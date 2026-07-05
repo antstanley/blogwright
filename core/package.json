@@ -1,0 +1,31 @@
+{
+  "name": "@iamstan/ops-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/credential-providers": "^3.1079.0",
+    "@smithy/protocol-http": "^5.5.6",
+    "@smithy/signature-v4": "^5.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "oxlint": "^1.72.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

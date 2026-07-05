@@ -1,0 +1,26 @@
+{
+  "name": "@iamstan/ops-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "blog-ops": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run",
+    "start": "node ./dist/bin.js"
+  },
+  "dependencies": {
+    "@iamstan/ops-core": "workspace:*",
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "oxlint": "^1.72.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

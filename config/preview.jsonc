@@ -1,0 +1,34 @@
+{
+  // Shared preview stack: one CloudFront distribution (caching disabled) that routes
+  // <pr-id>.preview.iamstan.dev to previews/<pr-id>/site/ via a CloudFront Function.
+  // preview.iamstan.dev is a Route53 hosted zone, so the wildcard cert + DNS are automated.
+  "region": "us-east-1",
+  "siteName": "iamstan",
+  "domain": "preview.iamstan.dev",
+
+  // owner/repo — scopes the GitHub OIDC deploy role's trust policy.
+  "githubRepo": "antstanley/iamstan",
+
+  "microvm": {
+    "memory": 2,
+    "maxDurationSeconds": 1800,
+    "idle": {
+      "autoResumeEnabled": false,
+      "maxIdleDurationSeconds": 1500,
+      "suspendedDurationSeconds": 120
+    }
+  },
+
+  "retention": {
+    "microvmDays": 365,
+    "cloudfrontDays": 90
+  },
+
+  "sourceIgnore": [".git/", ".jj/", "node_modules/", "dist/", ".astro/"],
+  "defaultRootObject": "index.html",
+  "invalidationMaxPaths": 1000,
+
+  // Previews are non-production, so the default ("auto") already publishes a robots.txt that
+  // blocks all crawlers and skips the sitemap. Set explicitly here for clarity.
+  "seo": { "robots": "noindex", "sitemap": "off" }
+}

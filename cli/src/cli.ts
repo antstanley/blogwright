@@ -1,0 +1,189 @@
+import { parseArgs } from 'node:util';
+
+import * as commands from './commands.js';
+import { createContext } from './context.js';
+import { createLogger, type Logger } from './logger.js';
+
+const USAGE = `blog-ops — lifecycle management for the iamstan.dev site
+
+Usage:
+  blog-ops <command> [env] [options]
+
+Commands:
+  bootstrap   [env]           Create/reconcile the infrastructure graph
+  deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
+  rollback    <hash> [env]    Re-deploy an existing build by hash
+  delete      [env]           Empty the live site/ prefix
+  destroy     [env] --yes     Tear down all infrastructure
+  history     [env]           List deployment history
+  logs        <hash> [env]    Show CloudWatch build logs for a hash
+  status      [env]           Show planned graph vs. live state
+
+  preview bootstrap           Provision the shared preview stack
+  preview deploy <id>         Build + publish a PR preview (id like pr-42)
+  preview destroy <id>        Remove one PR preview
+  preview list                List active previews
+  preview teardown --yes      Tear down the whole preview stack
+
+Options:
+  --env <name>      Environment (default: production; also accepted positionally)
+  --domain <fqdn>   Custom domain (ACM cert + CloudFront alias)
+  --config <path>   Path to a JSONC config file
+  --endpoint <url>  AWS endpoint override (e.g. http://localhost:4566 for floci)
+  --id <preview>    Preview id for preview deploy/destroy (also accepted positionally)
+  --yes             Confirm destructive operations
+  --help            Show this help
+`;
+
+const HASH_COMMANDS = new Set(['rollback', 'logs']);
+const KNOWN_COMMANDS = new Set([
+  'bootstrap',
+  'deploy',
+  'rollback',
+  'delete',
+  'destroy',
+  'history',
+  'logs',
+  'status',
+]);
+
+export async function main(argv: string[]): Promise<number> {
+  const logger = createLogger();
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      env: { type: 'string' },
+      domain: { type: 'string' },
+      config: { type: 'string' },
+      endpoint: { type: 'string' },
+      hash: { type: 'string' },
+      id: { type: 'string' },
+      yes: { type: 'boolean', default: false },
+      help: { type: 'boolean', default: false },
+    },
+  });
+
+  const command = positionals[0];
+  if (!command || values.help) {
+    logger.info(USAGE);
+    return command ? 0 : 1;
+  }
+  if (command === 'preview') {
+    return runPreview(positionals, values, logger);
+  }
+  if (!KNOWN_COMMANDS.has(command)) {
+    logger.error(`unknown command: ${command}`);
+    logger.info(USAGE);
+    return 1;
+  }
+
+  // Positional layout: rollback/logs take <hash> first, then optional env.
+  let hash: string | undefined;
+  let envPositional: string | undefined;
+  if (HASH_COMMANDS.has(command)) {
+    hash = values.hash ?? positionals[1];
+    envPositional = positionals[2];
+  } else {
+    envPositional = positionals[1];
+  }
+  const env = values.env ?? envPositional ?? 'production';
+
+  const ctx = await createContext({
+    env,
+    configPath: values.config,
+    domain: values.domain,
+    endpointOverride: values.endpoint,
+  });
+
+  switch (command) {
+    case 'bootstrap':
+      await commands.bootstrap(ctx);
+      break;
+    case 'deploy':
+      await commands.deploy(ctx);
+      break;
+    case 'rollback':
+      if (!hash) throw new Error('rollback requires a <hash>');
+      await commands.rollback(ctx, hash);
+      break;
+    case 'delete':
+      await commands.deleteSite(ctx);
+      break;
+    case 'destroy':
+      await commands.destroy(ctx, { yes: values.yes });
+      break;
+    case 'history':
+      await commands.history(ctx);
+      break;
+    case 'logs':
+      if (!hash) throw new Error('logs requires a <hash>');
+      await commands.logs(ctx, hash);
+      break;
+    case 'status':
+      await commands.status(ctx);
+      break;
+    default:
+      logger.error(`unknown command: ${command}`);
+      logger.info(USAGE);
+      return 1;
+  }
+  return 0;
+}
+
+interface PreviewValues {
+  domain?: string | undefined;
+  config?: string | undefined;
+  endpoint?: string | undefined;
+  id?: string | undefined;
+  yes: boolean;
+}
+
+/** Handle `blog-ops preview <action> [id]` (always the shared `preview` stack). */
+const PREVIEW_ACTIONS = new Set(['bootstrap', 'deploy', 'destroy', 'list', 'teardown']);
+
+async function runPreview(
+  positionals: string[],
+  values: PreviewValues,
+  logger: Logger,
+): Promise<number> {
+  const action = positionals[1];
+  const id = values.id ?? positionals[2];
+  if (!action || !PREVIEW_ACTIONS.has(action)) {
+    logger.error(`unknown preview action: ${action ?? '(none)'}`);
+    logger.info(USAGE);
+    return 1;
+  }
+  const ctx = await createContext({
+    env: 'preview',
+    preview: true,
+    configPath: values.config,
+    domain: values.domain,
+    endpointOverride: values.endpoint,
+  });
+
+  switch (action) {
+    case 'bootstrap':
+      await commands.previewBootstrap(ctx);
+      break;
+    case 'deploy':
+      if (!id) throw new Error('preview deploy requires an <id> (e.g. pr-42)');
+      await commands.previewDeploy(ctx, id);
+      break;
+    case 'destroy':
+      if (!id) throw new Error('preview destroy requires an <id>');
+      await commands.previewDestroy(ctx, id);
+      break;
+    case 'list':
+      await commands.previewList(ctx);
+      break;
+    case 'teardown':
+      await commands.previewTeardown(ctx, { yes: values.yes });
+      break;
+    default:
+      logger.error(`unknown preview action: ${action ?? '(none)'}`);
+      logger.info(USAGE);
+      return 1;
+  }
+  return 0;
+}

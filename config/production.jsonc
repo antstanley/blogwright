@@ -1,0 +1,45 @@
+{
+  // Primary region for S3 / MicroVM / logs. ACM + CloudFront are always us-east-1.
+  "region": "us-east-1",
+
+  // Stable slug used in resource names: <env>-<siteName>-<accountId>, etc.
+  "siteName": "iamstan",
+
+  // Custom domain. Leave unset to serve from the CloudFront *.cloudfront.net domain,
+  // or pass --domain on the CLI. DNS validation is manual (external DNS).
+  "domain": "iamstan.dev",
+
+  // Builder MicroVM sizing + lifecycle.
+  "microvm": {
+    "memory": 4, // GB baseline (vCPU scales 2GB = 1 vCPU)
+    "maxDurationSeconds": 1800, // hard cap on a build run
+    "idle": {
+      "autoResumeEnabled": false,
+      "maxIdleDurationSeconds": 300,
+      "suspendedDurationSeconds": 120
+    }
+  },
+
+  // CloudWatch retention.
+  "retention": {
+    "microvmDays": 365, // build logs — 1 year
+    "cloudfrontDays": 90 // access logs — 3 months
+  },
+
+  // Extra path prefixes excluded from the source zip (on top of .gitignore).
+  "sourceIgnore": ["ops/", ".jj/", ".git/", "node_modules/", "dist/", ".astro/"],
+
+  "defaultRootObject": "index.html",
+
+  // Each deploy invalidates only the CloudFront paths whose content actually changed
+  // (unchanged pages stay cached). If more than this many paths change, fall back to /*.
+  "invalidationMaxPaths": 1000,
+
+  // robots.txt / sitemap.xml. Defaults ("auto") already do the right thing per environment:
+  // production is indexable with a generated sitemap.xml; every other environment blocks
+  // crawlers and emits no sitemap. Override here if needed:
+  //   robots: "auto" | "index" | "noindex" | "off"   (off = leave the build's own robots.txt)
+  //   robotsContent: "…"                              (verbatim body; overrides robots)
+  //   sitemap: "auto" | "on" | "off"
+  "seo": { "robots": "index", "sitemap": "on" }
+}
