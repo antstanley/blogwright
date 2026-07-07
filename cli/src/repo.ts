@@ -53,11 +53,29 @@ export async function listRepoFiles(cwd: string, ignore: string[]): Promise<stri
   return present.filter((f): f is string => f !== null);
 }
 
-/** Build a deterministic zip of the given files (read relative to cwd). */
-export async function buildRepoZip(cwd: string, files: string[]): Promise<Uint8Array> {
+/**
+ * Filename injected into the source zip carrying the build revision. The site build
+ * runs in a MicroVM from this zip (no `.git`), so `astro.config` reads the hash from
+ * this file — see the repo's astro.config.mjs.
+ */
+export const COMMIT_FILE = '.commit-hash';
+
+/**
+ * Build a deterministic zip of the given files (read relative to cwd). Extra entries
+ * (path → text content) are added in memory — used to inject build metadata such as
+ * the commit hash without touching the working tree.
+ */
+export async function buildRepoZip(
+  cwd: string,
+  files: string[],
+  extra: Record<string, string> = {},
+): Promise<Uint8Array> {
   const entries: Zippable = {};
   for (const file of files) {
     entries[file] = await readFile(`${cwd}/${file}`);
+  }
+  for (const [path, content] of Object.entries(extra)) {
+    entries[path] = new TextEncoder().encode(content);
   }
   return zipSync(entries, { level: 6, mtime: ZIP_MTIME });
 }

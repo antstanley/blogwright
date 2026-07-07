@@ -12,7 +12,7 @@ import { colors } from './logger.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
 import { syncAfterDeploy } from './pds/commands.js';
-import { buildRepoZip, listRepoFiles, revisionHash } from './repo.js';
+import { buildRepoZip, COMMIT_FILE, listRepoFiles, revisionHash } from './repo.js';
 
 /**
  * Canonical origin the live site is served from: the custom domain if configured,
@@ -56,7 +56,7 @@ export async function deploy(ctx: OpsContext): Promise<void> {
 
   const files = await listRepoFiles(cwd, ctx.config.sourceIgnore);
   ctx.logger.step(`zipping ${files.length} files`);
-  const zip = await buildRepoZip(cwd, files);
+  const zip = await buildRepoZip(cwd, files, { [COMMIT_FILE]: hash });
   const sourceKey = `build/${hash}.zip`;
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
   ctx.logger.ok(`uploaded ${sourceKey} (${(zip.byteLength / 1024).toFixed(0)} KiB)`);
@@ -112,7 +112,7 @@ export async function previewDeploy(ctx: OpsContext, id: string): Promise<string
 
   const files = await listRepoFiles(cwd, ctx.config.sourceIgnore);
   ctx.logger.step(`zipping ${files.length} files`);
-  const zip = await buildRepoZip(cwd, files);
+  const zip = await buildRepoZip(cwd, files, { [COMMIT_FILE]: hash });
   const sourceKey = `build/${hash}.zip`;
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
 
