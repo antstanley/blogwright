@@ -1,5 +1,7 @@
 /* Minimal leveled logger with ANSI colour when attached to a TTY. */
 
+import { createInterface } from 'node:readline/promises';
+
 const isTty = process.stdout.isTTY === true;
 
 function paint(code: string, text: string): string {
@@ -31,4 +33,26 @@ export function createLogger(): Logger {
     warn: (msg) => console.warn(`${colors.yellow('!')} ${msg}`),
     error: (msg) => console.error(`${colors.red('✗')} ${msg}`),
   };
+}
+
+/**
+ * Ask a yes/no question on the terminal. Returns the default when there's no TTY (CI or a
+ * piped invocation) so automation isn't left hanging on a prompt.
+ */
+export async function confirm(
+  question: string,
+  opts: { defaultYes?: boolean } = {},
+): Promise<boolean> {
+  const defaultYes = opts.defaultYes ?? true;
+  if (process.stdin.isTTY !== true) return defaultYes;
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`${question} [${defaultYes ? 'Y/n' : 'y/N'}] `))
+      .trim()
+      .toLowerCase();
+    if (answer === '') return defaultYes;
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
 }

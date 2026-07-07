@@ -8,6 +8,7 @@ import {
 } from './deploy.js';
 import { applyGraph, destroyGraph } from './graph.js';
 import { colors } from './logger.js';
+import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
 import { buildRepoZip, listRepoFiles, revisionHash } from './repo.js';
 
@@ -37,6 +38,9 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
     throw new Error(`refusing to destroy "${ctx.env}" without --yes`);
   }
   ctx.logger.info(colors.bold(`Destroying "${ctx.env}"`));
+  // Running builder MicroVMs pin the image and make its deletion fail; clear them first
+  // (or let the operator cancel and wait for in-flight builds to finish).
+  if (!(await clearRunningMicrovms(ctx))) return;
   await destroyGraph(buildNodes(ctx), ctx);
   await ctx.store.delete();
   ctx.logger.ok(`destroyed "${ctx.env}"`);
@@ -134,6 +138,7 @@ export async function previewList(ctx: OpsContext): Promise<void> {
 export async function previewTeardown(ctx: OpsContext, opts: { yes: boolean }): Promise<void> {
   if (!opts.yes) throw new Error('refusing to tear down the preview stack without --yes');
   ctx.logger.info(colors.bold('Tearing down preview stack'));
+  if (!(await clearRunningMicrovms(ctx))) return;
   await destroyGraph(buildNodes(ctx), ctx);
   await ctx.store.delete();
   ctx.logger.ok('preview stack destroyed');

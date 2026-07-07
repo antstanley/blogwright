@@ -69,6 +69,28 @@ export interface Microvm {
   microvmId: string;
   state: string;
   endpoint: string;
+  /** ARN of the image this MicroVM was launched from (scopes cleanup to one stack). */
+  imageArn?: string | undefined;
+  imageVersion?: string | undefined;
+}
+
+interface MicrovmResponse {
+  microvmId?: string;
+  id?: string;
+  state?: string;
+  endpoint?: string;
+  imageArn?: string;
+  imageVersion?: string;
+}
+
+function normalizeMicrovm(res: MicrovmResponse): Microvm {
+  return {
+    microvmId: res.microvmId ?? res.id ?? '',
+    state: res.state ?? '',
+    endpoint: res.endpoint ?? '',
+    ...(res.imageArn ? { imageArn: res.imageArn } : {}),
+    ...(res.imageVersion ? { imageVersion: res.imageVersion } : {}),
+  };
 }
 
 /** Lambda-managed network connector ARNs (region-templated). */
@@ -99,11 +121,17 @@ function normalizeImage(res: ImageResponse): MicrovmImage {
 export class MicrovmsClient {
   constructor(private readonly client: SigningClient) {}
 
-  private async call<T>(method: string, path: string, payload?: object): Promise<T> {
+  private async call<T>(
+    method: string,
+    path: string,
+    payload?: object,
+    query?: Record<string, string | number | undefined>,
+  ): Promise<T> {
     const res = await this.client.send({
       service: 'microvms',
       method,
       path,
+      ...(query ? { query } : {}),
       headers: { 'content-type': 'application/json' },
       ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
     });
@@ -190,16 +218,34 @@ export class MicrovmsClient {
     }
   }
 
-  /** All MicroVMs in the account (paginated), for quota accounting and cleanup. */
-  async listMicrovms(): Promise<Microvm[]> {
+  /**
+   * MicroVMs in the account (paginated), for quota accounting and cleanup. Pass
+   * `imageIdentifier` to scope the list to one builder image server-side.
+   *
+   * `maxResults` is always sent: the ListMicrovms operation defines it as a defaulted
+   * query parameter, and the service normalizes a missing default into the request before
+   * validating the SigV4 signature — so omitting it produces an intermittent
+   * SignatureDoesNotMatch that GetMicrovm/DeleteMicrovm (no query params) never hit.
+   */
+  async listMicrovms(
+    opts: { imageIdentifier?: string | undefined; maxResults?: number | undefined } = {},
+  ): Promise<Microvm[]> {
     const all: Microvm[] = [];
     let token: string | undefined;
     do {
-      const path = token
-        ? `${PATHS.microvms}?nextToken=${encodeURIComponent(token)}`
-        : PATHS.microvms;
-      const page = await this.call<{ microvms?: Microvm[]; nextToken?: string }>('GET', path);
-      if (page.microvms) all.push(...page.microvms);
+      const query: Record<string, string | number | undefined> = {
+        maxResults: opts.maxResults ?? 50, // service cap; larger values are rejected (400)
+        ...(opts.imageIdentifier ? { imageIdentifier: opts.imageIdentifier } : {}),
+        ...(token ? { nextToken: token } : {}),
+      };
+      // The ListMicrovms response nests the collection under `items` (with `microvms` kept
+      // as a defensive fallback), each item carrying microvmId/state/imageArn.
+      const page = await this.call<{
+        items?: MicrovmResponse[];
+        microvms?: MicrovmResponse[];
+        nextToken?: string;
+      }>('GET', PATHS.microvms, undefined, query);
+      for (const item of page.items ?? page.microvms ?? []) all.push(normalizeMicrovm(item));
       token = page.nextToken;
     } while (token);
     return all;
