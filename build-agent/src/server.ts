@@ -21,7 +21,7 @@ const processed = new Set<string>();
 let pollCount = 0;
 
 function record(line: string): void {
-  console.log(line); // → CloudWatch (/iamstan/<env>/microvm-build); the CLI tails this
+  console.log(line); // → CloudWatch (/aws/lambda/microvms/<image-name>); the CLI tails this
 }
 
 function credsLine(): string {

@@ -27,6 +27,7 @@ export const SIGNING_NAMES = {
   // Lambda MicroVMs is served off the standard Lambda endpoint (host + signing name
   // "lambda"); operations are distinguished by the /2025-09-09/ path prefix.
   microvms: 'lambda',
+  secretsmanager: 'secretsmanager',
 } as const;
 
 export type ServiceKey = keyof typeof SIGNING_NAMES;

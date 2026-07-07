@@ -41,5 +41,20 @@
   //   robots: "auto" | "index" | "noindex" | "off"   (off = leave the build's own robots.txt)
   //   robotsContent: "…"                              (verbatim body; overrides robots)
   //   sitemap: "auto" | "on" | "off"
-  "seo": { "robots": "index", "sitemap": "on" }
+  "seo": { "robots": "index", "sitemap": "on" },
+
+  // owner/repo — scopes the production GitHub OIDC deploy role's trust policy
+  // (main branch only). Re-run `blog-ops bootstrap` after changing.
+  "githubRepo": "antstanley/iamstan",
+
+  // standard.site publishing to the AT Protocol PDS. After a successful production
+  // deploy the CLI reconciles site.standard.* records (see `blog-ops pds`).
+  // Credentials live in Secrets Manager under `secretName` (default
+  // "<siteName>/atproto"); manage them with `blog-ops pds secret`.
+  "pds": {
+    "name": "Ant Stanley",
+    "description": "Projects and notes from Ant Stanley."
+    // "service": "https://bsky.social",
+    // "secretName": "iamstan/atproto"
+  }
 }

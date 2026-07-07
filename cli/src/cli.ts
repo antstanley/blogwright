@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 
 import * as commands from './commands.js';
 import { createContext } from './context.js';
+import * as pds from './pds/commands.js';
 import { createLogger, type Logger } from './logger.js';
 
 const USAGE = `blog-ops — lifecycle management for the iamstan.dev site
@@ -24,6 +25,17 @@ Commands:
   preview destroy <id>        Remove one PR preview
   preview list                List active previews
   preview teardown --yes      Tear down the whole preview stack
+
+  pds secret set --identifier <did> --password <app-password> [--service <url>]
+                              Store PDS credentials in Secrets Manager
+                              (service defaults to https://bsky.social)
+  pds secret status           Show secret metadata (never the value)
+  pds secret delete --yes     Delete the secret
+  pds init                    Create/update the standard.site publication record and
+                              write the site verification files (commit them)
+  pds sync                    Reconcile site.standard.document records with
+                              src/content/blog (production only; also runs after
+                              every successful production deploy)
 
 Options:
   --env <name>      Environment (default: production; also accepted positionally)
@@ -59,6 +71,9 @@ export async function main(argv: string[]): Promise<number> {
       endpoint: { type: 'string' },
       hash: { type: 'string' },
       id: { type: 'string' },
+      identifier: { type: 'string' },
+      password: { type: 'string' },
+      service: { type: 'string' },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -71,6 +86,9 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (command === 'preview') {
     return runPreview(positionals, values, logger);
+  }
+  if (command === 'pds') {
+    return runPds(positionals, values, logger);
   }
   if (!KNOWN_COMMANDS.has(command)) {
     logger.error(`unknown command: ${command}`);
@@ -127,6 +145,60 @@ export async function main(argv: string[]): Promise<number> {
       logger.error(`unknown command: ${command}`);
       logger.info(USAGE);
       return 1;
+  }
+  return 0;
+}
+
+interface PdsValues {
+  env?: string | undefined;
+  config?: string | undefined;
+  domain?: string | undefined;
+  endpoint?: string | undefined;
+  identifier?: string | undefined;
+  password?: string | undefined;
+  service?: string | undefined;
+  yes: boolean;
+}
+
+/** Handle `blog-ops pds <action> [env]` (and `pds secret <action> [env]`). */
+async function runPds(positionals: string[], values: PdsValues, logger: Logger): Promise<number> {
+  // `pds secret set production` — the secret sub-action shifts positionals by one.
+  const secret = positionals[1] === 'secret';
+  const action = secret ? `secret ${positionals[2] ?? ''}`.trim() : positionals[1];
+  const envPositional = positionals[secret ? 3 : 2];
+  const known = new Set(['init', 'sync', 'secret set', 'secret status', 'secret delete']);
+  if (!action || !known.has(action)) {
+    logger.error(`unknown pds action: ${action ?? '(none)'}`);
+    logger.info(USAGE);
+    return 1;
+  }
+  const ctx = await createContext({
+    env: values.env ?? envPositional ?? 'production',
+    configPath: values.config,
+    domain: values.domain,
+    endpointOverride: values.endpoint,
+  });
+
+  switch (action) {
+    case 'secret set':
+      await pds.secretSet(ctx, {
+        identifier: values.identifier,
+        password: values.password,
+        service: values.service,
+      });
+      break;
+    case 'secret status':
+      await pds.secretStatus(ctx);
+      break;
+    case 'secret delete':
+      await pds.secretDelete(ctx, { yes: values.yes });
+      break;
+    case 'init':
+      await pds.init(ctx);
+      break;
+    case 'sync':
+      await pds.sync(ctx);
+      break;
   }
   return 0;
 }

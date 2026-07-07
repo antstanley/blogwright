@@ -125,6 +125,23 @@ export class LogsClient {
     return undefined;
   }
 
+  /** Ids of every delivery attached to a delivery source. */
+  async deliveriesForSource(sourceName: string): Promise<string[]> {
+    const ids: string[] = [];
+    let nextToken: string | undefined;
+    do {
+      const out = await this.call<{
+        deliveries?: Array<{ id: string; deliverySourceName?: string }>;
+        nextToken?: string;
+      }>('DescribeDeliveries', nextToken ? { nextToken } : {});
+      for (const d of out.deliveries ?? []) {
+        if (d.deliverySourceName === sourceName) ids.push(d.id);
+      }
+      nextToken = out.nextToken;
+    } while (nextToken);
+    return ids;
+  }
+
   async deleteDelivery(id: string): Promise<void> {
     try {
       await this.call('DeleteDelivery', { id });

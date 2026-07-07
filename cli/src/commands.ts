@@ -3,6 +3,7 @@ import {
   invalidateChanged,
   invalidateCloudFront,
   manifestKey,
+  microvmLogGroup,
   runBuild,
   type DeployManifest,
 } from './deploy.js';
@@ -10,6 +11,7 @@ import { applyGraph, destroyGraph } from './graph.js';
 import { colors } from './logger.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
+import { syncAfterDeploy } from './pds/commands.js';
 import { buildRepoZip, listRepoFiles, revisionHash } from './repo.js';
 
 /**
@@ -61,6 +63,8 @@ export async function deploy(ctx: OpsContext): Promise<void> {
 
   await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
   await invalidateChanged(ctx, hash);
+  // Production content changed — mirror it to the PDS (non-fatal; see syncAfterDeploy).
+  await syncAfterDeploy(ctx);
   ctx.logger.ok(`deployed ${hash}`);
 }
 
@@ -73,6 +77,14 @@ export async function rollback(ctx: OpsContext, hash: string): Promise<void> {
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
   await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
   await invalidateChanged(ctx, hash);
+  // A rollback changes production content too, but the PDS mirrors the *working tree*
+  // content, which a rollback does not restore — so only warn about the divergence.
+  if (ctx.env === 'production' && ctx.config.pds) {
+    ctx.logger.warn(
+      'rollback does not sync the PDS (records mirror the current repo content); ' +
+        'check out the rolled-back revision and run `blog-ops pds sync` if needed',
+    );
+  }
   ctx.logger.ok(`rolled back to ${hash}`);
 }
 
@@ -183,7 +195,7 @@ export async function logs(ctx: OpsContext, hash: string): Promise<void> {
   // Filter to the build's time window (± a minute) from the manifest.
   const startTime = manifest ? Date.parse(manifest.startedAt) - 60_000 : undefined;
   const endTime = manifest ? Date.parse(manifest.finishedAt) + 60_000 : undefined;
-  const events = await ctx.clients.logs.filterEvents(ctx.names.microvmLogGroup, {
+  const events = await ctx.clients.logs.filterEvents(microvmLogGroup(ctx), {
     ...(startTime !== undefined ? { startTime } : {}),
     ...(endTime !== undefined ? { endTime } : {}),
   });

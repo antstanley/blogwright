@@ -9,6 +9,7 @@ export * from './aws/logs.js';
 export * from './aws/microvms.js';
 export * from './aws/route53.js';
 export * from './aws/s3.js';
+export * from './aws/secretsmanager.js';
 export * from './aws/signer.js';
 export * from './aws/sts.js';
 export * from './aws/xml.js';

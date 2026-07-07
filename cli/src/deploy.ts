@@ -44,6 +44,25 @@ async function nudge(endpoint: string, token: string): Promise<void> {
 }
 
 /**
+ * Resolve the MicroVM build log group from bootstrapped state rather than re-deriving it.
+ * The image and the build-role IAM policy bake this name in at bootstrap, so if the derived
+ * name (`ctx.names.microvmLogGroup`) is renamed in code later, a deploy must still target
+ * the group the running stack actually logs to — otherwise the VM's logs land in (or are
+ * denied to) a different group and `pollBuild` waits on an empty one.
+ */
+export function microvmLogGroup(ctx: OpsContext): string {
+  const recorded = ctx.state.resources['microvm-image']?.logGroup;
+  if (typeof recorded === 'string' && recorded) return recorded;
+  const arn = ctx.state.resources['microvm-log-group']?.arn;
+  if (typeof arn === 'string') {
+    // arn:aws:logs:<region>:<acct>:log-group:<name>:*
+    const name = arn.split(':log-group:')[1]?.replace(/:\*$/, '');
+    if (name) return name;
+  }
+  return ctx.names.microvmLogGroup;
+}
+
+/**
  * Poll the CloudWatch build log group for the agent's output, streaming new lines and
  * detecting the terminal marker (the source of truth). Each cycle also nudges the VM
  * endpoint to keep the agent's event loop alive so the build triggers reliably.
@@ -61,7 +80,7 @@ async function pollBuild(
   for (;;) {
     await nudge(endpoint, token);
     const events = await ctx.clients.logs
-      .filterEvents(ctx.names.microvmLogGroup, { startTime })
+      .filterEvents(microvmLogGroup(ctx), { startTime })
       .catch(() => [] as LogEvent[]);
     events.sort((a, b) => a.timestamp - b.timestamp);
 
@@ -81,6 +100,14 @@ async function pollBuild(
       }
     }
     if (result) return result;
+    // Log delivery can lag or drop (e.g. the VM logging to a group the deploy isn't tailing).
+    // The agent writes build/changed/<hash>.json as its final step, so treat that artifact as
+    // an authoritative completion signal too — a successful build then can't hang until the
+    // deadline just because its logs never reached CloudWatch. runBuild clears any stale copy
+    // before launch, so its presence means *this* build finished.
+    if (await ctx.clients.s3.objectExists(ctx.names.bucket, `build/changed/${hash}.json`)) {
+      return { state: 'done' };
+    }
     if (Date.now() >= deadline) return { state: 'failed', message: 'build timed out' };
     await sleep(3000);
   }
@@ -112,6 +139,12 @@ export async function runBuild(
     );
   }
 
+  // Clear any stale completion manifest from a prior aborted build of this same hash, so its
+  // reappearance is an unambiguous "this build finished" signal for pollBuild's S3 fallback.
+  await ctx.clients.s3
+    .deleteObject(ctx.names.bucket, `build/changed/${opts.hash}.json`)
+    .catch(() => undefined);
+
   const connectors = networkConnectors(ctx.config.region);
   const startedAt = new Date();
   ctx.logger.step(`running builder MicroVM for ${opts.hash}`);
@@ -131,7 +164,7 @@ export async function runBuild(
     idlePolicy: ctx.config.microvm.idle,
     ingressNetworkConnectors: [connectors.allIngress],
     egressNetworkConnectors: [connectors.internetEgress],
-    logGroupName: ctx.names.microvmLogGroup,
+    logGroupName: microvmLogGroup(ctx),
   });
 
   let result: AgentStatus = { state: 'failed', message: 'did not start' };

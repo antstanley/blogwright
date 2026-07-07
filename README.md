@@ -50,6 +50,15 @@ Environment defaults to `production`; pass another as the positional `[env]` or 
 Credentials are read from the ambient AWS provider chain. Config is loaded from
 `ops/config/<env>.jsonc` (override with `--config`).
 
+## Production pipeline
+
+`.github/workflows/deploy.yml` deploys production on every push to `main` (deploys queue —
+they are never cancelled mid-run). It assumes `production-iamstan-gh` via GitHub OIDC — a
+role `blog-ops bootstrap` provisions when `config.githubRepo` is set, trusted only for
+`refs/heads/main` and additionally allowed `cloudfront:CreateInvalidation` plus
+`secretsmanager:GetSecretValue` on the PDS secret. After changing `githubRepo` or adding
+the `pds` section, re-run `blog-ops bootstrap` once to reconcile the role.
+
 ## PR previews
 
 A shared preview stack serves every PR at `https://<id>.preview.iamstan.dev` — one
@@ -71,6 +80,38 @@ blog-ops preview teardown --yes     # tear down the whole preview stack
 scoped to `config.githubRepo`). The workflow at `.github/workflows/preview.yml` assumes it
 (no stored keys) to `preview deploy` on PR open/update and `preview destroy` on close,
 commenting the URL on the PR. Set the workflow's `ROLE_ARN`/account if not `403884279830`.
+
+## standard.site publishing (AT Protocol)
+
+With a `pds` section in the config, the blog is mirrored to the owner's PDS as
+[standard.site](https://standard.site) records: one `site.standard.publication` for the
+site and one `site.standard.document` per post, with rkeys derived deterministically from
+each post's URL path (vendored mastrojs/atproto TID scheme — see `ops/cli/src/pds/rkey.ts`
+and its twin `src/lib/atproto.ts`, which the built pages use for their
+`<link rel="site.standard.document">` tags). **Post slugs must not change after
+publication** — the rkey is the URL.
+
+Credentials (an app password — never the account password) live in a Secrets Manager
+secret (`<siteName>/atproto` by default) and are read only at sync time; they never enter
+the builder MicroVM. Every successful **production** deploy re-reconciles the records
+(non-fatal on failure — the next deploy heals). Records for deleted posts are warned
+about, never deleted.
+
+One-time setup, then it is hands-off:
+
+```sh
+blog-ops pds secret set --identifier did:plc:… --password xxxx-xxxx-xxxx-xxxx
+                                    # store credentials in Secrets Manager
+                                    # (--service <url> to override https://bsky.social)
+blog-ops pds init                   # create the publication record; writes
+                                    #   public/.well-known/site.standard.publication
+                                    #   src/data/atproto.json
+git add public/.well-known src/data/atproto.json && git commit   # ship the verification
+blog-ops pds sync                   # first reconcile (also runs after each prod deploy)
+
+blog-ops pds secret status          # metadata only — never prints the value
+blog-ops pds secret delete --yes    # remove the credentials
+```
 
 ## Testing
 

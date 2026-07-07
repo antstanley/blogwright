@@ -27,6 +27,20 @@ export interface SeoConfig {
   sitemap: 'auto' | 'on' | 'off';
 }
 
+/** AT Protocol / standard.site publishing (see `blog-ops pds`). Inert when absent. */
+export interface PdsConfig {
+  /** Publication display name (site.standard.publication `name`). */
+  name: string;
+  /** Optional publication description. */
+  description?: string | undefined;
+  /** PDS endpoint used for XRPC calls. */
+  service: string;
+  /** Secrets Manager secret holding { identifier, password, service }. */
+  secretName: string;
+}
+
+export const DEFAULT_PDS_SERVICE = 'https://bsky.social';
+
 export interface OpsConfig {
   /** Primary region for S3 / MicroVM / logs. ACM+CloudFront are always us-east-1. */
   region: string;
@@ -55,6 +69,8 @@ export interface OpsConfig {
   githubRepo?: string | undefined;
   /** robots.txt / sitemap.xml behaviour (environment-aware defaults). */
   seo: SeoConfig;
+  /** standard.site publishing to the owner's AT Protocol PDS; disabled when absent. */
+  pds?: PdsConfig | undefined;
 }
 
 export const DEFAULT_CONFIG: OpsConfig = {
@@ -150,6 +166,13 @@ export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
     retention: { ...DEFAULT_CONFIG.retention, ...raw.retention },
     seo: { ...DEFAULT_CONFIG.seo, ...raw.seo },
   };
+  if (raw.pds) {
+    cfg.pds = {
+      ...raw.pds,
+      service: raw.pds.service ?? DEFAULT_PDS_SERVICE,
+      secretName: raw.pds.secretName ?? `${cfg.siteName}/atproto`,
+    };
+  }
   validateConfig(cfg);
   return cfg;
 }
@@ -177,6 +200,21 @@ function validateConfig(cfg: OpsConfig): void {
   if (!sitemapModes.includes(cfg.seo.sitemap)) {
     throw new Error(`config.seo.sitemap must be one of ${sitemapModes.join(', ')}`);
   }
+  if (cfg.pds) {
+    if (!cfg.pds.name?.trim()) throw new Error('config.pds.name is required');
+    let service: URL;
+    try {
+      service = new URL(cfg.pds.service);
+    } catch {
+      throw new Error(`config.pds.service must be a URL, got "${cfg.pds.service}"`);
+    }
+    if (service.protocol !== 'https:') {
+      throw new Error(`config.pds.service must be https, got "${cfg.pds.service}"`);
+    }
+    if (!/^[\w/+=.@-]+$/.test(cfg.pds.secretName)) {
+      throw new Error(`config.pds.secretName has invalid characters: "${cfg.pds.secretName}"`);
+    }
+  }
 }
 
 export interface Names {
@@ -200,6 +238,7 @@ export function deriveNames(env: string, accountId: string, cfg: OpsConfig): Nam
   }
   const prefix = `${env}-${cfg.siteName}`;
   const bucket = `${prefix}-${accountId}`;
+  const microvmImage = `${prefix}-builder`;
   if (bucket.length > 63) {
     throw new Error(
       `derived bucket name "${bucket}" exceeds S3's 63-char limit; shorten env or siteName`,
@@ -211,8 +250,8 @@ export function deriveNames(env: string, accountId: string, cfg: OpsConfig): Nam
     prefix,
     buildRole: `${prefix}-build-role`,
     execRole: `${prefix}-exec-role`,
-    microvmImage: `${prefix}-builder`,
-    microvmLogGroup: `/${cfg.siteName}/${env}/microvm-build`,
+    microvmImage,
+    microvmLogGroup: `/aws/lambda/microvms/${microvmImage}`,
     cloudfrontLogGroup: `/${cfg.siteName}/${env}/cloudfront`,
     oac: `${prefix}-oac`,
     deliverySource: `${prefix}-cf-source`,

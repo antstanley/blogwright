@@ -6,6 +6,7 @@ import { LogsClient } from './aws/logs.js';
 import { MicrovmsClient } from './aws/microvms.js';
 import { Route53Client } from './aws/route53.js';
 import { S3Client } from './aws/s3.js';
+import { SecretsManagerClient } from './aws/secretsmanager.js';
 import { SigningClient, type Transport } from './aws/signer.js';
 import { StsClient } from './aws/sts.js';
 
@@ -28,6 +29,7 @@ export interface AwsClients {
   cloudfront: CloudFrontClient;
   route53: Route53Client;
   microvms: MicrovmsClient;
+  secrets: SecretsManagerClient;
 }
 
 /** Build the full set of service clients that share one signing transport. */
@@ -56,5 +58,6 @@ export function createClients(opts: ClientBundleOptions): AwsClients {
     cloudfront: new CloudFrontClient(usEast1),
     route53: new Route53Client(usEast1),
     microvms: new MicrovmsClient(signing),
+    secrets: new SecretsManagerClient(signing),
   };
 }

@@ -292,19 +292,27 @@ function microvmImageNode(): ResourceNode {
       output(ctx, 'microvm-image').arn = image.imageArn;
       await ctx.save();
       await awaitImageSettled(ctx, image.imageArn, 'CREATED');
-      output(ctx, 'microvm-image').agentHash = hash;
+      const out = output(ctx, 'microvm-image');
+      out.agentHash = hash;
+      out.logGroup = ctx.names.microvmLogGroup;
     },
     async update(ctx) {
       const arn = String(output(ctx, 'microvm-image').arn);
       const before = await ctx.clients.microvms.getImage(arn);
       const healthy = Boolean(before) && /CREATED|UPDATED/i.test(before?.state ?? '');
       const { input, hash } = await imageInput(ctx);
-      // Skip the (slow) rebuild when the image is healthy and the agent is unchanged.
-      if (healthy && output(ctx, 'microvm-image').agentHash === hash) return;
+      // Skip the (slow) rebuild when the image is healthy and its inputs are unchanged
+      // (the agent code and the log group it writes to).
+      const unchanged =
+        output(ctx, 'microvm-image').agentHash === hash &&
+        output(ctx, 'microvm-image').logGroup === ctx.names.microvmLogGroup;
+      if (healthy && unchanged) return;
       ctx.logger.step(`update MicroVM image (agent ${hash})`);
       await ctx.clients.microvms.updateImage(arn, input);
       await awaitImageSettled(ctx, arn, 'UPDATED', before?.imageVersion);
-      output(ctx, 'microvm-image').agentHash = hash;
+      const out = output(ctx, 'microvm-image');
+      out.agentHash = hash;
+      out.logGroup = ctx.names.microvmLogGroup;
     },
     async delete(ctx) {
       const arn = output(ctx, 'microvm-image').arn;
@@ -513,6 +521,25 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
 
 /** Wire CloudFront access logs to the CloudWatch log group via vended log delivery. */
 function logDeliveryNode(): ResourceNode {
+  async function wire(ctx: OpsContext): Promise<void> {
+    const distArn = String(output(ctx, 'cloudfront-distribution').arn);
+    const groupArn = String(output(ctx, 'cloudfront-log-group').arn).replace(/:\*$/, '');
+    const sourceArn = await ctx.clients.logs.putDeliverySource(
+      ctx.names.deliverySource,
+      distArn,
+      'ACCESS_LOGS',
+    );
+    const destArn = await ctx.clients.logs.putDeliveryDestination(
+      ctx.names.deliveryDestination,
+      groupArn,
+    );
+    await ctx.clients.logs.createDelivery(ctx.names.deliverySource, destArn);
+    const out = output(ctx, 'cloudfront-log-delivery');
+    out.delivery = 'configured';
+    out.source = sourceArn;
+    out.destination = destArn;
+  }
+
   return {
     id: 'cloudfront-log-delivery',
     dependsOn: ['cloudfront-distribution', 'cloudfront-log-group'],
@@ -521,22 +548,22 @@ function logDeliveryNode(): ResourceNode {
       return typeof output(ctx, 'cloudfront-log-delivery').delivery === 'string';
     },
     async create(ctx) {
-      const distArn = String(output(ctx, 'cloudfront-distribution').arn);
-      const groupArn = String(output(ctx, 'cloudfront-log-group').arn).replace(/:\*$/, '');
-      const sourceArn = await ctx.clients.logs.putDeliverySource(
-        ctx.names.deliverySource,
-        distArn,
-        'ACCESS_LOGS',
-      );
-      const destArn = await ctx.clients.logs.putDeliveryDestination(
-        ctx.names.deliveryDestination,
-        groupArn,
-      );
-      await ctx.clients.logs.createDelivery(ctx.names.deliverySource, destArn);
-      const out = output(ctx, 'cloudfront-log-delivery');
-      out.delivery = 'configured';
-      out.source = sourceArn;
-      out.destination = destArn;
+      try {
+        await wire(ctx);
+      } catch (err) {
+        // delete() below leaves the delivery plumbing behind, and PutDeliverySource
+        // refuses to repoint an existing source at a new distribution ARN — so a
+        // destroy → bootstrap cycle hits ConflictException here. Remove the stale
+        // delivery/source/destination trio and retry once.
+        if (!(err instanceof AwsError && /Conflict/i.test(err.code))) throw err;
+        ctx.logger.step('stale log delivery from a previous stack — removing and retrying');
+        for (const id of await ctx.clients.logs.deliveriesForSource(ctx.names.deliverySource)) {
+          await ctx.clients.logs.deleteDelivery(id);
+        }
+        await ctx.clients.logs.deleteDeliverySource(ctx.names.deliverySource);
+        await ctx.clients.logs.deleteDeliveryDestination(ctx.names.deliveryDestination);
+        await wire(ctx);
+      }
     },
     async delete(ctx) {
       // Removing the distribution/log group does NOT clean up vended log delivery: the
@@ -593,12 +620,17 @@ const GITHUB_OIDC_URL = 'token.actions.githubusercontent.com';
 // this value, but the API requires one.
 const GITHUB_OIDC_THUMBPRINT = '6938fd4d98bab03faadb97b34396831e3780aea1';
 
-/** IAM role a GitHub Actions workflow assumes via OIDC to deploy/destroy previews. */
-function githubOidcRoleNode(): ResourceNode {
+/**
+ * IAM role a GitHub Actions workflow assumes via OIDC — to deploy/destroy previews
+ * (preview stack, any ref) or to deploy production (main branch only, plus CloudFront
+ * invalidation and read access to the PDS credentials secret).
+ */
+function githubOidcRoleNode(preview: boolean): ResourceNode {
   const roleName = (ctx: OpsContext) => `${ctx.names.prefix}-gh`;
   return {
     id: 'gh-oidc-role',
-    dependsOn: ['iam-exec-role'],
+    // Production deploys invalidate the distribution, so its ARN must be in state.
+    dependsOn: preview ? ['iam-exec-role'] : ['iam-exec-role', 'cloudfront-distribution'],
     title: 'GitHub OIDC deploy role',
     async read(ctx) {
       const arn = await ctx.clients.iam.getRoleArn(roleName(ctx));
@@ -618,9 +650,72 @@ function githubOidcRoleNode(): ResourceNode {
   };
 }
 
+/**
+ * The workflow's OIDC subject claim: previews deploy from any PR ref; production
+ * deploys only from pushes to main.
+ */
+export function oidcSubClaim(repo: string, preview: boolean): string {
+  return preview ? `repo:${repo}:*` : `repo:${repo}:ref:refs/heads/main`;
+}
+
+/** The deploy role's inline policy statements (exported for tests). */
+export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
+  const statements: object[] = [
+    { Effect: 'Allow', Action: ['sts:GetCallerIdentity'], Resource: '*' },
+    {
+      Effect: 'Allow',
+      Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
+    },
+    { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
+    {
+      Effect: 'Allow',
+      Action: [
+        'lambda:RunMicrovm',
+        'lambda:GetMicrovm',
+        'lambda:ListMicrovms',
+        'lambda:TerminateMicrovm',
+        'lambda:CreateMicrovmAuthToken',
+        'lambda:GetMicrovmImage',
+        // RunMicrovm attaches the managed ingress/egress network connectors.
+        'lambda:PassNetworkConnector',
+      ],
+      Resource: '*',
+    },
+    {
+      Effect: 'Allow',
+      Action: ['logs:FilterLogEvents', 'logs:GetLogEvents'],
+      Resource: logGroupArn(ctx, ctx.names.microvmLogGroup),
+    },
+    {
+      // RunMicrovm passes the exec role to the MicroVM.
+      Effect: 'Allow',
+      Action: ['iam:PassRole'],
+      Resource: String(output(ctx, 'iam-exec-role').arn),
+    },
+  ];
+  if (!ctx.preview) {
+    // Production deploys invalidate changed paths; previews are never cached.
+    statements.push({
+      Effect: 'Allow',
+      Action: ['cloudfront:CreateInvalidation'],
+      Resource: String(output(ctx, 'cloudfront-distribution').arn),
+    });
+    if (ctx.config.pds) {
+      // The post-deploy PDS sync reads the app-password secret (and nothing else).
+      statements.push({
+        Effect: 'Allow',
+        Action: ['secretsmanager:GetSecretValue'],
+        Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName}-*`,
+      });
+    }
+  }
+  return statements;
+}
+
 async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
   const repo = ctx.config.githubRepo;
-  if (!repo) throw new Error('config.githubRepo is required for the preview OIDC role');
+  if (!repo) throw new Error('config.githubRepo is required for the GitHub OIDC role');
   // CreateOpenIDConnectProvider needs the https:// scheme; the ARN + condition keys use
   // the bare host.
   await ctx.clients.iam.ensureOidcProvider(
@@ -640,49 +735,16 @@ async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
           Action: 'sts:AssumeRoleWithWebIdentity',
           Condition: {
             StringEquals: { [`${GITHUB_OIDC_URL}:aud`]: 'sts.amazonaws.com' },
-            StringLike: { [`${GITHUB_OIDC_URL}:sub`]: `repo:${repo}:*` },
+            StringLike: { [`${GITHUB_OIDC_URL}:sub`]: oidcSubClaim(repo, ctx.preview) },
           },
         },
       ],
     },
-    'GitHub Actions preview deploy role',
+    `GitHub Actions ${ctx.env} deploy role`,
   );
-  await ctx.clients.iam.putRolePolicy(roleName, 'preview-deploy', {
+  await ctx.clients.iam.putRolePolicy(roleName, `${ctx.env}-deploy`, {
     Version: '2012-10-17',
-    Statement: [
-      { Effect: 'Allow', Action: ['sts:GetCallerIdentity'], Resource: '*' },
-      {
-        Effect: 'Allow',
-        Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-        Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
-      },
-      { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
-      {
-        Effect: 'Allow',
-        Action: [
-          'lambda:RunMicrovm',
-          'lambda:GetMicrovm',
-          'lambda:ListMicrovms',
-          'lambda:TerminateMicrovm',
-          'lambda:CreateMicrovmAuthToken',
-          'lambda:GetMicrovmImage',
-          // RunMicrovm attaches the managed ingress/egress network connectors.
-          'lambda:PassNetworkConnector',
-        ],
-        Resource: '*',
-      },
-      {
-        Effect: 'Allow',
-        Action: ['logs:FilterLogEvents', 'logs:GetLogEvents'],
-        Resource: logGroupArn(ctx, ctx.names.microvmLogGroup),
-      },
-      {
-        // RunMicrovm passes the exec role to the MicroVM.
-        Effect: 'Allow',
-        Action: ['iam:PassRole'],
-        Resource: String(output(ctx, 'iam-exec-role').arn),
-      },
-    ],
+    Statement: oidcRolePolicyStatements(ctx),
   });
   output(ctx, 'gh-oidc-role').arn = arn;
 }
@@ -757,7 +819,10 @@ export function buildNodes(ctx: OpsContext): ResourceNode[] {
   ];
   if (hasDomain) nodes.push(certificateNode());
   if (ctx.preview) {
-    nodes.push(previewFunctionNode(), previewDnsNode(), githubOidcRoleNode());
+    nodes.push(previewFunctionNode(), previewDnsNode(), githubOidcRoleNode(true));
+  } else if (ctx.config.githubRepo) {
+    // Merge-to-main production deploys (.github/workflows/deploy.yml).
+    nodes.push(githubOidcRoleNode(false));
   }
   return nodes;
 }

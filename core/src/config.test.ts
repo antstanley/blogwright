@@ -39,6 +39,39 @@ describe('parseConfig', () => {
   it('rejects a memory value outside the supported MicroVM sizes', () => {
     expect(() => parseConfig('{ "microvm": { "memory": 3 } }')).toThrow(/memory/);
   });
+
+  it('leaves pds undefined when the section is absent', () => {
+    expect(parseConfig('{}').pds).toBeUndefined();
+  });
+
+  it('applies pds defaults (service, secretName from siteName)', () => {
+    const cfg = parseConfig('{ "pds": { "name": "Ant Stanley" } }');
+    expect(cfg.pds).toEqual({
+      name: 'Ant Stanley',
+      service: 'https://bsky.social',
+      secretName: 'iamstan/atproto',
+    });
+  });
+
+  it('keeps explicit pds overrides', () => {
+    const cfg = parseConfig(
+      '{ "pds": { "name": "x", "service": "https://pds.example", "secretName": "me/secret", "description": "d" } }',
+    );
+    expect(cfg.pds?.service).toBe('https://pds.example');
+    expect(cfg.pds?.secretName).toBe('me/secret');
+    expect(cfg.pds?.description).toBe('d');
+  });
+
+  it('rejects a pds section without a name', () => {
+    expect(() => parseConfig('{ "pds": { "name": " " } }')).toThrow(/pds.name/);
+  });
+
+  it('rejects a non-https pds service', () => {
+    expect(() => parseConfig('{ "pds": { "name": "x", "service": "http://pds" } }')).toThrow(
+      /https/,
+    );
+    expect(() => parseConfig('{ "pds": { "name": "x", "service": "nope" } }')).toThrow(/URL/);
+  });
 });
 
 describe('deriveNames', () => {
@@ -49,7 +82,7 @@ describe('deriveNames', () => {
     expect(names.buildRole).toBe('staging-iamstan-build-role');
     expect(names.execRole).toBe('staging-iamstan-exec-role');
     expect(names.microvmImage).toBe('staging-iamstan-builder');
-    expect(names.microvmLogGroup).toBe('/iamstan/staging/microvm-build');
+    expect(names.microvmLogGroup).toBe('/aws/lambda/microvms/staging-iamstan-builder');
     expect(names.cloudfrontLogGroup).toBe('/iamstan/staging/cloudfront');
   });
 
