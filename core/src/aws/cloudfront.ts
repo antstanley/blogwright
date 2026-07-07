@@ -30,6 +30,16 @@ export interface DistributionConfigInput {
   cachePolicyId?: string | undefined;
   /** CloudFront Function ARN to associate on viewer-request (for preview routing). */
   functionArn?: string | undefined;
+  /** Custom error responses (e.g. map the S3 REST origin's 403 for a missing key to /404.html). */
+  customErrorResponses?: CustomErrorResponse[] | undefined;
+}
+
+export interface CustomErrorResponse {
+  errorCode: number;
+  responsePagePath: string;
+  responseCode: number;
+  /** Seconds CloudFront caches the error response before re-querying the origin. */
+  errorCachingMinTtl?: number | undefined;
 }
 
 /** CloudFront client (REST-XML). Global service, signed in us-east-1. */
@@ -253,6 +263,26 @@ export class CloudFrontClient {
   }
 }
 
+/** Build the <CustomErrorResponses> block, ordered by error code for a stable payload. */
+function buildCustomErrorResponses(responses: CustomErrorResponse[] | undefined): string {
+  if (!responses || responses.length === 0) {
+    return `<CustomErrorResponses><Quantity>0</Quantity></CustomErrorResponses>`;
+  }
+  const items = [...responses]
+    .sort((a, b) => a.errorCode - b.errorCode)
+    .map(
+      (r) =>
+        `<CustomErrorResponse>` +
+        `<ErrorCode>${r.errorCode}</ErrorCode>` +
+        `<ResponsePagePath>${encodeEntities(r.responsePagePath)}</ResponsePagePath>` +
+        `<ResponseCode>${r.responseCode}</ResponseCode>` +
+        `<ErrorCachingMinTTL>${r.errorCachingMinTtl ?? 10}</ErrorCachingMinTTL>` +
+        `</CustomErrorResponse>`,
+    )
+    .join('');
+  return `<CustomErrorResponses><Quantity>${responses.length}</Quantity><Items>${items}</Items></CustomErrorResponses>`;
+}
+
 function parseDistribution(xml: string, etag: string | undefined): DistributionSummary {
   return {
     id: textTag(xml, 'Id') ?? '',
@@ -304,7 +334,7 @@ function buildDistributionConfig(input: DistributionConfigInput): string {
     `<CachePolicyId>${input.cachePolicyId ?? CACHING_OPTIMIZED}</CachePolicyId>` +
     `</DefaultCacheBehavior>` +
     `<CacheBehaviors><Quantity>0</Quantity></CacheBehaviors>` +
-    `<CustomErrorResponses><Quantity>0</Quantity></CustomErrorResponses>` +
+    buildCustomErrorResponses(input.customErrorResponses) +
     `<Comment>${encodeEntities(input.comment)}</Comment>` +
     `<Logging><Enabled>false</Enabled><IncludeCookies>false</IncludeCookies><Bucket></Bucket><Prefix></Prefix></Logging>` +
     `<PriceClass>PriceClass_100</PriceClass>` +

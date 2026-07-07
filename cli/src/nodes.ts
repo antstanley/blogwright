@@ -430,8 +430,28 @@ const PREVIEW_FUNCTION_CODE = `function handler(event) {
   return request;
 }`;
 
-/** CloudFront Function that maps a preview subdomain to its S3 prefix (preview stacks only). */
-function previewFunctionNode(): ResourceNode {
+/**
+ * CloudFront Function (viewer-request) for staging/production: resolve a directory URL
+ * to its index document (`/projects/` → `/projects/index.html`). Required because the S3
+ * origin is the private REST endpoint (via OAC), which — unlike an S3 website endpoint —
+ * does no index-document resolution, so `DefaultRootObject` only covers the apex. The
+ * `/site` origin path is applied by the distribution, so this function must not add it.
+ */
+const STATIC_ROUTER_CODE = `function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  if (uri.endsWith('/')) { uri += 'index.html'; }
+  else if (uri.lastIndexOf('.') < uri.lastIndexOf('/')) { uri += '/index.html'; }
+  request.uri = uri;
+  return request;
+}`;
+
+/**
+ * CloudFront viewer-request function. Preview stacks route a subdomain to its S3 prefix
+ * (and resolve index documents); staging/production just resolve directory URLs to their
+ * index document. Both are needed because the OAC/REST S3 origin does no index resolution.
+ */
+function routerFunctionNode(preview: boolean): ResourceNode {
   return {
     id: 'cloudfront-function',
     dependsOn: [],
@@ -442,8 +462,8 @@ function previewFunctionNode(): ResourceNode {
     async create(ctx) {
       const arn = await ctx.clients.cloudfront.ensureFunction(
         `${ctx.names.prefix}-router`,
-        PREVIEW_FUNCTION_CODE,
-        `iamstan ${ctx.env} preview host router`,
+        preview ? PREVIEW_FUNCTION_CODE : STATIC_ROUTER_CODE,
+        `iamstan ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`,
       );
       output(ctx, 'cloudfront-function').arn = arn;
     },
@@ -463,8 +483,8 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
   const dependsOn = [
     'bucket',
     'oac',
+    'cloudfront-function',
     ...(hasDomain ? ['acm-certificate'] : []),
-    ...(preview ? ['cloudfront-function'] : []),
   ];
   return {
     id: 'cloudfront-distribution',
@@ -487,12 +507,19 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
         defaultRootObject: ctx.config.defaultRootObject,
         aliases: ctx.domain ? [preview ? `*.${ctx.domain}` : ctx.domain] : [],
         acmCertificateArn: hasDomain ? String(output(ctx, 'acm-certificate').arn) : undefined,
+        functionArn: String(output(ctx, 'cloudfront-function').arn),
+        // Previews are served uncached (per-PR content, host-routed); staging/production
+        // keep the default cache policy. Non-preview stacks also map the S3 REST origin's
+        // 403/404 (a missing key) to the site's 404 page.
         ...(preview
-          ? {
-              cachePolicyId: CACHING_DISABLED,
-              functionArn: String(output(ctx, 'cloudfront-function').arn),
-            }
-          : {}),
+          ? { cachePolicyId: CACHING_DISABLED }
+          : {
+              customErrorResponses: [403, 404].map((errorCode) => ({
+                errorCode,
+                responsePagePath: '/404.html',
+                responseCode: 404,
+              })),
+            }),
       });
       const out = output(ctx, 'cloudfront-distribution');
       out.id = dist.id;
@@ -817,15 +844,16 @@ export function buildNodes(ctx: OpsContext): ResourceNode[] {
     execRoleNode(),
     microvmImageNode(),
     oacNode(),
+    routerFunctionNode(ctx.preview),
     distributionNode(hasDomain, ctx.preview),
     logDeliveryNode(),
     bucketPolicyNode(),
   ];
   if (hasDomain) nodes.push(certificateNode());
   if (ctx.preview) {
-    nodes.push(previewFunctionNode(), previewDnsNode(), githubOidcRoleNode(true));
+    nodes.push(previewDnsNode(), githubOidcRoleNode(true));
   } else if (ctx.config.githubRepo) {
-    // Merge-to-main production deploys (.github/workflows/deploy.yml).
+    // staging deploys on push to main; production on release (see the deploy workflows).
     nodes.push(githubOidcRoleNode(false));
   }
   return nodes;
