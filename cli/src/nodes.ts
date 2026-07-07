@@ -651,11 +651,15 @@ function githubOidcRoleNode(preview: boolean): ResourceNode {
 }
 
 /**
- * The workflow's OIDC subject claim: previews deploy from any PR ref; production
- * deploys only from pushes to main.
+ * The workflow's OIDC subject claim, scoped per environment to match how each one
+ * deploys: previews from any PR ref; staging from pushes to main; production from the
+ * `production` GitHub Environment (release-gated — see production.yml), which lets
+ * deploys be gated behind environment protection rules.
  */
-export function oidcSubClaim(repo: string, preview: boolean): string {
-  return preview ? `repo:${repo}:*` : `repo:${repo}:ref:refs/heads/main`;
+export function oidcSubClaim(repo: string, env: string, preview: boolean): string {
+  if (preview) return `repo:${repo}:*`;
+  if (env === 'production') return `repo:${repo}:environment:production`;
+  return `repo:${repo}:ref:refs/heads/main`;
 }
 
 /** The deploy role's inline policy statements (exported for tests). */
@@ -735,7 +739,7 @@ async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
           Action: 'sts:AssumeRoleWithWebIdentity',
           Condition: {
             StringEquals: { [`${GITHUB_OIDC_URL}:aud`]: 'sts.amazonaws.com' },
-            StringLike: { [`${GITHUB_OIDC_URL}:sub`]: oidcSubClaim(repo, ctx.preview) },
+            StringLike: { [`${GITHUB_OIDC_URL}:sub`]: oidcSubClaim(repo, ctx.env, ctx.preview) },
           },
         },
       ],

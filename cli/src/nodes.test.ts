@@ -122,17 +122,28 @@ describe('cloudfront log delivery self-heal', () => {
     const { ctx } = deliveryCtx(false);
     (ctx.clients.logs as { putDeliverySource: () => Promise<string> }).putDeliverySource =
       async () => {
-        throw new AwsError({ service: 'logs', code: 'AccessDenied', message: 'no', statusCode: 403 });
+        throw new AwsError({
+          service: 'logs',
+          code: 'AccessDenied',
+          message: 'no',
+          statusCode: 403,
+        });
       };
     await expect(node(ctx).create(ctx)).rejects.toThrow(/AccessDenied/);
   });
 });
 
 describe('oidcSubClaim', () => {
-  it('previews deploy from any ref; production only from main', () => {
-    expect(oidcSubClaim('antstanley/iamstan', true)).toBe('repo:antstanley/iamstan:*');
-    expect(oidcSubClaim('antstanley/iamstan', false)).toBe(
+  it('scopes the subject per environment', () => {
+    // preview: any ref (the flag wins regardless of env name)
+    expect(oidcSubClaim('antstanley/iamstan', 'preview', true)).toBe('repo:antstanley/iamstan:*');
+    // staging: pushes to main
+    expect(oidcSubClaim('antstanley/iamstan', 'staging', false)).toBe(
       'repo:antstanley/iamstan:ref:refs/heads/main',
+    );
+    // production: the release-gated `production` GitHub Environment
+    expect(oidcSubClaim('antstanley/iamstan', 'production', false)).toBe(
+      'repo:antstanley/iamstan:environment:production',
     );
   });
 });

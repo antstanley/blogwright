@@ -26,5 +26,10 @@
   // Only exclude VCS metadata and build output.
   "sourceIgnore": [".git/", ".jj/", "node_modules/", "dist/", ".astro/"],
 
-  "defaultRootObject": "index.html"
+  "defaultRootObject": "index.html",
+
+  // owner/repo — scopes the staging GitHub OIDC deploy role's trust policy
+  // (main branch only; staging.yml deploys on push to main). Re-run
+  // `blog-ops bootstrap staging` after changing.
+  "githubRepo": "antstanley/iamstan"
 }
