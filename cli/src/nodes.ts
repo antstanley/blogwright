@@ -539,8 +539,15 @@ function logDeliveryNode(): ResourceNode {
       out.destination = destArn;
     },
     async delete(ctx) {
-      // Best-effort: the delivery is orphaned when the distribution/log group are removed.
-      ctx.logger.warn('log delivery left to teardown with its distribution/log group');
+      // Removing the distribution/log group does NOT clean up vended log delivery: the
+      // delivery source/destination persist, and a later bootstrap against a new
+      // distribution ARN fails with ConflictException ("Update to existing Delivery Source
+      // with new ResourceId is not allowed"). Delete the delivery first (it references both),
+      // then the source and destination. The id isn't in state, so look it up by source name.
+      const deliveryId = await ctx.clients.logs.findDeliveryIdBySource(ctx.names.deliverySource);
+      if (deliveryId) await ctx.clients.logs.deleteDelivery(deliveryId);
+      await ctx.clients.logs.deleteDeliverySource(ctx.names.deliverySource);
+      await ctx.clients.logs.deleteDeliveryDestination(ctx.names.deliveryDestination);
     },
   };
 }

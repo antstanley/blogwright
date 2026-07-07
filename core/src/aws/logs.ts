@@ -109,4 +109,46 @@ export class LogsClient {
       throw err;
     }
   }
+
+  /** The delivery id linking a given source (needed to delete it), or undefined if none. */
+  async findDeliveryIdBySource(deliverySourceName: string): Promise<string | undefined> {
+    let nextToken: string | undefined;
+    do {
+      const out = await this.call<{
+        deliveries?: Array<{ id?: string; deliverySourceName?: string }>;
+        nextToken?: string;
+      }>('DescribeDeliveries', nextToken ? { nextToken } : {});
+      const match = (out.deliveries ?? []).find((d) => d.deliverySourceName === deliverySourceName);
+      if (match?.id) return match.id;
+      nextToken = out.nextToken;
+    } while (nextToken);
+    return undefined;
+  }
+
+  async deleteDelivery(id: string): Promise<void> {
+    try {
+      await this.call('DeleteDelivery', { id });
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return;
+      throw err;
+    }
+  }
+
+  async deleteDeliverySource(name: string): Promise<void> {
+    try {
+      await this.call('DeleteDeliverySource', { name });
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return;
+      throw err;
+    }
+  }
+
+  async deleteDeliveryDestination(name: string): Promise<void> {
+    try {
+      await this.call('DeleteDeliveryDestination', { name });
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return;
+      throw err;
+    }
+  }
 }
