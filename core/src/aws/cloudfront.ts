@@ -222,33 +222,35 @@ export class CloudFrontClient {
   /** Create-or-update the function code and publish it. Returns the published ARN. */
   async ensureFunction(name: string, code: string, comment: string): Promise<string> {
     const existing = await this.describeFunction(name);
-    let etag: string;
     if (existing) {
-      const res = await this.client.send({
+      await this.client.send({
         service: 'cloudfront',
         method: 'PUT',
         path: `${API}/function/${name}`,
         headers: { 'content-type': 'application/xml', 'if-match': existing.etag },
         body: this.functionBody('UpdateFunctionRequest', name, code, comment),
       });
-      etag = res.headers['etag'] ?? existing.etag;
     } else {
-      const res = await this.client.send({
+      await this.client.send({
         service: 'cloudfront',
         method: 'POST',
         path: `${API}/function`,
         headers: { 'content-type': 'application/xml' },
         body: this.functionBody('CreateFunctionRequest', name, code, comment),
       });
-      etag = res.headers['etag'] ?? '';
     }
+    // Re-read the current ETag before publishing. Create/update return a fresh ETag, but
+    // it isn't reliably surfaced from the response headers — publishing the DEVELOPMENT
+    // stage with a stale ETag fails the precondition (HTTP 412), which is what broke
+    // reconciling an already-existing function.
+    const current = await this.describeFunction(name);
     const pub = await this.client.send({
       service: 'cloudfront',
       method: 'POST',
       path: `${API}/function/${name}/publish`,
-      headers: { 'if-match': etag },
+      headers: { 'if-match': current?.etag ?? '' },
     });
-    return textTag(pub.text(), 'FunctionARN') ?? existing?.arn ?? '';
+    return textTag(pub.text(), 'FunctionARN') ?? current?.arn ?? existing?.arn ?? '';
   }
 
   async deleteFunction(name: string): Promise<void> {
