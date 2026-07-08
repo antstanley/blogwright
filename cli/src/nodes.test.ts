@@ -2,7 +2,7 @@ import { AwsError } from '@iamstan/ops-core';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
-import { buildNodes, oidcRolePolicyStatements, oidcSubClaim } from './nodes.js';
+import { buildNodes, builderImageAction, oidcRolePolicyStatements, oidcSubClaim } from './nodes.js';
 
 function ctx(opts: { preview: boolean; pds?: boolean }): OpsContext {
   return {
@@ -23,6 +23,7 @@ function ctx(opts: { preview: boolean; pds?: boolean }): OpsContext {
     state: {
       resources: {
         'iam-exec-role': { arn: 'arn:aws:iam::123456789012:role/exec' },
+        'iam-build-role': { arn: 'arn:aws:iam::123456789012:role/build' },
         'cloudfront-distribution': {
           arn: 'arn:aws:cloudfront::123456789012:distribution/DIST',
         },
@@ -133,6 +134,35 @@ describe('cloudfront log delivery self-heal', () => {
   });
 });
 
+describe('builderImageAction', () => {
+  const HEALTHY = { state: 'CREATED' };
+  const recorded = { agentHash: 'abc123', logGroup: '/lg' };
+
+  it('creates when the image is missing or being deleted', () => {
+    expect(builderImageAction(undefined, recorded, 'abc123', '/lg')).toBe('create');
+    expect(builderImageAction({ state: 'DELETING' }, recorded, 'abc123', '/lg')).toBe('create');
+  });
+
+  it('skips when a healthy image already matches the agent bundle and log group', () => {
+    expect(builderImageAction(HEALTHY, recorded, 'abc123', '/lg')).toBe('skip');
+    expect(builderImageAction({ state: 'UPDATED' }, recorded, 'abc123', '/lg')).toBe('skip');
+  });
+
+  it('updates when the agent bundle hash changed', () => {
+    expect(builderImageAction(HEALTHY, recorded, 'def456', '/lg')).toBe('update');
+  });
+
+  it('updates when the log group changed', () => {
+    expect(builderImageAction(HEALTHY, recorded, 'abc123', '/other')).toBe('update');
+  });
+
+  it('rebuilds (update) when the last build is unhealthy even if the hash matches', () => {
+    expect(builderImageAction({ state: 'CREATE_FAILED' }, recorded, 'abc123', '/lg')).toBe(
+      'update',
+    );
+  });
+});
+
 describe('oidcSubClaim', () => {
   it('scopes the subject per environment', () => {
     // preview: any ref (the flag wins regardless of env name)
@@ -153,6 +183,17 @@ describe('oidcRolePolicyStatements', () => {
     const actions = actionsOf(oidcRolePolicyStatements(ctx({ preview: true, pds: true })));
     expect(actions).not.toContain('cloudfront:CreateInvalidation');
     expect(actions).not.toContain('secretsmanager:GetSecretValue');
+  });
+
+  it('lets the deploy role rebuild the builder image (create/update image + pass build role)', () => {
+    const statements = oidcRolePolicyStatements(ctx({ preview: false }));
+    const actions = actionsOf(statements);
+    expect(actions).toContain('lambda:CreateMicrovmImage');
+    expect(actions).toContain('lambda:UpdateMicrovmImage');
+    const passRole = statements.find((s) => actionsOf([s]).includes('iam:PassRole')) as {
+      Resource: string[];
+    };
+    expect(passRole.Resource).toContain('arn:aws:iam::123456789012:role/build');
   });
 
   it('grants production invalidation on the distribution ARN', () => {

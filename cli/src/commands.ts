@@ -10,7 +10,7 @@ import {
 import { applyGraph, destroyGraph } from './graph.js';
 import { colors } from './logger.js';
 import { clearRunningMicrovms } from './microvms.js';
-import { buildNodes } from './nodes.js';
+import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import { syncAfterDeploy } from './pds/commands.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles, revisionHash } from './repo.js';
 
@@ -61,6 +61,9 @@ export async function deploy(ctx: OpsContext): Promise<void> {
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
   ctx.logger.ok(`uploaded ${sourceKey} (${(zip.byteLength / 1024).toFixed(0)} KiB)`);
 
+  // Rebuild the builder image first if the agent bundle changed, so build-agent fixes
+  // ship on the same deploy (no-op when unchanged).
+  await reconcileBuilderImage(ctx);
   await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
   await invalidateChanged(ctx, hash);
   // Production content changed — mirror it to the PDS (non-fatal; see syncAfterDeploy).
@@ -116,6 +119,9 @@ export async function previewDeploy(ctx: OpsContext, id: string): Promise<string
   const sourceKey = `build/${hash}.zip`;
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
 
+  // Rebuild the shared preview builder image if the agent bundle changed (no-op when
+  // unchanged), so agent fixes reach PR previews too.
+  await reconcileBuilderImage(ctx);
   const url = `https://${id}.${ctx.domain}`;
   await runBuild(ctx, {
     hash,

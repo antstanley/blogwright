@@ -266,16 +266,78 @@ async function awaitImageSettled(
   if (settled.imageVersion) out.version = settled.imageVersion;
 }
 
+export type BuilderImageAction = 'create' | 'update' | 'skip';
+
+/**
+ * Decide what a builder-image reconcile should do: create when the image is missing or
+ * being deleted, skip when a healthy image already matches the current agent bundle and
+ * log group, otherwise update (agent bundle changed, log group changed, or last build
+ * unhealthy). Pure so the decision is unit-testable independent of the AWS calls.
+ */
+export function builderImageAction(
+  image: { state: string } | undefined,
+  recorded: { agentHash?: string | undefined; logGroup?: string | undefined },
+  hash: string,
+  logGroup: string,
+): BuilderImageAction {
+  if (!image || /DELET/i.test(image.state)) return 'create';
+  const healthy = /CREATED|UPDATED/i.test(image.state);
+  const unchanged = recorded.agentHash === hash && recorded.logGroup === logGroup;
+  return healthy && unchanged ? 'skip' : 'update';
+}
+
+/**
+ * Create, rebuild, or leave the MicroVM builder image, depending on what's deployed:
+ * create it if missing, rebuild it if the agent bundle (or its log group) changed or the
+ * last build is unhealthy, otherwise no-op. Idempotent and cheap in the common case (a
+ * single GetMicrovmImage + hash compare), so it's safe to run before every deploy — which
+ * is how build-agent changes propagate through CI without a separate `bootstrap`.
+ */
+export async function reconcileBuilderImage(ctx: OpsContext): Promise<void> {
+  // GetMicrovmImage requires an ARN/ID (not the friendly name), looked up via the ARN
+  // recorded in state on a prior create.
+  const recordedArn = output(ctx, 'microvm-image').arn;
+  const existing =
+    typeof recordedArn === 'string' ? await ctx.clients.microvms.getImage(recordedArn) : undefined;
+  const out = output(ctx, 'microvm-image');
+  const { input, hash } = await imageInput(ctx);
+  const action = builderImageAction(
+    existing,
+    {
+      agentHash: out.agentHash as string | undefined,
+      logGroup: out.logGroup as string | undefined,
+    },
+    hash,
+    ctx.names.microvmLogGroup,
+  );
+  if (action === 'skip') return;
+
+  if (action === 'create') {
+    ctx.logger.step(`create MicroVM image (agent ${hash})`);
+    const image = await ctx.clients.microvms.createImage(input);
+    // Persist the ARN immediately so a later failure/retry finds the image (and updates it)
+    // instead of re-issuing create() and hitting a 409 on the existing name.
+    out.arn = image.imageArn;
+    await ctx.save();
+    await awaitImageSettled(ctx, image.imageArn, 'CREATED');
+  } else {
+    const arn = String(recordedArn);
+    ctx.logger.step(`update MicroVM image (agent ${hash})`);
+    await ctx.clients.microvms.updateImage(arn, input);
+    await awaitImageSettled(ctx, arn, 'UPDATED', existing?.imageVersion);
+  }
+
+  out.agentHash = hash;
+  out.logGroup = ctx.names.microvmLogGroup;
+  await ctx.save();
+}
+
 function microvmImageNode(): ResourceNode {
   return {
     id: 'microvm-image',
     dependsOn: ['bucket', 'iam-build-role'],
     title: 'MicroVM builder image',
     async read(ctx) {
-      // GetMicrovmImage requires an ARN/ID (not the friendly name), so look up via the
-      // ARN recorded in state on a prior create — as with the OAC/distribution nodes.
-      // The image "exists" in any non-deleted state; update() reconciles a failed or
-      // stale build (create() would otherwise 409 on the existing name).
       const arn = output(ctx, 'microvm-image').arn;
       if (typeof arn !== 'string') return false;
       const image = await ctx.clients.microvms.getImage(arn);
@@ -283,37 +345,9 @@ function microvmImageNode(): ResourceNode {
       if (image.imageVersion) output(ctx, 'microvm-image').version = image.imageVersion;
       return true;
     },
-    async create(ctx) {
-      const { input, hash } = await imageInput(ctx);
-      ctx.logger.step(`create MicroVM image (agent ${hash})`);
-      const image = await ctx.clients.microvms.createImage(input);
-      // Persist the ARN immediately so a later failure/retry can find the image via read()
-      // → update() instead of re-issuing create() and hitting a 409 on the existing name.
-      output(ctx, 'microvm-image').arn = image.imageArn;
-      await ctx.save();
-      await awaitImageSettled(ctx, image.imageArn, 'CREATED');
-      const out = output(ctx, 'microvm-image');
-      out.agentHash = hash;
-      out.logGroup = ctx.names.microvmLogGroup;
-    },
-    async update(ctx) {
-      const arn = String(output(ctx, 'microvm-image').arn);
-      const before = await ctx.clients.microvms.getImage(arn);
-      const healthy = Boolean(before) && /CREATED|UPDATED/i.test(before?.state ?? '');
-      const { input, hash } = await imageInput(ctx);
-      // Skip the (slow) rebuild when the image is healthy and its inputs are unchanged
-      // (the agent code and the log group it writes to).
-      const unchanged =
-        output(ctx, 'microvm-image').agentHash === hash &&
-        output(ctx, 'microvm-image').logGroup === ctx.names.microvmLogGroup;
-      if (healthy && unchanged) return;
-      ctx.logger.step(`update MicroVM image (agent ${hash})`);
-      await ctx.clients.microvms.updateImage(arn, input);
-      await awaitImageSettled(ctx, arn, 'UPDATED', before?.imageVersion);
-      const out = output(ctx, 'microvm-image');
-      out.agentHash = hash;
-      out.logGroup = ctx.names.microvmLogGroup;
-    },
+    // Both paths reconcile: create-if-missing / rebuild-if-changed / else no-op.
+    create: reconcileBuilderImage,
+    update: reconcileBuilderImage,
     async delete(ctx) {
       const arn = output(ctx, 'microvm-image').arn;
       if (typeof arn === 'string') await ctx.clients.microvms.deleteImage(arn);
@@ -708,6 +742,10 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
         'lambda:TerminateMicrovm',
         'lambda:CreateMicrovmAuthToken',
         'lambda:GetMicrovmImage',
+        // Rebuild the builder image in-deploy when the agent bundle changed, so
+        // build-agent fixes propagate through CI without a separate `bootstrap`.
+        'lambda:CreateMicrovmImage',
+        'lambda:UpdateMicrovmImage',
         // RunMicrovm attaches the managed ingress/egress network connectors.
         'lambda:PassNetworkConnector',
       ],
@@ -719,10 +757,14 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       Resource: logGroupArn(ctx, ctx.names.microvmLogGroup),
     },
     {
-      // RunMicrovm passes the exec role to the MicroVM.
+      // RunMicrovm passes the exec role to the MicroVM; rebuilding the builder image
+      // passes the build role.
       Effect: 'Allow',
       Action: ['iam:PassRole'],
-      Resource: String(output(ctx, 'iam-exec-role').arn),
+      Resource: [
+        String(output(ctx, 'iam-exec-role').arn),
+        String(output(ctx, 'iam-build-role').arn),
+      ],
     },
   ];
   if (!ctx.preview) {
