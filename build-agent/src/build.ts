@@ -167,6 +167,11 @@ const CONTENT_TYPES: Record<string, string> = {
   woff2: 'font/woff2',
   xml: 'application/xml',
   txt: 'text/plain; charset=utf-8',
+  // Serve Markdown with its proper MIME type. The prior fallback (application/octet-stream)
+  // forced the "view as Markdown" links to download; text/markdown is the correct type and
+  // the one Markdown-aware agents request.
+  md: 'text/markdown; charset=utf-8',
+  markdown: 'text/markdown; charset=utf-8',
   map: 'application/json',
   wasm: 'application/wasm',
 };
