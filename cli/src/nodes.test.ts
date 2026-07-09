@@ -205,12 +205,17 @@ describe('oidcRolePolicyStatements', () => {
     expect(actionsOf(statements)).not.toContain('secretsmanager:GetSecretValue');
   });
 
-  it('grants GetSecretValue scoped to the pds secret when configured', () => {
+  it('grants secret read/write scoped to the pds secret when configured', () => {
     const statements = oidcRolePolicyStatements(ctx({ preview: false, pds: true }));
     const secret = statements.find((s) =>
       actionsOf([s]).includes('secretsmanager:GetSecretValue'),
     ) as { Action: string[]; Resource: string };
-    expect(secret.Action).toEqual(['secretsmanager:GetSecretValue']);
+    // write access too: every sync persists the rotated OAuth refresh token
+    expect(secret.Action).toEqual([
+      'secretsmanager:GetSecretValue',
+      'secretsmanager:PutSecretValue',
+      'secretsmanager:CreateSecret',
+    ]);
     expect(secret.Resource).toBe(
       'arn:aws:secretsmanager:us-east-1:123456789012:secret:iamstan/atproto-*',
     );

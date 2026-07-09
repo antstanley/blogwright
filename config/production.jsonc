@@ -49,12 +49,13 @@
 
   // standard.site publishing to the AT Protocol PDS. After a successful production
   // deploy the CLI reconciles site.standard.* records (see `blog-ops pds`).
-  // Credentials live in Secrets Manager under `secretName` (default
-  // "<siteName>/atproto"); manage them with `blog-ops pds secret`.
+  // Auth is atproto OAuth (confidential client served from /oauth/ on the site):
+  // one-time `blog-ops pds keygen` + `blog-ops pds login`; the client key and
+  // session live in Secrets Manager under `secretName` (default "<siteName>/atproto").
   "pds": {
     "name": "Ant Stanley",
     "description": "Projects and notes from Ant Stanley."
-    // "service": "https://bsky.social",
+    // "handleResolver": "https://public.api.bsky.app",
     // "secretName": "iamstan/atproto"
   }
 }

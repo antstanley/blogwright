@@ -33,13 +33,15 @@ export interface PdsConfig {
   name: string;
   /** Optional publication description. */
   description?: string | undefined;
-  /** PDS endpoint used for XRPC calls. */
-  service: string;
-  /** Secrets Manager secret holding { identifier, password, service }. */
+  /**
+   * Resolver used by `pds login` to turn a handle into a DID (unused when
+   * logging in with a bare DID). The PDS endpoint itself is discovered from
+   * the DID document during OAuth.
+   */
+  handleResolver?: string | undefined;
+  /** Secrets Manager secret holding the OAuth client key + session. */
   secretName: string;
 }
-
-export const DEFAULT_PDS_SERVICE = 'https://bsky.social';
 
 export interface OpsConfig {
   /** Primary region for S3 / MicroVM / logs. ACM+CloudFront are always us-east-1. */
@@ -169,7 +171,6 @@ export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
   if (raw.pds) {
     cfg.pds = {
       ...raw.pds,
-      service: raw.pds.service ?? DEFAULT_PDS_SERVICE,
       secretName: raw.pds.secretName ?? `${cfg.siteName}/atproto`,
     };
   }
@@ -202,14 +203,16 @@ function validateConfig(cfg: OpsConfig): void {
   }
   if (cfg.pds) {
     if (!cfg.pds.name?.trim()) throw new Error('config.pds.name is required');
-    let service: URL;
-    try {
-      service = new URL(cfg.pds.service);
-    } catch {
-      throw new Error(`config.pds.service must be a URL, got "${cfg.pds.service}"`);
-    }
-    if (service.protocol !== 'https:') {
-      throw new Error(`config.pds.service must be https, got "${cfg.pds.service}"`);
+    if (cfg.pds.handleResolver !== undefined) {
+      let resolver: URL;
+      try {
+        resolver = new URL(cfg.pds.handleResolver);
+      } catch {
+        throw new Error(`config.pds.handleResolver must be a URL, got "${cfg.pds.handleResolver}"`);
+      }
+      if (resolver.protocol !== 'https:') {
+        throw new Error(`config.pds.handleResolver must be https, got "${cfg.pds.handleResolver}"`);
+      }
     }
     if (!/^[\w/+=.@-]+$/.test(cfg.pds.secretName)) {
       throw new Error(`config.pds.secretName has invalid characters: "${cfg.pds.secretName}"`);

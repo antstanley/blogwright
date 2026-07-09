@@ -44,20 +44,19 @@ describe('parseConfig', () => {
     expect(parseConfig('{}').pds).toBeUndefined();
   });
 
-  it('applies pds defaults (service, secretName from siteName)', () => {
+  it('applies pds defaults (secretName from siteName)', () => {
     const cfg = parseConfig('{ "pds": { "name": "Ant Stanley" } }');
     expect(cfg.pds).toEqual({
       name: 'Ant Stanley',
-      service: 'https://bsky.social',
       secretName: 'iamstan/atproto',
     });
   });
 
   it('keeps explicit pds overrides', () => {
     const cfg = parseConfig(
-      '{ "pds": { "name": "x", "service": "https://pds.example", "secretName": "me/secret", "description": "d" } }',
+      '{ "pds": { "name": "x", "handleResolver": "https://resolver.example", "secretName": "me/secret", "description": "d" } }',
     );
-    expect(cfg.pds?.service).toBe('https://pds.example');
+    expect(cfg.pds?.handleResolver).toBe('https://resolver.example');
     expect(cfg.pds?.secretName).toBe('me/secret');
     expect(cfg.pds?.description).toBe('d');
   });
@@ -66,11 +65,13 @@ describe('parseConfig', () => {
     expect(() => parseConfig('{ "pds": { "name": " " } }')).toThrow(/pds.name/);
   });
 
-  it('rejects a non-https pds service', () => {
-    expect(() => parseConfig('{ "pds": { "name": "x", "service": "http://pds" } }')).toThrow(
-      /https/,
+  it('rejects a non-https pds handleResolver', () => {
+    expect(() =>
+      parseConfig('{ "pds": { "name": "x", "handleResolver": "http://resolver" } }'),
+    ).toThrow(/https/);
+    expect(() => parseConfig('{ "pds": { "name": "x", "handleResolver": "nope" } }')).toThrow(
+      /URL/,
     );
-    expect(() => parseConfig('{ "pds": { "name": "x", "service": "nope" } }')).toThrow(/URL/);
   });
 });
 

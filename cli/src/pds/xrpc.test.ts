@@ -2,41 +2,27 @@ import { describe, expect, it } from 'vitest';
 
 import { PdsClient, XrpcError, rkeyFromUri } from './xrpc.js';
 
-type Handler = (url: URL, init: RequestInit) => { status: number; body: unknown };
+type Handler = (pathname: string, init: RequestInit) => { status: number; body: unknown };
 
 function client(handler: Handler): PdsClient {
-  const transport = (async (input: URL | RequestInfo, init?: RequestInit) => {
-    const { status, body } = handler(new URL(String(input)), init ?? {});
+  const transport = async (pathname: string, init?: RequestInit) => {
+    const { status, body } = handler(pathname, init ?? {});
     return new Response(JSON.stringify(body), { status });
-  }) as typeof fetch;
-  return new PdsClient('https://pds.example', transport);
-}
-
-async function authed(handler: Handler): Promise<PdsClient> {
-  const c = client((url, init) => {
-    if (url.pathname === '/xrpc/com.atproto.server.createSession') {
-      return { status: 200, body: { did: 'did:plc:me', accessJwt: 'jwt-1' } };
-    }
-    return handler(url, init);
-  });
-  await c.createSession('me.example', 'pass');
-  return c;
+  };
+  return new PdsClient('did:plc:me', transport);
 }
 
 describe('PdsClient', () => {
-  it('authenticates and sends the bearer token on subsequent calls', async () => {
-    let seenAuth: string | undefined;
-    const c = await authed((url, init) => {
-      seenAuth = new Headers(init.headers).get('authorization') ?? undefined;
+  it('sends PDS-relative pathnames with the repo DID in the query', async () => {
+    let seen: string | undefined;
+    const c = client((pathname) => {
+      seen = pathname;
       return { status: 200, body: { records: [] } };
     });
     await c.listRecords('site.standard.document');
-    expect(seenAuth).toBe('Bearer jwt-1');
-  });
-
-  it('requires a session before repo calls', async () => {
-    const c = client(() => ({ status: 200, body: {} }));
-    await expect(c.listRecords('x')).rejects.toThrow(/createSession/);
+    expect(seen).toBe(
+      '/xrpc/com.atproto.repo.listRecords?repo=did%3Aplc%3Ame&collection=site.standard.document&limit=100',
+    );
   });
 
   it('paginates listRecords with the cursor until exhausted', async () => {
@@ -45,16 +31,35 @@ describe('PdsClient', () => {
       { records: [{ uri: 'at://x/c/r2', cid: 'c', value: {} }] },
     ];
     let call = 0;
-    const c = await authed((url) => {
-      expect(url.searchParams.get('cursor')).toBe(call === 0 ? null : 'next');
+    const c = client((pathname) => {
+      const cursor = new URLSearchParams(pathname.split('?')[1]).get('cursor');
+      expect(cursor).toBe(call === 0 ? null : 'next');
       return { status: 200, body: pages[call++] };
     });
     const records = await c.listRecords('c');
     expect(records.map((r) => r.uri)).toEqual(['at://x/c/r1', 'at://x/c/r2']);
   });
 
+  it('posts JSON bodies with the repo DID', async () => {
+    let seenBody: string | undefined;
+    let seenType: string | null = null;
+    const c = client((_pathname, init) => {
+      seenBody = String(init.body);
+      seenType = new Headers(init.headers).get('content-type');
+      return { status: 200, body: { uri: 'at://x/c/r' } };
+    });
+    await c.putRecord('c', 'r', { $type: 'c' });
+    expect(seenType).toBe('application/json');
+    expect(JSON.parse(seenBody!)).toEqual({
+      repo: 'did:plc:me',
+      collection: 'c',
+      rkey: 'r',
+      record: { $type: 'c' },
+    });
+  });
+
   it('maps error bodies to XrpcError and treats RecordNotFound as undefined', async () => {
-    const c = await authed(() => ({
+    const c = client(() => ({
       status: 400,
       body: { error: 'RecordNotFound', message: 'nope' },
     }));
@@ -65,9 +70,9 @@ describe('PdsClient', () => {
   it('surfaces auth failures with the PDS error code', async () => {
     const c = client(() => ({
       status: 401,
-      body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' },
+      body: { error: 'InvalidToken', message: 'expired' },
     }));
-    await expect(c.createSession('me', 'bad')).rejects.toThrow(/AuthenticationRequired/);
+    await expect(c.listRecords('c')).rejects.toThrow(/InvalidToken/);
   });
 });
 

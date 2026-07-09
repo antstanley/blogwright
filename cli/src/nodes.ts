@@ -775,10 +775,17 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       Resource: String(output(ctx, 'cloudfront-distribution').arn),
     });
     if (ctx.config.pds) {
-      // The post-deploy PDS sync reads the app-password secret (and nothing else).
+      // The post-deploy PDS sync reads the OAuth secret and writes it back:
+      // refresh tokens are single-use, so every sync persists the rotated
+      // session (PutSecretValue via the upsert helper, which tries CreateSecret
+      // first when the secret is missing).
       statements.push({
         Effect: 'Allow',
-        Action: ['secretsmanager:GetSecretValue'],
+        Action: [
+          'secretsmanager:GetSecretValue',
+          'secretsmanager:PutSecretValue',
+          'secretsmanager:CreateSecret',
+        ],
         Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName}-*`,
       });
     }

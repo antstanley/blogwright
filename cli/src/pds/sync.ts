@@ -6,10 +6,16 @@ import type { PdsConfig } from '@iamstan/ops-core';
 import type { OpsContext } from '../context.js';
 import { listPublishablePosts, type PostMeta } from './content.js';
 import { postPath, tidFromPath } from './rkey.js';
-import { PdsClient, rkeyFromUri, type PdsRecord } from './xrpc.js';
+import { rkeyFromUri, type PdsClient, type PdsRecord } from './xrpc.js';
 
 /** The client surface the sync needs — structural, so tests can stub it. */
-export type PdsRepo = Pick<PdsClient, 'createSession' | 'listRecords' | 'getRecord' | 'putRecord'>;
+export type PdsRepo = Pick<PdsClient, 'listRecords' | 'getRecord' | 'putRecord'>;
+
+/**
+ * Opens an authenticated repo for the configured account. Production wiring is
+ * oauth.ts#openPdsRepo (OAuth session restore); tests inject stubs.
+ */
+export type OpenRepo = (ctx: OpsContext) => Promise<{ did: string; repo: PdsRepo }>;
 
 export const PUBLICATION_COLLECTION = 'site.standard.publication';
 export const DOCUMENT_COLLECTION = 'site.standard.document';
@@ -17,13 +23,6 @@ export const DOCUMENT_COLLECTION = 'site.standard.document';
 /** Repo-relative paths of the two files `pds init` writes and the site ships. */
 export const ATPROTO_JSON_PATH = 'src/data/atproto.json';
 export const WELL_KNOWN_PATH = 'public/.well-known/site.standard.publication';
-
-export interface PdsCredentials {
-  identifier: string;
-  password: string;
-  /** Optional per-secret override of the configured PDS endpoint. */
-  service?: string | undefined;
-}
 
 interface AtprotoSiteConfig {
   did: string;
@@ -39,32 +38,6 @@ export interface SyncSummary {
   orphans: string[];
 }
 
-/**
- * Fetch and parse the PDS credentials from Secrets Manager. Called only at
- * sync/init time — credentials must never be loaded during context creation.
- */
-export async function loadPdsCredentials(ctx: OpsContext): Promise<PdsCredentials> {
-  const pds = requirePdsConfig(ctx);
-  const raw = await ctx.clients.secrets.getSecretValue(pds.secretName);
-  if (!raw) {
-    throw new Error(
-      `no secret at "${pds.secretName}" — create it with \`blog-ops pds secret set\``,
-    );
-  }
-  let parsed: Partial<PdsCredentials>;
-  try {
-    parsed = JSON.parse(raw) as Partial<PdsCredentials>;
-  } catch {
-    throw new Error(`secret "${pds.secretName}" is not valid JSON`);
-  }
-  if (!parsed.identifier || !parsed.password) {
-    throw new Error(
-      `secret "${pds.secretName}" must contain { identifier, password } — re-run \`blog-ops pds secret set\``,
-    );
-  }
-  return { identifier: parsed.identifier, password: parsed.password, service: parsed.service };
-}
-
 export function requirePdsConfig(ctx: OpsContext): PdsConfig {
   if (!ctx.config.pds) {
     throw new Error('config has no "pds" section — add it to ops/config/production.jsonc');
@@ -73,9 +46,7 @@ export function requirePdsConfig(ctx: OpsContext): PdsConfig {
 }
 
 /** Read src/data/atproto.json; undefined when the site has not been initialised. */
-async function readAtprotoSiteConfig(
-  repoRoot: string,
-): Promise<AtprotoSiteConfig | undefined> {
+async function readAtprotoSiteConfig(repoRoot: string): Promise<AtprotoSiteConfig | undefined> {
   let text: string;
   try {
     text = await readFile(join(repoRoot, ATPROTO_JSON_PATH), 'utf8');
@@ -99,7 +70,11 @@ export async function readWellKnownUri(repoRoot: string): Promise<string | undef
   }
 }
 
-/** The publication record as config + domain describe it. */
+/**
+ * The publication record as config + domain describe it. `siteUrl` must have
+ * no trailing slash — standard.site appends the document `path`, which already
+ * starts with one.
+ */
 export function publicationRecord(pds: PdsConfig, siteUrl: string): Record<string, unknown> {
   return {
     $type: PUBLICATION_COLLECTION,
@@ -194,14 +169,14 @@ export async function syncDocuments(
 }
 
 /**
- * Full reconcile: credentials from Secrets Manager, session against the PDS,
- * publication + documents. The caller decides when this may run (production only)
- * and whether a failure is fatal.
+ * Full reconcile: OAuth session restore against the PDS, publication +
+ * documents. The caller decides when this may run (production only) and
+ * whether a failure is fatal.
  */
 export async function syncPds(
   ctx: OpsContext,
   repoRoot: string,
-  clientFactory: (service: string) => PdsRepo = (service) => new PdsClient(service),
+  openRepo: OpenRepo,
 ): Promise<SyncSummary> {
   const pds = requirePdsConfig(ctx);
   const site = await readAtprotoSiteConfig(repoRoot);
@@ -217,21 +192,17 @@ export async function syncPds(
   }
   if (!ctx.domain) throw new Error('pds sync requires a configured domain');
 
-  const creds = await loadPdsCredentials(ctx);
-  const client = clientFactory(creds.service ?? pds.service);
-  const session = await client.createSession(creds.identifier, creds.password);
-  if (session.did !== site.did) {
-    throw new Error(
-      `credential DID ${session.did} does not match ${ATPROTO_JSON_PATH} DID ${site.did}`,
-    );
+  const { did, repo } = await openRepo(ctx);
+  if (did !== site.did) {
+    throw new Error(`session DID ${did} does not match ${ATPROTO_JSON_PATH} DID ${site.did}`);
   }
 
   const posts = await listPublishablePosts(repoRoot);
   const publication = await syncPublication(
-    client,
-    publicationRecord(pds, `https://${ctx.domain}/`),
+    repo,
+    publicationRecord(pds, `https://${ctx.domain}`),
     site.publicationUri,
   );
-  const documents = await syncDocuments(client, posts, site.publicationUri);
+  const documents = await syncDocuments(repo, posts, site.publicationUri);
   return { publication, ...documents };
 }

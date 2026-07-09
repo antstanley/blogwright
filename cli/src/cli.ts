@@ -26,11 +26,16 @@ Commands:
   preview list                List active previews
   preview teardown --yes      Tear down the whole preview stack
 
-  pds secret set --identifier <did> --password <app-password> [--service <url>]
-                              Store PDS credentials in Secrets Manager
-                              (service defaults to https://bsky.social)
+  pds keygen                  Generate the OAuth client key: private JWK into
+                              Secrets Manager, public documents into public/oauth/
+                              (commit + release those before pds login)
+  pds login --identifier <handle-or-did>
+                              Interactive OAuth bootstrap: prints an authorize URL,
+                              then expects the pasted /oauth/callback redirect URL;
+                              the session is stored in Secrets Manager and refreshed
+                              automatically on every sync
   pds secret status           Show secret metadata (never the value)
-  pds secret delete --yes     Delete the secret
+  pds secret delete --yes     Delete the secret (logs out and discards the key)
   pds init                    Create/update the standard.site publication record and
                               write the site verification files (commit them)
   pds sync                    Reconcile site.standard.document records with
@@ -72,8 +77,6 @@ export async function main(argv: string[]): Promise<number> {
       hash: { type: 'string' },
       id: { type: 'string' },
       identifier: { type: 'string' },
-      password: { type: 'string' },
-      service: { type: 'string' },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -155,8 +158,6 @@ interface PdsValues {
   domain?: string | undefined;
   endpoint?: string | undefined;
   identifier?: string | undefined;
-  password?: string | undefined;
-  service?: string | undefined;
   yes: boolean;
 }
 
@@ -166,7 +167,7 @@ async function runPds(positionals: string[], values: PdsValues, logger: Logger):
   const secret = positionals[1] === 'secret';
   const action = secret ? `secret ${positionals[2] ?? ''}`.trim() : positionals[1];
   const envPositional = positionals[secret ? 3 : 2];
-  const known = new Set(['init', 'sync', 'secret set', 'secret status', 'secret delete']);
+  const known = new Set(['keygen', 'login', 'init', 'sync', 'secret status', 'secret delete']);
   if (!action || !known.has(action)) {
     logger.error(`unknown pds action: ${action ?? '(none)'}`);
     logger.info(USAGE);
@@ -180,12 +181,11 @@ async function runPds(positionals: string[], values: PdsValues, logger: Logger):
   });
 
   switch (action) {
-    case 'secret set':
-      await pds.secretSet(ctx, {
-        identifier: values.identifier,
-        password: values.password,
-        service: values.service,
-      });
+    case 'keygen':
+      await pds.keygen(ctx);
+      break;
+    case 'login':
+      await pds.login(ctx, { identifier: values.identifier });
       break;
     case 'secret status':
       await pds.secretStatus(ctx);

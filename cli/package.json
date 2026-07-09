@@ -14,6 +14,7 @@
     "start": "node ./dist/bin.js"
   },
   "dependencies": {
+    "@atproto/oauth-client-node": "^0.4.7",
     "@iamstan/ops-core": "workspace:*",
     "fflate": "^0.8.3"
   },

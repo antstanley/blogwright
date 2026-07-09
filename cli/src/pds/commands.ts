@@ -1,72 +1,113 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 
 import type { OpsContext } from '../context.js';
 import { colors } from '../logger.js';
 import {
+  CLIENT_METADATA_PATH,
+  JWKS_PATH,
+  clientMetadata,
+  jwksDocument,
+} from './client-metadata.js';
+import {
+  generateClientKey,
+  login as oauthLogin,
+  openPdsRepo,
+  publicClientJwk,
+  verifyClientAssets,
+} from './oauth.js';
+import { loadPdsSecret, updatePdsSecret } from './secret.js';
+import {
   ATPROTO_JSON_PATH,
   PUBLICATION_COLLECTION,
   WELL_KNOWN_PATH,
-  loadPdsCredentials,
   publicationRecord,
   readWellKnownUri,
   requirePdsConfig,
   syncPds,
+  type OpenRepo,
   type SyncSummary,
 } from './sync.js';
-import { PdsClient, rkeyFromUri } from './xrpc.js';
+import { rkeyFromUri } from './xrpc.js';
 
-export interface SecretSetOptions {
-  /** DID (or handle) used for com.atproto.server.createSession. */
-  identifier?: string | undefined;
-  /** App password — never the account password. */
-  password?: string | undefined;
-  /** AT Protocol host; defaults to the configured pds.service (bsky.social). */
-  service?: string | undefined;
-}
-
-/** Create/update the Secrets Manager secret from explicit CLI parameters. */
-export async function secretSet(ctx: OpsContext, opts: SecretSetOptions): Promise<void> {
+/**
+ * Generate the OAuth confidential-client key: private JWK into the secret
+ * (clearing any session — client auth is bound to the key), public half into
+ * the two committed /oauth/ documents the site serves.
+ */
+export async function keygen(
+  ctx: OpsContext,
+  repoRoot = process.cwd(),
+  generateKey: typeof generateClientKey = generateClientKey,
+): Promise<void> {
   const pds = requirePdsConfig(ctx);
-  if (!opts.identifier) {
-    throw new Error('pds secret set requires --identifier <did-or-handle>');
-  }
-  if (!opts.password) {
-    throw new Error(
-      'pds secret set requires --password <app-password> (never your account password)',
-    );
-  }
-  const service = opts.service ?? pds.service;
-  let parsed: URL;
-  try {
-    parsed = new URL(service);
-  } catch {
-    throw new Error(`--service must be a URL, got "${service}"`);
-  }
-  if (parsed.protocol !== 'https:') {
-    throw new Error(`--service must be https, got "${service}"`);
-  }
-  const value = JSON.stringify({ identifier: opts.identifier, password: opts.password, service });
-  await ctx.clients.secrets.upsertSecret(
+  if (!ctx.domain) throw new Error('pds keygen requires a configured domain');
+  const kid = `${ctx.config.siteName}-oauth-${new Date().toISOString().slice(0, 10)}`;
+  const clientKey = await generateKey(kid);
+  await updatePdsSecret(
+    ctx.clients.secrets,
     pds.secretName,
-    value,
-    `AT Protocol app-password credentials for ${opts.identifier} (blog-ops pds)`,
+    (secret) => ({ ...secret, clientKey, session: undefined }),
+    // keygen is the migration entry point — a legacy app-password value is replaced
+    { replaceLegacy: true },
   );
-  ctx.logger.ok(`secret "${pds.secretName}" set for ${opts.identifier} (${service})`);
+  ctx.logger.ok(`stored private key "${kid}" in secret "${pds.secretName}"`);
+
+  const documents: [path: string, body: object][] = [
+    [CLIENT_METADATA_PATH, clientMetadata(ctx.domain, pds)],
+    [JWKS_PATH, jwksDocument(await publicClientJwk(clientKey))],
+  ];
+  for (const [path, body] of documents) {
+    const file = join(repoRoot, path);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, `${JSON.stringify(body, null, 2)}\n`);
+    ctx.logger.info(`  wrote ${path}`);
+  }
+  ctx.logger.info(
+    colors.bold('Commit public/oauth/* and release — then run `blog-ops pds login`.'),
+  );
 }
 
-/** Show whether the secret exists and when it last changed. Never prints the value. */
+/** Interactive OAuth bootstrap; see oauth.ts#login for the flow. */
+export async function login(
+  ctx: OpsContext,
+  opts: { identifier?: string | undefined },
+): Promise<void> {
+  if (!opts.identifier) {
+    throw new Error('pds login requires --identifier <handle-or-did>');
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    await oauthLogin(ctx, opts.identifier, {
+      promptLine: (question) => rl.question(question),
+    });
+  } finally {
+    rl.close();
+  }
+}
+
+/** Show whether the secret exists and which parts it holds. Never prints values. */
 export async function secretStatus(ctx: OpsContext): Promise<void> {
   const pds = requirePdsConfig(ctx);
   const meta = await ctx.clients.secrets.describeSecret(pds.secretName);
   if (!meta) {
-    ctx.logger.info(`no secret at "${pds.secretName}" — create it with \`blog-ops pds secret set\``);
+    ctx.logger.info(`no secret at "${pds.secretName}" — create it with \`blog-ops pds keygen\``);
     return;
   }
   ctx.logger.info(`  name          ${meta.name}`);
   ctx.logger.info(`  arn           ${meta.arn}`);
   if (meta.lastChangedDate !== undefined) {
     ctx.logger.info(`  last changed  ${new Date(meta.lastChangedDate * 1000).toISOString()}`);
+  }
+  try {
+    const secret = await loadPdsSecret(ctx);
+    const kid = (secret.clientKey as { kid?: string } | undefined)?.kid;
+    ctx.logger.info(`  client key    ${secret.clientKey ? `yes (${kid ?? 'no kid'})` : 'no'}`);
+    ctx.logger.info(`  did           ${secret.did ?? 'no'}`);
+    ctx.logger.info(`  session       ${secret.session ? 'yes' : 'no'}`);
+  } catch (err) {
+    ctx.logger.warn((err as Error).message);
   }
 }
 
@@ -83,22 +124,26 @@ export async function secretDelete(ctx: OpsContext, opts: { yes: boolean }): Pro
  * record — or update it when the committed well-known file already names one — and
  * write the two site files the user commits.
  */
-export async function init(ctx: OpsContext, repoRoot = process.cwd()): Promise<void> {
+export async function init(
+  ctx: OpsContext,
+  repoRoot = process.cwd(),
+  openRepo: typeof openPdsRepo = openPdsRepo,
+  verifyAssets: typeof verifyClientAssets = verifyClientAssets,
+): Promise<void> {
   const pds = requirePdsConfig(ctx);
   if (!ctx.domain) throw new Error('pds init requires a configured domain');
-  const creds = await loadPdsCredentials(ctx);
-  const client = new PdsClient(creds.service ?? pds.service);
-  const session = await client.createSession(creds.identifier, creds.password);
+  await verifyAssets(ctx);
+  const { did, repo } = await openRepo(ctx);
 
-  const record = publicationRecord(pds, `https://${ctx.domain}/`);
+  const record = publicationRecord(pds, `https://${ctx.domain}`);
   const existingUri = await readWellKnownUri(repoRoot);
   let publicationUri: string;
   if (existingUri) {
-    await client.putRecord(PUBLICATION_COLLECTION, rkeyFromUri(existingUri), record);
+    await repo.putRecord(PUBLICATION_COLLECTION, rkeyFromUri(existingUri), record);
     publicationUri = existingUri;
     ctx.logger.ok(`updated publication ${publicationUri}`);
   } else {
-    const created = await client.createRecord(PUBLICATION_COLLECTION, record);
+    const created = await repo.createRecord(PUBLICATION_COLLECTION, record);
     publicationUri = created.uri;
     ctx.logger.ok(`created publication ${publicationUri}`);
   }
@@ -107,22 +152,28 @@ export async function init(ctx: OpsContext, repoRoot = process.cwd()): Promise<v
   await mkdir(dirname(wellKnownFile), { recursive: true });
   await writeFile(wellKnownFile, `${publicationUri}\n`);
   const jsonFile = join(repoRoot, ATPROTO_JSON_PATH);
-  await writeFile(jsonFile, `${JSON.stringify({ did: session.did, publicationUri }, null, 2)}\n`);
+  await writeFile(jsonFile, `${JSON.stringify({ did, publicationUri }, null, 2)}\n`);
   ctx.logger.info(`  wrote ${WELL_KNOWN_PATH}`);
   ctx.logger.info(`  wrote ${ATPROTO_JSON_PATH}`);
   ctx.logger.info(
-    colors.bold('Commit both files and deploy — they verify the publication and the post link tags.'),
+    colors.bold(
+      'Commit both files and deploy — they verify the publication and the post link tags.',
+    ),
   );
 }
 
 /** Reconcile PDS records against local content. Production only. */
-export async function sync(ctx: OpsContext, repoRoot = process.cwd()): Promise<void> {
+export async function sync(
+  ctx: OpsContext,
+  repoRoot = process.cwd(),
+  openRepo: OpenRepo = openPdsRepo,
+): Promise<void> {
   if (ctx.env !== 'production') {
     throw new Error(
       `pds sync publishes canonical production URLs and refuses to run for "${ctx.env}"`,
     );
   }
-  const summary = await syncPds(ctx, repoRoot);
+  const summary = await syncPds(ctx, repoRoot, openRepo);
   logSummary(ctx, summary);
 }
 
@@ -149,7 +200,8 @@ function logSummary(ctx: OpsContext, s: SyncSummary): void {
 export async function syncAfterDeploy(
   ctx: OpsContext,
   repoRoot = process.cwd(),
-  doSync: typeof syncPds = syncPds,
+  doSync: (ctx: OpsContext, repoRoot: string) => Promise<SyncSummary> = (c, r) =>
+    syncPds(c, r, openPdsRepo),
 ): Promise<void> {
   if (ctx.env !== 'production' || !ctx.config.pds) return;
   const initialised = await readWellKnownUri(repoRoot).catch(() => undefined);

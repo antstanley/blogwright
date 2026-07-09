@@ -10,10 +10,10 @@ import {
   DOCUMENT_COLLECTION,
   PUBLICATION_COLLECTION,
   documentRecord,
-  loadPdsCredentials,
   syncDocuments,
   syncPds,
   syncPublication,
+  type OpenRepo,
   type PdsRepo,
 } from './sync.js';
 import type { PdsRecord } from './xrpc.js';
@@ -33,11 +33,6 @@ class StubRepo implements PdsRepo {
       cid: 'cid',
       value,
     });
-  }
-
-  async createSession(identifier: string, _password: string) {
-    void identifier;
-    return { did: this.did, accessJwt: 'jwt' };
   }
 
   async listRecords(collection: string): Promise<PdsRecord[]> {
@@ -82,9 +77,7 @@ describe('syncDocuments', () => {
     const summary = await syncDocuments(repo, edited, PUB_URI);
     expect(summary.updated).toEqual(['hello-world']);
     expect(summary.unchanged).toBe(1);
-    expect(repo.writes).toEqual([
-      `${DOCUMENT_COLLECTION}/${tidFromPath(postPath('hello-world'))}`,
-    ]);
+    expect(repo.writes).toEqual([`${DOCUMENT_COLLECTION}/${tidFromPath(postPath('hello-world'))}`]);
   });
 
   it('warns about (never deletes) records for removed posts', async () => {
@@ -121,33 +114,6 @@ describe('syncPublication', () => {
   });
 });
 
-describe('loadPdsCredentials', () => {
-  function ctxWithSecret(value: string | undefined): OpsContext {
-    return {
-      config: { pds: { name: 'x', service: 'https://bsky.social', secretName: 's' } },
-      clients: { secrets: { getSecretValue: async () => value } },
-    } as unknown as OpsContext;
-  }
-
-  it('parses a valid secret', async () => {
-    const creds = await loadPdsCredentials(
-      ctxWithSecret('{"identifier":"iamstan.dev","password":"app-pass"}'),
-    );
-    expect(creds.identifier).toBe('iamstan.dev');
-  });
-
-  it('points at `pds secret set` when the secret is missing', async () => {
-    await expect(loadPdsCredentials(ctxWithSecret(undefined))).rejects.toThrow(/pds secret set/);
-  });
-
-  it('rejects malformed or incomplete secret JSON', async () => {
-    await expect(loadPdsCredentials(ctxWithSecret('not json'))).rejects.toThrow(/valid JSON/);
-    await expect(loadPdsCredentials(ctxWithSecret('{"identifier":"x"}'))).rejects.toThrow(
-      /identifier, password/,
-    );
-  });
-});
-
 describe('syncPds', () => {
   let root: string;
 
@@ -170,13 +136,12 @@ describe('syncPds', () => {
     return {
       env: 'production',
       domain: 'iamstan.dev',
-      config: { pds: { name: 'Ant Stanley', service: 'https://bsky.social', secretName: 's' } },
-      clients: {
-        secrets: {
-          getSecretValue: async () => '{"identifier":"iamstan.dev","password":"p"}',
-        },
-      },
+      config: { pds: { name: 'Ant Stanley', secretName: 's' } },
     } as unknown as OpsContext;
+  }
+
+  function opens(repo: PdsRepo, did = DID): OpenRepo {
+    return async () => ({ did, repo });
   }
 
   async function initialise(uri = PUB_URI, did = DID): Promise<void> {
@@ -189,29 +154,29 @@ describe('syncPds', () => {
 
   it('refuses when atproto.json is uninitialised', async () => {
     await writeFile(join(root, 'src/data/atproto.json'), '{"did":"","publicationUri":""}');
-    await expect(syncPds(ctx(), root, () => new StubRepo())).rejects.toThrow(/pds init/);
+    await expect(syncPds(ctx(), root, opens(new StubRepo()))).rejects.toThrow(/pds init/);
   });
 
   it('refuses when the well-known file disagrees with atproto.json', async () => {
     await initialise();
     await writeFile(join(root, 'public/.well-known/site.standard.publication'), 'at://other\n');
-    await expect(syncPds(ctx(), root, () => new StubRepo())).rejects.toThrow(/does not match/);
+    await expect(syncPds(ctx(), root, opens(new StubRepo()))).rejects.toThrow(/does not match/);
   });
 
-  it('refuses when the credential DID differs from the committed one', async () => {
+  it('refuses when the session DID differs from the committed one', async () => {
     await initialise(PUB_URI, 'did:plc:someone-else');
-    await expect(syncPds(ctx(), root, () => new StubRepo())).rejects.toThrow(/does not match/);
+    await expect(syncPds(ctx(), root, opens(new StubRepo()))).rejects.toThrow(/does not match/);
   });
 
   it('creates the publication and document records end to end', async () => {
     await initialise();
     const repo = new StubRepo();
-    const summary = await syncPds(ctx(), root, () => repo);
+    const summary = await syncPds(ctx(), root, opens(repo));
     expect(summary.publication).toBe('updated');
     expect(summary.created).toEqual(['hello-world']);
-    const doc = repo.records.get(
-      `${DOCUMENT_COLLECTION}/${tidFromPath(postPath('hello-world'))}`,
-    );
+    const pub = repo.records.get(`${PUBLICATION_COLLECTION}/3abc`);
+    expect(pub?.value.url).toBe('https://iamstan.dev'); // no trailing slash (standard.site)
+    const doc = repo.records.get(`${DOCUMENT_COLLECTION}/${tidFromPath(postPath('hello-world'))}`);
     expect(doc?.value).toEqual(
       documentRecord(PUB_URI, {
         slug: 'hello-world',
