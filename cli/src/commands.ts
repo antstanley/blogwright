@@ -13,6 +13,7 @@ import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import { syncAfterDeploy } from './pds/commands.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles, revisionHash } from './repo.js';
+import { findRepoRoot } from './repo-root.js';
 
 /**
  * Canonical origin the live site is served from: the custom domain if configured,
@@ -50,7 +51,7 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
 
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
 export async function deploy(ctx: OpsContext): Promise<void> {
-  const cwd = process.cwd();
+  const cwd = findRepoRoot();
   const hash = await revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
 
@@ -109,7 +110,7 @@ export async function previewBootstrap(ctx: OpsContext): Promise<void> {
 /** Build the current repo and publish it to this PR's preview prefix. Prints the URL. */
 export async function previewDeploy(ctx: OpsContext, id: string): Promise<string> {
   assertPreviewId(id);
-  const cwd = process.cwd();
+  const cwd = findRepoRoot();
   const hash = await revisionHash(cwd);
   ctx.logger.info(colors.bold(`Preview deploy ${id} (${hash})`));
 

@@ -31,10 +31,12 @@ export class SecretsManagerClient {
 
   /** Create the secret, or update its value if it already exists. */
   async upsertSecret(name: string, value: string, description?: string): Promise<void> {
+    // The raw API requires the idempotency token SDKs normally generate.
     try {
       await this.call('CreateSecret', {
         Name: name,
         SecretString: value,
+        ClientRequestToken: crypto.randomUUID(),
         ...(description ? { Description: description } : {}),
       });
     } catch (err) {
@@ -42,7 +44,11 @@ export class SecretsManagerClient {
       const exists =
         err instanceof AwsError && (err.isAlreadyExists || err.code === 'ResourceExistsException');
       if (!exists) throw err;
-      await this.call('PutSecretValue', { SecretId: name, SecretString: value });
+      await this.call('PutSecretValue', {
+        SecretId: name,
+        SecretString: value,
+        ClientRequestToken: crypto.randomUUID(),
+      });
     }
   }
 

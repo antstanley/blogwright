@@ -15,6 +15,7 @@ import {
 } from '@iamstan/ops-core';
 
 import { createLogger, type Logger } from './logger.js';
+import { findRepoRoot } from './repo-root.js';
 
 export interface OpsContext {
   env: string;
@@ -41,12 +42,13 @@ export interface ContextOptions {
 }
 
 async function loadConfig(env: string, configPath: string | undefined): Promise<OpsConfig> {
+  const root = findRepoRoot();
   const candidates = configPath
     ? [configPath]
     : [
-        resolve(process.cwd(), `ops/config/${env}.jsonc`),
-        resolve(process.cwd(), `config/${env}.jsonc`),
-        resolve(process.cwd(), 'ops.config.jsonc'),
+        resolve(root, `ops/config/${env}.jsonc`),
+        resolve(root, `config/${env}.jsonc`),
+        resolve(root, 'ops.config.jsonc'),
       ];
   for (const path of candidates) {
     try {

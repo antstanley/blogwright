@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline/promises';
 
 import type { OpsContext } from '../context.js';
 import { colors } from '../logger.js';
+import { findRepoRoot } from '../repo-root.js';
 import {
   CLIENT_METADATA_PATH,
   JWKS_PATH,
@@ -38,7 +39,7 @@ import { rkeyFromUri } from './xrpc.js';
  */
 export async function keygen(
   ctx: OpsContext,
-  repoRoot = process.cwd(),
+  repoRoot = findRepoRoot(),
   generateKey: typeof generateClientKey = generateClientKey,
 ): Promise<void> {
   const pds = requirePdsConfig(ctx);
@@ -126,7 +127,7 @@ export async function secretDelete(ctx: OpsContext, opts: { yes: boolean }): Pro
  */
 export async function init(
   ctx: OpsContext,
-  repoRoot = process.cwd(),
+  repoRoot = findRepoRoot(),
   openRepo: typeof openPdsRepo = openPdsRepo,
   verifyAssets: typeof verifyClientAssets = verifyClientAssets,
 ): Promise<void> {
@@ -165,7 +166,7 @@ export async function init(
 /** Reconcile PDS records against local content. Production only. */
 export async function sync(
   ctx: OpsContext,
-  repoRoot = process.cwd(),
+  repoRoot = findRepoRoot(),
   openRepo: OpenRepo = openPdsRepo,
 ): Promise<void> {
   if (ctx.env !== 'production') {
@@ -199,7 +200,7 @@ function logSummary(ctx: OpsContext, s: SyncSummary): void {
  */
 export async function syncAfterDeploy(
   ctx: OpsContext,
-  repoRoot = process.cwd(),
+  repoRoot = findRepoRoot(),
   doSync: (ctx: OpsContext, repoRoot: string) => Promise<SyncSummary> = (c, r) =>
     syncPds(c, r, openPdsRepo),
 ): Promise<void> {
