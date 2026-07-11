@@ -1,11 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createNodeFileSystem } from 'blogwright-core';
+import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
-import { createTestContext } from '../test-support.js';
+import { createTestContext, makeTempDir, removeTempDir } from '../test-support.js';
 import { postPath, tidFromPath } from './rkey.js';
 import {
   DOCUMENT_COLLECTION,
@@ -116,63 +115,74 @@ describe('syncPublication', () => {
 });
 
 describe('syncPds', () => {
-  let root: string;
+  const ROOT = '/repo';
+  const HELLO_POST = `---\ntitle: 'Hello'\ndescription: 'First.'\npubDate: 2026-06-20\n---\n\nHi.\n`;
 
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'pds-sync-'));
-    await mkdir(join(root, 'src/data'), { recursive: true });
-    await mkdir(join(root, 'src/content/blog'), { recursive: true });
-    await mkdir(join(root, 'public/.well-known'), { recursive: true });
-    await writeFile(
-      join(root, 'src/content/blog/hello-world.md'),
-      `---\ntitle: 'Hello'\ndescription: 'First.'\npubDate: 2026-06-20\n---\n\nHi.\n`,
-    );
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  function ctx(): OpsContext {
-    return createTestContext({
+  async function ctx(): Promise<OpsContext> {
+    const c = createTestContext({
       env: 'production',
       domain: 'example.com',
       config: { pds: { name: 'Ant Stanley', secretName: 's' } },
     });
+    await c.ports.fs.writeText(`${ROOT}/src/content/blog/hello-world.md`, HELLO_POST);
+    return c;
   }
 
   function opens(repo: PdsRepo, did = DID): OpenRepo {
     return async () => ({ did, repo });
   }
 
-  async function initialise(uri = PUB_URI, did = DID): Promise<void> {
-    await writeFile(
-      join(root, 'src/data/atproto.json'),
+  async function initialise(c: OpsContext, uri = PUB_URI, did = DID): Promise<void> {
+    await c.ports.fs.writeText(
+      `${ROOT}/src/data/atproto.json`,
       JSON.stringify({ did, publicationUri: uri }),
     );
-    await writeFile(join(root, 'public/.well-known/site.standard.publication'), `${uri}\n`);
+    await c.ports.fs.writeText(`${ROOT}/public/.well-known/site.standard.publication`, `${uri}\n`);
   }
 
+  it('refuses when atproto.json is missing entirely', async () => {
+    const c = await ctx();
+    await expect(syncPds(c, ROOT, opens(new StubRepo()))).rejects.toThrow(/pds init/);
+  });
+
   it('refuses when atproto.json is uninitialised', async () => {
-    await writeFile(join(root, 'src/data/atproto.json'), '{"did":"","publicationUri":""}');
-    await expect(syncPds(ctx(), root, opens(new StubRepo()))).rejects.toThrow(/pds init/);
+    const c = await ctx();
+    await c.ports.fs.writeText(`${ROOT}/src/data/atproto.json`, '{"did":"","publicationUri":""}');
+    await expect(syncPds(c, ROOT, opens(new StubRepo()))).rejects.toThrow(/pds init/);
+  });
+
+  it('refuses when the well-known file is missing', async () => {
+    const c = await ctx();
+    await c.ports.fs.writeText(
+      `${ROOT}/src/data/atproto.json`,
+      JSON.stringify({ did: DID, publicationUri: PUB_URI }),
+    );
+    await expect(syncPds(c, ROOT, opens(new StubRepo()))).rejects.toThrow(
+      /missing.*does not match/,
+    );
   });
 
   it('refuses when the well-known file disagrees with atproto.json', async () => {
-    await initialise();
-    await writeFile(join(root, 'public/.well-known/site.standard.publication'), 'at://other\n');
-    await expect(syncPds(ctx(), root, opens(new StubRepo()))).rejects.toThrow(/does not match/);
+    const c = await ctx();
+    await initialise(c);
+    await c.ports.fs.writeText(
+      `${ROOT}/public/.well-known/site.standard.publication`,
+      'at://other\n',
+    );
+    await expect(syncPds(c, ROOT, opens(new StubRepo()))).rejects.toThrow(/does not match/);
   });
 
   it('refuses when the session DID differs from the committed one', async () => {
-    await initialise(PUB_URI, 'did:plc:someone-else');
-    await expect(syncPds(ctx(), root, opens(new StubRepo()))).rejects.toThrow(/does not match/);
+    const c = await ctx();
+    await initialise(c, PUB_URI, 'did:plc:someone-else');
+    await expect(syncPds(c, ROOT, opens(new StubRepo()))).rejects.toThrow(/does not match/);
   });
 
   it('creates the publication and document records end to end', async () => {
-    await initialise();
+    const c = await ctx();
+    await initialise(c);
     const repo = new StubRepo();
-    const summary = await syncPds(ctx(), root, opens(repo));
+    const summary = await syncPds(c, ROOT, opens(repo));
     expect(summary.publication).toBe('updated');
     expect(summary.created).toEqual(['hello-world']);
     const pub = repo.records.get(`${PUBLICATION_COLLECTION}/3abc`);
@@ -186,5 +196,33 @@ describe('syncPds', () => {
         pubDate: new Date('2026-06-20'),
       }),
     );
+  });
+
+  it('reconciles a real directory tree through the node adapter', async () => {
+    const root = await makeTempDir('pds-sync');
+    try {
+      const fs = createNodeFileSystem();
+      const c = createTestContext({
+        env: 'production',
+        domain: 'example.com',
+        config: { pds: { name: 'Ant Stanley', secretName: 's' } },
+        ports: { fs },
+      });
+      await fs.writeText(join(root, 'src/content/blog/hello-world.md'), HELLO_POST);
+      await fs.writeText(
+        join(root, 'src/data/atproto.json'),
+        JSON.stringify({ did: DID, publicationUri: PUB_URI }),
+      );
+      await fs.writeText(
+        join(root, 'public/.well-known/site.standard.publication'),
+        `${PUB_URI}\n`,
+      );
+      const repo = new StubRepo();
+      const summary = await syncPds(c, root, opens(repo));
+      expect(summary.publication).toBe('updated');
+      expect(summary.created).toEqual(['hello-world']);
+    } finally {
+      await removeTempDir(root);
+    }
   });
 });

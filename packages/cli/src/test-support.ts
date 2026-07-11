@@ -5,6 +5,10 @@
  * Tests substitute behaviour here — at the ports — never by casting.
  */
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   createClients,
   createMemoryFileSystem,
@@ -90,6 +94,16 @@ const NOOP_LOGGER: Logger = {
 
 /** Default agent-artifact directory for tests; seed the in-memory fs under it. */
 export const TEST_AGENT_DIR = '/agent';
+
+/** Create a unique real-disk directory for a node-adapter integration test. */
+export async function makeTempDir(prefix: string): Promise<string> {
+  return mkdtemp(join(tmpdir(), `${prefix}-`));
+}
+
+/** Delete a directory created by {@link makeTempDir}. */
+export async function removeTempDir(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true });
+}
 
 /**
  * Build a complete OpsContext for tests. Defaults: env "test", site "example",

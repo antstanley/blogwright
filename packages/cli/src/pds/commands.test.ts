@@ -1,24 +1,15 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createNodeFileSystem } from 'blogwright-core';
+import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
-import { createTestContext } from '../test-support.js';
+import { createTestContext, makeTempDir, removeTempDir } from '../test-support.js';
 import { init, keygen, secretStatus, syncAfterDeploy } from './commands.js';
 import type { SyncSummary } from './sync.js';
 import type { PdsClient } from './xrpc.js';
 
-let root: string;
-
-beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'pds-hook-'));
-});
-
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
-});
+const ROOT = '/repo';
 
 function ctx(
   env: string,
@@ -52,9 +43,11 @@ function ctx(
   return Object.assign(base, { lines, stored });
 }
 
-async function markInitialised(): Promise<void> {
-  await mkdir(join(root, 'public/.well-known'), { recursive: true });
-  await writeFile(join(root, 'public/.well-known/site.standard.publication'), 'at://x/p/r\n');
+async function markInitialised(c: OpsContext): Promise<void> {
+  await c.ports.fs.writeText(
+    `${ROOT}/public/.well-known/site.standard.publication`,
+    'at://x/p/r\n',
+  );
 }
 
 const SUMMARY: SyncSummary = {
@@ -71,7 +64,7 @@ describe('keygen', () => {
   it('stores the private key, clears the session, and writes the public documents', async () => {
     const c = ctx('production');
     c.stored.s = JSON.stringify({ version: 1, did: 'did:plc:me', session: { tokenSet: {} } });
-    await keygen(c, root, async () => CLIENT_KEY);
+    await keygen(c, ROOT, async () => CLIENT_KEY);
 
     const secret = JSON.parse(c.stored.s!);
     expect(secret.clientKey).toEqual(CLIENT_KEY);
@@ -79,12 +72,12 @@ describe('keygen', () => {
     expect(secret.did).toBe('did:plc:me');
 
     const metadata = JSON.parse(
-      await readFile(join(root, 'public/oauth/client-metadata.json'), 'utf8'),
+      await c.ports.fs.readText(`${ROOT}/public/oauth/client-metadata.json`),
     );
     expect(metadata.client_id).toBe('https://example.com/oauth/client-metadata.json');
     expect(metadata.token_endpoint_auth_method).toBe('private_key_jwt');
 
-    const jwks = JSON.parse(await readFile(join(root, 'public/oauth/jwks.json'), 'utf8'));
+    const jwks = JSON.parse(await c.ports.fs.readText(`${ROOT}/public/oauth/jwks.json`));
     expect(jwks.keys).toHaveLength(1);
     expect(jwks.keys[0].d).toBeUndefined(); // never the private half
     expect(jwks.keys[0].x).toBe('x');
@@ -93,52 +86,47 @@ describe('keygen', () => {
   it('requires a configured domain', async () => {
     const c = ctx('production');
     (c as { domain: string | undefined }).domain = undefined;
-    await expect(keygen(c, root, async () => CLIENT_KEY)).rejects.toThrow(/domain/);
+    await expect(keygen(c, ROOT, async () => CLIENT_KEY)).rejects.toThrow(/domain/);
   });
 
   it('replaces a legacy app-password secret (the migration entry point)', async () => {
     const c = ctx('production');
     c.stored.s = JSON.stringify({ identifier: 'x', password: 'p' });
-    await keygen(c, root, async () => CLIENT_KEY);
+    await keygen(c, ROOT, async () => CLIENT_KEY);
     expect(JSON.parse(c.stored.s!)).toEqual({ version: 1, clientKey: CLIENT_KEY });
   });
 });
 
+function repoStub() {
+  const puts: string[] = [];
+  const repo = {
+    putRecord: async (collection: string, rkey: string) => {
+      puts.push(`${collection}/${rkey}`);
+      return { uri: `at://did:plc:me/${collection}/${rkey}` };
+    },
+    createRecord: async (collection: string) => ({
+      uri: `at://did:plc:me/${collection}/3new`,
+    }),
+  } as unknown as PdsClient;
+  return { repo, puts };
+}
+
 describe('init', () => {
-  beforeEach(async () => {
-    await mkdir(join(root, 'src/data'), { recursive: true }); // exists in the real repo
-  });
-
-  function repoStub() {
-    const puts: string[] = [];
-    const repo = {
-      putRecord: async (collection: string, rkey: string) => {
-        puts.push(`${collection}/${rkey}`);
-        return { uri: `at://did:plc:me/${collection}/${rkey}` };
-      },
-      createRecord: async (collection: string) => ({
-        uri: `at://did:plc:me/${collection}/3new`,
-      }),
-    } as unknown as PdsClient;
-    return { repo, puts };
-  }
-
   it('creates the publication and writes both site files', async () => {
     const c = ctx('production');
     const { repo } = repoStub();
     await init(
       c,
-      root,
+      ROOT,
       async () => ({ did: 'did:plc:me', repo }),
       async () => undefined,
     );
 
-    const wellKnown = await readFile(
-      join(root, 'public/.well-known/site.standard.publication'),
-      'utf8',
+    const wellKnown = await c.ports.fs.readText(
+      `${ROOT}/public/.well-known/site.standard.publication`,
     );
     expect(wellKnown).toBe('at://did:plc:me/site.standard.publication/3new\n');
-    const atproto = JSON.parse(await readFile(join(root, 'src/data/atproto.json'), 'utf8'));
+    const atproto = JSON.parse(await c.ports.fs.readText(`${ROOT}/src/data/atproto.json`));
     expect(atproto).toEqual({
       did: 'did:plc:me',
       publicationUri: 'at://did:plc:me/site.standard.publication/3new',
@@ -146,16 +134,44 @@ describe('init', () => {
   });
 
   it('updates in place when the well-known file already names a publication', async () => {
-    await markInitialised();
     const c = ctx('production');
+    await markInitialised(c);
     const { repo, puts } = repoStub();
     await init(
       c,
-      root,
+      ROOT,
       async () => ({ did: 'did:plc:me', repo }),
       async () => undefined,
     );
     expect(puts).toEqual(['site.standard.publication/r']);
+  });
+
+  it('writes real files through the node adapter', async () => {
+    const root = await makeTempDir('pds-init');
+    try {
+      const fs = createNodeFileSystem();
+      const c = createTestContext({
+        env: 'production',
+        domain: 'example.com',
+        config: { pds: { name: 'Ant Stanley', secretName: 's' } },
+        ports: { fs },
+      });
+      const { repo } = repoStub();
+      await init(
+        c,
+        root,
+        async () => ({ did: 'did:plc:me', repo }),
+        async () => undefined,
+      );
+      const wellKnown = await fs.readText(
+        join(root, 'public/.well-known/site.standard.publication'),
+      );
+      expect(wellKnown).toBe('at://did:plc:me/site.standard.publication/3new\n');
+      const atproto = JSON.parse(await fs.readText(join(root, 'src/data/atproto.json')));
+      expect(atproto.did).toBe('did:plc:me');
+    } finally {
+      await removeTempDir(root);
+    }
   });
 });
 
@@ -183,31 +199,31 @@ describe('syncAfterDeploy', () => {
   it('does nothing outside production or when pds is unconfigured', async () => {
     let calls = 0;
     const count = async () => ((calls += 1), SUMMARY);
-    await syncAfterDeploy(ctx('staging'), root, count);
-    await syncAfterDeploy(ctx('production', false), root, count);
+    await syncAfterDeploy(ctx('staging'), ROOT, count);
+    await syncAfterDeploy(ctx('production', false), ROOT, count);
     expect(calls).toBe(0);
   });
 
   it('skips (with a note) when the site is not initialised', async () => {
     const c = ctx('production');
     let calls = 0;
-    await syncAfterDeploy(c, root, async () => ((calls += 1), SUMMARY));
+    await syncAfterDeploy(c, ROOT, async () => ((calls += 1), SUMMARY));
     expect(calls).toBe(0);
     expect(c.lines.some((l) => l.includes('not initialised'))).toBe(true);
   });
 
   it('runs the sync and logs the summary when initialised', async () => {
-    await markInitialised();
     const c = ctx('production');
-    await syncAfterDeploy(c, root, async () => SUMMARY);
+    await markInitialised(c);
+    await syncAfterDeploy(c, ROOT, async () => SUMMARY);
     expect(c.lines.some((l) => l.startsWith('ok:') && l.includes('1 unchanged'))).toBe(true);
   });
 
   it('never lets a sync failure escape (deploy must not fail)', async () => {
-    await markInitialised();
     const c = ctx('production');
+    await markInitialised(c);
     await expect(
-      syncAfterDeploy(c, root, async () => {
+      syncAfterDeploy(c, ROOT, async () => {
         throw new Error('PDS is down');
       }),
     ).resolves.toBeUndefined();

@@ -1,5 +1,6 @@
-import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import type { FileSystem } from 'blogwright-core';
 
 /** A publishable blog post, as enumerated from the Astro content collection. */
 export interface PostMeta {
@@ -44,18 +45,17 @@ export function parseFrontmatter(source: string, file: string): Record<string, s
  * build: slug = file path minus `.md` (the glob-loader id), drafts excluded.
  */
 export async function listPublishablePosts(
+  fs: FileSystem,
   repoRoot: string,
   contentDir: string = DEFAULT_CONTENT_DIR,
 ): Promise<PostMeta[]> {
   const dir = join(repoRoot, contentDir);
-  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
   const posts: PostMeta[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-    const path = join(entry.parentPath, entry.name);
-    const rel = path.slice(dir.length + 1).replaceAll('\\', '/');
+  for (const file of await fs.listFiles(dir)) {
+    const rel = file.replaceAll('\\', '/');
+    if (!rel.endsWith('.md')) continue;
     const slug = rel.slice(0, -'.md'.length);
-    const fields = parseFrontmatter(await readFile(path, 'utf8'), rel);
+    const fields = parseFrontmatter(await fs.readText(join(dir, file)), rel);
     if (fields.draft === 'true') continue;
     for (const key of REQUIRED_FIELDS) {
       if (!fields[key]) throw new Error(`${rel}: frontmatter is missing "${key}"`);

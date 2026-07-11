@@ -1,7 +1,11 @@
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { OpsConfig, PdsConfig } from 'blogwright-core';
+import {
+  FileNotFoundError,
+  type FileSystem,
+  type OpsConfig,
+  type PdsConfig,
+} from 'blogwright-core';
 
 import type { OpsContext } from '../context.js';
 import { listPublishablePosts, type PostMeta } from './content.js';
@@ -52,14 +56,15 @@ export function requirePdsConfig(ctx: OpsContext): PdsConfig {
 
 /** Read the atproto.json site file; undefined when the site has not been initialised. */
 async function readAtprotoSiteConfig(
+  fs: FileSystem,
   repoRoot: string,
   cfg: Pick<OpsConfig, 'paths'>,
 ): Promise<AtprotoSiteConfig | undefined> {
   let text: string;
   try {
-    text = await readFile(join(repoRoot, cfg.paths.atprotoJson), 'utf8');
+    text = await fs.readText(join(repoRoot, cfg.paths.atprotoJson));
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (err instanceof FileNotFoundError) return undefined;
     throw err;
   }
   const parsed = JSON.parse(text) as Partial<AtprotoSiteConfig>;
@@ -69,14 +74,15 @@ async function readAtprotoSiteConfig(
 
 /** Read the committed well-known file; undefined when absent. */
 export async function readWellKnownUri(
+  fs: FileSystem,
   repoRoot: string,
   cfg: Pick<OpsConfig, 'paths'>,
 ): Promise<string | undefined> {
   try {
-    const text = await readFile(join(repoRoot, wellKnownPath(cfg)), 'utf8');
+    const text = await fs.readText(join(repoRoot, wellKnownPath(cfg)));
     return text.trim() || undefined;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    if (err instanceof FileNotFoundError) return undefined;
     throw err;
   }
 }
@@ -191,11 +197,11 @@ export async function syncPds(
 ): Promise<SyncSummary> {
   const pds = requirePdsConfig(ctx);
   const atprotoJson = ctx.config.paths.atprotoJson;
-  const site = await readAtprotoSiteConfig(repoRoot, ctx.config);
+  const site = await readAtprotoSiteConfig(ctx.ports.fs, repoRoot, ctx.config);
   if (!site) {
     throw new Error(`${atprotoJson} is not initialised — run \`blogwright pds init\` first`);
   }
-  const wellKnown = await readWellKnownUri(repoRoot, ctx.config);
+  const wellKnown = await readWellKnownUri(ctx.ports.fs, repoRoot, ctx.config);
   if (wellKnown !== site.publicationUri) {
     throw new Error(
       `${wellKnownPath(ctx.config)} (${wellKnown ?? 'missing'}) does not match ${atprotoJson} ` +
@@ -209,7 +215,7 @@ export async function syncPds(
     throw new Error(`session DID ${did} does not match ${atprotoJson} DID ${site.did}`);
   }
 
-  const posts = await listPublishablePosts(repoRoot, ctx.config.paths.content);
+  const posts = await listPublishablePosts(ctx.ports.fs, repoRoot, ctx.config.paths.content);
   const publication = await syncPublication(
     repo,
     publicationRecord(pds, `https://${ctx.domain}`),

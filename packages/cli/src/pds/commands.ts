@@ -1,5 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 import type { OpsContext } from '../context.js';
@@ -56,9 +55,7 @@ export async function keygen(
     [docPaths.jwks, jwksDocument(await publicClientJwk(clientKey))],
   ];
   for (const [path, body] of documents) {
-    const file = join(root, path);
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, `${JSON.stringify(body, null, 2)}\n`);
+    await ctx.ports.fs.writeText(join(root, path), `${JSON.stringify(body, null, 2)}\n`);
     ctx.logger.info(`  wrote ${path}`);
   }
   ctx.logger.info(
@@ -136,7 +133,7 @@ export async function init(
   const { did, repo } = await openRepo(ctx);
 
   const record = publicationRecord(pds, `https://${ctx.domain}`);
-  const existingUri = await readWellKnownUri(root, ctx.config);
+  const existingUri = await readWellKnownUri(ctx.ports.fs, root, ctx.config);
   let publicationUri: string;
   if (existingUri) {
     await repo.putRecord(PUBLICATION_COLLECTION, rkeyFromUri(existingUri), record);
@@ -149,12 +146,11 @@ export async function init(
   }
 
   const wellKnown = wellKnownPath(ctx.config);
-  const wellKnownFile = join(root, wellKnown);
-  await mkdir(dirname(wellKnownFile), { recursive: true });
-  await writeFile(wellKnownFile, `${publicationUri}\n`);
-  const jsonFile = join(root, ctx.config.paths.atprotoJson);
-  await mkdir(dirname(jsonFile), { recursive: true });
-  await writeFile(jsonFile, `${JSON.stringify({ did, publicationUri }, null, 2)}\n`);
+  await ctx.ports.fs.writeText(join(root, wellKnown), `${publicationUri}\n`);
+  await ctx.ports.fs.writeText(
+    join(root, ctx.config.paths.atprotoJson),
+    `${JSON.stringify({ did, publicationUri }, null, 2)}\n`,
+  );
   ctx.logger.info(`  wrote ${wellKnown}`);
   ctx.logger.info(`  wrote ${ctx.config.paths.atprotoJson}`);
   ctx.logger.info(
@@ -208,7 +204,7 @@ export async function syncAfterDeploy(
 ): Promise<void> {
   if (ctx.env !== 'production' || !ctx.config.pds) return;
   const root = repoRoot ?? (await findRepoRoot(ctx.ports.fs));
-  const initialised = await readWellKnownUri(root, ctx.config).catch(() => undefined);
+  const initialised = await readWellKnownUri(ctx.ports.fs, root, ctx.config).catch(() => undefined);
   if (!initialised) {
     ctx.logger.info('standard.site publishing not initialised (`blogwright pds init`) — skipping');
     return;

@@ -1,24 +1,16 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createMemoryFileSystem, createNodeFileSystem } from 'blogwright-core';
+import { describe, expect, it } from 'vitest';
 
+import { makeTempDir, removeTempDir } from '../test-support.js';
 import { listPublishablePosts, parseFrontmatter } from './content.js';
 
-let root: string;
+const ROOT = '/repo';
+const CONTENT_DIR = `${ROOT}/src/content/blog`;
 
-beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'pds-content-'));
-  await mkdir(join(root, 'src/content/blog'), { recursive: true });
-});
-
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
-});
-
-async function post(name: string, frontmatter: string, body = 'Hello.'): Promise<void> {
-  await writeFile(join(root, 'src/content/blog', name), `---\n${frontmatter}\n---\n\n${body}\n`);
+function postFile(frontmatter: string, body = 'Hello.'): string {
+  return `---\n${frontmatter}\n---\n\n${body}\n`;
 }
 
 describe('parseFrontmatter', () => {
@@ -43,39 +35,73 @@ describe('parseFrontmatter', () => {
 
 describe('listPublishablePosts', () => {
   it('enumerates posts with slugs matching the Astro glob-loader ids', async () => {
-    await post(
-      'hello-world.md',
-      `title: 'Hello world'\ndescription: 'First post.'\npubDate: 2026-06-20`,
-    );
-    await post(
-      'building-with-astro.md',
-      `title: 'Building this site with Astro'\ndescription: 'Notes.'\npubDate: 2026-06-28`,
-    );
-    const posts = await listPublishablePosts(root);
+    const fs = createMemoryFileSystem({
+      [`${CONTENT_DIR}/hello-world.md`]: postFile(
+        `title: 'Hello world'\ndescription: 'First post.'\npubDate: 2026-06-20`,
+      ),
+      [`${CONTENT_DIR}/building-with-astro.md`]: postFile(
+        `title: 'Building this site with Astro'\ndescription: 'Notes.'\npubDate: 2026-06-28`,
+      ),
+      [`${CONTENT_DIR}/notes.txt`]: 'not a post',
+    });
+    const posts = await listPublishablePosts(fs, ROOT);
     expect(posts.map((p) => p.slug)).toEqual(['building-with-astro', 'hello-world']);
     expect(posts[1]?.title).toBe('Hello world');
     expect(posts[1]?.pubDate.toISOString()).toBe('2026-06-20T00:00:00.000Z');
   });
 
   it('skips drafts, matching [...slug].astro getStaticPaths', async () => {
-    await post('wip.md', `title: 'WIP'\ndescription: 'x'\npubDate: 2026-06-20\ndraft: true`);
-    await post('live.md', `title: 'Live'\ndescription: 'x'\npubDate: 2026-06-20\ndraft: false`);
-    const posts = await listPublishablePosts(root);
+    const fs = createMemoryFileSystem({
+      [`${CONTENT_DIR}/wip.md`]: postFile(
+        `title: 'WIP'\ndescription: 'x'\npubDate: 2026-06-20\ndraft: true`,
+      ),
+      [`${CONTENT_DIR}/live.md`]: postFile(
+        `title: 'Live'\ndescription: 'x'\npubDate: 2026-06-20\ndraft: false`,
+      ),
+    });
+    const posts = await listPublishablePosts(fs, ROOT);
     expect(posts.map((p) => p.slug)).toEqual(['live']);
   });
 
   it('includes nested files with directory-qualified slugs', async () => {
-    await mkdir(join(root, 'src/content/blog/series'), { recursive: true });
-    await post('series/part-one.md', `title: 'One'\ndescription: 'x'\npubDate: 2026-06-20`);
-    const posts = await listPublishablePosts(root);
+    const fs = createMemoryFileSystem({
+      [`${CONTENT_DIR}/series/part-one.md`]: postFile(
+        `title: 'One'\ndescription: 'x'\npubDate: 2026-06-20`,
+      ),
+    });
+    const posts = await listPublishablePosts(fs, ROOT);
     expect(posts.map((p) => p.slug)).toEqual(['series/part-one']);
   });
 
   it('errors clearly on missing required fields and bad dates', async () => {
-    await post('bad.md', `title: 'No description'\npubDate: 2026-06-20`);
-    await expect(listPublishablePosts(root)).rejects.toThrow(/bad\.md.*description/);
-    await rm(join(root, 'src/content/blog/bad.md'));
-    await post('bad-date.md', `title: 'x'\ndescription: 'x'\npubDate: not-a-date`);
-    await expect(listPublishablePosts(root)).rejects.toThrow(/invalid pubDate/);
+    const missingField = createMemoryFileSystem({
+      [`${CONTENT_DIR}/bad.md`]: postFile(`title: 'No description'\npubDate: 2026-06-20`),
+    });
+    await expect(listPublishablePosts(missingField, ROOT)).rejects.toThrow(/bad\.md.*description/);
+
+    const badDate = createMemoryFileSystem({
+      [`${CONTENT_DIR}/bad-date.md`]: postFile(`title: 'x'\ndescription: 'x'\npubDate: not-a-date`),
+    });
+    await expect(listPublishablePosts(badDate, ROOT)).rejects.toThrow(/invalid pubDate/);
+  });
+
+  it('errors when the content directory does not exist', async () => {
+    const fs = createMemoryFileSystem({ [`${ROOT}/readme.md`]: 'no content collection' });
+    await expect(listPublishablePosts(fs, ROOT)).rejects.toThrow(/not found/);
+  });
+
+  it('enumerates a real directory tree through the node adapter', async () => {
+    const root = await makeTempDir('pds-content');
+    try {
+      const fs = createNodeFileSystem();
+      await fs.writeText(
+        join(root, 'src/content/blog/series/part-one.md'),
+        postFile(`title: 'One'\ndescription: 'x'\npubDate: 2026-06-20`),
+      );
+      const posts = await listPublishablePosts(fs, root);
+      expect(posts.map((p) => p.slug)).toEqual(['series/part-one']);
+    } finally {
+      await removeTempDir(root);
+    }
   });
 });
