@@ -13,7 +13,14 @@ import {
 import { applyGraph, destroyGraph } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
-import { formatDuration, renderSummary, type SummaryRow } from './render.js';
+import {
+  formatDuration,
+  renderHistoryTable,
+  renderStatusTree,
+  renderSummary,
+  type StatusEntry,
+  type SummaryRow,
+} from './render.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
 
 /** One line per invalidation outcome, shared by the summary card and logs. */
@@ -207,6 +214,11 @@ export async function history(ctx: OpsContext): Promise<void> {
     if (text) manifests.push(JSON.parse(text) as DeployManifest);
   }
   manifests.sort((a, b) => b.finishedAt.localeCompare(a.finishedAt));
+  if (ctx.ports.terminal.isInteractive) {
+    for (const line of renderHistoryTable(manifests, Date.now())) ctx.logger.info(line);
+    return;
+  }
+  // The plain form is the stable contract for CI logs and agents.
   ctx.logger.info(colors.bold('hash          status      finished                 duration'));
   for (const m of manifests) {
     const cell =
@@ -242,17 +254,31 @@ export async function logs(ctx: OpsContext, hash: string): Promise<void> {
 /** Show the planned graph against live state (drift view). */
 export async function status(ctx: OpsContext): Promise<void> {
   ctx.logger.info(colors.bold(`Status for "${ctx.env}" (bucket ${ctx.names.bucket})`));
+  const pretty = ctx.ports.terminal.isInteractive;
+  const entries: StatusEntry[] = [];
   for (const node of buildNodes(ctx)) {
     let exists = false;
     try {
       exists = await node.read(ctx);
     } catch (err) {
-      ctx.logger.warn(`${node.title}: read failed (${(err as Error).message})`);
+      if (pretty) {
+        entries.push({ title: node.title, state: 'error', detail: (err as Error).message });
+      } else {
+        ctx.logger.warn(`${node.title}: read failed (${(err as Error).message})`);
+      }
       continue;
     }
-    const mark = exists ? colors.green('present') : colors.yellow('missing');
     const outputs = ctx.state.resources[node.id];
-    const detail = outputs ? colors.dim(JSON.stringify(outputs)) : '';
-    ctx.logger.info(`  ${mark}  ${node.title} ${detail}`);
+    const detail = outputs ? JSON.stringify(outputs) : undefined;
+    if (pretty) {
+      entries.push({ title: node.title, state: exists ? 'present' : 'missing', detail });
+      continue;
+    }
+    // The plain form is the stable contract for CI logs and agents.
+    const mark = exists ? colors.green('present') : colors.yellow('missing');
+    ctx.logger.info(`  ${mark}  ${node.title} ${detail ? colors.dim(detail) : ''}`);
+  }
+  if (pretty) {
+    for (const line of renderStatusTree(entries)) ctx.logger.info(line);
   }
 }

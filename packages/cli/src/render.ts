@@ -21,6 +21,17 @@ export function spinnerFrame(tick: number): string {
   return SPINNER_FRAMES[tick % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0]!;
 }
 
+/** Coarse relative time for history listings: 42s ago, 5m ago, 3h ago, 12d ago. */
+export function formatAgo(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
 export interface SummaryRow {
   label: string;
   value: string;
@@ -43,4 +54,51 @@ export function renderSummary(title: string, rows: SummaryRow[], pretty: boolean
     ...body.map((l) => `│ ${l}${pad(l)} │`),
     `╰${'─'.repeat(inner + 2)}╯`,
   ];
+}
+
+export interface StatusEntry {
+  title: string;
+  state: 'present' | 'missing' | 'error';
+  detail?: string | undefined;
+}
+
+const STATUS_MARKS = {
+  present: colors.green('✓'),
+  missing: colors.yellow('◌'),
+  error: colors.red('✗'),
+} as const;
+
+/** The pretty drift tree for `status` (the plain form keeps the classic lines). */
+export function renderStatusTree(entries: StatusEntry[]): string[] {
+  return entries.map((entry, i) => {
+    const connector = i === entries.length - 1 ? '╰─' : '├─';
+    const detail = entry.detail ? ` ${colors.dim(entry.detail)}` : '';
+    return `${connector} ${STATUS_MARKS[entry.state]} ${entry.title}${detail}`;
+  });
+}
+
+export interface HistoryEntry {
+  hash: string;
+  status: 'succeeded' | 'failed';
+  finishedAt: string;
+  durationMs: number;
+}
+
+/**
+ * The pretty deployment table for `history`: relative times, a live marker on
+ * the newest success. Entries arrive newest-first (the caller sorts).
+ */
+export function renderHistoryTable(entries: HistoryEntry[], now: number): string[] {
+  const liveIndex = entries.findIndex((e) => e.status === 'succeeded');
+  const rows = entries.map((e, i) => {
+    const mark = e.status === 'succeeded' ? colors.green('✓') : colors.red('✗');
+    const cells = [
+      e.hash.padEnd(13),
+      mark,
+      formatAgo(now - Date.parse(e.finishedAt)).padEnd(9),
+      formatDuration(e.durationMs).padEnd(7),
+    ].join(' ');
+    return i === liveIndex ? `${cells} ${colors.cyan('← live')}` : cells;
+  });
+  return [colors.bold(`${'hash'.padEnd(13)} ${' '} ${'finished'.padEnd(9)} duration`), ...rows];
 }
