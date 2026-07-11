@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createClients,
   createNodeFileSystem,
+  createNodeTerminal,
   deriveNames,
   FileNotFoundError,
   parseConfig,
@@ -88,11 +89,12 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
  * real adapters are constructed and wired.
  */
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {
-  const logger = createLogger();
   const ports: Ports = {
     fs: opts.ports?.fs ?? createNodeFileSystem(),
     vcs: opts.ports?.vcs ?? createProcessVcs(),
+    terminal: opts.ports?.terminal ?? createNodeTerminal(),
   };
+  const logger = createLogger(ports.terminal);
   const agentDir = fileURLToPath(new URL('../agent', import.meta.url));
   const root = await findRepoRoot(ports.fs);
   const config = await loadConfig(ports.fs, {

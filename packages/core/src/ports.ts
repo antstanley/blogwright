@@ -25,6 +25,23 @@ export interface FileSystem {
   listFiles(dir: string): Promise<string[]>;
 }
 
+/**
+ * The operator's terminal in domain vocabulary: leveled line output plus one
+ * question/answer primitive. `isInteractive` reflects TTY attachment, captured
+ * once when the adapter is constructed; callers key formatting (color) and
+ * prompting decisions off it.
+ */
+export interface Terminal {
+  /** True when the session has an interactive TTY on both input and output. */
+  readonly isInteractive: boolean;
+  /** Write one line to standard output. */
+  write(line: string): void;
+  /** Write one line to standard error. */
+  error(line: string): void;
+  /** Show `prompt` and resolve with the operator's answer (newline excluded). */
+  question(prompt: string): Promise<string>;
+}
+
 /** Raised by {@link FileSystem} implementations when a path has no file. */
 export class FileNotFoundError extends Error {
   readonly path: string;

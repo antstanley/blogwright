@@ -4,7 +4,7 @@
  * constructed only at the composition root (context.ts).
  */
 
-import type { FileSystem } from 'blogwright-core';
+import type { FileSystem, Terminal } from 'blogwright-core';
 
 /** Version-control queries the deploy pipeline needs, in domain vocabulary. */
 export interface Vcs {
@@ -18,4 +18,5 @@ export interface Vcs {
 export interface Ports {
   fs: FileSystem;
   vcs: Vcs;
+  terminal: Terminal;
 }

@@ -1,11 +1,12 @@
 import { join } from 'node:path';
 
-import { createNodeFileSystem } from 'blogwright-core';
+import { createNodeFileSystem, createScriptedTerminal } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
 import { createTestContext, makeTempDir, removeTempDir } from '../test-support.js';
-import { init, keygen, secretStatus, syncAfterDeploy } from './commands.js';
+import { init, keygen, login, secretStatus, syncAfterDeploy } from './commands.js';
+import type { LoginDeps } from './oauth.js';
 import type { SyncSummary } from './sync.js';
 import type { PdsClient } from './xrpc.js';
 
@@ -172,6 +173,37 @@ describe('init', () => {
     } finally {
       await removeTempDir(root);
     }
+  });
+});
+
+describe('login', () => {
+  it('round-trips the prompt through the terminal port, without a real stdin', async () => {
+    const terminal = createScriptedTerminal({
+      answers: ['https://example.com/oauth/callback?code=abc'],
+    });
+    const c = ctx('production');
+    c.ports.terminal = terminal;
+    let pasted: string | undefined;
+    const runLogin = async (_c: OpsContext, identifier: string, deps: LoginDeps) => {
+      pasted = await deps.promptLine(`Paste the callback URL for ${identifier}: `);
+      return 'did:plc:me';
+    };
+
+    await login(c, { identifier: 'alice.example' }, runLogin);
+
+    expect(terminal.prompts).toEqual(['Paste the callback URL for alice.example: ']);
+    expect(pasted).toBe('https://example.com/oauth/callback?code=abc');
+  });
+
+  it('requires an identifier before touching the terminal', async () => {
+    const c = ctx('production');
+    const runLogin = async () => {
+      throw new Error('must not be called');
+    };
+
+    await expect(login(c, {}, runLogin)).rejects.toThrow(
+      'pds login requires --identifier <handle-or-did>',
+    );
   });
 });
 

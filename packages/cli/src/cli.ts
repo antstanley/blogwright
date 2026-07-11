@@ -1,5 +1,7 @@
 import { parseArgs } from 'node:util';
 
+import type { Terminal } from 'blogwright-core';
+
 import * as commands from './commands.js';
 import { createContext } from './context.js';
 import * as pds from './pds/commands.js';
@@ -64,8 +66,8 @@ const KNOWN_COMMANDS = new Set([
   'status',
 ]);
 
-export async function main(argv: string[]): Promise<number> {
-  const logger = createLogger();
+export async function main(argv: string[], terminal: Terminal): Promise<number> {
+  const logger = createLogger(terminal);
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -88,10 +90,10 @@ export async function main(argv: string[]): Promise<number> {
     return command ? 0 : 1;
   }
   if (command === 'preview') {
-    return runPreview(positionals, values, logger);
+    return runPreview(positionals, values, terminal, logger);
   }
   if (command === 'pds') {
-    return runPds(positionals, values, logger);
+    return runPds(positionals, values, terminal, logger);
   }
   if (!KNOWN_COMMANDS.has(command)) {
     logger.error(`unknown command: ${command}`);
@@ -115,6 +117,7 @@ export async function main(argv: string[]): Promise<number> {
     configPath: values.config,
     domain: values.domain,
     endpointOverride: values.endpoint,
+    ports: { terminal },
   });
 
   switch (command) {
@@ -162,7 +165,12 @@ interface PdsValues {
 }
 
 /** Handle `blogwright pds <action> [env]` (and `pds secret <action> [env]`). */
-async function runPds(positionals: string[], values: PdsValues, logger: Logger): Promise<number> {
+async function runPds(
+  positionals: string[],
+  values: PdsValues,
+  terminal: Terminal,
+  logger: Logger,
+): Promise<number> {
   // `pds secret set production` — the secret sub-action shifts positionals by one.
   const secret = positionals[1] === 'secret';
   const action = secret ? `secret ${positionals[2] ?? ''}`.trim() : positionals[1];
@@ -178,6 +186,7 @@ async function runPds(positionals: string[], values: PdsValues, logger: Logger):
     configPath: values.config,
     domain: values.domain,
     endpointOverride: values.endpoint,
+    ports: { terminal },
   });
 
   switch (action) {
@@ -217,6 +226,7 @@ const PREVIEW_ACTIONS = new Set(['bootstrap', 'deploy', 'destroy', 'list', 'tear
 async function runPreview(
   positionals: string[],
   values: PreviewValues,
+  terminal: Terminal,
   logger: Logger,
 ): Promise<number> {
   const action = positionals[1];
@@ -232,6 +242,7 @@ async function runPreview(
     configPath: values.config,
     domain: values.domain,
     endpointOverride: values.endpoint,
+    ports: { terminal },
   });
 
   switch (action) {

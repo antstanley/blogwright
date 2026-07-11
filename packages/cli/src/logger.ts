@@ -1,13 +1,18 @@
-/* Minimal leveled logger with ANSI colour when attached to a TTY. */
+/*
+ * Leveled logger and confirm prompt over the Terminal port. Messages are
+ * composed with ANSI colour; the logger strips the codes for non-interactive
+ * sessions (piped output, CI) so they stay plain text.
+ */
 
-import { createInterface } from 'node:readline/promises';
+import type { Terminal } from 'blogwright-core';
 
-const isTty = process.stdout.isTTY === true;
+const ESCAPE = '\u001B';
 
 function paint(code: string, text: string): string {
-  return isTty ? `[${code}m${text}[0m` : text;
+  return `${ESCAPE}[${code}m${text}${ESCAPE}[0m`;
 }
 
+/** ANSI colour helpers; {@link createLogger} strips the codes off-TTY. */
 export const colors = {
   dim: (s: string) => paint('2', s),
   bold: (s: string) => paint('1', s),
@@ -17,6 +22,12 @@ export const colors = {
   cyan: (s: string) => paint('36', s),
 };
 
+const COLOR_CODES = new RegExp(`${ESCAPE}\\[[0-9;]*m`, 'g');
+
+function stripColors(text: string): string {
+  return text.replace(COLOR_CODES, '');
+}
+
 export interface Logger {
   info(msg: string): void;
   step(msg: string): void;
@@ -25,34 +36,33 @@ export interface Logger {
   error(msg: string): void;
 }
 
-export function createLogger(): Logger {
+/** Build the leveled logger: info/step/ok to standard output, warn/error to standard error. */
+export function createLogger(terminal: Terminal): Logger {
+  const render = (msg: string) => (terminal.isInteractive ? msg : stripColors(msg));
   return {
-    info: (msg) => console.log(msg),
-    step: (msg) => console.log(`${colors.cyan('›')} ${msg}`),
-    ok: (msg) => console.log(`${colors.green('✓')} ${msg}`),
-    warn: (msg) => console.warn(`${colors.yellow('!')} ${msg}`),
-    error: (msg) => console.error(`${colors.red('✗')} ${msg}`),
+    info: (msg) => terminal.write(render(msg)),
+    step: (msg) => terminal.write(render(`${colors.cyan('›')} ${msg}`)),
+    ok: (msg) => terminal.write(render(`${colors.green('✓')} ${msg}`)),
+    warn: (msg) => terminal.error(render(`${colors.yellow('!')} ${msg}`)),
+    error: (msg) => terminal.error(render(`${colors.red('✗')} ${msg}`)),
   };
 }
 
 /**
- * Ask a yes/no question on the terminal. Returns the default when there's no TTY (CI or a
- * piped invocation) so automation isn't left hanging on a prompt.
+ * Ask a yes/no question on the terminal. Returns the default for a
+ * non-interactive session (CI or a piped invocation) so automation isn't left
+ * hanging on a prompt.
  */
 export async function confirm(
+  terminal: Terminal,
   question: string,
   opts: { defaultYes?: boolean } = {},
 ): Promise<boolean> {
   const defaultYes = opts.defaultYes ?? true;
-  if (process.stdin.isTTY !== true) return defaultYes;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = (await rl.question(`${question} [${defaultYes ? 'Y/n' : 'y/N'}] `))
-      .trim()
-      .toLowerCase();
-    if (answer === '') return defaultYes;
-    return answer === 'y' || answer === 'yes';
-  } finally {
-    rl.close();
-  }
+  if (!terminal.isInteractive) return defaultYes;
+  const answer = (await terminal.question(`${question} [${defaultYes ? 'Y/n' : 'y/N'}] `))
+    .trim()
+    .toLowerCase();
+  if (answer === '') return defaultYes;
+  return answer === 'y' || answer === 'yes';
 }

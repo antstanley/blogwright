@@ -47,7 +47,10 @@ export async function clearRunningMicrovms(ctx: OpsContext): Promise<boolean> {
   );
   for (const vm of running) ctx.logger.info(`    ${vm.microvmId} (${vm.state})`);
 
-  if (!(await confirm('Terminate them and continue?', { defaultYes: true }))) {
+  const proceed = await confirm(ctx.ports.terminal, 'Terminate them and continue?', {
+    defaultYes: true,
+  });
+  if (!proceed) {
     ctx.logger.info('Leaving MicroVMs running — destroy cancelled.');
     return false;
   }

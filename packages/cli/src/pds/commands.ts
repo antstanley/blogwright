@@ -1,5 +1,4 @@
 import { join } from 'node:path';
-import { createInterface } from 'node:readline/promises';
 
 import type { OpsContext } from '../context.js';
 import { colors } from '../logger.js';
@@ -69,18 +68,14 @@ export async function keygen(
 export async function login(
   ctx: OpsContext,
   opts: { identifier?: string | undefined },
+  runLogin: typeof oauthLogin = oauthLogin,
 ): Promise<void> {
   if (!opts.identifier) {
     throw new Error('pds login requires --identifier <handle-or-did>');
   }
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    await oauthLogin(ctx, opts.identifier, {
-      promptLine: (question) => rl.question(question),
-    });
-  } finally {
-    rl.close();
-  }
+  await runLogin(ctx, opts.identifier, {
+    promptLine: (question) => ctx.ports.terminal.question(question),
+  });
 }
 
 /** Show whether the secret exists and which parts it holds. Never prints values. */

@@ -21,6 +21,7 @@ import {
   type Names,
   type OpsConfig,
   type OpsState,
+  type Terminal,
   type Transport,
 } from 'blogwright-core';
 
@@ -98,6 +99,18 @@ const rejectAllVcs: Vcs = {
   },
 };
 
+/** Silent, non-interactive terminal; a prompt in a test is a missing override. */
+const silentTerminal: Terminal = {
+  isInteractive: false,
+  write: () => undefined,
+  error: () => undefined,
+  question: async (prompt) => {
+    throw new Error(
+      `unexpected terminal prompt in test: ${prompt} — override ports.terminal on createTestContext`,
+    );
+  },
+};
+
 const NOOP_LOGGER: Logger = {
   info: () => undefined,
   step: () => undefined,
@@ -136,6 +149,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
   const ports: Ports = {
     fs: overrides.ports?.fs ?? createMemoryFileSystem(),
     vcs: overrides.ports?.vcs ?? rejectAllVcs,
+    terminal: overrides.ports?.terminal ?? silentTerminal,
   };
 
   return {

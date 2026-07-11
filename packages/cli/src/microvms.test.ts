@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Microvm } from 'blogwright-core';
+import { createScriptedTerminal, type Microvm } from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
 import { clearRunningMicrovms, runningStackMicrovms } from './microvms.js';
@@ -59,7 +59,7 @@ describe('clearRunningMicrovms', () => {
     expect(terminate).not.toHaveBeenCalled();
   });
 
-  it('terminates running VMs and waits for them to clear (non-TTY default = yes)', async () => {
+  it('terminates running VMs and waits for them to clear (non-interactive default = yes)', async () => {
     const terminate = vi.fn(async () => {});
     // First listing (the guard) sees a running VM; subsequent listings (the wait loop)
     // see it gone — so pollUntil resolves on its first probe without sleeping.
@@ -69,5 +69,14 @@ describe('clearRunningMicrovms', () => {
 
     expect(await clearRunningMicrovms(ctx)).toBe(true);
     expect(terminate).toHaveBeenCalledWith('a');
+  });
+
+  it('cancels the destroy when the operator declines the prompt', async () => {
+    const terminate = vi.fn(async () => {});
+    const ctx = fakeCtx([vm('a', 'RUNNING', IMAGE_ARN)], terminate);
+    ctx.ports.terminal = createScriptedTerminal({ answers: ['n'] });
+
+    expect(await clearRunningMicrovms(ctx)).toBe(false);
+    expect(terminate).not.toHaveBeenCalled();
   });
 });
