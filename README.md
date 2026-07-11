@@ -8,16 +8,22 @@ reconcilable dependency graph — no CloudFormation, no Terraform, no CDK.
 
 ```sh
 pnpm add -D blogwright
+
+# config/production.jsonc — siteName is required (it names every AWS resource)
+echo '{ "region": "us-east-1", "siteName": "example" }' > config/production.jsonc
+
 pnpm exec blogwright bootstrap --domain example.com
 pnpm exec blogwright deploy        # `bw` works too
 ```
 
+Requires Node ≥ 22 and AWS credentials in the ambient provider chain.
+
 ## Packages
 
-| Package                     | What it is                                                          |
-| --------------------------- | ------------------------------------------------------------------- |
-| `blogwright`             | The CLI: graph engine, resource nodes, commands, PDS publishing     |
-| `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store  |
+| Package                  | What it is                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, PDS publishing, `blogwright/rkey` subpath export |
+| `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store                                               |
 | `blogwright-build-agent` | HTTP build server baked into the builder MicroVM image (not published — its bundle ships inside the CLI package) |
 
 ## Architecture
@@ -59,7 +65,9 @@ Credentials are read from the ambient AWS provider chain.
 ## Configuration
 
 Config is loaded from `config/<env>.jsonc` at the repo root of the consuming site,
-falling back to `ops.config.jsonc` (override with `--config`). Minimal example:
+falling back to `ops.config.jsonc` (override with `--config`). The repo root is found
+by walking up from the invocation directory to the nearest `.git` or `.jj`, so the CLI
+works from any subdirectory. Minimal example:
 
 ```jsonc
 // config/production.jsonc
@@ -106,7 +114,9 @@ destroys on close.
 
 ## standard.site publishing (AT Protocol)
 
-With a `pds` section in the config, the site is mirrored to the owner's PDS as
+With a `pds` section in the config (`"pds": { "name": "My Blog" }` is enough — `name`
+becomes the publication's display name, and the Secrets Manager secret defaults to
+`<siteName>/atproto`), the site is mirrored to the owner's PDS as
 [standard.site](https://standard.site) records: one `site.standard.publication` for the
 site and one `site.standard.document` per post, with rkeys derived deterministically from
 each post's URL path (vendored mastrojs/atproto TID scheme — see
@@ -167,6 +177,8 @@ deploy orchestration are covered by transport-level mocks rather than integratio
 ## Code hygiene
 
 `oxlint` (lint), `oxfmt` (format), `knip` (dead-code/deps), `vitest` (tests), TypeScript ≥ 6.
+Contributor guidelines — coding style, error handling, version control (jj), and the
+definition of done — live in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Releasing
 
