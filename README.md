@@ -205,19 +205,24 @@ definition of done — live in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Releasing
 
-Releases are tag-driven with **staged npm publishing** — no npm token anywhere
-(see `.github/workflows/release.yml`):
+Versioning is driven by **changesets** and releases by tags, with **staged npm
+publishing** — no npm token anywhere (see `.github/workflows/version-pr.yml`
+and `release.yml`):
 
-1. Bump the versions of `packages/core`, `packages/pds`, and `packages/cli`
-   together (the workflow fails if any differs from the tag) and land the commit
-   on `main`.
-2. Tag it: `git tag v<x>.<y>.<z> && git push origin v<x>.<y>.<z>` (tags are the
-   one place plain git is used — jj does not author tags).
-3. CI validates versions, builds, runs the full gate set plus `publint` and
-   `arethetypeswrong`, then **stages** all three packages to npm via OIDC
-   trusted publishing with provenance, and cuts a GitHub Release with a
-   changelog.
-4. Nothing is live yet: approve the staged packages (`npm stage approve`, or
+1. Every user-facing change ships with a changeset: `pnpm changeset`, pick the
+   impact, write a one-liner. The three publishable packages are version-fixed,
+   so any bump moves them together.
+2. CI maintains a **"Release: version packages"** PR that folds pending
+   changesets into a version bump + per-package CHANGELOGs. Merge it when
+   ready to release.
+3. Tag the merge: `git tag v<x>.<y>.<z> && git push origin v<x>.<y>.<z>` (tags
+   are the one place plain git is used — jj does not author tags; the version
+   is previewed in the PR).
+4. CI validates versions match the tag, builds, runs the full gate set plus
+   `publint` and `arethetypeswrong`, then **stages** all three packages to npm
+   via OIDC trusted publishing with provenance, and cuts a GitHub Release from
+   the changesets CHANGELOG entry.
+5. Nothing is live yet: approve the staged packages (`npm stage approve`, or
    the staged-packages UI on npmjs.com). Re-running a tag is idempotent —
    already-published packages are skipped.
 

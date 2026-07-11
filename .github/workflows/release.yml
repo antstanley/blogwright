@@ -143,12 +143,23 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        # Prefer the changesets-curated entry for this version from the CLI
+        # package's CHANGELOG; fall back to raw git log when it is absent
+        # (e.g. a release cut before changesets, or a hand-tagged hotfix).
         run: |
-          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
-          if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD)
-          else
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)")
+          CHANGELOG=""
+          if [ -f packages/cli/CHANGELOG.md ]; then
+            CHANGELOG=$(awk -v ver="## ${VERSION}" '$0 == ver {found=1; next} /^## / {found=0} found' packages/cli/CHANGELOG.md)
+          fi
+          if [ -z "$(echo "$CHANGELOG" | tr -d '[:space:]')" ]; then
+            PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
+            if [ -n "$PREV_TAG" ]; then
+              CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD)
+            else
+              CHANGELOG=$(git log --pretty=format:"- %s (%h)")
+            fi
           fi
           {
             echo "changelog<<EOF"

@@ -313,7 +313,9 @@ A change is done when:
 - New external interactions (network, disk, process, terminal) go through a port;
   no direct Node API or vendor-SDK calls were added to domain modules.
 - `pnpm build`, `pnpm test`, `pnpm lint`, and `pnpm knip` all pass locally — the same
-  four gates CI runs.
+  gates CI runs (CI adds `pnpm typecheck`).
+- A user-facing change ships with a changeset (`pnpm changeset`) describing its
+  semver impact; internal-only changes (docs, tests, refactors) do not need one.
 - Pinned rkey vectors and derived AWS resource names are unchanged for existing
   inputs (or the change description calls out the migration).
 - The commit description states the *why*.
