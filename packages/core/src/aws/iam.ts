@@ -50,7 +50,17 @@ export class IamClient {
     } catch (err) {
       if (err instanceof AwsError && err.isAlreadyExists) {
         const arn = await this.getRoleArn(roleName);
-        if (arn) return arn;
+        if (arn) {
+          // CreateRole's trust document is ignored for an existing role, so a
+          // changed trust (e.g. a renamed githubRepo in the OIDC sub claim)
+          // would silently keep granting the old principal. Reconcile it.
+          await this.call({
+            Action: 'UpdateAssumeRolePolicy',
+            RoleName: roleName,
+            PolicyDocument: JSON.stringify(assumeRolePolicy),
+          });
+          return arn;
+        }
       }
       throw err;
     }
