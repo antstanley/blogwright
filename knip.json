@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreWorkspaces": ["."],
+  "workspaces": {
+    "packages/core": { "project": "src/**/*.ts" },
+    "packages/cli": {
+      "project": "src/**/*.ts",
+      "ignoreDependencies": ["blogwright-build-agent"]
+    },
+    "packages/build-agent": { "project": "src/**/*.ts" }
+  }
+}

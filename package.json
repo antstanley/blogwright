@@ -1,0 +1,17 @@
+{
+  "name": "blogwright-workspace",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "knip": "knip"
+  },
+  "devDependencies": {
+    "knip": "^6.24.0",
+    "oxfmt": "^0.57.0"
+  }
+}

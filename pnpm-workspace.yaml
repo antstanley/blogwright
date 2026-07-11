@@ -1,0 +1,9 @@
+packages:
+  - packages/*
+
+allowBuilds:
+  # core-js (transitive via @atproto/oauth-client-node) postinstall only prints
+  # a funding banner — never run it.
+  core-js: false
+  # esbuild is a transitive dependency of vitest; its binary postinstall is required.
+  esbuild: true

@@ -1,0 +1,57 @@
+{
+  "name": "blogwright",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "blogwright": "./dist/bin.js",
+    "bw": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "agent"
+  ],
+  "exports": {
+    "./rkey": {
+      "types": "./dist/pds/rkey.d.ts",
+      "default": "./dist/pds/rkey.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-agent.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run",
+    "start": "node ./dist/bin.js"
+  },
+  "dependencies": {
+    "@atproto/oauth-client-node": "^0.4.7",
+    "blogwright-core": "workspace:*",
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "blogwright-build-agent": "workspace:*",
+    "@types/node": "^26.1.0",
+    "oxlint": "^1.72.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "description": "Full operations for a blog site on AWS: S3 + CloudFront hosting with builds in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site (AT Protocol) publishing",
+  "keywords": [
+    "astro",
+    "aws",
+    "deploy",
+    "s3",
+    "cloudfront",
+    "static-site",
+    "atproto",
+    "standard.site"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/antstanley/blogwright.git"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
