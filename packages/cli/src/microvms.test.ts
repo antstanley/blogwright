@@ -45,7 +45,7 @@ describe('runningStackMicrovms', () => {
   it('falls back to matching the image name when state has no ARN yet', async () => {
     const ctx = fakeCtx([vm('a', 'RUNNING', IMAGE_ARN)]);
     // Drop the recorded ARN so only the name-based fallback can match.
-    (ctx.state.resources['microvm-image'] as { arn?: string }).arn = undefined;
+    delete (ctx.state.resources['microvm-image'] as { arn?: string }).arn;
     const running = await runningStackMicrovms(ctx);
     expect(running.map((v) => v.microvmId)).toEqual(['a']);
   });

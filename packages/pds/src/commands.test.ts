@@ -59,7 +59,7 @@ const SUMMARY: SyncSummary = {
   orphans: [],
 };
 
-const CLIENT_KEY = { kty: 'EC', crv: 'P-256', x: 'x', y: 'y', d: 'secret', kid: 'k1' };
+const CLIENT_KEY = { kty: 'EC', crv: 'P-256', x: 'x', y: 'y', d: 'secret', kid: 'k1' } as const;
 
 describe('keygen', () => {
   it('stores the private key, clears the session, and writes the public documents', async () => {

@@ -26,7 +26,7 @@ export const COMMIT_FILE = '.commit-hash';
  * fail the whole zip).
  */
 export async function listRepoFiles(
-  ports: Ports,
+  ports: Pick<Ports, 'vcs' | 'fs'>,
   cwd: string,
   ignore: string[],
 ): Promise<string[]> {

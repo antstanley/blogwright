@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "rolldown -c && node dist/write-manifest.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
     "lint": "oxlint src",
     "test": "vitest run",
     "start": "node ./dist/server.js"

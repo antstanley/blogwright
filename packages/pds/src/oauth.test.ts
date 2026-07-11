@@ -1,4 +1,4 @@
-import { JoseKey } from '@atproto/oauth-client-node';
+import { JoseKey, type Jwk } from '@atproto/oauth-client-node';
 import { describe, expect, it } from 'vitest';
 
 import type { PdsContext } from './context.js';
@@ -17,9 +17,9 @@ function ctxWith(secret: object | undefined): PdsContext {
   });
 }
 
-async function generatedKey(): Promise<Record<string, unknown>> {
+async function generatedKey(): Promise<Jwk> {
   const key = await JoseKey.generate(['ES256'], 'test-key');
-  return key.privateJwk as Record<string, unknown>;
+  return key.privateJwk as unknown as Jwk;
 }
 
 describe('publicClientJwk', () => {
@@ -28,7 +28,7 @@ describe('publicClientJwk', () => {
     const publicJwk = await publicClientJwk(privateJwk);
     expect(publicJwk.d).toBeUndefined();
     expect(publicJwk.kty).toBe('EC');
-    expect(publicJwk.x).toBe(privateJwk.x);
+    expect(publicJwk.x).toBe((privateJwk as { x?: string }).x);
     expect(publicJwk.kid).toBe('test-key');
   });
 });

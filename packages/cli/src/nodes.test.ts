@@ -106,7 +106,7 @@ describe('cloudfront log delivery self-heal', () => {
 
   it('rethrows non-conflict errors untouched', async () => {
     const { ctx } = deliveryCtx(false);
-    (ctx.clients.logs as { putDeliverySource: () => Promise<string> }).putDeliverySource =
+    (ctx.clients.logs as unknown as { putDeliverySource: () => Promise<string> }).putDeliverySource =
       async () => {
         throw new AwsError({
           service: 'logs',

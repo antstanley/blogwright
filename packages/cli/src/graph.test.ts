@@ -55,9 +55,15 @@ describe('applyGraph / destroyGraph', () => {
       dependsOn: [],
       title: 'x',
       read: async () => true,
-      create: async () => log.push('create'),
-      update: async () => log.push('update'),
-      delete: async () => log.push('delete'),
+      create: async () => {
+        log.push('create');
+      },
+      update: async () => {
+        log.push('update');
+      },
+      delete: async () => {
+        log.push('delete');
+      },
     };
     await applyGraph([updating], createTestContext());
     expect(log).toEqual(['update']);

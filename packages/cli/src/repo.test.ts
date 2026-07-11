@@ -26,7 +26,7 @@ function decode(bytes: Uint8Array | undefined): string {
 describe('listRepoFiles', () => {
   it('drops files under the extra ignore prefixes', async () => {
     const listed = ['src/index.ts', 'node_modules/pkg/index.js', '.astro/types.d.ts', 'README.md'];
-    const ports: Ports = {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
       vcs: fakeVcs(listed),
       fs: createMemoryFileSystem(Object.fromEntries(listed.map((f) => [`/repo/${f}`, 'x']))),
     };
@@ -36,7 +36,7 @@ describe('listRepoFiles', () => {
 
   it('matches ignore entries on path boundaries, not raw prefixes', async () => {
     const listed = ['dist/site.html', 'dist-notes.md', 'distribution/plan.md', 'dist'];
-    const ports: Ports = {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
       vcs: fakeVcs(listed),
       fs: createMemoryFileSystem(Object.fromEntries(listed.map((f) => [`/repo/${f}`, 'x']))),
     };
@@ -45,7 +45,7 @@ describe('listRepoFiles', () => {
   });
 
   it('drops tracked files that no longer exist on disk', async () => {
-    const ports: Ports = {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
       vcs: fakeVcs(['present.txt', 'deleted.txt']),
       fs: createMemoryFileSystem({ '/repo/present.txt': 'here' }),
     };
@@ -86,7 +86,7 @@ describe('buildRepoZip', () => {
 
 describe('zip pipeline through the ports', () => {
   it('stamps the fake revision into a deterministic file set', async () => {
-    const ports: Ports = {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
       vcs: fakeVcs(['index.md', 'dist/site.html'], 'feedbee'),
       fs: createMemoryFileSystem({ '/repo/index.md': '# hi', '/repo/dist/site.html': '<p>' }),
     };
