@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
-import { networkConnectors, pollUntil, sleep, type LogEvent } from 'blogwright-core';
+import {
+  AwsError,
+  networkConnectors,
+  pollUntil,
+  sleep,
+  type LogEvent,
+  type Microvm,
+  type RunMicrovmInput,
+} from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
 import { formatDuration, spinnerFrame } from './render.js';
@@ -37,6 +45,41 @@ function manifestKey(hash: string): string {
 async function nudge(ctx: OpsContext, endpoint: string, token: string): Promise<void> {
   if (!endpoint || !token) return;
   await ctx.ports.ping(endpoint, token).catch(() => undefined);
+}
+
+/** Backoff between MicroVM-launch retries; the total window (~2m) bounds the wait. */
+const RUN_RETRY_DELAYS_MS: readonly number[] = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+
+function isGatewayError(err: unknown): boolean {
+  return err instanceof AwsError && (err.statusCode === 502 || err.statusCode === 503 || err.statusCode === 504);
+}
+
+/**
+ * Launch the builder MicroVM, retrying gateway errors (502/503/504) with a
+ * bounded backoff. The control plane can answer 502 for a short window right
+ * after the builder image was updated (fresh agent hash) — an
+ * eventual-consistency gap that would otherwise fail every consumer's first
+ * deploy after a blogwright upgrade. Retrying is safe: the input's client
+ * token makes the launch idempotent. Exported for tests.
+ */
+export async function runMicrovmWithRetry(
+  ctx: OpsContext,
+  input: RunMicrovmInput,
+  delaysMs: readonly number[] = RUN_RETRY_DELAYS_MS,
+): Promise<Microvm> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await ctx.clients.microvms.runMicrovm(input);
+    } catch (err) {
+      const delay = delaysMs[attempt];
+      if (!isGatewayError(err) || delay === undefined) throw err;
+      ctx.logger.warn(
+        `MicroVM launch returned HTTP ${(err as AwsError).statusCode} — ` +
+          `retrying in ${Math.round(delay / 1000)}s (a just-updated builder image can lag)`,
+      );
+      await sleep(delay);
+    }
+  }
 }
 
 /**
@@ -165,7 +208,7 @@ export async function runBuild(
   // return the ALREADY-TERMINATED original VM instead of launching a fresh one. Generated
   // once here so a network retry of this single call still dedupes.
   const clientToken = `run-${opts.hash}-${randomUUID()}`;
-  const run = await ctx.clients.microvms.runMicrovm({
+  const run = await runMicrovmWithRetry(ctx, {
     imageIdentifier: imageArn,
     executionRoleArn: execRoleArn,
     clientToken,

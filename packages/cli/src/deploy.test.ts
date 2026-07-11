@@ -1,8 +1,15 @@
-import { createScriptedTerminal, type LogEvent, type ResourceOutputs } from 'blogwright-core';
+import {
+  AwsError,
+  createScriptedTerminal,
+  type LogEvent,
+  type Microvm,
+  type ResourceOutputs,
+  type RunMicrovmInput,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
-import { microvmLogGroup, pollBuild, type AgentStatus } from './deploy.js';
+import { microvmLogGroup, pollBuild, runMicrovmWithRetry, type AgentStatus } from './deploy.js';
 import { createTestContext } from './test-support.js';
 
 function ctxWith(resources: Record<string, ResourceOutputs>): OpsContext {
@@ -130,5 +137,85 @@ describe('pollBuild nudge', () => {
     await pollBuild(ctx, HASH, Date.now(), '', TOKEN);
     await pollBuild(ctx, HASH, Date.now(), ENDPOINT, '');
     expect(pinged).toBe(0);
+  });
+});
+
+describe('runMicrovmWithRetry', () => {
+  const INPUT: RunMicrovmInput = {
+    imageIdentifier: 'arn:img',
+    executionRoleArn: 'arn:role',
+    clientToken: 'run-abc-1',
+    maximumDurationInSeconds: 1800,
+    idlePolicy: { autoResumeEnabled: false, maxIdleDurationSeconds: 300, suspendedDurationSeconds: 120 },
+    ingressNetworkConnectors: [],
+    egressNetworkConnectors: [],
+  };
+  const VM: Microvm = { microvmId: 'vm-1', state: 'PENDING', endpoint: '' };
+
+  function gateway(statusCode: number): AwsError {
+    return new AwsError({
+      service: 'lambda-microvms',
+      code: 'BadGateway',
+      message: 'Bad Gateway',
+      statusCode,
+    });
+  }
+
+  function ctxWithLaunch(fail: AwsError[], warns: string[]) {
+    let attempts = 0;
+    const ctx = createTestContext({
+      clients: {
+        microvms: {
+          runMicrovm: async (input: RunMicrovmInput) => {
+            expect(input.clientToken).toBe('run-abc-1'); // same token every attempt
+            attempts += 1;
+            const err = fail.shift();
+            if (err) throw err;
+            return VM;
+          },
+        },
+      },
+      logger: {
+        warn: (msg: string) => {
+          warns.push(msg);
+        },
+      },
+    });
+    return { ctx, attempts: () => attempts };
+  }
+
+  it('retries gateway errors after an image update and eventually launches', async () => {
+    const warns: string[] = [];
+    const { ctx, attempts } = ctxWithLaunch([gateway(502), gateway(503)], warns);
+
+    const vm = await runMicrovmWithRetry(ctx, INPUT, [1, 1, 1]);
+
+    expect(vm).toEqual(VM);
+    expect(attempts()).toBe(3);
+    expect(warns).toHaveLength(2);
+    expect(warns[0]).toContain('HTTP 502');
+  });
+
+  it('gives up when the bounded retry window is exhausted', async () => {
+    const warns: string[] = [];
+    const { ctx, attempts } = ctxWithLaunch([gateway(502), gateway(502), gateway(502)], warns);
+
+    await expect(runMicrovmWithRetry(ctx, INPUT, [1, 1])).rejects.toThrow(/HTTP 502/);
+    expect(attempts()).toBe(3);
+  });
+
+  it('rethrows non-gateway errors immediately', async () => {
+    const warns: string[] = [];
+    const denied = new AwsError({
+      service: 'lambda-microvms',
+      code: 'AccessDenied',
+      message: 'no',
+      statusCode: 403,
+    });
+    const { ctx, attempts } = ctxWithLaunch([denied], warns);
+
+    await expect(runMicrovmWithRetry(ctx, INPUT, [1, 1])).rejects.toThrow(/AccessDenied/);
+    expect(attempts()).toBe(1);
+    expect(warns).toHaveLength(0);
   });
 });
