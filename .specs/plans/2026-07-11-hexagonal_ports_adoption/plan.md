@@ -1,6 +1,6 @@
 # Plan: Hexagonal ports adoption
 
-**Status:** In progress · **Layout:** kanban · **Date:** 2026-07-11 · **Owner:** Ant Stanley · **Source spec:** [DEVELOPMENT.md §Hexagonal architecture — ports and adapters](../../../DEVELOPMENT.md)
+**Status:** Done · **Layout:** kanban · **Date:** 2026-07-11 · **Owner:** Ant Stanley · **Source spec:** [DEVELOPMENT.md §Hexagonal architecture — ports and adapters](../../../DEVELOPMENT.md)
 
 Close the gap between the adopted hexagonal rule and the code: move every remaining
 direct side effect — `node:fs` in six CLI modules, `node:child_process` in `repo.ts`,

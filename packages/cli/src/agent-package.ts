@@ -28,12 +28,12 @@ export async function packageAndUploadAgent(
 ): Promise<{ key: string; hash: string }> {
   const dir = ctx.agentDir;
   const { fs } = ctx.ports;
-  let dockerfile: string;
-  let server: string;
+  let dockerfile: Uint8Array;
+  let server: Uint8Array;
   let manifest: { hash?: string };
   try {
-    dockerfile = await fs.readText(`${dir}/Dockerfile`);
-    server = await fs.readText(`${dir}/server.js`);
+    dockerfile = await fs.readBytes(`${dir}/Dockerfile`);
+    server = await fs.readBytes(`${dir}/server.js`);
     manifest = JSON.parse(await fs.readText(`${dir}/agent-manifest.json`));
   } catch {
     throw new Error(
@@ -45,11 +45,10 @@ export async function packageAndUploadAgent(
     throw new Error(`agent-manifest.json in ${dir} has no valid hash — rebuild the agent`);
   }
 
-  const encoder = new TextEncoder();
   const entries: Zippable = {
-    Dockerfile: encoder.encode(dockerfile),
-    'server.js': encoder.encode(server),
-    'package.json': encoder.encode(IMAGE_PACKAGE_JSON),
+    Dockerfile: dockerfile,
+    'server.js': server,
+    'package.json': new TextEncoder().encode(IMAGE_PACKAGE_JSON),
   };
   const zip = zipSync(entries, { level: 6, mtime: new Date('1980-01-01T00:00:00Z') });
   const key = `build/agent/agent-${hash}.zip`;
