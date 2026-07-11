@@ -1,10 +1,11 @@
 import { parseArgs } from 'node:util';
 
-import type { Terminal } from 'blogwright-core';
+import { createNodeFileSystem, type Terminal } from 'blogwright-core';
 import * as pds from 'blogwright-pds';
 
 import * as commands from './commands.js';
 import { createContext } from './context.js';
+import { initSite } from './init.js';
 import { createLogger, type Logger } from './logger.js';
 
 const USAGE = `blogwright — full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
@@ -13,6 +14,7 @@ Usage:
   blogwright <command> [env] [options]
 
 Commands:
+  init                        First-run wizard: writes config/production.jsonc
   bootstrap   [env]           Create/reconcile the infrastructure graph
   deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
   rollback    <hash> [env]    Re-deploy an existing build by hash
@@ -96,6 +98,10 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
   if (!command || values.help) {
     logger.info(USAGE);
     return command ? 0 : 1;
+  }
+  if (command === 'init') {
+    // Runs before any context exists — there is no config to load yet.
+    return initSite(createNodeFileSystem(), terminal, logger);
   }
   if (command === 'preview') {
     return runPreview(positionals, values, terminal, logger);

@@ -172,9 +172,45 @@ export function stripJsonComments(input: string): string {
   return out;
 }
 
+/**
+ * Remove trailing commas before a closing `}`/`]`, respecting string literals.
+ * JSONC editors accept them (and hand-written configs grow them), but
+ * JSON.parse does not. Run after comment stripping.
+ */
+export function stripTrailingCommas(input: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!;
+    if (inString) {
+      out += ch;
+      if (ch === '\\') {
+        out += input[i + 1] ?? '';
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ',') {
+      // A comma directly followed (across whitespace) by a closer is dropped.
+      let j = i + 1;
+      while (j < input.length && /\s/.test(input[j]!)) j++;
+      if (input[j] === '}' || input[j] === ']') continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /** Parse + validate a JSONC config document, merged over defaults. */
 export function parseConfig(text: string): OpsConfig {
-  const raw = JSON.parse(stripJsonComments(text)) as Partial<OpsConfig>;
+  const raw = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as Partial<OpsConfig>;
   return mergeConfig(raw);
 }
 

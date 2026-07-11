@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveNames, parseConfig, stripJsonComments } from './config.js';
+import { deriveNames, parseConfig, stripJsonComments, stripTrailingCommas } from './config.js';
 
 /** Wrap a config fragment with the required siteName. */
 const withSite = (fragment: string): string =>
@@ -16,6 +16,28 @@ describe('stripJsonComments', () => {
     const parsed = JSON.parse(stripJsonComments(src)) as { url: string; note: string };
     expect(parsed.url).toBe('http://x/y');
     expect(parsed.note).toBe('a // b /* c');
+  });
+});
+
+describe('stripTrailingCommas', () => {
+  it('drops commas before closing braces and brackets, across whitespace', () => {
+    const src = '{ "a": [1, 2,], "b": { "c": 1, }, }';
+    expect(JSON.parse(stripTrailingCommas(src))).toEqual({ a: [1, 2], b: { c: 1 } });
+  });
+
+  it('leaves commas inside strings alone', () => {
+    const src = '{ "note": "a, }", "list": [1,] }';
+    expect(JSON.parse(stripTrailingCommas(src))).toEqual({ note: 'a, }', list: [1] });
+  });
+
+  it('parseConfig accepts a config with comments and trailing commas together', () => {
+    const cfg = parseConfig(`{
+      "region": "us-east-1",
+      "siteName": "example", // required
+      "domain": "example.com",
+    }`);
+    expect(cfg.siteName).toBe('example');
+    expect(cfg.domain).toBe('example.com');
   });
 });
 

@@ -9,12 +9,13 @@ reconcilable dependency graph — no CloudFormation, no Terraform, no CDK.
 ```sh
 pnpm add -D blogwright
 
-# config/production.jsonc — siteName is required (it names every AWS resource)
-echo '{ "region": "us-east-1", "siteName": "example" }' > config/production.jsonc
-
-pnpm exec blogwright bootstrap --domain example.com
+pnpm exec blogwright init          # first-run wizard — writes config/production.jsonc
+pnpm exec blogwright bootstrap
 pnpm exec blogwright deploy        # `bw` works too
 ```
+
+(No TTY? Write the config by hand — only `region` and `siteName` are required:
+`echo '{ "region": "us-east-1", "siteName": "example" }' > config/production.jsonc`.)
 
 Requires Node ≥ 22 and AWS credentials in the ambient provider chain.
 
@@ -50,6 +51,7 @@ changed files are re-uploaded and **only the changed CloudFront paths are invali
 ## Usage
 
 ```sh
+blogwright init                             # first-run wizard: config/production.jsonc
 blogwright bootstrap --domain example.com   # create infra; prints ACM validation CNAMEs
 blogwright deploy                           # zip + build in a MicroVM + publish
 blogwright status staging                   # planned graph vs. live state
@@ -62,6 +64,11 @@ blogwright destroy --yes                    # tear everything down
 
 Environment defaults to `production`; pass another as the positional `[env]` or `--env`.
 Credentials are read from the ambient AWS provider chain.
+
+Output is pretty on a TTY — live build progress, a deploy summary card, a status
+drift tree. Piped output, CI, and `--plain` get stable line-oriented text for
+machines and agents (the plain formats are a compatibility contract); `NO_COLOR`
+disables color only.
 
 ## Configuration
 
