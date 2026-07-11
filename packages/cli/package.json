@@ -53,5 +53,7 @@
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "homepage": "https://github.com/antstanley/blogwright#readme",
+  "bugs": "https://github.com/antstanley/blogwright/issues"
 }
