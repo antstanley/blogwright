@@ -38,6 +38,13 @@ export interface Terminal {
   write(line: string): void;
   /** Write one line to standard error. */
   error(line: string): void;
+  /**
+   * Show a transient single-line status (elapsed time, progress). Each call
+   * replaces the previous status; the empty string clears it. Adapters that
+   * cannot rewrite a line (piped output, CI, plain mode) make this a no-op,
+   * so callers must still emit durable lines for those sessions.
+   */
+  status(line: string): void;
   /** Show `prompt` and resolve with the operator's answer (newline excluded). */
   question(prompt: string): Promise<string>;
 }

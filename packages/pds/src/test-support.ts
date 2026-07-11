@@ -61,6 +61,7 @@ const silentTerminal: Terminal = {
   isInteractive: false,
   write: () => undefined,
   error: () => undefined,
+  status: () => undefined,
   question: async (prompt) => {
     throw new Error(
       `unexpected terminal prompt in test: ${prompt} — override ports.terminal on createTestContext`,

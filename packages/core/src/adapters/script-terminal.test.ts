@@ -30,6 +30,15 @@ describe('createScriptedTerminal', () => {
     );
   });
 
+  it('records transient status lines, including clears', () => {
+    const terminal = createScriptedTerminal();
+
+    terminal.status('working… 3s');
+    terminal.status('');
+
+    expect(terminal.statuses).toEqual(['working… 3s', '']);
+  });
+
   it('defaults to interactive and honours an explicit non-interactive option', () => {
     expect(createScriptedTerminal().isInteractive).toBe(true);
     expect(createScriptedTerminal({ interactive: false }).isInteractive).toBe(false);

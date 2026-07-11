@@ -8,6 +8,8 @@ export interface ScriptedTerminal extends Terminal {
   readonly writes: string[];
   /** Lines written to standard error, in order. */
   readonly errors: string[];
+  /** Transient status lines, in order ('' is a clear). */
+  readonly statuses: string[];
   /** Prompts shown by `question`, in order. */
   readonly prompts: string[];
 }
@@ -23,11 +25,13 @@ export function createScriptedTerminal(
   const pendingAnswers = [...(options.answers ?? [])];
   const writes: string[] = [];
   const errors: string[] = [];
+  const statuses: string[] = [];
   const prompts: string[] = [];
   return {
     isInteractive: options.interactive ?? true,
     writes,
     errors,
+    statuses,
     prompts,
 
     write(line: string): void {
@@ -36,6 +40,10 @@ export function createScriptedTerminal(
 
     error(line: string): void {
       errors.push(line);
+    },
+
+    status(line: string): void {
+      statuses.push(line);
     },
 
     async question(prompt: string): Promise<string> {
