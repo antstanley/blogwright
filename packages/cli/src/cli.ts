@@ -50,6 +50,9 @@ Options:
   --config <path>   Path to a JSONC config file
   --endpoint <url>  AWS endpoint override (e.g. http://localhost:4566 for floci)
   --id <preview>    Preview id for preview deploy/destroy (also accepted positionally)
+  --plain           Minimal machine-friendly output (no colour, no live status,
+                    no prompts) — for CI systems and agents; also automatic when
+                    output is piped. NO_COLOR disables colour only.
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -66,8 +69,10 @@ const KNOWN_COMMANDS = new Set([
   'status',
 ]);
 
-export async function main(argv: string[], terminal: Terminal): Promise<number> {
-  const logger = createLogger(terminal);
+/** Builds the Terminal after flag parsing, so --plain shapes the whole session. */
+export type TerminalFactory = (opts: { plain: boolean }) => Terminal;
+
+export async function main(argv: string[], makeTerminal: TerminalFactory): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -79,10 +84,13 @@ export async function main(argv: string[], terminal: Terminal): Promise<number> 
       hash: { type: 'string' },
       id: { type: 'string' },
       identifier: { type: 'string' },
+      plain: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
   });
+  const terminal = makeTerminal({ plain: values.plain });
+  const logger = createLogger(terminal);
 
   const command = positionals[0];
   if (!command || values.help) {

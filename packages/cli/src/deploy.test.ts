@@ -1,4 +1,4 @@
-import type { LogEvent, ResourceOutputs } from 'blogwright-core';
+import { createScriptedTerminal, type LogEvent, type ResourceOutputs } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
@@ -82,6 +82,39 @@ describe('pollBuild nudge', () => {
       },
     });
     await expect(pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN)).resolves.toEqual({ state: 'done' });
+  });
+
+  it('shows a live status line per cycle and clears it when the poll ends', async () => {
+    const terminal = createScriptedTerminal();
+    const ctx = createTestContext({
+      clients: { logs: { filterEvents: async () => [doneEvent()] } },
+      ports: { terminal, ping: async () => undefined },
+    });
+
+    await pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN);
+
+    expect(terminal.statuses.at(-1)).toBe('');
+    const shown = terminal.statuses.slice(0, -1);
+    expect(shown.length).toBeGreaterThan(0);
+    for (const line of shown) expect(line).toContain(`building ${HASH} in MicroVM`);
+  });
+
+  it('clears the status line even when the build fails', async () => {
+    const terminal = createScriptedTerminal();
+    const failed: LogEvent = {
+      eventId: 'e2',
+      timestamp: 1,
+      message: `##build:failed:${HASH}: pnpm build exited 1`,
+    };
+    const ctx = createTestContext({
+      clients: { logs: { filterEvents: async () => [failed] } },
+      ports: { terminal, ping: async () => undefined },
+    });
+
+    const result = await pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN);
+
+    expect(result.state).toBe('failed');
+    expect(terminal.statuses.at(-1)).toBe('');
   });
 
   it('skips the nudge when the endpoint or token is missing', async () => {

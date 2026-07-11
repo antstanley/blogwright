@@ -13,7 +13,15 @@ import {
 import { applyGraph, destroyGraph } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
+import { formatDuration, renderSummary, type SummaryRow } from './render.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
+
+/** One line per invalidation outcome, shared by the summary card and logs. */
+function describeInvalidation(inv: { mode: 'none' | 'paths' | 'all'; count: number }): string {
+  if (inv.mode === 'none') return 'nothing changed — skipped';
+  if (inv.mode === 'paths') return `${inv.count} changed path${inv.count === 1 ? '' : 's'}`;
+  return inv.count > 0 ? `everything (/*) — ${inv.count} paths over cap` : 'everything (/*)';
+}
 
 /**
  * Canonical origin the live site is served from: the custom domain if configured,
@@ -51,6 +59,7 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
 
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
 export async function deploy(ctx: OpsContext): Promise<void> {
+  const startedAt = Date.now();
   const cwd = await findRepoRoot(ctx.ports.fs);
   const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
@@ -65,11 +74,24 @@ export async function deploy(ctx: OpsContext): Promise<void> {
   // Rebuild the builder image first if the agent bundle changed, so build-agent fixes
   // ship on the same deploy (no-op when unchanged).
   await reconcileBuilderImage(ctx);
-  await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
-  await invalidateChanged(ctx, hash);
+  const manifest = await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
+  const invalidation = await invalidateChanged(ctx, hash);
   // Production content changed — mirror it to the PDS (non-fatal; see syncAfterDeploy).
   await syncAfterDeploy(ctx);
-  ctx.logger.ok(`deployed ${hash}`);
+
+  const url = siteBaseUrl(ctx);
+  const rows: SummaryRow[] = [
+    { label: 'revision', value: hash },
+    { label: 'environment', value: ctx.env },
+    { label: 'source', value: `${files.length} files, ${(zip.byteLength / 1024).toFixed(0)} KiB` },
+    { label: 'build', value: formatDuration(manifest.durationMs) },
+    { label: 'invalidated', value: describeInvalidation(invalidation) },
+    ...(url ? [{ label: 'site', value: colors.cyan(url) }] : []),
+  ];
+  for (const line of renderSummary('deploy summary', rows, ctx.ports.terminal.isInteractive)) {
+    ctx.logger.info(line);
+  }
+  ctx.logger.ok(`deployed ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
 /** Re-run the builder against an existing source zip for the given hash. */
@@ -79,6 +101,7 @@ export async function rollback(ctx: OpsContext, hash: string): Promise<void> {
     throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
   }
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
+  const startedAt = Date.now();
   await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
   await invalidateChanged(ctx, hash);
   // A rollback changes production content too, but the PDS mirrors the *working tree*
@@ -89,7 +112,7 @@ export async function rollback(ctx: OpsContext, hash: string): Promise<void> {
         'check out the rolled-back revision and run `blogwright pds sync` if needed',
     );
   }
-  ctx.logger.ok(`rolled back to ${hash}`);
+  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
 function assertPreviewId(id: string): void {
@@ -110,6 +133,7 @@ export async function previewBootstrap(ctx: OpsContext): Promise<void> {
 /** Build the current repo and publish it to this PR's preview prefix. Prints the URL. */
 export async function previewDeploy(ctx: OpsContext, id: string): Promise<string> {
   assertPreviewId(id);
+  const startedAt = Date.now();
   const cwd = await findRepoRoot(ctx.ports.fs);
   const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Preview deploy ${id} (${hash})`));
@@ -131,7 +155,7 @@ export async function previewDeploy(ctx: OpsContext, id: string): Promise<string
     target: `preview-${id}`,
     baseUrl: url,
   });
-  ctx.logger.ok(`preview ready: ${url}`);
+  ctx.logger.ok(`preview ready in ${formatDuration(Date.now() - startedAt)}: ${url}`);
   return url;
 }
 

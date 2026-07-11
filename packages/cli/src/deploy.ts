@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { networkConnectors, pollUntil, sleep, type LogEvent } from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
+import { formatDuration, spinnerFrame } from './render.js';
 import { resolveSeo } from './seo.js';
 
 export interface DeployManifest {
@@ -72,40 +73,49 @@ export async function pollBuild(
 ): Promise<AgentStatus> {
   const seen = new Set<string>();
   const deadline = Date.now() + ctx.config.microvm.maxDurationSeconds * 1000;
+  const { terminal } = ctx.ports;
+  let tick = 0;
 
-  for (;;) {
-    await nudge(ctx, endpoint, token);
-    const events = await ctx.clients.logs
-      .filterEvents(microvmLogGroup(ctx), { startTime })
-      .catch(() => [] as LogEvent[]);
-    events.sort((a, b) => a.timestamp - b.timestamp);
+  try {
+    for (;;) {
+      terminal.status(
+        `${spinnerFrame(tick++)} building ${hash} in MicroVM … ${formatDuration(Date.now() - startTime)}`,
+      );
+      await nudge(ctx, endpoint, token);
+      const events = await ctx.clients.logs
+        .filterEvents(microvmLogGroup(ctx), { startTime })
+        .catch(() => [] as LogEvent[]);
+      events.sort((a, b) => a.timestamp - b.timestamp);
 
-    let result: AgentStatus | undefined;
-    for (const e of events) {
-      if (seen.has(e.eventId)) continue;
-      seen.add(e.eventId);
-      ctx.logger.info(`  ${e.message.trimEnd()}`);
-      // Hash-scoped structured markers so unrelated log lines (raw pnpm/astro output, or
-      // an orphaned VM from a different deploy) can't be mistaken for this build's result.
-      if (e.message.includes(`##build:done:${hash}`)) result = { state: 'done' };
-      else if (e.message.includes(`##build:failed:${hash}`)) {
-        result = {
-          state: 'failed',
-          message: e.message.split(`##build:failed:${hash}:`)[1]?.trim(),
-        };
+      let result: AgentStatus | undefined;
+      for (const e of events) {
+        if (seen.has(e.eventId)) continue;
+        seen.add(e.eventId);
+        ctx.logger.info(`  ${e.message.trimEnd()}`);
+        // Hash-scoped structured markers so unrelated log lines (raw pnpm/astro output, or
+        // an orphaned VM from a different deploy) can't be mistaken for this build's result.
+        if (e.message.includes(`##build:done:${hash}`)) result = { state: 'done' };
+        else if (e.message.includes(`##build:failed:${hash}`)) {
+          result = {
+            state: 'failed',
+            message: e.message.split(`##build:failed:${hash}:`)[1]?.trim(),
+          };
+        }
       }
+      if (result) return result;
+      // Log delivery can lag or drop (e.g. the VM logging to a group the deploy isn't tailing).
+      // The agent writes build/changed/<hash>.json as its final step, so treat that artifact as
+      // an authoritative completion signal too — a successful build then can't hang until the
+      // deadline just because its logs never reached CloudWatch. runBuild clears any stale copy
+      // before launch, so its presence means *this* build finished.
+      if (await ctx.clients.s3.objectExists(ctx.names.bucket, `build/changed/${hash}.json`)) {
+        return { state: 'done' };
+      }
+      if (Date.now() >= deadline) return { state: 'failed', message: 'build timed out' };
+      await sleep(3000);
     }
-    if (result) return result;
-    // Log delivery can lag or drop (e.g. the VM logging to a group the deploy isn't tailing).
-    // The agent writes build/changed/<hash>.json as its final step, so treat that artifact as
-    // an authoritative completion signal too — a successful build then can't hang until the
-    // deadline just because its logs never reached CloudWatch. runBuild clears any stale copy
-    // before launch, so its presence means *this* build finished.
-    if (await ctx.clients.s3.objectExists(ctx.names.bucket, `build/changed/${hash}.json`)) {
-      return { state: 'done' };
-    }
-    if (Date.now() >= deadline) return { state: 'failed', message: 'build timed out' };
-    await sleep(3000);
+  } finally {
+    terminal.status('');
   }
 }
 
@@ -233,12 +243,21 @@ export async function invalidateCloudFront(ctx: OpsContext, paths = ['/*']): Pro
   ctx.logger.ok(`CloudFront invalidation requested (${shown})`);
 }
 
+/** What a deploy's cache invalidation actually did, for the deploy summary. */
+export interface InvalidationSummary {
+  mode: 'none' | 'paths' | 'all';
+  count: number;
+}
+
 /**
  * Invalidate only the URL paths that changed in this build (from the agent's manifest),
  * so unchanged pages stay cached. Falls back to `/*` when the manifest is missing or the
  * changed set is larger than the configured cap.
  */
-export async function invalidateChanged(ctx: OpsContext, hash: string): Promise<void> {
+export async function invalidateChanged(
+  ctx: OpsContext,
+  hash: string,
+): Promise<InvalidationSummary> {
   const text = await ctx.clients.s3
     .getObjectText(ctx.names.bucket, `build/changed/${hash}.json`)
     .catch(() => undefined);
@@ -253,19 +272,24 @@ export async function invalidateChanged(ctx: OpsContext, hash: string): Promise<
   if (!paths) {
     ctx.logger.warn('no changed-paths manifest — invalidating everything (/*)');
     await invalidateCloudFront(ctx, ['/*']);
-    return;
+    return { mode: 'all', count: 0 };
   }
+  let summary: InvalidationSummary;
   if (paths.length === 0) {
     ctx.logger.ok('no content changed — skipping CloudFront invalidation');
+    summary = { mode: 'none', count: 0 };
   } else if (paths.length > ctx.config.invalidationMaxPaths) {
     ctx.logger.step(`${paths.length} paths changed (> cap) — invalidating everything (/*)`);
     await invalidateCloudFront(ctx, ['/*']);
+    summary = { mode: 'all', count: paths.length };
   } else {
     await invalidateCloudFront(ctx, paths);
+    summary = { mode: 'paths', count: paths.length };
   }
   await ctx.clients.s3
     .deleteObject(ctx.names.bucket, `build/changed/${hash}.json`)
     .catch(() => undefined);
+  return summary;
 }
 
 export { manifestKey };
