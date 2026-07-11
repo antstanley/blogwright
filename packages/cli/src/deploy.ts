@@ -16,7 +16,8 @@ export interface DeployManifest {
   message?: string;
 }
 
-interface AgentStatus {
+/** Terminal outcome the log poller extracts from the agent's build markers. */
+export interface AgentStatus {
   state: 'idle' | 'building' | 'done' | 'failed';
   message?: string | undefined;
 }
@@ -29,18 +30,12 @@ function manifestKey(hash: string): string {
  * Nudge the MicroVM's endpoint to wake its event loop. A Firecracker-resumed process
  * can sit idle with its poll timer pending until some I/O arrives; a connection here —
  * even one the agent's HTTP/1 server can't fully parse — wakes the loop so the timer
- * fires and the build starts. Best-effort; errors are ignored.
+ * fires and the build starts. The wake-up, not the response, is the point: a missing
+ * endpoint or token means nothing to nudge, and a rejecting ping never fails the poll.
  */
-async function nudge(endpoint: string, token: string): Promise<void> {
+async function nudge(ctx: OpsContext, endpoint: string, token: string): Promise<void> {
   if (!endpoint || !token) return;
-  try {
-    await fetch(`https://${endpoint}/status`, {
-      headers: { 'X-aws-proxy-auth': token, 'X-aws-proxy-port': '8080' },
-      signal: AbortSignal.timeout(2500),
-    });
-  } catch {
-    /* expected — the point is the wake-up, not the response */
-  }
+  await ctx.ports.ping(endpoint, token).catch(() => undefined);
 }
 
 /**
@@ -66,8 +61,9 @@ export function microvmLogGroup(ctx: OpsContext): string {
  * Poll the CloudWatch build log group for the agent's output, streaming new lines and
  * detecting the terminal marker (the source of truth). Each cycle also nudges the VM
  * endpoint to keep the agent's event loop alive so the build triggers reliably.
+ * Exported for tests.
  */
-async function pollBuild(
+export async function pollBuild(
   ctx: OpsContext,
   hash: string,
   startTime: number,
@@ -78,7 +74,7 @@ async function pollBuild(
   const deadline = Date.now() + ctx.config.microvm.maxDurationSeconds * 1000;
 
   for (;;) {
-    await nudge(endpoint, token);
+    await nudge(ctx, endpoint, token);
     const events = await ctx.clients.logs
       .filterEvents(microvmLogGroup(ctx), { startTime })
       .catch(() => [] as LogEvent[]);

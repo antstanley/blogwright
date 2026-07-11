@@ -14,9 +14,16 @@ export interface Vcs {
   listFiles(cwd: string): Promise<string[]>;
 }
 
+/**
+ * Best-effort wake-up ping to a builder MicroVM's proxy endpoint. Implementations
+ * never throw — the connection attempt, not the response, is the point.
+ */
+export type PingBuilder = (endpoint: string, token: string) => Promise<void>;
+
 /** The ports domain code reaches side effects through; adapters are wired in createContext. */
 export interface Ports {
   fs: FileSystem;
   vcs: Vcs;
   terminal: Terminal;
+  ping: PingBuilder;
 }

@@ -27,7 +27,7 @@ import {
 
 import type { OpsContext } from './context.js';
 import type { Logger } from './logger.js';
-import type { Ports, Vcs } from './ports.js';
+import type { PingBuilder, Ports, Vcs } from './ports.js';
 
 type ServiceName = Exclude<keyof AwsClients, 'region'>;
 
@@ -99,6 +99,9 @@ const rejectAllVcs: Vcs = {
   },
 };
 
+/** Pings are best-effort fire-and-forget by contract; the default resolves silently. */
+const noopPing: PingBuilder = async () => undefined;
+
 /** Silent, non-interactive terminal; a prompt in a test is a missing override. */
 const silentTerminal: Terminal = {
   isInteractive: false,
@@ -150,6 +153,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     fs: overrides.ports?.fs ?? createMemoryFileSystem(),
     vcs: overrides.ports?.vcs ?? rejectAllVcs,
     terminal: overrides.ports?.terminal ?? silentTerminal,
+    ping: overrides.ports?.ping ?? noopPing,
   };
 
   return {

@@ -16,6 +16,7 @@ import {
   type OpsState,
 } from 'blogwright-core';
 
+import { createFetchPing } from './adapters/fetch-ping.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
 import { createLogger, type Logger } from './logger.js';
 import type { Ports } from './ports.js';
@@ -93,6 +94,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     fs: opts.ports?.fs ?? createNodeFileSystem(),
     vcs: opts.ports?.vcs ?? createProcessVcs(),
     terminal: opts.ports?.terminal ?? createNodeTerminal(),
+    ping: opts.ports?.ping ?? createFetchPing(),
   };
   const logger = createLogger(ports.terminal);
   const agentDir = fileURLToPath(new URL('../agent', import.meta.url));
