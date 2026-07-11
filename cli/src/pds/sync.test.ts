@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { DEFAULT_CONFIG } from '@iamstan/ops-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
@@ -136,7 +137,7 @@ describe('syncPds', () => {
     return {
       env: 'production',
       domain: 'iamstan.dev',
-      config: { pds: { name: 'Ant Stanley', secretName: 's' } },
+      config: { paths: DEFAULT_CONFIG.paths, pds: { name: 'Ant Stanley', secretName: 's' } },
     } as unknown as OpsContext;
   }
 

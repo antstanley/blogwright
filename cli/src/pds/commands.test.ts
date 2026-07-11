@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { DEFAULT_CONFIG } from '@iamstan/ops-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
@@ -30,8 +31,12 @@ function ctx(
     env,
     domain: 'iamstan.dev',
     config: pdsConfigured
-      ? { siteName: 'iamstan', pds: { name: 'Ant Stanley', secretName: 's' } }
-      : { siteName: 'iamstan' },
+      ? {
+          siteName: 'iamstan',
+          paths: DEFAULT_CONFIG.paths,
+          pds: { name: 'Ant Stanley', secretName: 's' },
+        }
+      : { siteName: 'iamstan', paths: DEFAULT_CONFIG.paths },
     clients: {
       secrets: {
         getSecretValue: async (name: string) => stored[name],

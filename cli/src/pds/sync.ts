@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { PdsConfig } from '@iamstan/ops-core';
+import type { OpsConfig, PdsConfig } from '@iamstan/ops-core';
 
 import type { OpsContext } from '../context.js';
 import { listPublishablePosts, type PostMeta } from './content.js';
@@ -20,9 +20,14 @@ export type OpenRepo = (ctx: OpsContext) => Promise<{ did: string; repo: PdsRepo
 export const PUBLICATION_COLLECTION = 'site.standard.publication';
 export const DOCUMENT_COLLECTION = 'site.standard.document';
 
-/** Repo-relative paths of the two files `pds init` writes and the site ships. */
-export const ATPROTO_JSON_PATH = 'src/data/atproto.json';
-export const WELL_KNOWN_PATH = 'public/.well-known/site.standard.publication';
+/**
+ * Repo-relative path of the standard.site well-known file `pds init` writes;
+ * its segment under the public dir is protocol-fixed. The companion
+ * atproto.json path comes straight from `config.paths.atprotoJson`.
+ */
+export function wellKnownPath(cfg: Pick<OpsConfig, 'paths'>): string {
+  return `${cfg.paths.publicDir}/.well-known/site.standard.publication`;
+}
 
 interface AtprotoSiteConfig {
   did: string;
@@ -40,16 +45,19 @@ export interface SyncSummary {
 
 export function requirePdsConfig(ctx: OpsContext): PdsConfig {
   if (!ctx.config.pds) {
-    throw new Error('config has no "pds" section — add it to ops/config/production.jsonc');
+    throw new Error('config has no "pds" section — add it to config/production.jsonc');
   }
   return ctx.config.pds;
 }
 
-/** Read src/data/atproto.json; undefined when the site has not been initialised. */
-async function readAtprotoSiteConfig(repoRoot: string): Promise<AtprotoSiteConfig | undefined> {
+/** Read the atproto.json site file; undefined when the site has not been initialised. */
+async function readAtprotoSiteConfig(
+  repoRoot: string,
+  cfg: Pick<OpsConfig, 'paths'>,
+): Promise<AtprotoSiteConfig | undefined> {
   let text: string;
   try {
-    text = await readFile(join(repoRoot, ATPROTO_JSON_PATH), 'utf8');
+    text = await readFile(join(repoRoot, cfg.paths.atprotoJson), 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw err;
@@ -60,9 +68,12 @@ async function readAtprotoSiteConfig(repoRoot: string): Promise<AtprotoSiteConfi
 }
 
 /** Read the committed well-known file; undefined when absent. */
-export async function readWellKnownUri(repoRoot: string): Promise<string | undefined> {
+export async function readWellKnownUri(
+  repoRoot: string,
+  cfg: Pick<OpsConfig, 'paths'>,
+): Promise<string | undefined> {
   try {
-    const text = await readFile(join(repoRoot, WELL_KNOWN_PATH), 'utf8');
+    const text = await readFile(join(repoRoot, wellKnownPath(cfg)), 'utf8');
     return text.trim() || undefined;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
@@ -179,14 +190,15 @@ export async function syncPds(
   openRepo: OpenRepo,
 ): Promise<SyncSummary> {
   const pds = requirePdsConfig(ctx);
-  const site = await readAtprotoSiteConfig(repoRoot);
+  const atprotoJson = ctx.config.paths.atprotoJson;
+  const site = await readAtprotoSiteConfig(repoRoot, ctx.config);
   if (!site) {
-    throw new Error(`${ATPROTO_JSON_PATH} is not initialised — run \`blog-ops pds init\` first`);
+    throw new Error(`${atprotoJson} is not initialised — run \`blog-ops pds init\` first`);
   }
-  const wellKnown = await readWellKnownUri(repoRoot);
+  const wellKnown = await readWellKnownUri(repoRoot, ctx.config);
   if (wellKnown !== site.publicationUri) {
     throw new Error(
-      `${WELL_KNOWN_PATH} (${wellKnown ?? 'missing'}) does not match ${ATPROTO_JSON_PATH} ` +
+      `${wellKnownPath(ctx.config)} (${wellKnown ?? 'missing'}) does not match ${atprotoJson} ` +
         `(${site.publicationUri}) — re-run \`blog-ops pds init\``,
     );
   }
@@ -194,10 +206,10 @@ export async function syncPds(
 
   const { did, repo } = await openRepo(ctx);
   if (did !== site.did) {
-    throw new Error(`session DID ${did} does not match ${ATPROTO_JSON_PATH} DID ${site.did}`);
+    throw new Error(`session DID ${did} does not match ${atprotoJson} DID ${site.did}`);
   }
 
-  const posts = await listPublishablePosts(repoRoot);
+  const posts = await listPublishablePosts(repoRoot, ctx.config.paths.content);
   const publication = await syncPublication(
     repo,
     publicationRecord(pds, `https://${ctx.domain}`),

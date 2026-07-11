@@ -10,7 +10,8 @@ export interface PostMeta {
   pubDate: Date;
 }
 
-const BLOG_DIR = 'src/content/blog';
+/** Default content-collection directory; overridable via `config.paths.content`. */
+const DEFAULT_CONTENT_DIR = 'src/content/blog';
 const REQUIRED_FIELDS = ['title', 'description', 'pubDate'] as const;
 
 /**
@@ -42,8 +43,11 @@ export function parseFrontmatter(source: string, file: string): Record<string, s
  * Enumerate publishable posts from the content collection, mirroring the Astro
  * build: slug = file path minus `.md` (the glob-loader id), drafts excluded.
  */
-export async function listPublishablePosts(repoRoot: string): Promise<PostMeta[]> {
-  const dir = join(repoRoot, BLOG_DIR);
+export async function listPublishablePosts(
+  repoRoot: string,
+  contentDir: string = DEFAULT_CONTENT_DIR,
+): Promise<PostMeta[]> {
+  const dir = join(repoRoot, contentDir);
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
   const posts: PostMeta[] = [];
   for (const entry of entries) {

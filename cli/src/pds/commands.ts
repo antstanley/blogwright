@@ -5,12 +5,7 @@ import { createInterface } from 'node:readline/promises';
 import type { OpsContext } from '../context.js';
 import { colors } from '../logger.js';
 import { findRepoRoot } from '../repo-root.js';
-import {
-  CLIENT_METADATA_PATH,
-  JWKS_PATH,
-  clientMetadata,
-  jwksDocument,
-} from './client-metadata.js';
+import { clientDocumentPaths, clientMetadata, jwksDocument } from './client-metadata.js';
 import {
   generateClientKey,
   login as oauthLogin,
@@ -20,13 +15,12 @@ import {
 } from './oauth.js';
 import { loadPdsSecret, updatePdsSecret } from './secret.js';
 import {
-  ATPROTO_JSON_PATH,
   PUBLICATION_COLLECTION,
-  WELL_KNOWN_PATH,
   publicationRecord,
   readWellKnownUri,
   requirePdsConfig,
   syncPds,
+  wellKnownPath,
   type OpenRepo,
   type SyncSummary,
 } from './sync.js';
@@ -55,9 +49,10 @@ export async function keygen(
   );
   ctx.logger.ok(`stored private key "${kid}" in secret "${pds.secretName}"`);
 
+  const docPaths = clientDocumentPaths(ctx.config);
   const documents: [path: string, body: object][] = [
-    [CLIENT_METADATA_PATH, clientMetadata(ctx.domain, pds)],
-    [JWKS_PATH, jwksDocument(await publicClientJwk(clientKey))],
+    [docPaths.clientMetadata, clientMetadata(ctx.domain, pds)],
+    [docPaths.jwks, jwksDocument(await publicClientJwk(clientKey))],
   ];
   for (const [path, body] of documents) {
     const file = join(repoRoot, path);
@@ -66,7 +61,9 @@ export async function keygen(
     ctx.logger.info(`  wrote ${path}`);
   }
   ctx.logger.info(
-    colors.bold('Commit public/oauth/* and release — then run `blog-ops pds login`.'),
+    colors.bold(
+      `Commit ${ctx.config.paths.publicDir}/oauth/* and release — then run \`blog-ops pds login\`.`,
+    ),
   );
 }
 
@@ -137,7 +134,7 @@ export async function init(
   const { did, repo } = await openRepo(ctx);
 
   const record = publicationRecord(pds, `https://${ctx.domain}`);
-  const existingUri = await readWellKnownUri(repoRoot);
+  const existingUri = await readWellKnownUri(repoRoot, ctx.config);
   let publicationUri: string;
   if (existingUri) {
     await repo.putRecord(PUBLICATION_COLLECTION, rkeyFromUri(existingUri), record);
@@ -149,13 +146,15 @@ export async function init(
     ctx.logger.ok(`created publication ${publicationUri}`);
   }
 
-  const wellKnownFile = join(repoRoot, WELL_KNOWN_PATH);
+  const wellKnown = wellKnownPath(ctx.config);
+  const wellKnownFile = join(repoRoot, wellKnown);
   await mkdir(dirname(wellKnownFile), { recursive: true });
   await writeFile(wellKnownFile, `${publicationUri}\n`);
-  const jsonFile = join(repoRoot, ATPROTO_JSON_PATH);
+  const jsonFile = join(repoRoot, ctx.config.paths.atprotoJson);
+  await mkdir(dirname(jsonFile), { recursive: true });
   await writeFile(jsonFile, `${JSON.stringify({ did, publicationUri }, null, 2)}\n`);
-  ctx.logger.info(`  wrote ${WELL_KNOWN_PATH}`);
-  ctx.logger.info(`  wrote ${ATPROTO_JSON_PATH}`);
+  ctx.logger.info(`  wrote ${wellKnown}`);
+  ctx.logger.info(`  wrote ${ctx.config.paths.atprotoJson}`);
   ctx.logger.info(
     colors.bold(
       'Commit both files and deploy — they verify the publication and the post link tags.',
@@ -205,7 +204,7 @@ export async function syncAfterDeploy(
     syncPds(c, r, openPdsRepo),
 ): Promise<void> {
   if (ctx.env !== 'production' || !ctx.config.pds) return;
-  const initialised = await readWellKnownUri(repoRoot).catch(() => undefined);
+  const initialised = await readWellKnownUri(repoRoot, ctx.config).catch(() => undefined);
   if (!initialised) {
     ctx.logger.info('standard.site publishing not initialised (`blog-ops pds init`) — skipping');
     return;

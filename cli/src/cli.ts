@@ -5,7 +5,7 @@ import { createContext } from './context.js';
 import * as pds from './pds/commands.js';
 import { createLogger, type Logger } from './logger.js';
 
-const USAGE = `blog-ops — lifecycle management for the iamstan.dev site
+const USAGE = `blog-ops — deploy a static Astro site to AWS (S3 + CloudFront, MicroVM builds)
 
 Usage:
   blog-ops <command> [env] [options]
@@ -38,8 +38,8 @@ Commands:
   pds secret delete --yes     Delete the secret (logs out and discards the key)
   pds init                    Create/update the standard.site publication record and
                               write the site verification files (commit them)
-  pds sync                    Reconcile site.standard.document records with
-                              src/content/blog (production only; also runs after
+  pds sync                    Reconcile site.standard.document records with the
+                              content collection (production only; also runs after
                               every successful production deploy)
 
 Options:

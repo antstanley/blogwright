@@ -4,8 +4,6 @@ import { resolve } from 'node:path';
 import {
   createClients,
   deriveNames,
-  DEFAULT_CONFIG,
-  mergeConfig,
   parseConfig,
   StateStore,
   type AwsClients,
@@ -45,11 +43,7 @@ async function loadConfig(env: string, configPath: string | undefined): Promise<
   const root = findRepoRoot();
   const candidates = configPath
     ? [configPath]
-    : [
-        resolve(root, `ops/config/${env}.jsonc`),
-        resolve(root, `config/${env}.jsonc`),
-        resolve(root, 'ops.config.jsonc'),
-      ];
+    : [resolve(root, `config/${env}.jsonc`), resolve(root, 'ops.config.jsonc')];
   for (const path of candidates) {
     try {
       const text = await readFile(path, 'utf8');
@@ -58,8 +52,9 @@ async function loadConfig(env: string, configPath: string | undefined): Promise<
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
   }
-  // No file found — fall back to built-in defaults.
-  return mergeConfig({ ...DEFAULT_CONFIG });
+  throw new Error(
+    `no config found for environment "${env}" — looked for ${candidates.join(', ')}`,
+  );
 }
 
 /**

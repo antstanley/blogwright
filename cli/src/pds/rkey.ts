@@ -6,9 +6,9 @@
  * Behaviour must not diverge: rkeys derived here must match link tags any
  * standard.site-aware client reconstructs with the reference implementation.
  *
- * A second copy lives at src/lib/atproto.ts for the Astro build — the site cannot
- * import from the ops workspace because `sourceIgnore` excludes ops/ from the
- * production source zip. rkey.test.ts pins both copies to shared vectors.
+ * Exported from the package as the `./rkey` subpath so the consuming site can
+ * derive its document <link> tags from the same implementation. rkey.test.ts pins
+ * the outputs to on-the-wire vectors that must never change for an existing path.
  */
 
 /** Derive a TID-format rkey from a URL path (deterministic, no PDS round-trip). */

@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { deriveNames, parseConfig, stripJsonComments } from './config.js';
 
+/** Wrap a config fragment with the required siteName. */
+const withSite = (fragment: string): string =>
+  fragment === '{}' ? '{ "siteName": "example" }' : `{ "siteName": "example", ${fragment.slice(1)}`;
+
 describe('stripJsonComments', () => {
   it('removes line and block comments but keeps string contents', () => {
     const src = `{
@@ -17,44 +21,61 @@ describe('stripJsonComments', () => {
 
 describe('parseConfig', () => {
   it('applies defaults and merges nested objects', () => {
-    const cfg = parseConfig('{ "domain": "example.com", "microvm": { "memory": 8 } }');
+    const cfg = parseConfig(withSite('{ "domain": "example.com", "microvm": { "memory": 8 } }'));
     expect(cfg.region).toBe('us-east-1');
-    expect(cfg.siteName).toBe('iamstan');
+    expect(cfg.siteName).toBe('example');
     expect(cfg.domain).toBe('example.com');
     expect(cfg.microvm.memory).toBe(8);
     expect(cfg.microvm.idle.maxIdleDurationSeconds).toBe(300);
     expect(cfg.retention.microvmDays).toBe(365);
+    expect(cfg.paths).toEqual({
+      publicDir: 'public',
+      content: 'src/content/blog',
+      atprotoJson: 'src/data/atproto.json',
+    });
+  });
+
+  it('requires siteName', () => {
+    expect(() => parseConfig('{}')).toThrow(/siteName is required/);
   });
 
   it('rejects invalid siteName', () => {
     expect(() => parseConfig('{ "siteName": "Bad Name" }')).toThrow(/siteName/);
   });
 
+  it('merges paths overrides over defaults', () => {
+    const cfg = parseConfig(withSite('{ "paths": { "content": "src/content/notes" } }'));
+    expect(cfg.paths.content).toBe('src/content/notes');
+    expect(cfg.paths.publicDir).toBe('public');
+  });
+
   it('rejects out-of-range maxDurationSeconds', () => {
-    expect(() => parseConfig('{ "microvm": { "maxDurationSeconds": 999999 } }')).toThrow(
+    expect(() => parseConfig(withSite('{ "microvm": { "maxDurationSeconds": 999999 } }'))).toThrow(
       /maxDuration/,
     );
   });
 
   it('rejects a memory value outside the supported MicroVM sizes', () => {
-    expect(() => parseConfig('{ "microvm": { "memory": 3 } }')).toThrow(/memory/);
+    expect(() => parseConfig(withSite('{ "microvm": { "memory": 3 } }'))).toThrow(/memory/);
   });
 
   it('leaves pds undefined when the section is absent', () => {
-    expect(parseConfig('{}').pds).toBeUndefined();
+    expect(parseConfig(withSite('{}')).pds).toBeUndefined();
   });
 
   it('applies pds defaults (secretName from siteName)', () => {
-    const cfg = parseConfig('{ "pds": { "name": "Ant Stanley" } }');
+    const cfg = parseConfig(withSite('{ "pds": { "name": "Ant Stanley" } }'));
     expect(cfg.pds).toEqual({
       name: 'Ant Stanley',
-      secretName: 'iamstan/atproto',
+      secretName: 'example/atproto',
     });
   });
 
   it('keeps explicit pds overrides', () => {
     const cfg = parseConfig(
-      '{ "pds": { "name": "x", "handleResolver": "https://resolver.example", "secretName": "me/secret", "description": "d" } }',
+      withSite(
+        '{ "pds": { "name": "x", "handleResolver": "https://resolver.example", "secretName": "me/secret", "description": "d" } }',
+      ),
     );
     expect(cfg.pds?.handleResolver).toBe('https://resolver.example');
     expect(cfg.pds?.secretName).toBe('me/secret');
@@ -62,33 +83,33 @@ describe('parseConfig', () => {
   });
 
   it('rejects a pds section without a name', () => {
-    expect(() => parseConfig('{ "pds": { "name": " " } }')).toThrow(/pds.name/);
+    expect(() => parseConfig(withSite('{ "pds": { "name": " " } }'))).toThrow(/pds.name/);
   });
 
   it('rejects a non-https pds handleResolver', () => {
     expect(() =>
-      parseConfig('{ "pds": { "name": "x", "handleResolver": "http://resolver" } }'),
+      parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "http://resolver" } }')),
     ).toThrow(/https/);
-    expect(() => parseConfig('{ "pds": { "name": "x", "handleResolver": "nope" } }')).toThrow(
-      /URL/,
-    );
+    expect(() =>
+      parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "nope" } }')),
+    ).toThrow(/URL/);
   });
 });
 
 describe('deriveNames', () => {
   it('produces deterministic env-prefixed names', () => {
-    const cfg = parseConfig('{}');
+    const cfg = parseConfig(withSite('{}'));
     const names = deriveNames('staging', '123456789012', cfg);
-    expect(names.bucket).toBe('staging-iamstan-123456789012');
-    expect(names.buildRole).toBe('staging-iamstan-build-role');
-    expect(names.execRole).toBe('staging-iamstan-exec-role');
-    expect(names.microvmImage).toBe('staging-iamstan-builder');
-    expect(names.microvmLogGroup).toBe('/aws/lambda/microvms/staging-iamstan-builder');
-    expect(names.cloudfrontLogGroup).toBe('/iamstan/staging/cloudfront');
+    expect(names.bucket).toBe('staging-example-123456789012');
+    expect(names.buildRole).toBe('staging-example-build-role');
+    expect(names.execRole).toBe('staging-example-exec-role');
+    expect(names.microvmImage).toBe('staging-example-builder');
+    expect(names.microvmLogGroup).toBe('/aws/lambda/microvms/staging-example-builder');
+    expect(names.cloudfrontLogGroup).toBe('/example/staging/cloudfront');
   });
 
   it('rejects an invalid environment name', () => {
-    expect(() => deriveNames('Prod!', '1', parseConfig('{}'))).toThrow(/environment/);
+    expect(() => deriveNames('Prod!', '1', parseConfig(withSite('{}')))).toThrow(/environment/);
   });
 
   it('rejects a derived bucket name over the 63-char S3 limit', () => {

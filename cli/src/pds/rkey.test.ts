@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-// The site keeps its own copy of the vendored algorithm (see rkey.ts header).
-// Importing it here pins both copies to the same vectors so they cannot drift apart.
-import * as site from '../../../../src/lib/atproto.ts';
-
 import { documentUri, extractDate, postPath, tidFromPath } from './rkey.js';
 
 /**
@@ -51,18 +47,5 @@ describe('postPath / documentUri', () => {
     expect(documentUri('did:plc:abc', 'hello-world')).toBe(
       'at://did:plc:abc/site.standard.document/7m7eb4ia7xeuo',
     );
-  });
-});
-
-describe('site copy (src/lib/atproto.ts)', () => {
-  it('matches the ops copy on every vector', () => {
-    for (const [path, tid] of VECTORS) {
-      expect(site.tidFromPath(path)).toBe(tid);
-    }
-  });
-
-  it('matches postPath and documentUri', () => {
-    expect(site.postPath('hello-world')).toBe(postPath('hello-world'));
-    expect(site.documentUri('did:plc:abc', 'x')).toBe(documentUri('did:plc:abc', 'x'));
   });
 });

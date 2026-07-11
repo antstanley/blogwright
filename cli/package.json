@@ -6,8 +6,15 @@
   "bin": {
     "blog-ops": "./dist/bin.js"
   },
+  "files": ["dist", "agent"],
+  "exports": {
+    "./rkey": {
+      "types": "./dist/pds/rkey.d.ts",
+      "default": "./dist/pds/rkey.js"
+    }
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-agent.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "oxlint src",
     "test": "vitest run",
@@ -19,6 +26,7 @@
     "fflate": "^0.8.3"
   },
   "devDependencies": {
+    "@iamstan/ops-build-agent": "workspace:*",
     "@types/node": "^26.1.0",
     "oxlint": "^1.72.0",
     "typescript": "^6.0.3",

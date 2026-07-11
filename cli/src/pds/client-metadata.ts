@@ -6,11 +6,22 @@
  */
 
 import type { OAuthClientMetadataInput } from '@atproto/oauth-client-node';
-import type { PdsConfig } from '@iamstan/ops-core';
+import type { OpsConfig, PdsConfig } from '@iamstan/ops-core';
 
-/** Repo-relative paths of the committed OAuth client documents. */
-export const CLIENT_METADATA_PATH = 'public/oauth/client-metadata.json';
-export const JWKS_PATH = 'public/oauth/jwks.json';
+/**
+ * Repo-relative paths of the committed OAuth client documents. The segments
+ * under the public dir are protocol-fixed — they must mirror the URL paths in
+ * the client metadata — so only the public dir itself is configurable.
+ */
+export function clientDocumentPaths(cfg: Pick<OpsConfig, 'paths'>): {
+  clientMetadata: string;
+  jwks: string;
+} {
+  return {
+    clientMetadata: `${cfg.paths.publicDir}/oauth/client-metadata.json`,
+    jwks: `${cfg.paths.publicDir}/oauth/jwks.json`,
+  };
+}
 
 /** Per the atproto OAuth spec the client_id IS the metadata document URL. */
 export function clientMetadataUrl(domain: string): string {

@@ -101,7 +101,7 @@ function assertPreviewId(id: string): void {
 /** Provision the shared preview stack (one CloudFront distribution + host router + OIDC role). */
 export async function previewBootstrap(ctx: OpsContext): Promise<void> {
   if (!ctx.domain)
-    throw new Error('preview bootstrap requires a domain (e.g. preview.iamstan.dev)');
+    throw new Error('preview bootstrap requires a domain (e.g. preview.example.com)');
   ctx.logger.info(colors.bold(`Bootstrapping preview stack (bucket ${ctx.names.bucket})`));
   await applyGraph(buildNodes(ctx), ctx);
   ctx.logger.ok('preview stack ready');

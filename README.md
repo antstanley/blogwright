@@ -48,7 +48,10 @@ blog-ops destroy --yes                    # tear everything down
 
 Environment defaults to `production`; pass another as the positional `[env]` or `--env`.
 Credentials are read from the ambient AWS provider chain. Config is loaded from
-`ops/config/<env>.jsonc` (override with `--config`).
+`config/<env>.jsonc` at the repo root, falling back to `ops.config.jsonc` (override
+with `--config`). `siteName` is required; a `paths` section can override the site
+layout (`publicDir`, `content`, `atprotoJson`) when it differs from a stock Astro
+project.
 
 ## Production pipeline
 

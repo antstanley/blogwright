@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { agentSourceHash } from './agent-package.js';
+import { agentSourceHash } from './agent-hash.js';
 
 /** Build a minimal build-agent + sibling ops-core source tree under a temp dir. */
 async function fixture(): Promise<string> {

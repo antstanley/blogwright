@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
+  "files": ["dist"],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
   },

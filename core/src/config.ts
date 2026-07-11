@@ -43,10 +43,25 @@ export interface PdsConfig {
   secretName: string;
 }
 
+/**
+ * Repo-relative paths the pds commands read/write in the consuming site.
+ * The OAuth client documents and the standard.site well-known file live at
+ * protocol-fixed locations under `publicDir` (their URL paths are part of the
+ * OAuth client id / standard.site spec), so only the directory roots vary.
+ */
+export interface PathsConfig {
+  /** The static-asset directory served at the site root (Astro's `public/`). */
+  publicDir: string;
+  /** Content-collection directory the pds sync enumerates for posts. */
+  content: string;
+  /** JSON file the site imports to render its document <link> tags. */
+  atprotoJson: string;
+}
+
 export interface OpsConfig {
   /** Primary region for S3 / MicroVM / logs. ACM+CloudFront are always us-east-1. */
   region: string;
-  /** Stable slug used in resource names (default "iamstan"). */
+  /** Stable slug used in every derived AWS resource name. Required. */
   siteName: string;
   /** Custom domain; may also be supplied via --domain. */
   domain?: string | undefined;
@@ -73,11 +88,13 @@ export interface OpsConfig {
   seo: SeoConfig;
   /** standard.site publishing to the owner's AT Protocol PDS; disabled when absent. */
   pds?: PdsConfig | undefined;
+  /** Site-repo layout; the defaults match a stock Astro project. */
+  paths: PathsConfig;
 }
 
-export const DEFAULT_CONFIG: OpsConfig = {
+/** Every setting except the required `siteName`. */
+export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
   region: 'us-east-1',
-  siteName: 'iamstan',
   microvm: {
     memory: 4,
     maxDurationSeconds: 1800,
@@ -91,10 +108,15 @@ export const DEFAULT_CONFIG: OpsConfig = {
     microvmDays: 365,
     cloudfrontDays: 90,
   },
-  sourceIgnore: ['ops/', '.jj/', '.git/', 'node_modules/', 'dist/', '.astro/'],
+  sourceIgnore: ['.jj/', '.git/', 'node_modules/', 'dist/', '.astro/'],
   defaultRootObject: 'index.html',
   invalidationMaxPaths: 1000,
   seo: { robots: 'auto', sitemap: 'auto' },
+  paths: {
+    publicDir: 'public',
+    content: 'src/content/blog',
+    atprotoJson: 'src/data/atproto.json',
+  },
 };
 
 /** Strip // and /* *\/ comments from a JSONC string, respecting string literals. */
@@ -157,9 +179,15 @@ export function parseConfig(text: string): OpsConfig {
 }
 
 export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
+  if (!raw.siteName) {
+    throw new Error(
+      'config.siteName is required — a stable lowercase slug used in every derived AWS resource name',
+    );
+  }
   const cfg: OpsConfig = {
     ...DEFAULT_CONFIG,
     ...raw,
+    siteName: raw.siteName,
     microvm: {
       ...DEFAULT_CONFIG.microvm,
       ...raw.microvm,
@@ -167,6 +195,7 @@ export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
     },
     retention: { ...DEFAULT_CONFIG.retention, ...raw.retention },
     seo: { ...DEFAULT_CONFIG.seo, ...raw.seo },
+    paths: { ...DEFAULT_CONFIG.paths, ...raw.paths },
   };
   if (raw.pds) {
     cfg.pds = {

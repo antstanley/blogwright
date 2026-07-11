@@ -133,7 +133,7 @@ function buildRoleNode(): ResourceNode {
       const arn = await ctx.clients.iam.ensureRole(
         ctx.names.buildRole,
         LAMBDA_TRUST,
-        'Builds the iamstan MicroVM image',
+        `Builds the ${ctx.config.siteName} MicroVM image`,
       );
       await applyBuildRolePolicy(ctx);
       output(ctx, 'iam-build-role').arn = arn;
@@ -199,7 +199,7 @@ function execRoleNode(): ResourceNode {
       const arn = await ctx.clients.iam.ensureRole(
         ctx.names.execRole,
         LAMBDA_TRUST,
-        'Runtime role for the iamstan builder MicroVM',
+        `Runtime role for the ${ctx.config.siteName} builder MicroVM`,
       );
       await applyExecRolePolicy(ctx);
       output(ctx, 'iam-exec-role').arn = arn;
@@ -230,7 +230,7 @@ async function imageInput(ctx: OpsContext): Promise<{ input: CreateImageInput; h
       // delivered over TLS which the agent can't satisfy, and are unnecessary here.
       environmentVariables: { BUILD_BUCKET: ctx.names.bucket, BUILD_REGION: ctx.config.region },
       clientToken: `img-${artifact.hash}`,
-      description: `iamstan ${ctx.env} builder`,
+      description: `${ctx.config.siteName} ${ctx.env} builder`,
     },
   };
 }
@@ -383,7 +383,7 @@ function certificateNode(): ResourceNode {
       let arn = output(ctx, 'acm-certificate').arn as string | undefined;
       if (!arn) {
         // ACM idempotency token must match \w+ (no dashes).
-        const token = `iamstan${ctx.env}`.replace(/\W/g, '');
+        const token = `${ctx.config.siteName}${ctx.env}`.replace(/\W/g, '');
         arn = await ctx.clients.acm.requestCertificate(certDomain, token);
         output(ctx, 'acm-certificate').arn = arn;
         await ctx.save();
@@ -497,7 +497,7 @@ function routerFunctionNode(preview: boolean): ResourceNode {
       const arn = await ctx.clients.cloudfront.ensureFunction(
         `${ctx.names.prefix}-router`,
         preview ? PREVIEW_FUNCTION_CODE : STATIC_ROUTER_CODE,
-        `iamstan ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`,
+        `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`,
       );
       output(ctx, 'cloudfront-function').arn = arn;
     },
@@ -533,7 +533,7 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
     async create(ctx) {
       const dist = await ctx.clients.cloudfront.createDistribution({
         callerReference: `${ctx.names.prefix}-${ctx.accountId}`,
-        comment: `iamstan ${ctx.env}`,
+        comment: `${ctx.config.siteName} ${ctx.env}`,
         bucketDomainName: `${ctx.names.bucket}.s3.${ctx.config.region}.amazonaws.com`,
         // Preview: function rewrites the full path, so the origin path is the bucket root.
         originPath: preview ? '' : '/site',

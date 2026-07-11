@@ -17,15 +17,25 @@ afterEach(async () => {
 });
 
 describe('findRepoRoot', () => {
-  it('walks up from a nested directory to the workspace file', async () => {
-    await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n');
-    const nested = join(root, 'ops', 'cli');
+  it('walks up from a nested directory to the .git directory', async () => {
+    await mkdir(join(root, '.git'));
+    const nested = join(root, 'packages', 'cli');
     await mkdir(nested, { recursive: true });
     expect(findRepoRoot(nested)).toBe(root);
     expect(findRepoRoot(root)).toBe(root);
   });
 
-  it('throws when no workspace file exists above', async () => {
+  it('accepts a .git file (worktree checkout)', async () => {
+    await writeFile(join(root, '.git'), 'gitdir: /elsewhere\n');
+    expect(findRepoRoot(root)).toBe(root);
+  });
+
+  it('accepts a .jj repo', async () => {
+    await mkdir(join(root, '.jj'));
+    expect(findRepoRoot(root)).toBe(root);
+  });
+
+  it('throws when no VCS directory exists above', async () => {
     expect(() => findRepoRoot(root)).toThrow(/repo root/);
   });
 });
