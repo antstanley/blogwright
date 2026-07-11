@@ -1,4 +1,10 @@
-import { AwsError, CACHING_DISABLED, pollUntil, type CreateImageInput } from 'blogwright-core';
+import {
+  AwsError,
+  CACHING_DISABLED,
+  CLOUDFRONT_ALIAS_ZONE_ID,
+  pollUntil,
+  type CreateImageInput,
+} from 'blogwright-core';
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
@@ -13,8 +19,8 @@ function output(ctx: OpsContext, id: string): Record<string, string | number | b
   return (ctx.state.resources[id] ??= {});
 }
 
-function logGroupArn(ctx: OpsContext, name: string): string {
-  return `arn:aws:logs:${ctx.config.region}:${ctx.accountId}:log-group:${name}:*`;
+function logGroupArn(ctx: OpsContext, name: string, region = ctx.config.region): string {
+  return `arn:aws:logs:${region}:${ctx.accountId}:log-group:${name}:*`;
 }
 
 /** S3 resource ARN the build writes the site into (per-PR prefix for preview stacks). */
@@ -53,26 +59,31 @@ function logGroupNode(
   title: string,
   name: (ctx: OpsContext) => string,
   days: (ctx: OpsContext) => number,
+  // CloudFront vended log delivery exists only in us-east-1, so its log group
+  // must live there too — regardless of the stack's primary region.
+  usEast1 = false,
 ): ResourceNode {
+  const logs = (ctx: OpsContext) => (usEast1 ? ctx.clients.logsUsEast1 : ctx.clients.logs);
+  const region = (ctx: OpsContext) => (usEast1 ? 'us-east-1' : ctx.config.region);
   return {
     id,
     dependsOn: [],
     title,
     async read(ctx) {
-      const exists = await ctx.clients.logs.logGroupExists(name(ctx));
-      if (exists) output(ctx, id).arn = logGroupArn(ctx, name(ctx));
+      const exists = await logs(ctx).logGroupExists(name(ctx));
+      if (exists) output(ctx, id).arn = logGroupArn(ctx, name(ctx), region(ctx));
       return exists;
     },
     async create(ctx) {
-      await ctx.clients.logs.ensureLogGroup(name(ctx));
-      await ctx.clients.logs.putRetentionPolicy(name(ctx), days(ctx));
-      output(ctx, id).arn = logGroupArn(ctx, name(ctx));
+      await logs(ctx).ensureLogGroup(name(ctx));
+      await logs(ctx).putRetentionPolicy(name(ctx), days(ctx));
+      output(ctx, id).arn = logGroupArn(ctx, name(ctx), region(ctx));
     },
     async update(ctx) {
-      await ctx.clients.logs.putRetentionPolicy(name(ctx), days(ctx));
+      await logs(ctx).putRetentionPolicy(name(ctx), days(ctx));
     },
     async delete(ctx) {
-      await ctx.clients.logs.deleteLogGroup(name(ctx));
+      await logs(ctx).deleteLogGroup(name(ctx));
     },
   };
 }
@@ -561,9 +572,10 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       out.arn = dist.arn;
       out.domainName = dist.domainName;
       ctx.logger.info(`  CloudFront domain: ${dist.domainName}`);
-      if (ctx.domain) {
-        const record = preview ? `*.${ctx.domain}` : ctx.domain;
-        ctx.logger.info(`  point ${record} (CNAME/ALIAS) at ${dist.domainName}`);
+      if (ctx.domain && !preview) {
+        // Preview stacks create the wildcard record themselves (preview-dns
+        // node, next in the graph); only the main site may be DNS'd elsewhere.
+        ctx.logger.info(`  point ${ctx.domain} (CNAME/ALIAS) at ${dist.domainName}`);
       }
     },
     async update(ctx) {
@@ -611,16 +623,16 @@ function logDeliveryNode(): ResourceNode {
   async function wire(ctx: OpsContext): Promise<void> {
     const distArn = String(output(ctx, 'cloudfront-distribution').arn);
     const groupArn = String(output(ctx, 'cloudfront-log-group').arn).replace(/:\*$/, '');
-    const sourceArn = await ctx.clients.logs.putDeliverySource(
+    const sourceArn = await ctx.clients.logsUsEast1.putDeliverySource(
       ctx.names.deliverySource,
       distArn,
       'ACCESS_LOGS',
     );
-    const destArn = await ctx.clients.logs.putDeliveryDestination(
+    const destArn = await ctx.clients.logsUsEast1.putDeliveryDestination(
       ctx.names.deliveryDestination,
       groupArn,
     );
-    await ctx.clients.logs.createDelivery(ctx.names.deliverySource, destArn);
+    await ctx.clients.logsUsEast1.createDelivery(ctx.names.deliverySource, destArn);
     const out = output(ctx, 'cloudfront-log-delivery');
     out.delivery = 'configured';
     out.source = sourceArn;
@@ -644,11 +656,11 @@ function logDeliveryNode(): ResourceNode {
         // delivery/source/destination trio and retry once.
         if (!(err instanceof AwsError && /Conflict/i.test(err.code))) throw err;
         ctx.logger.step('stale log delivery from a previous stack — removing and retrying');
-        for (const id of await ctx.clients.logs.deliveriesForSource(ctx.names.deliverySource)) {
-          await ctx.clients.logs.deleteDelivery(id);
+        for (const id of await ctx.clients.logsUsEast1.deliveriesForSource(ctx.names.deliverySource)) {
+          await ctx.clients.logsUsEast1.deleteDelivery(id);
         }
-        await ctx.clients.logs.deleteDeliverySource(ctx.names.deliverySource);
-        await ctx.clients.logs.deleteDeliveryDestination(ctx.names.deliveryDestination);
+        await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
+        await ctx.clients.logsUsEast1.deleteDeliveryDestination(ctx.names.deliveryDestination);
         await wire(ctx);
       }
     },
@@ -658,10 +670,10 @@ function logDeliveryNode(): ResourceNode {
       // distribution ARN fails with ConflictException ("Update to existing Delivery Source
       // with new ResourceId is not allowed"). Delete the delivery first (it references both),
       // then the source and destination. The id isn't in state, so look it up by source name.
-      const deliveryId = await ctx.clients.logs.findDeliveryIdBySource(ctx.names.deliverySource);
-      if (deliveryId) await ctx.clients.logs.deleteDelivery(deliveryId);
-      await ctx.clients.logs.deleteDeliverySource(ctx.names.deliverySource);
-      await ctx.clients.logs.deleteDeliveryDestination(ctx.names.deliveryDestination);
+      const deliveryId = await ctx.clients.logsUsEast1.findDeliveryIdBySource(ctx.names.deliverySource);
+      if (deliveryId) await ctx.clients.logsUsEast1.deleteDelivery(deliveryId);
+      await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
+      await ctx.clients.logsUsEast1.deleteDeliveryDestination(ctx.names.deliveryDestination);
     },
   };
 }
@@ -855,8 +867,47 @@ async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
   output(ctx, 'gh-oidc-role').arn = arn;
 }
 
-/** Route53 wildcard record pointing *.<domain> at the preview CloudFront distribution. */
+/**
+ * Route53 wildcard record pointing *.<domain> at the preview CloudFront
+ * distribution — A/AAAA alias records (free queries, apex-safe), not a CNAME.
+ */
 function previewDnsNode(): ResourceNode {
+  async function upsertAliases(ctx: OpsContext): Promise<void> {
+    const domain = ctx.domain;
+    if (!domain) throw new Error('preview DNS requires a domain');
+    const zoneId = await ctx.clients.route53.hostedZoneId(domain);
+    if (!zoneId) throw new Error(`no Route53 hosted zone found for ${domain}`);
+    const cf = String(output(ctx, 'cloudfront-distribution').domainName);
+    const out = output(ctx, 'preview-dns');
+    // Route53 refuses A/AAAA alongside a CNAME at the same name, so clear any
+    // CNAME first — a pre-0.2.1 bootstrap's (recorded in state) or an
+    // operator's manual workaround (pointing at the distribution). Deleting a
+    // record that is not there is a no-op.
+    if (out.type !== 'ALIAS') {
+      const staleValues = new Set([cf, ...(typeof out.value === 'string' ? [out.value] : [])]);
+      for (const value of staleValues) {
+        await ctx.clients.route53.deleteRecord(zoneId, {
+          name: `*.${domain}`,
+          type: 'CNAME',
+          value,
+        });
+      }
+    }
+    for (const type of ['A', 'AAAA'] as const) {
+      await ctx.clients.route53.upsertRecord(zoneId, {
+        name: `*.${domain}`,
+        type,
+        value: cf,
+        aliasZoneId: CLOUDFRONT_ALIAS_ZONE_ID,
+      });
+    }
+    out.record = `*.${domain}`;
+    out.zoneId = zoneId;
+    out.value = cf;
+    out.type = 'ALIAS';
+    ctx.logger.info(`  *.${domain} -> ${cf} (alias)`);
+  }
+
   return {
     id: 'preview-dns',
     dependsOn: ['cloudfront-distribution'],
@@ -864,30 +915,31 @@ function previewDnsNode(): ResourceNode {
     async read(ctx) {
       return typeof output(ctx, 'preview-dns').record === 'string';
     },
-    async create(ctx) {
-      const domain = ctx.domain;
-      if (!domain) throw new Error('preview DNS requires a domain');
-      const zoneId = await ctx.clients.route53.hostedZoneId(domain);
-      if (!zoneId) throw new Error(`no Route53 hosted zone found for ${domain}`);
-      const cf = String(output(ctx, 'cloudfront-distribution').domainName);
-      await ctx.clients.route53.upsertRecord(zoneId, {
-        name: `*.${domain}`,
-        type: 'CNAME',
-        value: cf,
-      });
-      const out = output(ctx, 'preview-dns');
-      out.record = `*.${domain}`;
-      out.zoneId = zoneId;
-      out.value = cf;
-      ctx.logger.info(`  *.${domain} -> ${cf}`);
+    create: upsertAliases,
+    async update(ctx) {
+      // Reconcile: migrates a legacy CNAME to aliases and repoints a drifted
+      // target; a no-drift run is two idempotent UPSERTs.
+      await upsertAliases(ctx);
     },
     async delete(ctx) {
       const out = output(ctx, 'preview-dns');
       if (
-        typeof out.zoneId === 'string' &&
-        typeof out.record === 'string' &&
-        typeof out.value === 'string'
+        typeof out.zoneId !== 'string' ||
+        typeof out.record !== 'string' ||
+        typeof out.value !== 'string'
       ) {
+        return;
+      }
+      if (out.type === 'ALIAS') {
+        for (const type of ['A', 'AAAA'] as const) {
+          await ctx.clients.route53.deleteRecord(out.zoneId, {
+            name: out.record,
+            type,
+            value: out.value,
+            aliasZoneId: CLOUDFRONT_ALIAS_ZONE_ID,
+          });
+        }
+      } else {
         await ctx.clients.route53.deleteRecord(out.zoneId, {
           name: out.record,
           type: 'CNAME',
@@ -914,6 +966,7 @@ export function buildNodes(ctx: OpsContext): ResourceNode[] {
       'CloudFront log group',
       (c) => c.names.cloudfrontLogGroup,
       (c) => c.config.retention.cloudfrontDays,
+      true, // us-east-1: vended CloudFront delivery only exists there (#3)
     ),
     buildRoleNode(),
     execRoleNode(),

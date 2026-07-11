@@ -7,9 +7,15 @@ const API = '/2013-04-01';
 export interface DnsRecord {
   name: string;
   type: string;
+  /** Record data; for an alias record, the target DNS name (e.g. dxxx.cloudfront.net). */
   value: string;
   ttl?: number;
+  /** When set, emit an AliasTarget (no TTL/ResourceRecords) pointing at `value`. */
+  aliasZoneId?: string | undefined;
 }
+
+/** CloudFront's fixed alias hosted zone id — the same for every distribution. */
+export const CLOUDFRONT_ALIAS_ZONE_ID = 'Z2FDTNDATAQYW2';
 
 /** Route53 client (REST-XML). Global service, signed in us-east-1. */
 export class Route53Client {
@@ -44,8 +50,12 @@ export class Route53Client {
       `<ResourceRecordSet>` +
       `<Name>${encodeEntities(r.name)}</Name>` +
       `<Type>${r.type}</Type>` +
-      `<TTL>${r.ttl ?? 300}</TTL>` +
-      `<ResourceRecords><ResourceRecord><Value>${encodeEntities(r.value)}</Value></ResourceRecord></ResourceRecords>` +
+      (r.aliasZoneId
+        ? `<AliasTarget><HostedZoneId>${encodeEntities(r.aliasZoneId)}</HostedZoneId>` +
+          `<DNSName>${encodeEntities(r.value)}</DNSName>` +
+          `<EvaluateTargetHealth>false</EvaluateTargetHealth></AliasTarget>`
+        : `<TTL>${r.ttl ?? 300}</TTL>` +
+          `<ResourceRecords><ResourceRecord><Value>${encodeEntities(r.value)}</Value></ResourceRecord></ResourceRecords>`) +
       `</ResourceRecordSet>` +
       `</Change></Changes></ChangeBatch>` +
       `</ChangeResourceRecordSetsRequest>`;

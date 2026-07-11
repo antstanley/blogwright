@@ -43,7 +43,7 @@ describe('cloudfront log delivery self-heal', () => {
         },
       },
       clients: {
-        logs: {
+        logsUsEast1: {
           putDeliverySource: async () => {
             calls.push('putSource');
             if (failFirstPut && putCount++ === 0) {
@@ -106,7 +106,7 @@ describe('cloudfront log delivery self-heal', () => {
 
   it('rethrows non-conflict errors untouched', async () => {
     const { ctx } = deliveryCtx(false);
-    (ctx.clients.logs as unknown as { putDeliverySource: () => Promise<string> }).putDeliverySource =
+    (ctx.clients.logsUsEast1 as unknown as { putDeliverySource: () => Promise<string> }).putDeliverySource =
       async () => {
         throw new AwsError({
           service: 'logs',
@@ -310,5 +310,134 @@ describe('distributionNode SPA mode', () => {
       { errorCode: 403, responsePagePath: '/404.html', responseCode: 404 },
       { errorCode: 404, responsePagePath: '/404.html', responseCode: 404 },
     ]);
+  });
+});
+
+describe('previewDnsNode', () => {
+  function dnsCtx(existing?: { record: string; zoneId: string; value: string }) {
+    const upserts: Array<{ type: string; name: string; value: string; aliasZoneId?: string }> = [];
+    const deletes: Array<{ type: string; name: string }> = [];
+    const ctx = createTestContext({
+      preview: true,
+      domain: 'preview.example.com',
+      state: {
+        resources: {
+          'cloudfront-distribution': { id: 'D1', domainName: 'd123.cloudfront.net' },
+          ...(existing ? { 'preview-dns': existing } : {}),
+        },
+      },
+      clients: {
+        route53: {
+          hostedZoneId: async () => 'Z-PREVIEW',
+          upsertRecord: async (_zone: string, r: (typeof upserts)[number]) => {
+            upserts.push(r);
+          },
+          deleteRecord: async (_zone: string, r: (typeof deletes)[number]) => {
+            deletes.push(r);
+          },
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'preview-dns');
+    if (!node) throw new Error('preview-dns node not found');
+    return { ctx, node, upserts, deletes };
+  }
+
+  it('creates A and AAAA alias records pointing at the distribution', async () => {
+    const { ctx, node, upserts, deletes } = dnsCtx();
+
+    await node.create(ctx);
+
+    // A stray CNAME (manual workaround) is cleared best-effort before the aliases.
+    expect(deletes).toEqual([
+      { name: '*.preview.example.com', type: 'CNAME', value: 'd123.cloudfront.net' },
+    ]);
+    expect(upserts).toEqual([
+      {
+        name: '*.preview.example.com',
+        type: 'A',
+        value: 'd123.cloudfront.net',
+        aliasZoneId: 'Z2FDTNDATAQYW2',
+      },
+      {
+        name: '*.preview.example.com',
+        type: 'AAAA',
+        value: 'd123.cloudfront.net',
+        aliasZoneId: 'Z2FDTNDATAQYW2',
+      },
+    ]);
+    expect(ctx.state.resources['preview-dns']?.type).toBe('ALIAS');
+  });
+
+  it('migrates a legacy CNAME on reconcile (deletes it before the aliases)', async () => {
+    const { ctx, node, upserts, deletes } = dnsCtx({
+      record: '*.preview.example.com',
+      zoneId: 'Z-PREVIEW',
+      value: 'd123.cloudfront.net',
+    });
+
+    await node.update!(ctx);
+
+    expect(deletes).toEqual([{ name: '*.preview.example.com', type: 'CNAME', value: 'd123.cloudfront.net' }]);
+    expect(upserts.map((u) => u.type)).toEqual(['A', 'AAAA']);
+    expect(ctx.state.resources['preview-dns']?.type).toBe('ALIAS');
+  });
+});
+
+describe('cloudfront log nodes use the us-east-1 logs client', () => {
+  it('routes group creation and delivery wiring through logsUsEast1', async () => {
+    const calls: string[] = [];
+    const pinned = {
+      logGroupExists: async (_name: string) => false,
+      ensureLogGroup: async (name: string) => {
+        calls.push(`ensure:${name}`);
+      },
+      putRetentionPolicy: async (_name: string, _days: number) => {
+        calls.push('retention');
+      },
+      putDeliverySource: async (_n: string, _arn: string, _t: string) => {
+        calls.push('source');
+        return 'arn:source';
+      },
+      putDeliveryDestination: async (_n: string, _g: string) => {
+        calls.push('dest');
+        return 'arn:dest';
+      },
+      createDelivery: async (_s: string, _d: string) => {
+        calls.push('delivery');
+      },
+    };
+    const poisoned = new Proxy(
+      {},
+      {
+        get: (_t, prop) => () => {
+          throw new Error(`regional logs client used for CloudFront ${String(prop)} (#3)`);
+        },
+      },
+    );
+    const ctx = createTestContext({
+      config: { region: 'eu-west-1' },
+      state: {
+        resources: {
+          'cloudfront-distribution': { arn: 'arn:cf:dist' },
+          'cloudfront-log-group': { arn: 'arn:aws:logs:us-east-1:1:log-group:/g:*' },
+        },
+      },
+      clients: { logsUsEast1: pinned, logs: poisoned as Record<string, never> },
+    });
+
+    const group = buildNodes(ctx).find((n) => n.id === 'cloudfront-log-group');
+    await group!.create(ctx);
+    const delivery = buildNodes(ctx).find((n) => n.id === 'cloudfront-log-delivery');
+    await delivery!.create(ctx);
+
+    expect(calls).toEqual([
+      'ensure:/example/test/cloudfront',
+      'retention',
+      'source',
+      'dest',
+      'delivery',
+    ]);
+    expect(String(ctx.state.resources['cloudfront-log-group']?.arn)).toContain(':us-east-1:');
   });
 });

@@ -25,6 +25,12 @@ export interface AwsClients {
   sts: StsClient;
   iam: IamClient;
   logs: LogsClient;
+  /**
+   * Logs client pinned to us-east-1 for CloudFront vended log delivery —
+   * PutDeliverySource with the CloudFront LogType exists only there, the same
+   * global-service quirk as CloudFront's ACM certificates.
+   */
+  logsUsEast1: LogsClient;
   acm: AcmClient;
   cloudfront: CloudFrontClient;
   route53: Route53Client;
@@ -54,6 +60,7 @@ export function createClients(opts: ClientBundleOptions): AwsClients {
     sts: new StsClient(signing),
     iam: new IamClient(signing),
     logs: new LogsClient(signing),
+    logsUsEast1: new LogsClient(usEast1),
     acm: new AcmClient(usEast1),
     cloudfront: new CloudFrontClient(usEast1),
     route53: new Route53Client(usEast1),

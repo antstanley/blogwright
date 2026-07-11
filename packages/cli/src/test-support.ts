@@ -78,6 +78,7 @@ function testClients(region: string, overrides: ClientOverrides): AwsClients {
     sts: overrideClient(base.sts, overrides.sts),
     iam: overrideClient(base.iam, overrides.iam),
     logs: overrideClient(base.logs, overrides.logs),
+    logsUsEast1: overrideClient(base.logsUsEast1, overrides.logsUsEast1),
     acm: overrideClient(base.acm, overrides.acm),
     cloudfront: overrideClient(base.cloudfront, overrides.cloudfront),
     route53: overrideClient(base.route53, overrides.route53),
