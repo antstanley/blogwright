@@ -2,23 +2,19 @@ import { JoseKey } from '@atproto/oauth-client-node';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
+import { createTestContext } from '../test-support.js';
 import { login, openPdsRepo, publicClientJwk, verifyClientAssets } from './oauth.js';
 
 const DID = 'did:plc:test';
 
 function ctxWith(secret: object | undefined): OpsContext {
-  const logged: string[] = [];
-  return {
+  return createTestContext({
     domain: 'example.com',
     config: { pds: { name: 'Ant Stanley', secretName: 's' } },
     clients: {
       secrets: { getSecretValue: async () => (secret ? JSON.stringify(secret) : undefined) },
     },
-    logger: {
-      info: (m: string) => logged.push(m),
-      ok: (m: string) => logged.push(m),
-    },
-  } as unknown as OpsContext;
+  });
 }
 
 async function generatedKey(): Promise<Record<string, unknown>> {

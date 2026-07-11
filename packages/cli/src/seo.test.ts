@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
 import { resolveSeo } from './seo.js';
+import { createTestContext } from './test-support.js';
 
 function ctx(env: string, preview: boolean, seo: SeoConfig): OpsContext {
-  return { env, preview, config: { seo } } as unknown as OpsContext;
+  return createTestContext({ env, preview, config: { seo } });
 }
 
 const AUTO: SeoConfig = { robots: 'auto', sitemap: 'auto' };

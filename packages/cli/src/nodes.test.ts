@@ -3,22 +3,15 @@ import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
 import { buildNodes, builderImageAction, oidcRolePolicyStatements, oidcSubClaim } from './nodes.js';
+import { createTestContext } from './test-support.js';
 
 function ctx(opts: { preview: boolean; pds?: boolean }): OpsContext {
-  return {
+  return createTestContext({
     preview: opts.preview,
     env: opts.preview ? 'preview' : 'production',
-    accountId: '123456789012',
     config: {
-      region: 'us-east-1',
       githubRepo: 'antstanley/example',
-      ...(opts.pds
-        ? { pds: { name: 'x', service: 'https://bsky.social', secretName: 'example/atproto' } }
-        : {}),
-    },
-    names: {
-      bucket: 'production-example-123456789012',
-      microvmLogGroup: '/aws/lambda/microvms/production-example-builder',
+      ...(opts.pds ? { pds: { name: 'x', secretName: 'example/atproto' } } : {}),
     },
     state: {
       resources: {
@@ -29,7 +22,7 @@ function ctx(opts: { preview: boolean; pds?: boolean }): OpsContext {
         },
       },
     },
-  } as unknown as OpsContext;
+  });
 }
 
 function actionsOf(statements: object[]): string[] {
@@ -40,23 +33,15 @@ describe('cloudfront log delivery self-heal', () => {
   function deliveryCtx(failFirstPut: boolean) {
     const calls: string[] = [];
     let putCount = 0;
-    const ctx = {
-      preview: false,
-      domain: undefined,
+    const ctx = createTestContext({
+      env: 'staging',
       config: { retention: { microvmDays: 1, cloudfrontDays: 1 } },
-      names: {
-        deliverySource: 'staging-example-cf-source',
-        deliveryDestination: 'staging-example-cf-dest',
-        microvmLogGroup: '/aws/lambda/microvms/staging-example-builder',
-        cloudfrontLogGroup: '/example/staging/cloudfront',
-      },
       state: {
         resources: {
           'cloudfront-distribution': { arn: 'arn:dist/NEW' },
           'cloudfront-log-group': { arn: 'arn:group:*' },
         },
       },
-      logger: { step: () => undefined, warn: () => undefined },
       clients: {
         logs: {
           putDeliverySource: async () => {
@@ -87,7 +72,7 @@ describe('cloudfront log delivery self-heal', () => {
           },
         },
       },
-    } as unknown as OpsContext;
+    });
     return { ctx, calls };
   }
 

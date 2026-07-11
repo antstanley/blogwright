@@ -1,12 +1,14 @@
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import {
   createClients,
+  createNodeFileSystem,
   deriveNames,
+  FileNotFoundError,
   parseConfig,
   StateStore,
   type AwsClients,
+  type FileSystem,
   type Names,
   type OpsConfig,
   type OpsState,
@@ -14,6 +16,11 @@ import {
 
 import { createLogger, type Logger } from './logger.js';
 import { findRepoRoot } from './repo-root.js';
+
+/** The ports domain code reaches side effects through; adapters are wired in createContext. */
+export interface Ports {
+  fs: FileSystem;
+}
 
 export interface OpsContext {
   env: string;
@@ -24,6 +31,7 @@ export interface OpsContext {
   names: Names;
   accountId: string;
   clients: AwsClients;
+  ports: Ports;
   state: OpsState;
   store: StateStore;
   logger: Logger;
@@ -37,34 +45,53 @@ export interface ContextOptions {
   domain?: string | undefined;
   endpointOverride?: string | undefined;
   preview?: boolean | undefined;
+  /** Adapter overrides; anything omitted defaults to the real (node) adapter. */
+  ports?: Partial<Ports> | undefined;
 }
 
-async function loadConfig(env: string, configPath: string | undefined): Promise<OpsConfig> {
-  const root = findRepoRoot();
-  const candidates = configPath
-    ? [configPath]
-    : [resolve(root, `config/${env}.jsonc`), resolve(root, 'ops.config.jsonc')];
+export interface ConfigSource {
+  env: string;
+  /** Repo root the default config candidates resolve against. */
+  root: string;
+  /** Explicit config file; when set it is the only candidate. */
+  configPath?: string | undefined;
+}
+
+/** Load and parse the first config candidate that exists. Exported for tests. */
+export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<OpsConfig> {
+  const candidates = source.configPath
+    ? [source.configPath]
+    : [
+        resolve(source.root, `config/${source.env}.jsonc`),
+        resolve(source.root, 'ops.config.jsonc'),
+      ];
   for (const path of candidates) {
     try {
-      const text = await readFile(path, 'utf8');
-      return parseConfig(text);
+      return parseConfig(await fs.readText(path));
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if (!(err instanceof FileNotFoundError)) throw err;
     }
   }
   throw new Error(
-    `no config found for environment "${env}" — looked for ${candidates.join(', ')}`,
+    `no config found for environment "${source.env}" — looked for ${candidates.join(', ')}`,
   );
 }
 
 /**
  * Build the runtime context: load config, resolve the account id, derive names, create
  * clients, and load topology state from S3. The state bucket name is deterministic, which
- * resolves the bootstrap chicken-and-egg.
+ * resolves the bootstrap chicken-and-egg. This is the composition root — the only place
+ * real adapters are constructed and wired.
  */
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {
   const logger = createLogger();
-  const config = await loadConfig(opts.env, opts.configPath);
+  const ports: Ports = { fs: opts.ports?.fs ?? createNodeFileSystem() };
+  const root = await findRepoRoot(ports.fs);
+  const config = await loadConfig(ports.fs, {
+    env: opts.env,
+    root,
+    configPath: opts.configPath,
+  });
   const domain = opts.domain ?? config.domain;
 
   const clients = createClients({
@@ -87,6 +114,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     names,
     accountId,
     clients,
+    ports,
     state,
     store,
     logger,

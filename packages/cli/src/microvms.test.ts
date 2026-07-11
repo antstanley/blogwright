@@ -4,6 +4,7 @@ import type { Microvm } from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
 import { clearRunningMicrovms, runningStackMicrovms } from './microvms.js';
+import { createTestContext } from './test-support.js';
 
 const IMAGE_ARN = 'arn:aws:lambda:us-east-1:1:microvm-image:preview-example-builder';
 
@@ -16,18 +17,17 @@ function fakeCtx(
   terminate = vi.fn(async () => {}),
   listImpl?: () => Promise<Microvm[]>,
 ): OpsContext {
-  const noop = () => {};
-  return {
-    names: { microvmImage: 'preview-example-builder' },
-    state: { version: 1, env: 'preview', resources: { 'microvm-image': { arn: IMAGE_ARN } } },
-    logger: { info: noop, step: noop, ok: noop, warn: noop, error: noop },
+  // env "preview" + site "example" derive the microvmImage name the ARN encodes
+  return createTestContext({
+    env: 'preview',
+    state: { resources: { 'microvm-image': { arn: IMAGE_ARN } } },
     clients: {
       microvms: {
         listMicrovms: listImpl ?? (async () => vms),
         terminateMicrovm: terminate,
       },
     },
-  } as unknown as OpsContext;
+  });
 }
 
 describe('runningStackMicrovms', () => {

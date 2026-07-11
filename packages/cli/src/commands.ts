@@ -51,7 +51,7 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
 
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
 export async function deploy(ctx: OpsContext): Promise<void> {
-  const cwd = findRepoRoot();
+  const cwd = await findRepoRoot(ctx.ports.fs);
   const hash = await revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
 
@@ -110,7 +110,7 @@ export async function previewBootstrap(ctx: OpsContext): Promise<void> {
 /** Build the current repo and publish it to this PR's preview prefix. Prints the URL. */
 export async function previewDeploy(ctx: OpsContext, id: string): Promise<string> {
   assertPreviewId(id);
-  const cwd = findRepoRoot();
+  const cwd = await findRepoRoot(ctx.ports.fs);
   const hash = await revisionHash(cwd);
   ctx.logger.info(colors.bold(`Preview deploy ${id} (${hash})`));
 

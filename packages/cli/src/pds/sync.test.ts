@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_CONFIG } from 'blogwright-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
+import { createTestContext } from '../test-support.js';
 import { postPath, tidFromPath } from './rkey.js';
 import {
   DOCUMENT_COLLECTION,
@@ -134,11 +134,11 @@ describe('syncPds', () => {
   });
 
   function ctx(): OpsContext {
-    return {
+    return createTestContext({
       env: 'production',
       domain: 'example.com',
-      config: { paths: DEFAULT_CONFIG.paths, pds: { name: 'Ant Stanley', secretName: 's' } },
-    } as unknown as OpsContext;
+      config: { pds: { name: 'Ant Stanley', secretName: 's' } },
+    });
   }
 
   function opens(repo: PdsRepo, did = DID): OpenRepo {

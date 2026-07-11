@@ -1,16 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { OpsContext } from './context.js';
 import { applyGraph, destroyGraph, topoSort, type ResourceNode } from './graph.js';
-
-function fakeCtx(): OpsContext {
-  const noop = () => {};
-  return {
-    state: { version: 1, env: 'test', updatedAt: undefined, resources: {} },
-    logger: { info: noop, step: noop, ok: noop, warn: noop, error: noop },
-    save: async () => {},
-  } as unknown as OpsContext;
-}
+import { createTestContext } from './test-support.js';
 
 function node(id: string, dependsOn: string[], log: string[]): ResourceNode {
   return {
@@ -49,11 +40,11 @@ describe('applyGraph / destroyGraph', () => {
   it('creates in dependency order and destroys in reverse', async () => {
     const log: string[] = [];
     const nodes = [node('a', ['b'], log), node('b', [], log)];
-    await applyGraph(nodes, fakeCtx());
+    await applyGraph(nodes, createTestContext());
     expect(log).toEqual(['create:b', 'create:a']);
 
     log.length = 0;
-    await destroyGraph(nodes, fakeCtx());
+    await destroyGraph(nodes, createTestContext());
     expect(log).toEqual(['delete:a', 'delete:b']);
   });
 
@@ -68,7 +59,7 @@ describe('applyGraph / destroyGraph', () => {
       update: async () => log.push('update'),
       delete: async () => log.push('delete'),
     };
-    await applyGraph([updating], fakeCtx());
+    await applyGraph([updating], createTestContext());
     expect(log).toEqual(['update']);
   });
 });

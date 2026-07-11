@@ -33,11 +33,12 @@ import { rkeyFromUri } from './xrpc.js';
  */
 export async function keygen(
   ctx: OpsContext,
-  repoRoot = findRepoRoot(),
+  repoRoot?: string,
   generateKey: typeof generateClientKey = generateClientKey,
 ): Promise<void> {
   const pds = requirePdsConfig(ctx);
   if (!ctx.domain) throw new Error('pds keygen requires a configured domain');
+  const root = repoRoot ?? (await findRepoRoot(ctx.ports.fs));
   const kid = `${ctx.config.siteName}-oauth-${new Date().toISOString().slice(0, 10)}`;
   const clientKey = await generateKey(kid);
   await updatePdsSecret(
@@ -55,7 +56,7 @@ export async function keygen(
     [docPaths.jwks, jwksDocument(await publicClientJwk(clientKey))],
   ];
   for (const [path, body] of documents) {
-    const file = join(repoRoot, path);
+    const file = join(root, path);
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, `${JSON.stringify(body, null, 2)}\n`);
     ctx.logger.info(`  wrote ${path}`);
@@ -124,17 +125,18 @@ export async function secretDelete(ctx: OpsContext, opts: { yes: boolean }): Pro
  */
 export async function init(
   ctx: OpsContext,
-  repoRoot = findRepoRoot(),
+  repoRoot?: string,
   openRepo: typeof openPdsRepo = openPdsRepo,
   verifyAssets: typeof verifyClientAssets = verifyClientAssets,
 ): Promise<void> {
   const pds = requirePdsConfig(ctx);
   if (!ctx.domain) throw new Error('pds init requires a configured domain');
+  const root = repoRoot ?? (await findRepoRoot(ctx.ports.fs));
   await verifyAssets(ctx);
   const { did, repo } = await openRepo(ctx);
 
   const record = publicationRecord(pds, `https://${ctx.domain}`);
-  const existingUri = await readWellKnownUri(repoRoot, ctx.config);
+  const existingUri = await readWellKnownUri(root, ctx.config);
   let publicationUri: string;
   if (existingUri) {
     await repo.putRecord(PUBLICATION_COLLECTION, rkeyFromUri(existingUri), record);
@@ -147,10 +149,10 @@ export async function init(
   }
 
   const wellKnown = wellKnownPath(ctx.config);
-  const wellKnownFile = join(repoRoot, wellKnown);
+  const wellKnownFile = join(root, wellKnown);
   await mkdir(dirname(wellKnownFile), { recursive: true });
   await writeFile(wellKnownFile, `${publicationUri}\n`);
-  const jsonFile = join(repoRoot, ctx.config.paths.atprotoJson);
+  const jsonFile = join(root, ctx.config.paths.atprotoJson);
   await mkdir(dirname(jsonFile), { recursive: true });
   await writeFile(jsonFile, `${JSON.stringify({ did, publicationUri }, null, 2)}\n`);
   ctx.logger.info(`  wrote ${wellKnown}`);
@@ -165,7 +167,7 @@ export async function init(
 /** Reconcile PDS records against local content. Production only. */
 export async function sync(
   ctx: OpsContext,
-  repoRoot = findRepoRoot(),
+  repoRoot?: string,
   openRepo: OpenRepo = openPdsRepo,
 ): Promise<void> {
   if (ctx.env !== 'production') {
@@ -173,7 +175,8 @@ export async function sync(
       `pds sync publishes canonical production URLs and refuses to run for "${ctx.env}"`,
     );
   }
-  const summary = await syncPds(ctx, repoRoot, openRepo);
+  const root = repoRoot ?? (await findRepoRoot(ctx.ports.fs));
+  const summary = await syncPds(ctx, root, openRepo);
   logSummary(ctx, summary);
 }
 
@@ -199,19 +202,20 @@ function logSummary(ctx: OpsContext, s: SyncSummary): void {
  */
 export async function syncAfterDeploy(
   ctx: OpsContext,
-  repoRoot = findRepoRoot(),
+  repoRoot?: string,
   doSync: (ctx: OpsContext, repoRoot: string) => Promise<SyncSummary> = (c, r) =>
     syncPds(c, r, openPdsRepo),
 ): Promise<void> {
   if (ctx.env !== 'production' || !ctx.config.pds) return;
-  const initialised = await readWellKnownUri(repoRoot, ctx.config).catch(() => undefined);
+  const root = repoRoot ?? (await findRepoRoot(ctx.ports.fs));
+  const initialised = await readWellKnownUri(root, ctx.config).catch(() => undefined);
   if (!initialised) {
     ctx.logger.info('standard.site publishing not initialised (`blogwright pds init`) — skipping');
     return;
   }
   try {
     ctx.logger.step('syncing standard.site records to the PDS');
-    logSummary(ctx, await doSync(ctx, repoRoot));
+    logSummary(ctx, await doSync(ctx, root));
   } catch (err) {
     ctx.logger.warn(`pds sync failed (deploy unaffected): ${(err as Error).message}`);
   }

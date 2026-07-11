@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { NodeSavedSession } from '@atproto/oauth-client-node';
 
 import type { OpsContext } from '../context.js';
+import { createTestContext } from '../test-support.js';
 import {
   loadPdsSecret,
   parsePdsSecret,
@@ -50,10 +51,10 @@ describe('parsePdsSecret', () => {
 
 describe('loadPdsSecret', () => {
   function ctxWithSecret(value: string | undefined): OpsContext {
-    return {
+    return createTestContext({
       config: { pds: { name: 'x', secretName: 's' } },
-      clients: { secrets: new StubSecrets(value) },
-    } as unknown as OpsContext;
+      clients: { secrets: { getSecretValue: async () => value } },
+    });
   }
 
   it('parses the stored secret', async () => {

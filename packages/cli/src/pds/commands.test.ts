@@ -2,10 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_CONFIG } from 'blogwright-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { OpsContext } from '../context.js';
+import { createTestContext } from '../test-support.js';
 import { init, keygen, secretStatus, syncAfterDeploy } from './commands.js';
 import type { SyncSummary } from './sync.js';
 import type { PdsClient } from './xrpc.js';
@@ -27,16 +27,10 @@ function ctx(
   const lines: string[] = [];
   const stored: Record<string, string> = {};
   const log = (prefix: string) => (msg: string) => lines.push(`${prefix}:${msg}`);
-  return {
+  const base = createTestContext({
     env,
     domain: 'example.com',
-    config: pdsConfigured
-      ? {
-          siteName: 'example',
-          paths: DEFAULT_CONFIG.paths,
-          pds: { name: 'Ant Stanley', secretName: 's' },
-        }
-      : { siteName: 'example', paths: DEFAULT_CONFIG.paths },
+    config: pdsConfigured ? { pds: { name: 'Ant Stanley', secretName: 's' } } : {},
     clients: {
       secrets: {
         getSecretValue: async (name: string) => stored[name],
@@ -54,9 +48,8 @@ function ctx(
       warn: log('warn'),
       error: log('error'),
     },
-    lines,
-    stored,
-  } as unknown as OpsContext & { lines: string[]; stored: Record<string, string> };
+  });
+  return Object.assign(base, { lines, stored });
 }
 
 async function markInitialised(): Promise<void> {

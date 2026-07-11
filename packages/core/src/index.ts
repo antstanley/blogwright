@@ -1,3 +1,5 @@
+export * from './adapters/memory-fs.js';
+export * from './adapters/node-fs.js';
 export * from './aws/acm.js';
 export * from './aws/cloudfront.js';
 export * from './aws/credentials.js';
@@ -15,5 +17,6 @@ export * from './aws/sts.js';
 export * from './aws/xml.js';
 export * from './clients.js';
 export * from './config.js';
+export * from './ports.js';
 export * from './state.js';
 export * from './util.js';
