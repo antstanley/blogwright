@@ -25,6 +25,14 @@ export function createNodeFileSystem(): FileSystem {
       }
     },
 
+    async readBytes(path: string): Promise<Uint8Array> {
+      try {
+        return await readFile(path);
+      } catch (err) {
+        throw isAbsence(err) ? new FileNotFoundError(path) : contextualise('reading', path, err);
+      }
+    },
+
     async writeText(path: string, text: string): Promise<void> {
       try {
         await mkdir(dirname(path), { recursive: true });

@@ -32,6 +32,17 @@ describe('createNodeFileSystem', () => {
     expect((failure as FileNotFoundError).path).toBe(path);
   });
 
+  it('round-trips binary content through readBytes without text decoding', async () => {
+    const path = join(root, 'logo.bin');
+    const bytes = new Uint8Array([0x00, 0xff, 0x80, 0x7f]);
+    await writeFile(path, bytes);
+    expect(new Uint8Array(await fs.readBytes(path))).toEqual(bytes);
+  });
+
+  it('throws FileNotFoundError when readBytes hits a missing file', async () => {
+    await expect(fs.readBytes(join(root, 'missing.bin'))).rejects.toThrow(FileNotFoundError);
+  });
+
   it('reports existence of files and directories, and absence of neither', async () => {
     await mkdir(join(root, 'dir'));
     await writeFile(join(root, 'file.txt'), 'x');

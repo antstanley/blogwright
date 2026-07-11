@@ -12,7 +12,7 @@ import { colors } from './logger.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import { syncAfterDeploy } from './pds/commands.js';
-import { buildRepoZip, COMMIT_FILE, listRepoFiles, revisionHash } from './repo.js';
+import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
 import { findRepoRoot } from './repo-root.js';
 
 /**
@@ -52,12 +52,12 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
 export async function deploy(ctx: OpsContext): Promise<void> {
   const cwd = await findRepoRoot(ctx.ports.fs);
-  const hash = await revisionHash(cwd);
+  const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
 
-  const files = await listRepoFiles(cwd, ctx.config.sourceIgnore);
+  const files = await listRepoFiles(ctx.ports, cwd, ctx.config.sourceIgnore);
   ctx.logger.step(`zipping ${files.length} files`);
-  const zip = await buildRepoZip(cwd, files, { [COMMIT_FILE]: hash });
+  const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
   const sourceKey = `build/${hash}.zip`;
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
   ctx.logger.ok(`uploaded ${sourceKey} (${(zip.byteLength / 1024).toFixed(0)} KiB)`);
@@ -111,12 +111,12 @@ export async function previewBootstrap(ctx: OpsContext): Promise<void> {
 export async function previewDeploy(ctx: OpsContext, id: string): Promise<string> {
   assertPreviewId(id);
   const cwd = await findRepoRoot(ctx.ports.fs);
-  const hash = await revisionHash(cwd);
+  const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Preview deploy ${id} (${hash})`));
 
-  const files = await listRepoFiles(cwd, ctx.config.sourceIgnore);
+  const files = await listRepoFiles(ctx.ports, cwd, ctx.config.sourceIgnore);
   ctx.logger.step(`zipping ${files.length} files`);
-  const zip = await buildRepoZip(cwd, files, { [COMMIT_FILE]: hash });
+  const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
   const sourceKey = `build/${hash}.zip`;
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
 

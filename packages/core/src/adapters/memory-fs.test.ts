@@ -18,6 +18,16 @@ describe('createMemoryFileSystem', () => {
     expect((failure as FileNotFoundError).path).toBe('/repo/missing.txt');
   });
 
+  it('serves a file as its UTF-8 bytes through readBytes', async () => {
+    const fs = createMemoryFileSystem({ '/repo/logo.txt': 'héllo' });
+    expect(await fs.readBytes('/repo/logo.txt')).toEqual(new TextEncoder().encode('héllo'));
+  });
+
+  it('throws FileNotFoundError when readBytes hits a missing file', async () => {
+    const fs = createMemoryFileSystem();
+    await expect(fs.readBytes('/repo/missing.bin')).rejects.toThrow(FileNotFoundError);
+  });
+
   it('treats any ancestor of a stored file as an existing directory', async () => {
     const fs = createMemoryFileSystem({ '/repo/.git/HEAD': 'ref' });
     expect(await fs.exists('/repo/.git/HEAD')).toBe(true);

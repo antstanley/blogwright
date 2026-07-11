@@ -24,8 +24,9 @@ import {
   type Transport,
 } from 'blogwright-core';
 
-import type { OpsContext, Ports } from './context.js';
+import type { OpsContext } from './context.js';
 import type { Logger } from './logger.js';
+import type { Ports, Vcs } from './ports.js';
 
 type ServiceName = Exclude<keyof AwsClients, 'region'>;
 
@@ -84,6 +85,19 @@ function testClients(region: string, overrides: ClientOverrides): AwsClients {
   };
 }
 
+const rejectAllVcs: Vcs = {
+  revisionHash: async (cwd) => {
+    throw new Error(
+      `unexpected VCS call in test: revisionHash(${cwd}) — override ports.vcs on createTestContext`,
+    );
+  },
+  listFiles: async (cwd) => {
+    throw new Error(
+      `unexpected VCS call in test: listFiles(${cwd}) — override ports.vcs on createTestContext`,
+    );
+  },
+};
+
 const NOOP_LOGGER: Logger = {
   info: () => undefined,
   step: () => undefined,
@@ -108,8 +122,9 @@ export async function removeTempDir(dir: string): Promise<void> {
 /**
  * Build a complete OpsContext for tests. Defaults: env "test", site "example",
  * account 123456789012, config merged over DEFAULT_CONFIG, derived names,
- * empty state, a fresh in-memory FileSystem, TEST_AGENT_DIR as the agent
- * directory, a silent logger, and a no-op save.
+ * empty state, a fresh in-memory FileSystem, a Vcs that fails fast until
+ * overridden, TEST_AGENT_DIR as the agent directory, a silent logger, and a
+ * no-op save.
  */
 export function createTestContext(overrides: TestContextOverrides = {}): OpsContext {
   const env = overrides.env ?? 'test';
@@ -118,7 +133,10 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
   const names = { ...deriveNames(env, accountId, config), ...overrides.names };
   const state = { ...emptyState(env), ...overrides.state };
   const clients = testClients(config.region, overrides.clients ?? {});
-  const ports: Ports = { fs: overrides.ports?.fs ?? createMemoryFileSystem() };
+  const ports: Ports = {
+    fs: overrides.ports?.fs ?? createMemoryFileSystem(),
+    vcs: overrides.ports?.vcs ?? rejectAllVcs,
+  };
 
   return {
     env,

@@ -14,8 +14,9 @@ function directoryPrefix(path: string): string {
 
 /**
  * Build a Map-backed FileSystem seeded with `initialFiles` (path → content).
- * A directory "exists" when any file lives under it; inspect writes back
- * through `readText`/`listFiles`.
+ * Contents are text; `readBytes` returns the UTF-8 encoding. A directory
+ * "exists" when any file lives under it; inspect writes back through
+ * `readText`/`listFiles`.
  */
 export function createMemoryFileSystem(initialFiles: Record<string, string> = {}): FileSystem {
   const files = new Map<string, string>(
@@ -27,11 +28,19 @@ export function createMemoryFileSystem(initialFiles: Record<string, string> = {}
     return [...files.keys()].some((key) => key.startsWith(prefix));
   }
 
+  function contentOf(path: string): string {
+    const content = files.get(normalise(path));
+    if (content === undefined) throw new FileNotFoundError(path);
+    return content;
+  }
+
   return {
     async readText(path: string): Promise<string> {
-      const content = files.get(normalise(path));
-      if (content === undefined) throw new FileNotFoundError(path);
-      return content;
+      return contentOf(path);
+    },
+
+    async readBytes(path: string): Promise<Uint8Array> {
+      return new TextEncoder().encode(contentOf(path));
     },
 
     async writeText(path: string, text: string): Promise<void> {

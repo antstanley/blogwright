@@ -15,13 +15,10 @@ import {
   type OpsState,
 } from 'blogwright-core';
 
+import { createProcessVcs } from './adapters/process-vcs.js';
 import { createLogger, type Logger } from './logger.js';
+import type { Ports } from './ports.js';
 import { findRepoRoot } from './repo-root.js';
-
-/** The ports domain code reaches side effects through; adapters are wired in createContext. */
-export interface Ports {
-  fs: FileSystem;
-}
 
 export interface OpsContext {
   env: string;
@@ -92,7 +89,10 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
  */
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {
   const logger = createLogger();
-  const ports: Ports = { fs: opts.ports?.fs ?? createNodeFileSystem() };
+  const ports: Ports = {
+    fs: opts.ports?.fs ?? createNodeFileSystem(),
+    vcs: opts.ports?.vcs ?? createProcessVcs(),
+  };
   const agentDir = fileURLToPath(new URL('../agent', import.meta.url));
   const root = await findRepoRoot(ports.fs);
   const config = await loadConfig(ports.fs, {

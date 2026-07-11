@@ -12,6 +12,8 @@
 export interface FileSystem {
   /** Read a UTF-8 text file. Throws {@link FileNotFoundError} when absent. */
   readText(path: string): Promise<string>;
+  /** Read a file's raw bytes. Throws {@link FileNotFoundError} when absent. */
+  readBytes(path: string): Promise<Uint8Array>;
   /** Write a UTF-8 text file, creating parent directories as needed. */
   writeText(path: string, text: string): Promise<void>;
   /** True when a file or directory exists at the path. */
