@@ -31,7 +31,14 @@ export async function listRepoFiles(
   ignore: string[],
 ): Promise<string[]> {
   const files = await ports.vcs.listFiles(cwd);
-  const kept = files.filter((f) => !ignore.some((prefix) => f === prefix || f.startsWith(prefix)));
+  // An ignore entry matches an exact path or a directory boundary — "dist"
+  // drops dist and dist/**, never dist-notes.md (files silently missing from
+  // the deployed site are painful to trace back to a prefix collision).
+  const matches = (f: string, entry: string) => {
+    const dir = entry.endsWith('/') ? entry : `${entry}/`;
+    return f === entry || f.startsWith(dir);
+  };
+  const kept = files.filter((f) => !ignore.some((entry) => matches(f, entry)));
   const present = await Promise.all(
     kept.map(async (f) => ((await ports.fs.exists(`${cwd}/${f}`)) ? f : null)),
   );

@@ -14,10 +14,13 @@ const PING_TIMEOUT_MS = 2500;
 export function createFetchPing(fetchImpl: typeof fetch = fetch): PingBuilder {
   return async (endpoint, token) => {
     try {
-      await fetchImpl(`https://${endpoint}/status`, {
+      const res = await fetchImpl(`https://${endpoint}/status`, {
         headers: { 'X-aws-proxy-auth': token, 'X-aws-proxy-port': '8080' },
         signal: AbortSignal.timeout(PING_TIMEOUT_MS),
       });
+      // Release the connection — an unread body pins an undici socket per
+      // poll cycle until GC.
+      await res.body?.cancel();
     } catch {
       /* expected — the point is the wake-up, not the response */
     }

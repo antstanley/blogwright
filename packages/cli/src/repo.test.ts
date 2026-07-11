@@ -34,6 +34,16 @@ describe('listRepoFiles', () => {
     expect(files).toEqual(['src/index.ts', 'README.md']);
   });
 
+  it('matches ignore entries on path boundaries, not raw prefixes', async () => {
+    const listed = ['dist/site.html', 'dist-notes.md', 'distribution/plan.md', 'dist'];
+    const ports: Ports = {
+      vcs: fakeVcs(listed),
+      fs: createMemoryFileSystem(Object.fromEntries(listed.map((f) => [`/repo/${f}`, 'x']))),
+    };
+    const files = await listRepoFiles(ports, '/repo', ['dist']);
+    expect(files).toEqual(['dist-notes.md', 'distribution/plan.md']);
+  });
+
   it('drops tracked files that no longer exist on disk', async () => {
     const ports: Ports = {
       vcs: fakeVcs(['present.txt', 'deleted.txt']),

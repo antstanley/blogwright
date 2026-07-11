@@ -211,7 +211,13 @@ export async function history(ctx: OpsContext): Promise<void> {
   const manifests: DeployManifest[] = [];
   for (const obj of objects) {
     const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, obj.key);
-    if (text) manifests.push(JSON.parse(text) as DeployManifest);
+    if (!text) continue;
+    try {
+      manifests.push(JSON.parse(text) as DeployManifest);
+    } catch {
+      // One corrupt manifest must not take down the whole listing.
+      ctx.logger.warn(`skipping unreadable manifest ${obj.key}`);
+    }
   }
   manifests.sort((a, b) => b.finishedAt.localeCompare(a.finishedAt));
   if (ctx.ports.terminal.isInteractive) {
@@ -234,7 +240,12 @@ export async function history(ctx: OpsContext): Promise<void> {
 /** Show CloudWatch build logs for a given hash. */
 export async function logs(ctx: OpsContext, hash: string): Promise<void> {
   const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, manifestKey(hash));
-  const manifest = text ? (JSON.parse(text) as DeployManifest) : undefined;
+  let manifest: DeployManifest | undefined;
+  try {
+    manifest = text ? (JSON.parse(text) as DeployManifest) : undefined;
+  } catch {
+    ctx.logger.warn(`manifest for ${hash} is unreadable — showing the unfiltered log window`);
+  }
   // Filter to the build's time window (± a minute) from the manifest.
   const startTime = manifest ? Date.parse(manifest.startedAt) - 60_000 : undefined;
   const endTime = manifest ? Date.parse(manifest.finishedAt) + 60_000 : undefined;

@@ -97,7 +97,8 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
   const command = positionals[0];
   if (!command || values.help) {
     logger.info(USAGE);
-    return command ? 0 : 1;
+    // Asking for help is success; invoking with no command at all is not.
+    return values.help || command ? 0 : 1;
   }
   if (command === 'init') {
     // Runs before any context exists — there is no config to load yet.
