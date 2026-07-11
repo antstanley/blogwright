@@ -159,7 +159,10 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
 
   return {
     env,
-    domain: overrides.domain,
+    // Mirrors production resolution (context.ts): an explicit domain wins,
+    // else the config's — so a test setting config.domain builds the same
+    // graph shape (certificate node, aliases) the real run would.
+    domain: overrides.domain ?? config.domain,
     preview: overrides.preview ?? false,
     config,
     names,

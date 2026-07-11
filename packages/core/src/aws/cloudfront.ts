@@ -130,6 +130,41 @@ export class CloudFrontClient {
   }
 
   /**
+   * Reconcile the distribution's aliases and viewer certificate in place — the
+   * path taken when a domain is added (or changed) after the distribution was
+   * first created. Compares semantically (CNAME set + certificate ARN), since
+   * the returned config carries legacy elements our builder never emits.
+   * Returns true when a change was pushed.
+   */
+  async setDistributionAliases(
+    id: string,
+    aliases: string[],
+    acmCertificateArn: string | undefined,
+  ): Promise<boolean> {
+    const current = await this.getDistributionConfig(id);
+    if (!current) throw new Error(`distribution ${id} not found while reconciling aliases`);
+    const currentAliases = [...current.config.matchAll(/<CNAME>(.*?)<\/CNAME>/g)]
+      .map((m) => m[1] ?? '')
+      .sort();
+    const currentCert = textTag(current.config, 'ACMCertificateArn');
+    const sameAliases =
+      currentAliases.length === aliases.length &&
+      [...aliases].sort().every((a, i) => a === currentAliases[i]);
+    if (sameAliases && currentCert === acmCertificateArn) return false;
+    const next = current.config
+      .replace(/<Aliases>.*?<\/Aliases>/s, aliasesBlock(aliases))
+      .replace(/<ViewerCertificate>.*?<\/ViewerCertificate>/s, viewerCertificateBlock(acmCertificateArn));
+    await this.client.send({
+      service: 'cloudfront',
+      method: 'PUT',
+      path: `${API}/distribution/${id}/config`,
+      headers: { 'content-type': 'application/xml', 'if-match': current.etag },
+      body: next,
+    });
+    return true;
+  }
+
+  /**
    * Disable a distribution by flipping its top-level `<Enabled>` to false. The config
    * also contains `<Enabled>false</Enabled>` inside TrustedSigners/Logging, so the
    * distribution-level flag must be matched specifically — it is the one immediately
@@ -206,11 +241,14 @@ export class CloudFrontClient {
   }
 
   private async describeFunction(name: string): Promise<{ arn: string; etag: string } | undefined> {
+    // DescribeFunction is GET …/function/{name}/describe (XML summary). The
+    // bare GET …/function/{name} is GetFunction, whose body is the raw code
+    // bytes — no FunctionARN to parse.
     try {
       const res = await this.client.send({
         service: 'cloudfront',
         method: 'GET',
-        path: `${API}/function/${name}`,
+        path: `${API}/function/${name}/describe`,
       });
       return { arn: textTag(res.text(), 'FunctionARN') ?? '', etag: res.headers['etag'] ?? '' };
     } catch (err) {
@@ -295,20 +333,26 @@ function parseDistribution(xml: string, etag: string | undefined): DistributionS
   };
 }
 
-/** Build a DistributionConfig document. Element order follows the CloudFront schema. */
-function buildDistributionConfig(input: DistributionConfigInput): string {
-  const aliases =
-    input.aliases.length > 0
-      ? `<Aliases><Quantity>${input.aliases.length}</Quantity><Items>${input.aliases
-          .map((a) => `<CNAME>${encodeEntities(a)}</CNAME>`)
-          .join('')}</Items></Aliases>`
-      : `<Aliases><Quantity>0</Quantity></Aliases>`;
+function aliasesBlock(aliases: string[]): string {
+  return aliases.length > 0
+    ? `<Aliases><Quantity>${aliases.length}</Quantity><Items>${aliases
+        .map((a) => `<CNAME>${encodeEntities(a)}</CNAME>`)
+        .join('')}</Items></Aliases>`
+    : `<Aliases><Quantity>0</Quantity></Aliases>`;
+}
 
-  const viewerCertificate = input.acmCertificateArn
+function viewerCertificateBlock(acmCertificateArn: string | undefined): string {
+  return acmCertificateArn
     ? `<ViewerCertificate><ACMCertificateArn>${encodeEntities(
-        input.acmCertificateArn,
+        acmCertificateArn,
       )}</ACMCertificateArn><SSLSupportMethod>sni-only</SSLSupportMethod><MinimumProtocolVersion>TLSv1.2_2021</MinimumProtocolVersion></ViewerCertificate>`
     : `<ViewerCertificate><CloudFrontDefaultCertificate>true</CloudFrontDefaultCertificate></ViewerCertificate>`;
+}
+
+/** Build a DistributionConfig document. Element order follows the CloudFront schema. */
+function buildDistributionConfig(input: DistributionConfigInput): string {
+  const aliases = aliasesBlock(input.aliases);
+  const viewerCertificate = viewerCertificateBlock(input.acmCertificateArn);
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>` +

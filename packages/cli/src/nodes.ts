@@ -565,6 +565,31 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
         ctx.logger.info(`  point ${record} (CNAME/ALIAS) at ${dist.domainName}`);
       }
     },
+    async update(ctx) {
+      // A domain added (or changed) after the first bootstrap must reach the
+      // existing distribution — the certificate node validates the cert, but
+      // only this reconcile attaches the alias + viewer certificate.
+      const id = output(ctx, 'cloudfront-distribution').id;
+      if (typeof id !== 'string') return;
+      if (!ctx.domain) {
+        // Deliberately no automatic alias removal: dropping --domain from a
+        // later run must not detach a live site's hostname.
+        ctx.logger.ok('no domain configured — existing aliases left as-is');
+        return;
+      }
+      const alias = preview ? `*.${ctx.domain}` : ctx.domain;
+      const certArn = String(output(ctx, 'acm-certificate').arn);
+      const changed = await ctx.clients.cloudfront.setDistributionAliases(id, [alias], certArn);
+      if (changed) {
+        ctx.logger.ok(`attached ${alias} to the distribution`);
+        const domainName = output(ctx, 'cloudfront-distribution').domainName;
+        if (typeof domainName === 'string') {
+          ctx.logger.info(`  point ${alias} (CNAME/ALIAS) at ${domainName}`);
+        }
+      } else {
+        ctx.logger.ok('aliases up to date');
+      }
+    },
     async delete(ctx) {
       const id = output(ctx, 'cloudfront-distribution').id;
       if (typeof id !== 'string') return;

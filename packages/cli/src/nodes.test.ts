@@ -206,3 +206,59 @@ describe('oidcRolePolicyStatements', () => {
     );
   });
 });
+
+describe('distributionNode.update', () => {
+  function distCtx(opts: { domain?: string; existingAliasCall?: boolean }) {
+    const calls: Array<{ id: string; aliases: string[]; cert: string | undefined }> = [];
+    const ctx = createTestContext({
+      config: opts.domain ? { domain: opts.domain } : {},
+      state: {
+        resources: {
+          'cloudfront-distribution': { id: 'D1', domainName: 'd1.cloudfront.net' },
+          'acm-certificate': { arn: 'arn:aws:acm:us-east-1:1:certificate/abc' },
+        },
+      },
+      clients: {
+        cloudfront: {
+          setDistributionAliases: async (id: string, aliases: string[], cert?: string) => {
+            calls.push({ id, aliases, cert });
+            return true;
+          },
+        },
+      },
+    });
+    return { ctx, calls };
+  }
+
+  function distNode(ctx: OpsContext) {
+    const found = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    if (!found?.update) throw new Error('distribution node has no update');
+    return found;
+  }
+
+  it('attaches the domain alias and certificate on reconcile', async () => {
+    const { ctx, calls } = distCtx({ domain: 'example.com' });
+    await distNode(ctx).update!(ctx);
+    expect(calls).toEqual([
+      {
+        id: 'D1',
+        aliases: ['example.com'],
+        cert: 'arn:aws:acm:us-east-1:1:certificate/abc',
+      },
+    ]);
+  });
+
+  it('uses a wildcard alias for the preview stack', async () => {
+    const { ctx, calls } = distCtx({ domain: 'preview.example.com' });
+    ctx.preview = true;
+    const found = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    await found!.update!(ctx);
+    expect(calls[0]?.aliases).toEqual(['*.preview.example.com']);
+  });
+
+  it('never touches aliases when no domain is configured', async () => {
+    const { ctx, calls } = distCtx({});
+    await distNode(ctx).update!(ctx);
+    expect(calls).toEqual([]);
+  });
+});
