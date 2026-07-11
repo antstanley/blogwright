@@ -12,7 +12,6 @@ import {
   OAuthResponseError,
   TokenRefreshError,
   TokenRevokedError,
-  requestLocalLock,
   type Jwk,
   type NodeSavedState,
 } from '@atproto/oauth-client-node';
@@ -57,7 +56,13 @@ async function buildClient(ctx: PdsContext, clientKey: Jwk): Promise<NodeOAuthCl
     },
     sessionStore: sessionStoreForSecret(ctx.clients.secrets, pds.secretName),
     handleResolver: pds.handleResolver ?? DEFAULT_HANDLE_RESOLVER,
-    requestLock: requestLocalLock,
+    // Deliberately NO requestLock. The session lives in shared Secrets Manager
+    // state, and syncs can run concurrently (overlapping CI deploys). Providing
+    // a lock tells the library it holds the only instance, which disables its
+    // invalid_grant recovery (re-read the store and adopt a concurrently
+    // rotated session) and instead deletes the session — destroying the valid
+    // token a parallel sync just persisted. A process-local lock cannot
+    // serialize cross-process refreshes, so lock-less with recovery is correct.
   });
 }
 

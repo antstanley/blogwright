@@ -114,11 +114,25 @@ export function sessionStoreForSecret(
       return secret.session;
     },
     async set(sub: string, session: NodeSavedSession): Promise<void> {
-      await updatePdsSecret(secrets, secretName, (secret) => ({
-        ...secret,
-        did: sub,
-        session,
-      }));
+      // Retried: this write persists a just-rotated single-use refresh token.
+      // If it throws, the OAuth library revokes the new token and deletes the
+      // session — one Secrets Manager throttle at exactly the wrong moment
+      // would otherwise force an interactive re-login.
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await updatePdsSecret(secrets, secretName, (secret) => ({
+            ...secret,
+            did: sub,
+            session,
+          }));
+          return;
+        } catch (err) {
+          lastError = err;
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        }
+      }
+      throw lastError;
     },
     async del(sub: string): Promise<void> {
       await updatePdsSecret(secrets, secretName, (secret) =>
