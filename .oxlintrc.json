@@ -17,7 +17,37 @@
     "unicorn/no-array-sort": "off",
     "unicorn/no-array-reverse": "off",
     "unicorn/consistent-function-scoping": "off",
-    "no-await-in-loop": "off"
+    "no-await-in-loop": "off",
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          { "name": "node:fs", "message": "Domain modules read and write files through the FileSystem port (ctx.ports.fs); only adapters and the composition root touch node:fs. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "node:fs/promises", "message": "Domain modules read and write files through the FileSystem port (ctx.ports.fs); only adapters and the composition root touch node:fs. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "fs", "message": "Domain modules read and write files through the FileSystem port (ctx.ports.fs); only adapters and the composition root touch node:fs. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "fs/promises", "message": "Domain modules read and write files through the FileSystem port (ctx.ports.fs); only adapters and the composition root touch node:fs. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "node:child_process", "message": "Domain modules run external commands through a port (the CLI's Vcs is the model); only adapters spawn processes. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "child_process", "message": "Domain modules run external commands through a port (the CLI's Vcs is the model); only adapters spawn processes. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "node:readline", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "node:readline/promises", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "readline", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "readline/promises", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." }
+        ]
+      }
+    ]
   },
+  "overrides": [
+    {
+      "files": [
+        "packages/core/src/adapters/**",
+        "packages/cli/src/adapters/**",
+        "packages/cli/src/bin.ts",
+        "packages/cli/src/context.ts",
+        "packages/cli/src/test-support.ts",
+        "packages/build-agent/**"
+      ],
+      "rules": { "no-restricted-imports": "off" }
+    }
+  ],
   "ignorePatterns": ["dist", "node_modules"]
 }

@@ -73,6 +73,10 @@ Existing ports are the model for new ones:
 | `XrpcTransport`             | `cli/src/pds/xrpc.ts`         | OAuth session `fetchHandler`    | stub transports in `xrpc.test.ts` |
 | `StateStore`                | `core/src/state.ts`           | S3-backed store                 | in-memory / mocked transport |
 | `Logger`                    | `cli/src/logger.ts`           | terminal logger                 | capturing logger |
+| `FileSystem`                | `core/src/ports.ts`           | `createNodeFileSystem` (`core/src/adapters/node-fs.ts`) | `createMemoryFileSystem` (Map-backed) |
+| `Terminal`                  | `core/src/ports.ts`           | `createNodeTerminal` (`core/src/adapters/node-terminal.ts`) | `createScriptedTerminal` |
+| `Vcs`                       | `cli/src/ports.ts`            | `createProcessVcs` (`cli/src/adapters/process-vcs.ts`) | fake `Vcs` via `createTestContext` `ports.vcs` overrides |
+| `PingBuilder`               | `cli/src/ports.ts`            | `createFetchPing` (`cli/src/adapters/fetch-ping.ts`) | no-op / recording ping via `createTestContext` `ports.ping` overrides |
 
 Conventions:
 
@@ -343,6 +347,17 @@ A change is done when:
   generalizes an existing strength rather than importing a foreign structure. The
   package split stays as-is; hexagonal here means port discipline inside packages,
   not new packages.
+- *Hexagonal enforcement.* **A lint rule, not convention, active 2026-07-11.**
+  `no-restricted-imports` in the root `.oxlintrc.json` errors on `node:fs`,
+  `node:fs/promises`, `node:child_process`, and `node:readline`(`/promises`) —
+  with and without the `node:` prefix — everywhere except the adapter directories
+  (`packages/core/src/adapters/`, `packages/cli/src/adapters/`), the CLI
+  composition root (`bin.ts`, `context.ts`), the tmp-dir test helpers
+  (`cli/src/test-support.ts`, which back the node-adapter integration tests), and
+  `packages/build-agent` — the in-MicroVM build server is an edge component whose
+  whole job is spawning builds and writing artifacts. oxlint scopes the exception
+  with config `overrides`; the glob paths resolve relative to the root config, so
+  one rule covers every package even though `pnpm lint` runs per package.
 
 **Open questions**
 
@@ -356,9 +371,3 @@ A change is done when:
   keep the current convention?
 - Boundary validation is hand-rolled (`validateConfig`); if config surface keeps
   growing, is a schema validator (zod/valibot) worth the dependency?
-- The hexagonal rule is not yet fully met: `node:fs` is called directly from CLI
-  modules (`context.ts`, `repo-root.ts`, `pds/content.ts`,
-  `pds/sync.ts`, `pds/commands.ts`), `repo.ts` shells out to jj/git via
-  `node:child_process`, `deploy.ts` calls `fetch` directly, and `pds login` reads
-  the terminal inline. Migration is planned (see `.specs/plans/`); until it lands,
-  new code follows the port rule and the listed modules are the known exceptions.
