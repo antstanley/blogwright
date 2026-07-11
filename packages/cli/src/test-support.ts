@@ -39,6 +39,7 @@ export interface TestContextOverrides {
   clients?: ClientOverrides | undefined;
   logger?: Partial<Logger> | undefined;
   ports?: Partial<Ports> | undefined;
+  agentDir?: string | undefined;
   save?: (() => Promise<void>) | undefined;
 }
 
@@ -87,10 +88,14 @@ const NOOP_LOGGER: Logger = {
   error: () => undefined,
 };
 
+/** Default agent-artifact directory for tests; seed the in-memory fs under it. */
+export const TEST_AGENT_DIR = '/agent';
+
 /**
  * Build a complete OpsContext for tests. Defaults: env "test", site "example",
  * account 123456789012, config merged over DEFAULT_CONFIG, derived names,
- * empty state, a fresh in-memory FileSystem, a silent logger, and a no-op save.
+ * empty state, a fresh in-memory FileSystem, TEST_AGENT_DIR as the agent
+ * directory, a silent logger, and a no-op save.
  */
 export function createTestContext(overrides: TestContextOverrides = {}): OpsContext {
   const env = overrides.env ?? 'test';
@@ -110,6 +115,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     accountId,
     clients,
     ports,
+    agentDir: overrides.agentDir ?? TEST_AGENT_DIR,
     state,
     store: new StateStore(clients.s3, names.bucket, env),
     logger: { ...NOOP_LOGGER, ...overrides.logger },

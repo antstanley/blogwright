@@ -283,8 +283,9 @@ Where agents most often slip in this repo:
    code; if a comment is needed to explain *what*, rename instead.
 8. **Tests are first-class.** A change ships with tests written alongside it;
    "compiles" is not "works" — run `pnpm build && pnpm test && pnpm lint && pnpm knip`
-   and report the actual output. Use `OPS_AGENT_DIR` to point tests at agent
-   artifacts; do not weaken the runtime `../agent` resolution.
+   and report the actual output. Point tests at agent artifacts through
+   `createTestContext` (an injected `agentDir` plus the in-memory `FileSystem`);
+   do not weaken the runtime `../agent` resolution.
 9. **No duplication.** Before adding logic, check whether it already has a home —
    especially in `blogwright-core`, whose clients and config own their surfaces.
    **Stay inside the architecture:** a new side effect goes through a port
@@ -355,8 +356,8 @@ A change is done when:
   keep the current convention?
 - Boundary validation is hand-rolled (`validateConfig`); if config surface keeps
   growing, is a schema validator (zod/valibot) worth the dependency?
-- The hexagonal rule is not yet fully met: `node:fs` is called directly from six CLI
-  modules (`context.ts`, `repo-root.ts`, `agent-package.ts`, `pds/content.ts`,
+- The hexagonal rule is not yet fully met: `node:fs` is called directly from CLI
+  modules (`context.ts`, `repo-root.ts`, `pds/content.ts`,
   `pds/sync.ts`, `pds/commands.ts`), `repo.ts` shells out to jj/git via
   `node:child_process`, `deploy.ts` calls `fetch` directly, and `pds login` reads
   the terminal inline. Migration is planned (see `.specs/plans/`); until it lands,

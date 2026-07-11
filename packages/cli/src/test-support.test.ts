@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createTestContext } from './test-support.js';
+import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
 
 describe('createTestContext', () => {
   it('builds a complete context with derived defaults', async () => {
@@ -29,6 +29,11 @@ describe('createTestContext', () => {
     await ctx.ports.fs.writeText('/repo/file.txt', 'hello');
     expect(await ctx.ports.fs.readText('/repo/file.txt')).toBe('hello');
     expect(await createTestContext().ports.fs.exists('/repo/file.txt')).toBe(false);
+  });
+
+  it('defaults agentDir to TEST_AGENT_DIR and honours an override', () => {
+    expect(createTestContext().agentDir).toBe(TEST_AGENT_DIR);
+    expect(createTestContext({ agentDir: '/elsewhere/agent' }).agentDir).toBe('/elsewhere/agent');
   });
 
   it('rejects any AWS call a test did not explicitly override', async () => {

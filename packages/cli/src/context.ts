@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   createClients,
@@ -32,6 +33,12 @@ export interface OpsContext {
   accountId: string;
   clients: AwsClients;
   ports: Ports;
+  /**
+   * Directory holding the build-agent artifacts — Dockerfile, bundled server.js,
+   * and agent-manifest.json — copied into this package by its build
+   * (scripts/copy-agent.mjs). Resolved at the composition root; tests inject one.
+   */
+  agentDir: string;
   state: OpsState;
   store: StateStore;
   logger: Logger;
@@ -86,6 +93,7 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {
   const logger = createLogger();
   const ports: Ports = { fs: opts.ports?.fs ?? createNodeFileSystem() };
+  const agentDir = fileURLToPath(new URL('../agent', import.meta.url));
   const root = await findRepoRoot(ports.fs);
   const config = await loadConfig(ports.fs, {
     env: opts.env,
@@ -115,6 +123,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     accountId,
     clients,
     ports,
+    agentDir,
     state,
     store,
     logger,

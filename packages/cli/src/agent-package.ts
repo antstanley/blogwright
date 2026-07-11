@@ -1,19 +1,13 @@
-import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+/**
+ * Packages the build-agent artifacts (Dockerfile, bundled server.js,
+ * agent-manifest.json) into a reproducible zip and uploads it to S3. Reads the
+ * artifacts through the FileSystem port from the composition-root-resolved
+ * `ctx.agentDir`; this module touches no Node API directly.
+ */
 
 import { zipSync, type Zippable } from 'fflate';
 
 import type { OpsContext } from './context.js';
-
-/**
- * Resolve the directory holding the build-agent artifacts — Dockerfile, bundled
- * server.js, and agent-manifest.json — copied into this package by its build
- * (scripts/copy-agent.mjs). Overridable for tests via OPS_AGENT_DIR.
- */
-function agentDir(): string {
-  if (process.env.OPS_AGENT_DIR) return process.env.OPS_AGENT_DIR;
-  return fileURLToPath(new URL('../agent', import.meta.url));
-}
 
 const IMAGE_PACKAGE_JSON = JSON.stringify({
   name: 'site-builder',
@@ -32,14 +26,15 @@ const IMAGE_PACKAGE_JSON = JSON.stringify({
 export async function packageAndUploadAgent(
   ctx: OpsContext,
 ): Promise<{ key: string; hash: string }> {
-  const dir = agentDir();
-  let dockerfile: Uint8Array;
-  let server: Uint8Array;
+  const dir = ctx.agentDir;
+  const { fs } = ctx.ports;
+  let dockerfile: string;
+  let server: string;
   let manifest: { hash?: string };
   try {
-    dockerfile = await readFile(`${dir}/Dockerfile`);
-    server = await readFile(`${dir}/server.js`);
-    manifest = JSON.parse(await readFile(`${dir}/agent-manifest.json`, 'utf8'));
+    dockerfile = await fs.readText(`${dir}/Dockerfile`);
+    server = await fs.readText(`${dir}/server.js`);
+    manifest = JSON.parse(await fs.readText(`${dir}/agent-manifest.json`));
   } catch {
     throw new Error(
       `build-agent artifacts not found in ${dir}. Run "pnpm --filter blogwright build" first.`,
@@ -50,10 +45,11 @@ export async function packageAndUploadAgent(
     throw new Error(`agent-manifest.json in ${dir} has no valid hash — rebuild the agent`);
   }
 
+  const encoder = new TextEncoder();
   const entries: Zippable = {
-    Dockerfile: dockerfile,
-    'server.js': server,
-    'package.json': new TextEncoder().encode(IMAGE_PACKAGE_JSON),
+    Dockerfile: encoder.encode(dockerfile),
+    'server.js': encoder.encode(server),
+    'package.json': encoder.encode(IMAGE_PACKAGE_JSON),
   };
   const zip = zipSync(entries, { level: 6, mtime: new Date('1980-01-01T00:00:00Z') });
   const key = `build/agent/agent-${hash}.zip`;
