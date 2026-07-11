@@ -1,9 +1,9 @@
 import { join } from 'node:path';
 
-import type { OpsContext } from '../context.js';
-import { colors } from '../logger.js';
-import { findRepoRoot } from '../repo-root.js';
+import { colors, findRepoRoot } from 'blogwright-core';
+
 import { clientDocumentPaths, clientMetadata, jwksDocument } from './client-metadata.js';
+import type { PdsContext } from './context.js';
 import {
   generateClientKey,
   login as oauthLogin,
@@ -30,7 +30,7 @@ import { rkeyFromUri } from './xrpc.js';
  * the two committed /oauth/ documents the site serves.
  */
 export async function keygen(
-  ctx: OpsContext,
+  ctx: PdsContext,
   repoRoot?: string,
   generateKey: typeof generateClientKey = generateClientKey,
 ): Promise<void> {
@@ -66,7 +66,7 @@ export async function keygen(
 
 /** Interactive OAuth bootstrap; see oauth.ts#login for the flow. */
 export async function login(
-  ctx: OpsContext,
+  ctx: PdsContext,
   opts: { identifier?: string | undefined },
   runLogin: typeof oauthLogin = oauthLogin,
 ): Promise<void> {
@@ -79,7 +79,7 @@ export async function login(
 }
 
 /** Show whether the secret exists and which parts it holds. Never prints values. */
-export async function secretStatus(ctx: OpsContext): Promise<void> {
+export async function secretStatus(ctx: PdsContext): Promise<void> {
   const pds = requirePdsConfig(ctx);
   const meta = await ctx.clients.secrets.describeSecret(pds.secretName);
   if (!meta) {
@@ -103,7 +103,7 @@ export async function secretStatus(ctx: OpsContext): Promise<void> {
 }
 
 /** Delete the secret (immediate, no recovery window). */
-export async function secretDelete(ctx: OpsContext, opts: { yes: boolean }): Promise<void> {
+export async function secretDelete(ctx: PdsContext, opts: { yes: boolean }): Promise<void> {
   const pds = requirePdsConfig(ctx);
   if (!opts.yes) throw new Error(`refusing to delete secret "${pds.secretName}" without --yes`);
   await ctx.clients.secrets.deleteSecret(pds.secretName);
@@ -116,7 +116,7 @@ export async function secretDelete(ctx: OpsContext, opts: { yes: boolean }): Pro
  * write the two site files the user commits.
  */
 export async function init(
-  ctx: OpsContext,
+  ctx: PdsContext,
   repoRoot?: string,
   openRepo: typeof openPdsRepo = openPdsRepo,
   verifyAssets: typeof verifyClientAssets = verifyClientAssets,
@@ -157,7 +157,7 @@ export async function init(
 
 /** Reconcile PDS records against local content. Production only. */
 export async function sync(
-  ctx: OpsContext,
+  ctx: PdsContext,
   repoRoot?: string,
   openRepo: OpenRepo = openPdsRepo,
 ): Promise<void> {
@@ -171,7 +171,7 @@ export async function sync(
   logSummary(ctx, summary);
 }
 
-function logSummary(ctx: OpsContext, s: SyncSummary): void {
+function logSummary(ctx: PdsContext, s: SyncSummary): void {
   ctx.logger.ok(
     `publication ${s.publication}; documents: ${s.created.length} created, ` +
       `${s.updated.length} updated, ${s.unchanged} unchanged`,
@@ -192,9 +192,9 @@ function logSummary(ctx: OpsContext, s: SyncSummary): void {
  * re-reconciles. No-op unless production, configured, and initialised.
  */
 export async function syncAfterDeploy(
-  ctx: OpsContext,
+  ctx: PdsContext,
   repoRoot?: string,
-  doSync: (ctx: OpsContext, repoRoot: string) => Promise<SyncSummary> = (c, r) =>
+  doSync: (ctx: PdsContext, repoRoot: string) => Promise<SyncSummary> = (c, r) =>
     syncPds(c, r, openPdsRepo),
 ): Promise<void> {
   if (ctx.env !== 'production' || !ctx.config.pds) return;

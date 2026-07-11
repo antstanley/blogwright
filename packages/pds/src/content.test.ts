@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { createMemoryFileSystem, createNodeFileSystem } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { makeTempDir, removeTempDir } from '../test-support.js';
+import { makeTempDir, removeTempDir } from './test-support.js';
 import { listPublishablePosts, parseFrontmatter } from './content.js';
 
 const ROOT = '/repo';

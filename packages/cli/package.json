@@ -12,8 +12,8 @@
   ],
   "exports": {
     "./rkey": {
-      "types": "./dist/pds/rkey.d.ts",
-      "default": "./dist/pds/rkey.js"
+      "types": "./dist/rkey.d.ts",
+      "default": "./dist/rkey.js"
     }
   },
   "scripts": {
@@ -24,8 +24,8 @@
     "start": "node ./dist/bin.js"
   },
   "dependencies": {
-    "@atproto/oauth-client-node": "^0.4.7",
     "blogwright-core": "workspace:*",
+    "blogwright-pds": "workspace:*",
     "fflate": "^0.8.3"
   },
   "devDependencies": {

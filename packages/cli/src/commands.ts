@@ -1,3 +1,6 @@
+import { colors, findRepoRoot } from 'blogwright-core';
+import { syncAfterDeploy } from 'blogwright-pds';
+
 import type { OpsContext } from './context.js';
 import {
   invalidateChanged,
@@ -8,12 +11,9 @@ import {
   type DeployManifest,
 } from './deploy.js';
 import { applyGraph, destroyGraph } from './graph.js';
-import { colors } from './logger.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
-import { syncAfterDeploy } from './pds/commands.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
-import { findRepoRoot } from './repo-root.js';
 
 /**
  * Canonical origin the live site is served from: the custom domain if configured,

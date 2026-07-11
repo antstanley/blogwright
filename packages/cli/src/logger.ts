@@ -4,29 +4,7 @@
  * sessions (piped output, CI) so they stay plain text.
  */
 
-import type { Terminal } from 'blogwright-core';
-
-const ESCAPE = '\u001B';
-
-function paint(code: string, text: string): string {
-  return `${ESCAPE}[${code}m${text}${ESCAPE}[0m`;
-}
-
-/** ANSI colour helpers; {@link createLogger} strips the codes off-TTY. */
-export const colors = {
-  dim: (s: string) => paint('2', s),
-  bold: (s: string) => paint('1', s),
-  green: (s: string) => paint('32', s),
-  yellow: (s: string) => paint('33', s),
-  red: (s: string) => paint('31', s),
-  cyan: (s: string) => paint('36', s),
-};
-
-const COLOR_CODES = new RegExp(`${ESCAPE}\\[[0-9;]*m`, 'g');
-
-function stripColors(text: string): string {
-  return text.replace(COLOR_CODES, '');
-}
+import { colors, stripColors, type Terminal } from 'blogwright-core';
 
 export interface Logger {
   info(msg: string): void;

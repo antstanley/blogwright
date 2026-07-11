@@ -1,6 +1,6 @@
-import { createMemoryFileSystem } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
+import { createMemoryFileSystem } from './adapters/memory-fs.js';
 import { findRepoRoot } from './repo-root.js';
 
 describe('findRepoRoot', () => {

@@ -7,8 +7,8 @@ import {
   type PdsConfig,
 } from 'blogwright-core';
 
-import type { OpsContext } from '../context.js';
 import { listPublishablePosts, type PostMeta } from './content.js';
+import type { PdsContext } from './context.js';
 import { postPath, tidFromPath } from './rkey.js';
 import { rkeyFromUri, type PdsClient, type PdsRecord } from './xrpc.js';
 
@@ -19,7 +19,7 @@ export type PdsRepo = Pick<PdsClient, 'listRecords' | 'getRecord' | 'putRecord'>
  * Opens an authenticated repo for the configured account. Production wiring is
  * oauth.ts#openPdsRepo (OAuth session restore); tests inject stubs.
  */
-export type OpenRepo = (ctx: OpsContext) => Promise<{ did: string; repo: PdsRepo }>;
+export type OpenRepo = (ctx: PdsContext) => Promise<{ did: string; repo: PdsRepo }>;
 
 export const PUBLICATION_COLLECTION = 'site.standard.publication';
 export const DOCUMENT_COLLECTION = 'site.standard.document';
@@ -47,7 +47,7 @@ export interface SyncSummary {
   orphans: string[];
 }
 
-export function requirePdsConfig(ctx: OpsContext): PdsConfig {
+export function requirePdsConfig(ctx: PdsContext): PdsConfig {
   if (!ctx.config.pds) {
     throw new Error('config has no "pds" section — add it to config/production.jsonc');
   }
@@ -191,7 +191,7 @@ export async function syncDocuments(
  * whether a failure is fatal.
  */
 export async function syncPds(
-  ctx: OpsContext,
+  ctx: PdsContext,
   repoRoot: string,
   openRepo: OpenRepo,
 ): Promise<SyncSummary> {

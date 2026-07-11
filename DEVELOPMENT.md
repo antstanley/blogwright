@@ -13,7 +13,7 @@ repository hygiene, agent-specific emphases, and the definition of done.
 | ---------- | ------------------------ | --------------------------------------------------------------------- |
 | TypeScript | ^6 (strict)              | shared `tsconfig.base.json`; see [TypeScript conventions](#typescript-conventions) |
 | Node       | ≥ 22 (CI runs 24)        | `engines` in every package; ESM only (`"type": "module"`)             |
-| pnpm       | 11                       | workspace of three packages under `packages/`                         |
+| pnpm       | 11                       | workspace of four packages under `packages/`                         |
 | oxlint     | latest                   | linter; per-package `pnpm lint`, config in `.oxlintrc.json`           |
 | oxfmt      | latest                   | formatter; config in `.oxfmtrc.json`, run via `pnpm exec oxfmt`       |
 | vitest     | 4                        | test runner in every package; `pnpm test` at the root runs all        |
@@ -43,8 +43,9 @@ Load-bearing principles:
   function doing two things). No hidden side effects; separate commands from queries.
 - **Single responsibility.** A module has one reason to change. High cohesion, low
   coupling. The package boundaries encode this: `blogwright-core` owns transport,
-  config, and state; the CLI owns the graph, commands, and PDS publishing; the
-  build-agent owns the in-MicroVM build server.
+  config, state, and shared ports; the CLI owns the graph, commands, and dispatch;
+  `blogwright-pds` owns standard.site (PDS) publishing; the build-agent owns the
+  in-MicroVM build server.
 - **No duplication (DRY).** Duplicated logic has one home — tempered by judgment:
   prefer a little duplication over the wrong abstraction.
 - **Self-documenting code; comments are a last resort.** A comment is often a failure
@@ -70,7 +71,7 @@ Existing ports are the model for new ones:
 | Port                        | Defined in                    | Real adapter                    | Test adapter |
 | --------------------------- | ----------------------------- | ------------------------------- | ------------ |
 | `Transport`                 | `core/src/aws/signer.ts`      | `fetchTransport`                | transport-level mocks in every AWS client test |
-| `XrpcTransport`             | `cli/src/pds/xrpc.ts`         | OAuth session `fetchHandler`    | stub transports in `xrpc.test.ts` |
+| `XrpcTransport`             | `pds/src/xrpc.ts`             | OAuth session `fetchHandler`    | stub transports in `xrpc.test.ts` |
 | `StateStore`                | `core/src/state.ts`           | S3-backed store                 | in-memory / mocked transport |
 | `Logger`                    | `cli/src/logger.ts`           | terminal logger                 | capturing logger |
 | `FileSystem`                | `core/src/ports.ts`           | `createNodeFileSystem` (`core/src/adapters/node-fs.ts`) | `createMemoryFileSystem` (Map-backed) |
@@ -96,9 +97,9 @@ Conventions:
   (transport, filesystem, terminal) and their adapters; a package hosts privately
   the ports only it uses (the CLI's VCS and builder-ping ports).
 - **Features live in their own packages.** A coherent feature with its own domain —
-  the standard.site integration behind the `pds` commands is the model — is its own
+  the standard.site integration in `blogwright-pds` is the model — is its own
   workspace package depending on `blogwright-core`, consumed by the CLI through a
-  narrow surface. The CLI owns dispatch and wiring, not feature logic.
+  narrow surface (`PdsContext`, satisfied structurally by the CLI's `OpsContext`). The CLI owns dispatch and wiring, not feature logic.
 
 ## Error handling and boundaries
 
@@ -111,7 +112,7 @@ translate the failure into the repo's own vocabulary at that line.
 | ----------------------------- | -------------------------------------- | --- |
 | Config file → CLI             | Shape, required fields, value ranges   | `parseConfig` / `mergeConfig` / `validateConfig` in `blogwright-core` — the parsed JSONC never escapes unvalidated |
 | AWS API → core                | Status, body shape                     | Per-service clients in `blogwright-core` over the SigV4 transport; the CLI never issues a raw AWS call |
-| PDS / OAuth → CLI             | Token responses, record shapes         | The `pds/` modules own the atproto surface; nothing outside them touches OAuth state |
+| PDS / OAuth → pds package     | Token responses, record shapes         | `blogwright-pds` owns the atproto surface; nothing outside it touches OAuth state |
 | S3 state read                 | Round-trip integrity                   | The state store re-parses `state/<env>.json` on read and fails typed on mismatch |
 | CLI arguments                 | Command, positionals, flags            | `parseArgs` plus explicit dispatch in `cli.ts`; unknown commands fail with usage |
 
@@ -125,7 +126,7 @@ translate the failure into the repo's own vocabulary at that line.
   collection, or make absence explicit in the type (`domain?: string | undefined`
   under `exactOptionalPropertyTypes`).
 - Wrap third-party surfaces behind a repo-owned module (the AWS clients in core, the
-  OAuth client in `pds/oauth.ts`); the rest of the code never sees a vendor error.
+  OAuth client in `pds/src/oauth.ts`); the rest of the code never sees a vendor error.
 - Validate inbound data at the boundary, then work with trusted shapes inside. A
   `JSON.parse(…) as T` cast is acceptable only when the very next step validates the
   result (as `parseConfig` does); it is never a substitute for validation.
@@ -232,7 +233,7 @@ name is derived, with an error that says how to fix it.
 - **Positive and negative space.** Every happy-path test is paired with a test that
   the adjacent bad input is rejected (the config validator tests are the model).
 - **Test the validity boundary** — one below a limit, at the limit, one above.
-- **Pinned vectors are contracts.** `packages/cli/src/pds/rkey.test.ts` pins rkey/TID
+- **Pinned vectors are contracts.** `packages/pds/src/rkey.test.ts` pins rkey/TID
   vectors that are on-the-wire identity: they must never change for an existing post
   path. Changing a pinned vector is a breaking protocol change, not a test fix.
 - **No flaky tests.** A flaky test is a bug to fix now, not a known issue to retry
@@ -242,8 +243,8 @@ name is derived, with an error that says how to fix it.
 
 ### Documentation
 
-- Public exports of `blogwright-core` and the `blogwright/rkey` subpath carry doc
-  comments.
+- Public exports of `blogwright-core`, `blogwright-pds`, and the `blogwright/rkey`
+  subpath carry doc comments.
 - Each module opens with a comment stating what it owns (see `config.ts`,
   `repo-root.ts`).
 - No bare `// TODO` without an owner and a tracking reference.
@@ -321,8 +322,9 @@ A change is done when:
 
 **Assumptions**
 
-- The three-package split (core / cli / build-agent) is stable; new code joins an
-  existing package rather than adding a fourth.
+- The four-package split (core / cli / pds / build-agent) is stable; new code joins
+  an existing package, and a new package is added only for a coherent feature with its
+  own domain (`blogwright-pds`, extracted 2026-07-11, is the model).
 - Consumers run the CLI via `pnpm exec` in their own repos; global installs are not a
   supported surface (the `bw` bin collides with Bitwarden's CLI when global).
 
@@ -344,17 +346,18 @@ A change is done when:
 - *Architecture.* **Hexagonal (ports and adapters), adopted 2026-07-11.** The repo
   already practiced it at its two network seams (`Transport`, `XrpcTransport`) —
   transport-level mocking is why the test suite needs no cloud — so the adoption
-  generalizes an existing strength rather than importing a foreign structure. The
-  package split stays as-is; hexagonal here means port discipline inside packages,
-  not new packages.
+  generalizes an existing strength rather than importing a foreign structure. Hexagonal
+  here means port discipline inside packages first; once a feature's side effects sat
+  behind ports, the standard.site integration was extracted into `blogwright-pds`
+  (2026-07-11) per the feature-package convention above.
 - *Hexagonal enforcement.* **A lint rule, not convention, active 2026-07-11.**
   `no-restricted-imports` in the root `.oxlintrc.json` errors on `node:fs`,
   `node:fs/promises`, `node:child_process`, and `node:readline`(`/promises`) —
   with and without the `node:` prefix — everywhere except the adapter directories
   (`packages/core/src/adapters/`, `packages/cli/src/adapters/`), the CLI
   composition root (`bin.ts`, `context.ts`), the tmp-dir test helpers
-  (`cli/src/test-support.ts`, which back the node-adapter integration tests), and
-  `packages/build-agent` — the in-MicroVM build server is an edge component whose
+  (`cli/src/test-support.ts` and `pds/src/test-support.ts`, which back the
+  node-adapter integration tests), and `packages/build-agent` — the in-MicroVM build server is an edge component whose
   whole job is spawning builds and writing artifacts. oxlint scopes the exception
   with config `overrides`; the glob paths resolve relative to the root config, so
   one rule covers every package even though `pnpm lint` runs per package.

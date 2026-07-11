@@ -22,8 +22,9 @@ Requires Node ≥ 22 and AWS credentials in the ambient provider chain.
 
 | Package                  | What it is                                                                                                       |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, PDS publishing, `blogwright/rkey` subpath export |
-| `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store                                               |
+| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, dispatch — plus the `blogwright/rkey` subpath export (a re-export of `blogwright-pds/rkey`) |
+| `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store, shared ports (filesystem, terminal)          |
+| `blogwright-pds`         | standard.site (AT Protocol) publishing: OAuth client, secret store, PDS record sync, URL-derived rkeys           |
 | `blogwright-build-agent` | HTTP build server baked into the builder MicroVM image (not published — its bundle ships inside the CLI package) |
 
 ## Architecture
@@ -120,7 +121,7 @@ becomes the publication's display name, and the Secrets Manager secret defaults 
 [standard.site](https://standard.site) records: one `site.standard.publication` for the
 site and one `site.standard.document` per post, with rkeys derived deterministically from
 each post's URL path (vendored mastrojs/atproto TID scheme — see
-`packages/cli/src/pds/rkey.ts`, exported as the `blogwright/rkey` subpath so the site
+`packages/pds/src/rkey.ts`, exported as the `blogwright/rkey` subpath so the site
 can build its `<link rel="site.standard.document">` tags from the same implementation).
 **Post slugs must not change after publication** — the rkey is the URL.
 

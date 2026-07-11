@@ -1,7 +1,7 @@
-import { pollUntil, type Microvm } from 'blogwright-core';
+import { colors, pollUntil, type Microvm } from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
-import { colors, confirm } from './logger.js';
+import { confirm } from './logger.js';
 
 /** A MicroVM keeps its image pinned until it fully terminates, so anything that isn't
  *  already TERMINATED/TERMINATING still blocks deleting the builder image. */

@@ -1,0 +1,50 @@
+{
+  "name": "blogwright-pds",
+  "version": "0.1.0",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./rkey": {
+      "types": "./dist/rkey.d.ts",
+      "default": "./dist/rkey.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@atproto/oauth-client-node": "^0.4.7",
+    "blogwright-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "oxlint": "^1.72.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "description": "standard.site (AT Protocol) publishing for blogwright: OAuth client, PDS record sync, and URL-derived rkeys",
+  "keywords": [
+    "atproto",
+    "standard.site",
+    "pds",
+    "oauth"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/antstanley/blogwright.git"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

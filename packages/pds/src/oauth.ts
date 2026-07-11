@@ -18,15 +18,15 @@ import {
 } from '@atproto/oauth-client-node';
 import type { PdsConfig } from 'blogwright-core';
 
-import type { OpsContext } from '../context.js';
 import { clientMetadata, clientMetadataUrl, jwksDocument, jwksUrl } from './client-metadata.js';
+import type { PdsContext } from './context.js';
 import { loadPdsSecret, sessionStoreForSecret, type PdsSecret } from './secret.js';
 import { requirePdsConfig } from './sync.js';
 import { PdsClient } from './xrpc.js';
 
 const DEFAULT_HANDLE_RESOLVER = 'https://public.api.bsky.app';
 
-function requireDomain(ctx: OpsContext): string {
+function requireDomain(ctx: PdsContext): string {
   if (!ctx.domain) throw new Error('pds OAuth requires a configured domain');
   return ctx.domain;
 }
@@ -41,7 +41,7 @@ function requireClientKey(secret: PdsSecret, pds: PdsConfig): Jwk {
 }
 
 /** The OAuth client, keyed with the secret's private JWK. */
-async function buildClient(ctx: OpsContext, clientKey: Jwk): Promise<NodeOAuthClient> {
+async function buildClient(ctx: PdsContext, clientKey: Jwk): Promise<NodeOAuthClient> {
   const pds = requirePdsConfig(ctx);
   const states = new Map<string, NodeSavedState>();
   return new NodeOAuthClient({
@@ -105,7 +105,7 @@ export async function publicClientJwk(clientKey: Jwk): Promise<Record<string, un
  * would otherwise fail deep inside the OAuth flow.
  */
 export async function verifyClientAssets(
-  ctx: OpsContext,
+  ctx: PdsContext,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
   const pds = requirePdsConfig(ctx);
@@ -156,7 +156,7 @@ export interface LoginDeps {
  * /oauth/callback page, paste the redirect URL back. The client persists the
  * session (and DID) into the secret through the session store.
  */
-export async function login(ctx: OpsContext, identifier: string, deps: LoginDeps): Promise<string> {
+export async function login(ctx: PdsContext, identifier: string, deps: LoginDeps): Promise<string> {
   await (deps.verifyAssets ?? verifyClientAssets)(ctx);
   let flow = deps.flow;
   if (!flow) {
@@ -195,12 +195,14 @@ function sessionExpired(err: unknown): boolean {
  * refresh token lands back in the secret) and wrap it as a PdsClient. The
  * session's fetchHandler adds DPoP + auth headers and handles nonce retries.
  */
-export async function openPdsRepo(ctx: OpsContext): Promise<{ did: string; repo: PdsClient }> {
+export async function openPdsRepo(ctx: PdsContext): Promise<{ did: string; repo: PdsClient }> {
   const pds = requirePdsConfig(ctx);
   const secret = await loadPdsSecret(ctx);
   const clientKey = requireClientKey(secret, pds);
   if (!secret.did || !secret.session) {
-    throw new Error(`secret "${pds.secretName}" has no OAuth session — run \`blogwright pds login\``);
+    throw new Error(
+      `secret "${pds.secretName}" has no OAuth session — run \`blogwright pds login\``,
+    );
   }
   const client = await buildClient(ctx, clientKey);
   try {

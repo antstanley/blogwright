@@ -44,6 +44,7 @@
         "packages/cli/src/bin.ts",
         "packages/cli/src/context.ts",
         "packages/cli/src/test-support.ts",
+        "packages/pds/src/test-support.ts",
         "packages/build-agent/**"
       ],
       "rules": { "no-restricted-imports": "off" }

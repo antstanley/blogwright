@@ -10,7 +10,7 @@
 import type { Jwk, NodeSavedSession, NodeSavedSessionStore } from '@atproto/oauth-client-node';
 import type { SecretsManagerClient } from 'blogwright-core';
 
-import type { OpsContext } from '../context.js';
+import type { PdsContext } from './context.js';
 import { requirePdsConfig } from './sync.js';
 
 /** The client surface secret persistence needs — structural, so tests can stub it. */
@@ -66,7 +66,7 @@ export function parsePdsSecret(raw: string, secretName: string): PdsSecret {
  * Fetch and parse the secret. Called only at keygen/login/sync time —
  * secret material must never be loaded during context creation.
  */
-export async function loadPdsSecret(ctx: OpsContext): Promise<PdsSecret> {
+export async function loadPdsSecret(ctx: PdsContext): Promise<PdsSecret> {
   const pds = requirePdsConfig(ctx);
   const raw = await ctx.clients.secrets.getSecretValue(pds.secretName);
   if (!raw) {

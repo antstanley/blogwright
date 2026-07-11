@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { createNodeFileSystem, createScriptedTerminal } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import type { OpsContext } from '../context.js';
-import { createTestContext, makeTempDir, removeTempDir } from '../test-support.js';
+import type { PdsContext } from './context.js';
+import { createTestContext, makeTempDir, removeTempDir } from './test-support.js';
 import { init, keygen, login, secretStatus, syncAfterDeploy } from './commands.js';
 import type { LoginDeps } from './oauth.js';
 import type { SyncSummary } from './sync.js';
@@ -15,7 +15,7 @@ const ROOT = '/repo';
 function ctx(
   env: string,
   pdsConfigured = true,
-): OpsContext & { lines: string[]; stored: Record<string, string> } {
+): PdsContext & { lines: string[]; stored: Record<string, string> } {
   const lines: string[] = [];
   const stored: Record<string, string> = {};
   const log = (prefix: string) => (msg: string) => lines.push(`${prefix}:${msg}`);
@@ -44,7 +44,7 @@ function ctx(
   return Object.assign(base, { lines, stored });
 }
 
-async function markInitialised(c: OpsContext): Promise<void> {
+async function markInitialised(c: PdsContext): Promise<void> {
   await c.ports.fs.writeText(
     `${ROOT}/public/.well-known/site.standard.publication`,
     'at://x/p/r\n',
@@ -184,7 +184,7 @@ describe('login', () => {
     const c = ctx('production');
     c.ports.terminal = terminal;
     let pasted: string | undefined;
-    const runLogin = async (_c: OpsContext, identifier: string, deps: LoginDeps) => {
+    const runLogin = async (_c: PdsContext, identifier: string, deps: LoginDeps) => {
       pasted = await deps.promptLine(`Paste the callback URL for ${identifier}: `);
       return 'did:plc:me';
     };

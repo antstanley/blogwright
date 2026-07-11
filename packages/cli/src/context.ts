@@ -7,6 +7,7 @@ import {
   createNodeTerminal,
   deriveNames,
   FileNotFoundError,
+  findRepoRoot,
   parseConfig,
   StateStore,
   type AwsClients,
@@ -20,7 +21,6 @@ import { createFetchPing } from './adapters/fetch-ping.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
 import { createLogger, type Logger } from './logger.js';
 import type { Ports } from './ports.js';
-import { findRepoRoot } from './repo-root.js';
 
 export interface OpsContext {
   env: string;

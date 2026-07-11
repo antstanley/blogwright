@@ -1,7 +1,7 @@
-import { createScriptedTerminal } from 'blogwright-core';
+import { colors, createScriptedTerminal } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { colors, confirm, createLogger } from './logger.js';
+import { confirm, createLogger } from './logger.js';
 
 const ESCAPE = '\u001B';
 
@@ -72,9 +72,9 @@ describe('confirm', () => {
   });
 
   it('returns the default for an empty answer', async () => {
-    await expect(
-      confirm(createScriptedTerminal({ answers: [''] }), 'Continue?'),
-    ).resolves.toBe(true);
+    await expect(confirm(createScriptedTerminal({ answers: [''] }), 'Continue?')).resolves.toBe(
+      true,
+    );
     await expect(
       confirm(createScriptedTerminal({ answers: [''] }), 'Continue?', { defaultYes: false }),
     ).resolves.toBe(false);

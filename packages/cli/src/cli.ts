@@ -1,10 +1,10 @@
 import { parseArgs } from 'node:util';
 
 import type { Terminal } from 'blogwright-core';
+import * as pds from 'blogwright-pds';
 
 import * as commands from './commands.js';
 import { createContext } from './context.js';
-import * as pds from './pds/commands.js';
 import { createLogger, type Logger } from './logger.js';
 
 const USAGE = `blogwright — full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)

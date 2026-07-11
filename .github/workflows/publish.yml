@@ -1,9 +1,9 @@
 name: Publish to npm
 
-# Publishes blogwright-core and blogwright when a GitHub release is
-# published. Requires an NPM_TOKEN repository secret (an npm automation token
-# with publish rights on both packages), or switch to npm trusted publishing
-# once the packages exist and drop the token.
+# Publishes blogwright-core, blogwright-pds, and blogwright when a GitHub
+# release is published. Requires an NPM_TOKEN repository secret (an npm
+# automation token with publish rights on all three packages), or switch to
+# npm trusted publishing once the packages exist and drop the token.
 on:
   release:
     types: [published]

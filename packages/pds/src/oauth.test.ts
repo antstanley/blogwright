@@ -1,13 +1,13 @@
 import { JoseKey } from '@atproto/oauth-client-node';
 import { describe, expect, it } from 'vitest';
 
-import type { OpsContext } from '../context.js';
-import { createTestContext } from '../test-support.js';
+import type { PdsContext } from './context.js';
+import { createTestContext } from './test-support.js';
 import { login, openPdsRepo, publicClientJwk, verifyClientAssets } from './oauth.js';
 
 const DID = 'did:plc:test';
 
-function ctxWith(secret: object | undefined): OpsContext {
+function ctxWith(secret: object | undefined): PdsContext {
   return createTestContext({
     domain: 'example.com',
     config: { pds: { name: 'Ant Stanley', secretName: 's' } },

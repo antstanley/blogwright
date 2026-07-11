@@ -3,6 +3,7 @@
   "ignoreWorkspaces": ["."],
   "workspaces": {
     "packages/core": { "project": "src/**/*.ts" },
+    "packages/pds": { "project": "src/**/*.ts" },
     "packages/cli": {
       "project": "src/**/*.ts",
       "ignoreDependencies": ["blogwright-build-agent"]

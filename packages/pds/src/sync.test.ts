@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { createNodeFileSystem } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import type { OpsContext } from '../context.js';
-import { createTestContext, makeTempDir, removeTempDir } from '../test-support.js';
+import type { PdsContext } from './context.js';
+import { createTestContext, makeTempDir, removeTempDir } from './test-support.js';
 import { postPath, tidFromPath } from './rkey.js';
 import {
   DOCUMENT_COLLECTION,
@@ -118,7 +118,7 @@ describe('syncPds', () => {
   const ROOT = '/repo';
   const HELLO_POST = `---\ntitle: 'Hello'\ndescription: 'First.'\npubDate: 2026-06-20\n---\n\nHi.\n`;
 
-  async function ctx(): Promise<OpsContext> {
+  async function ctx(): Promise<PdsContext> {
     const c = createTestContext({
       env: 'production',
       domain: 'example.com',
@@ -132,7 +132,7 @@ describe('syncPds', () => {
     return async () => ({ did, repo });
   }
 
-  async function initialise(c: OpsContext, uri = PUB_URI, did = DID): Promise<void> {
+  async function initialise(c: PdsContext, uri = PUB_URI, did = DID): Promise<void> {
     await c.ports.fs.writeText(
       `${ROOT}/src/data/atproto.json`,
       JSON.stringify({ did, publicationUri: uri }),
