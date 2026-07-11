@@ -6,7 +6,7 @@
 
 import { zipSync, type Zippable } from 'fflate';
 
-import type { FileSystem } from 'blogwright-core';
+import { FileNotFoundError, type FileSystem } from 'blogwright-core';
 
 import type { Ports } from './ports.js';
 
@@ -29,6 +29,7 @@ export async function listRepoFiles(
   ports: Pick<Ports, 'vcs' | 'fs'>,
   cwd: string,
   ignore: string[],
+  include: string[] = [],
 ): Promise<string[]> {
   const files = await ports.vcs.listFiles(cwd);
   // An ignore entry matches an exact path or a directory boundary — "dist"
@@ -42,7 +43,37 @@ export async function listRepoFiles(
   const present = await Promise.all(
     kept.map(async (f) => ((await ports.fs.exists(`${cwd}/${f}`)) ? f : null)),
   );
-  return present.filter((f): f is string => f !== null);
+  const all = new Set(present.filter((f): f is string => f !== null));
+  for (const entry of include) {
+    for (const f of await includedFiles(ports.fs, cwd, entry)) all.add(f);
+  }
+  return [...all];
+}
+
+/**
+ * Expand one `sourceInclude` entry (gitignored pre-deploy artifacts) into
+ * repo-relative files. A missing or empty path is a hard error: it means the
+ * pre-deploy build (e.g. `just wasm`) did not run, and shipping without the
+ * artifacts would deploy a broken site.
+ */
+async function includedFiles(
+  fs: FileSystem,
+  cwd: string,
+  entry: string,
+): Promise<string[]> {
+  const rel = entry.replace(/\/+$/, '');
+  const abs = `${cwd}/${rel}`;
+  try {
+    const listed = await fs.listFiles(abs);
+    if (listed.length === 0) throw new FileNotFoundError(abs);
+    return listed.map((f) => `${rel}/${f}`).sort();
+  } catch (err) {
+    if (err instanceof FileNotFoundError && (await fs.exists(abs))) return [rel]; // a single file
+    throw new Error(
+      `sourceInclude path "${entry}" is missing or empty — run the pre-deploy build that produces it before deploying`,
+      { cause: err },
+    );
+  }
 }
 
 /**

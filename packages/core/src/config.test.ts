@@ -54,6 +54,8 @@ describe('parseConfig', () => {
       publicDir: 'public',
       content: 'src/content/blog',
       atprotoJson: 'src/data/atproto.json',
+      app: '.',
+      dist: 'dist',
     });
   });
 
@@ -115,6 +117,34 @@ describe('parseConfig', () => {
     expect(() =>
       parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "nope" } }')),
     ).toThrow(/URL/);
+  });
+});
+
+describe('deployment shape config', () => {
+  it('defaults app/dist/spa/sourceInclude for a stock repo-root site', () => {
+    const cfg = parseConfig(withSite('{}'));
+    expect(cfg.paths.app).toBe('.');
+    expect(cfg.paths.dist).toBe('dist');
+    expect(cfg.spa).toBe(false);
+    expect(cfg.sourceInclude).toEqual([]);
+  });
+
+  it('accepts a monorepo layout and SPA mode', () => {
+    const cfg = parseConfig(
+      withSite('{ "spa": true, "paths": { "app": "web", "dist": "web/build" }, "sourceInclude": ["web/src/lib/pkg/"] }'),
+    );
+    expect(cfg.paths.app).toBe('web');
+    expect(cfg.paths.dist).toBe('web/build');
+    expect(cfg.spa).toBe(true);
+    expect(cfg.sourceInclude).toEqual(['web/src/lib/pkg/']);
+  });
+
+  it('rejects escaping or absolute app/dist/sourceInclude paths', () => {
+    expect(() => parseConfig(withSite('{ "paths": { "app": "../up" } }'))).toThrow(/paths.app/);
+    expect(() => parseConfig(withSite('{ "paths": { "dist": "/abs" } }'))).toThrow(/paths.dist/);
+    expect(() => parseConfig(withSite('{ "sourceInclude": ["a/../b"] }'))).toThrow(
+      /sourceInclude/,
+    );
   });
 });
 

@@ -44,6 +44,39 @@ describe('listRepoFiles', () => {
     expect(files).toEqual(['dist-notes.md', 'distribution/plan.md']);
   });
 
+  it('adds sourceInclude artifacts the VCS ignores, sorted and deduplicated', async () => {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
+      vcs: fakeVcs(['src/index.ts']),
+      fs: createMemoryFileSystem({
+        '/repo/src/index.ts': 'x',
+        '/repo/web/pkg/b.wasm': 'bb',
+        '/repo/web/pkg/a.js': 'aa',
+      }),
+    };
+    const files = await listRepoFiles(ports, '/repo', [], ['web/pkg/']);
+    expect(files).toEqual(['src/index.ts', 'web/pkg/a.js', 'web/pkg/b.wasm']);
+  });
+
+  it('includes a single gitignored file named directly', async () => {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
+      vcs: fakeVcs([]),
+      fs: createMemoryFileSystem({ '/repo/generated/data.json': '{}' }),
+    };
+    expect(await listRepoFiles(ports, '/repo', [], ['generated/data.json'])).toEqual([
+      'generated/data.json',
+    ]);
+  });
+
+  it('fails fast when a sourceInclude path is missing (pre-deploy build not run)', async () => {
+    const ports: Pick<Ports, 'vcs' | 'fs'> = {
+      vcs: fakeVcs(['src/index.ts']),
+      fs: createMemoryFileSystem({ '/repo/src/index.ts': 'x' }),
+    };
+    await expect(listRepoFiles(ports, '/repo', [], ['web/pkg/'])).rejects.toThrow(
+      /web\/pkg\/.*pre-deploy build/,
+    );
+  });
+
   it('drops tracked files that no longer exist on disk', async () => {
     const ports: Pick<Ports, 'vcs' | 'fs'> = {
       vcs: fakeVcs(['present.txt', 'deleted.txt']),

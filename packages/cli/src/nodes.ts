@@ -543,15 +543,16 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
         acmCertificateArn: hasDomain ? String(output(ctx, 'acm-certificate').arn) : undefined,
         functionArn: String(output(ctx, 'cloudfront-function').arn),
         // Previews are served uncached (per-PR content, host-routed); staging/production
-        // keep the default cache policy. Non-preview stacks also map the S3 REST origin's
-        // 403/404 (a missing key) to the site's 404 page.
+        // keep the default cache policy. Non-preview stacks map the S3 REST origin's
+        // 403/404 (a missing key) to the site's 404 page — or, in SPA mode, to
+        // /index.html with a 200 so client-side routes deep-link correctly.
         ...(preview
           ? { cachePolicyId: CACHING_DISABLED }
           : {
               customErrorResponses: [403, 404].map((errorCode) => ({
                 errorCode,
-                responsePagePath: '/404.html',
-                responseCode: 404,
+                responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
+                responseCode: ctx.config.spa ? 200 : 404,
               })),
             }),
       });

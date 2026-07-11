@@ -84,6 +84,8 @@ async function poll(): Promise<void> {
       sitePrefix: next.sitePrefix ?? 'site/',
       bucket: BUCKET,
       region: REGION,
+      appDir: next.appDir,
+      distDir: next.distDir,
       robots: next.robots,
       sitemapBaseUrl: next.sitemapBaseUrl,
     });

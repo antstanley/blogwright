@@ -1,8 +1,9 @@
 # blogwright
 
 Full operations for a blog site on AWS: S3 + CloudFront hosting, with the site built
-inside a **Lambda MicroVM**. Works with any static site that builds via `pnpm build`
-into `dist/` (Astro, or anything Astro-shaped). The CLI talks to AWS by SigV4-signing
+inside a **Lambda MicroVM**. Works with any static site that builds via `pnpm build` —
+an Astro blog at the repo root, or a SvelteKit/Vite SPA in a monorepo subdirectory
+(see `paths.app`, `paths.dist`, and `spa` below). The CLI talks to AWS by SigV4-signing
 raw HTTP requests (`@smithy/signature-v4`) and models the infrastructure as a
 reconcilable dependency graph — no CloudFormation, no Terraform, no CDK.
 
@@ -91,6 +92,20 @@ Everything else has defaults: `microvm` sizing/lifecycle, CloudWatch `retention`
 `sourceIgnore` prefixes, `invalidationMaxPaths`, `seo` (robots/sitemap policy: production
 indexable, everything else blocked), and `paths` — override `publicDir`, `content`, and
 `atprotoJson` when the site layout differs from a stock Astro project.
+
+Non-Astro-shaped sites use three more knobs:
+
+- **`paths.app` / `paths.dist`** — where the MicroVM runs `pnpm install && pnpm build`,
+  and which output directory it publishes. A monorepo SPA might use
+  `"paths": { "app": "web", "dist": "web/build" }`.
+- **`spa`** — `true` makes CloudFront serve `/index.html` with a 200 for unknown
+  paths (client-side routing) instead of the 404 page. Applies when the
+  distribution is created.
+- **`sourceInclude`** — gitignored paths zipped into the deploy source anyway, for
+  artifacts a pre-deploy step builds outside the MicroVM (a wasm bundle, generated
+  data). Run the producing step before `blogwright deploy`; a missing or empty
+  entry fails the deploy with a pointer to it. The MicroVM image stays lean — heavy
+  toolchains (Rust, wasm-pack) live in CI, not in the builder.
 
 ## CI deploys (GitHub OIDC)
 

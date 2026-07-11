@@ -71,7 +71,7 @@ export async function deploy(ctx: OpsContext): Promise<void> {
   const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
 
-  const files = await listRepoFiles(ctx.ports, cwd, ctx.config.sourceIgnore);
+  const files = await listRepoFiles(ctx.ports, cwd, ctx.config.sourceIgnore, ctx.config.sourceInclude);
   ctx.logger.step(`zipping ${files.length} files`);
   const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
   const sourceKey = `build/${hash}.zip`;
@@ -145,7 +145,7 @@ export async function previewDeploy(ctx: OpsContext, id: string): Promise<string
   const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Preview deploy ${id} (${hash})`));
 
-  const files = await listRepoFiles(ctx.ports, cwd, ctx.config.sourceIgnore);
+  const files = await listRepoFiles(ctx.ports, cwd, ctx.config.sourceIgnore, ctx.config.sourceInclude);
   ctx.logger.step(`zipping ${files.length} files`);
   const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
   const sourceKey = `build/${hash}.zip`;

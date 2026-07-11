@@ -18,6 +18,10 @@ export interface BuildPayload {
   bucket: string;
   region: string;
   sitePrefix: string;
+  /** Directory (repo-relative) to run `pnpm install && pnpm build` in; default the repo root. */
+  appDir?: string | undefined;
+  /** Built output directory (repo-relative) to publish; default `dist`. */
+  distDir?: string | undefined;
   /** robots.txt body to publish (the CLI computes it from env + config). */
   robots?: string | undefined;
   /** When set, generate sitemap.xml from the built pages using this origin. */
@@ -29,6 +33,8 @@ export interface PendingJob {
   hash: string;
   sourceKey: string;
   sitePrefix?: string;
+  appDir?: string;
+  distDir?: string;
   robots?: string;
   sitemapBaseUrl?: string;
 }
@@ -184,6 +190,15 @@ export function contentType(path: string): string {
   return type ?? 'application/octet-stream';
 }
 
+/** Resolve a repo-relative dir, rejecting anything that escapes the work dir. */
+export function resolveWithin(workDir: string, rel: string, label: string): string {
+  const resolved = join(workDir, rel);
+  if (resolved !== workDir && !resolved.startsWith(workDir + sep)) {
+    throw new Error(`${label} "${rel}" escapes the work dir`);
+  }
+  return resolved;
+}
+
 /** Run a command, streaming combined output to the log. Rejects on non-zero exit. */
 function exec(cmd: string, args: string[], cwd: string, log: LogFn): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -268,13 +283,16 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   }
   log(`extracted ${Object.keys(files).length} files`);
 
+  // A monorepo site (config paths.app/paths.dist) builds in a subdirectory and
+  // publishes from wherever its toolchain emits; both must stay inside workDir.
+  const appDir = resolveWithin(workDir, payload.appDir ?? '.', 'appDir');
   // --prod=false: the image bakes NODE_ENV=production (right for `pnpm run build`),
   // but under it pnpm skips devDependencies — where static sites keep their build
   // tooling (astro, vite, tailwind). The site build needs the full install.
-  await exec('pnpm', ['install', '--frozen-lockfile', '--prod=false'], workDir, log);
-  await exec('pnpm', ['run', 'build'], workDir, log);
+  await exec('pnpm', ['install', '--frozen-lockfile', '--prod=false'], appDir, log);
+  await exec('pnpm', ['run', 'build'], appDir, log);
 
-  const distDir = join(workDir, 'dist');
+  const distDir = resolveWithin(workDir, payload.distDir ?? 'dist', 'distDir');
 
   // Write SEO artifacts into dist/ before the walk so they publish (and invalidate) like
   // any other page. robots.txt/sitemap.xml policy is decided by the CLI per environment.

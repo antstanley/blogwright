@@ -1,4 +1,4 @@
-import { AwsError } from 'blogwright-core';
+import { AwsError, type DistributionConfigInput } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
@@ -260,5 +260,55 @@ describe('distributionNode.update', () => {
     const { ctx, calls } = distCtx({});
     await distNode(ctx).update!(ctx);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('distributionNode SPA mode', () => {
+  function createCtx(spa: boolean) {
+    const inputs: DistributionConfigInput[] = [];
+    const ctx = createTestContext({
+      config: spa ? { spa: true } : {},
+      state: {
+        resources: {
+          oac: { id: 'oac1' },
+          'cloudfront-function': { arn: 'arn:cf:fn' },
+        },
+      },
+      clients: {
+        cloudfront: {
+          createDistribution: async (input: DistributionConfigInput) => {
+            inputs.push(input);
+            return {
+              id: 'D1',
+              arn: 'a',
+              domainName: 'd.cloudfront.net',
+              status: 'InProgress',
+              etag: 'E',
+            };
+          },
+        },
+      },
+    });
+    return { ctx, inputs };
+  }
+
+  it('maps origin 403/404 to /index.html with 200 when spa is set', async () => {
+    const { ctx, inputs } = createCtx(true);
+    const node = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    await node!.create(ctx);
+    expect(inputs[0]?.customErrorResponses).toEqual([
+      { errorCode: 403, responsePagePath: '/index.html', responseCode: 200 },
+      { errorCode: 404, responsePagePath: '/index.html', responseCode: 200 },
+    ]);
+  });
+
+  it('keeps the 404 page mapping by default', async () => {
+    const { ctx, inputs } = createCtx(false);
+    const node = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    await node!.create(ctx);
+    expect(inputs[0]?.customErrorResponses).toEqual([
+      { errorCode: 403, responsePagePath: '/404.html', responseCode: 404 },
+      { errorCode: 404, responsePagePath: '/404.html', responseCode: 404 },
+    ]);
   });
 });

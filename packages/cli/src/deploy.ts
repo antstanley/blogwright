@@ -182,7 +182,16 @@ export async function runBuild(
     await ctx.clients.s3.putObject(
       ctx.names.bucket,
       pendingKey,
-      JSON.stringify({ hash: opts.hash, sourceKey: opts.sourceKey, sitePrefix, ...seo }),
+      JSON.stringify({
+        hash: opts.hash,
+        sourceKey: opts.sourceKey,
+        sitePrefix,
+        // Repo-relative build cwd and output dir (config paths.app/paths.dist);
+        // older agents ignore unknown fields and use their root/dist defaults.
+        appDir: ctx.config.paths.app,
+        distDir: ctx.config.paths.dist,
+        ...seo,
+      }),
       'application/json',
     );
     // Confirm the MicroVM actually reached RUNNING (a FAILED launch must not fall through

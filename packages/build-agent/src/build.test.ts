@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { contentType, generateSitemap, invalidationPaths } from './build.js';
+import { contentType, generateSitemap, invalidationPaths, resolveWithin } from './build.js';
 
 describe('invalidationPaths', () => {
   it('maps a plain asset to its URL path', () => {
@@ -74,5 +74,20 @@ describe('generateSitemap', () => {
     // Trailing slash on base is normalised (no double slash).
     expect(xml).not.toContain('example.com//');
     expect(xml.startsWith('<?xml')).toBe(true);
+  });
+});
+
+describe('resolveWithin', () => {
+  const WORK = '/tmp/build-x';
+
+  it('resolves the root and nested app/dist dirs', () => {
+    expect(resolveWithin(WORK, '.', 'appDir')).toBe(WORK);
+    expect(resolveWithin(WORK, 'web', 'appDir')).toBe(`${WORK}/web`);
+    expect(resolveWithin(WORK, 'web/build', 'distDir')).toBe(`${WORK}/web/build`);
+  });
+
+  it('rejects paths that escape the work dir', () => {
+    expect(() => resolveWithin(WORK, '../elsewhere', 'appDir')).toThrow(/escapes/);
+    expect(() => resolveWithin(WORK, 'web/../../up', 'distDir')).toThrow(/escapes/);
   });
 });

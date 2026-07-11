@@ -56,6 +56,13 @@ export interface PathsConfig {
   content: string;
   /** JSON file the site imports to render its document <link> tags. */
   atprotoJson: string;
+  /**
+   * Directory the MicroVM builds in (`pnpm install && pnpm build` runs here).
+   * "." for an app at the repo root; "web" for a monorepo subdirectory.
+   */
+  app: string;
+  /** Built output directory the MicroVM publishes, relative to the repo root. */
+  dist: string;
 }
 
 export interface OpsConfig {
@@ -78,12 +85,26 @@ export interface OpsConfig {
   };
   /** Extra path prefixes excluded from the source zip (on top of .gitignore). */
   sourceIgnore: string[];
+  /**
+   * Paths zipped into the deploy source even when gitignored — for artifacts a
+   * pre-deploy step builds outside the MicroVM (a wasm bundle, generated
+   * assets). Each entry must exist and be non-empty at deploy time, so a
+   * forgotten pre-build fails fast instead of shipping a broken site.
+   */
+  sourceInclude: string[];
   /** CloudFront default root object. */
   defaultRootObject: string;
   /** If more than this many paths change in a deploy, invalidate `/*` instead. */
   invalidationMaxPaths: number;
   /** GitHub `owner/repo`, used to scope the preview stack's OIDC deploy role. */
   githubRepo?: string | undefined;
+  /**
+   * Single-page app mode: CloudFront serves /index.html with a 200 for
+   * unknown paths (client-side routing) instead of the 404 page. Applies to
+   * the main distribution at creation; previews are unaffected (their error
+   * responses cannot be host-routed).
+   */
+  spa: boolean;
   /** robots.txt / sitemap.xml behaviour (environment-aware defaults). */
   seo: SeoConfig;
   /** standard.site publishing to the owner's AT Protocol PDS; disabled when absent. */
@@ -109,13 +130,17 @@ export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
     cloudfrontDays: 90,
   },
   sourceIgnore: ['.jj/', '.git/', 'node_modules/', 'dist/', '.astro/'],
+  sourceInclude: [],
   defaultRootObject: 'index.html',
   invalidationMaxPaths: 1000,
+  spa: false,
   seo: { robots: 'auto', sitemap: 'auto' },
   paths: {
     publicDir: 'public',
     content: 'src/content/blog',
     atprotoJson: 'src/data/atproto.json',
+    app: '.',
+    dist: 'dist',
   },
 };
 
@@ -265,6 +290,21 @@ function validateConfig(cfg: OpsConfig): void {
   const sitemapModes = ['auto', 'on', 'off'];
   if (!sitemapModes.includes(cfg.seo.sitemap)) {
     throw new Error(`config.seo.sitemap must be one of ${sitemapModes.join(', ')}`);
+  }
+  for (const entry of cfg.sourceInclude) {
+    if (entry.startsWith('/') || entry.split('/').includes('..')) {
+      throw new Error(
+        `config.sourceInclude entries must be repo-relative without "..", got "${entry}"`,
+      );
+    }
+  }
+  for (const [key, value] of [
+    ['app', cfg.paths.app],
+    ['dist', cfg.paths.dist],
+  ] as const) {
+    if (!value || value.startsWith('/') || value.split('/').includes('..')) {
+      throw new Error(`config.paths.${key} must be repo-relative without "..", got "${value}"`);
+    }
   }
   if (cfg.pds) {
     if (!cfg.pds.name?.trim()) throw new Error('config.pds.name is required');
