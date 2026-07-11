@@ -56,30 +56,40 @@ function startBuild(payload: BuildPayload): void {
  * per tick — multiple targets (concurrent PR previews) each have their own key. The
  * MicroVM's ambient IMDS credentials are the build role, which holds the site-write perms.
  */
+let polling = false;
+
 async function poll(): Promise<void> {
-  if (!s3 || !BUCKET || status.state !== 'idle') return;
-  pollCount += 1;
-  const diag = pollCount % 10 === 1;
-  if (diag) record(credsLine());
-  let jobs: PendingJob[];
+  // The re-entrancy guard closes a check-then-act race: without it, a slow
+  // fetchPendingJobs lets a second interval tick pass the idle check, and the
+  // loser's job would be marked processed while startBuild refuses to run it.
+  if (polling || !s3 || !BUCKET || status.state !== 'idle') return;
+  polling = true;
   try {
-    jobs = await fetchPendingJobs(s3, BUCKET);
-  } catch (err) {
-    if (diag) record(`[poll] error: ${err instanceof Error ? err.message : String(err)}`);
-    return;
+    pollCount += 1;
+    const diag = pollCount % 10 === 1;
+    if (diag) record(credsLine());
+    let jobs: PendingJob[];
+    try {
+      jobs = await fetchPendingJobs(s3, BUCKET);
+    } catch (err) {
+      if (diag) record(`[poll] error: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    const next = jobs.find((j) => !processed.has(j.hash));
+    if (!next || status.state !== 'idle') return;
+    processed.add(next.hash);
+    startBuild({
+      hash: next.hash,
+      sourceKey: next.sourceKey,
+      sitePrefix: next.sitePrefix ?? 'site/',
+      bucket: BUCKET,
+      region: REGION,
+      robots: next.robots,
+      sitemapBaseUrl: next.sitemapBaseUrl,
+    });
+  } finally {
+    polling = false;
   }
-  const next = jobs.find((j) => !processed.has(j.hash));
-  if (!next) return;
-  processed.add(next.hash);
-  startBuild({
-    hash: next.hash,
-    sourceKey: next.sourceKey,
-    sitePrefix: next.sitePrefix ?? 'site/',
-    bucket: BUCKET,
-    region: REGION,
-    robots: next.robots,
-    sitemapBaseUrl: next.sitemapBaseUrl,
-  });
 }
 
 function json(res: ServerResponse, code: number, body: unknown): void {

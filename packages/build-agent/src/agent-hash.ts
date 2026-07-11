@@ -31,13 +31,22 @@ async function collectSource(
  */
 export async function agentSourceHash(dir: string): Promise<string> {
   const coreDir = join(dir, '..', 'core');
+  const rootDir = join(dir, '..', '..');
   const inputs = [
     ...(await collectSource(join(dir, 'src'), 'agent/src')),
     ...(await collectSource(join(coreDir, 'src'), 'core/src')),
     { label: 'agent/Dockerfile', abs: join(dir, 'Dockerfile') },
     { label: 'agent/package.json', abs: join(dir, 'package.json') },
+    // The bundler config, compiler settings, and lockfile all shape the emitted
+    // server.js — a dependency bump within range must produce a new hash, or a
+    // changed agent ships under an unchanged image key and is never rebuilt.
+    { label: 'agent/rolldown.config.ts', abs: join(dir, 'rolldown.config.ts') },
+    { label: 'agent/tsconfig.json', abs: join(dir, 'tsconfig.json') },
     { label: 'core/package.json', abs: join(coreDir, 'package.json') },
-  ].sort((a, b) => a.label.localeCompare(b.label));
+    { label: 'workspace/tsconfig.base.json', abs: join(rootDir, 'tsconfig.base.json') },
+    { label: 'workspace/pnpm-lock.yaml', abs: join(rootDir, 'pnpm-lock.yaml') },
+    // Codepoint sort, not localeCompare: collation must not depend on host locale/ICU.
+  ].sort((a, b) => (a.label < b.label ? -1 : 1));
 
   const h = createHash('sha256');
   for (const { label, abs } of inputs) {

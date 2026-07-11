@@ -268,7 +268,10 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   }
   log(`extracted ${Object.keys(files).length} files`);
 
-  await exec('pnpm', ['install', '--frozen-lockfile'], workDir, log);
+  // --prod=false: the image bakes NODE_ENV=production (right for `pnpm run build`),
+  // but under it pnpm skips devDependencies — where static sites keep their build
+  // tooling (astro, vite, tailwind). The site build needs the full install.
+  await exec('pnpm', ['install', '--frozen-lockfile', '--prod=false'], workDir, log);
   await exec('pnpm', ['run', 'build'], workDir, log);
 
   const distDir = join(workDir, 'dist');
