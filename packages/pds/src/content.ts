@@ -4,7 +4,11 @@ import type { FileSystem } from 'blogwright-core';
 
 /** A publishable blog post, as enumerated from the Astro content collection. */
 export interface PostMeta {
-  /** Content-collection id: the file path under src/content/blog minus `.md`. */
+  /**
+   * Content-collection id: frontmatter `slug` when set, else the file path
+   * under the content dir minus its `.md`/`.mdx` extension and any trailing
+   * `/index` segment — matching the id Astro's glob loader produces.
+   */
   slug: string;
   title: string;
   description: string;
@@ -42,7 +46,10 @@ export function parseFrontmatter(source: string, file: string): Record<string, s
 
 /**
  * Enumerate publishable posts from the content collection, mirroring the Astro
- * build: slug = file path minus `.md` (the glob-loader id), drafts excluded.
+ * glob-loader ids: `.md`/`.mdx` files, a frontmatter `slug` wins outright, a
+ * trailing `/index` segment is dropped, drafts excluded. (Astro additionally
+ * github-slugifies unusual path segments — keep file names lowercase-kebab, as
+ * the rkey derived here must match the id the site builds its link tags from.)
  */
 export async function listPublishablePosts(
   fs: FileSystem,
@@ -53,8 +60,9 @@ export async function listPublishablePosts(
   const posts: PostMeta[] = [];
   for (const file of await fs.listFiles(dir)) {
     const rel = file.replaceAll('\\', '/');
-    if (!rel.endsWith('.md')) continue;
-    const slug = rel.slice(0, -'.md'.length);
+    if (!/\.mdx?$/.test(rel)) continue;
+    const base = rel.replace(/\.mdx?$/, '');
+    const pathId = base.endsWith('/index') ? base.slice(0, -'/index'.length) : base;
     const fields = parseFrontmatter(await fs.readText(join(dir, file)), rel);
     if (fields.draft === 'true') continue;
     for (const key of REQUIRED_FIELDS) {
@@ -65,7 +73,7 @@ export async function listPublishablePosts(
       throw new Error(`${rel}: invalid pubDate "${fields.pubDate}"`);
     }
     posts.push({
-      slug,
+      slug: fields.slug || pathId,
       title: fields.title as string,
       description: fields.description as string,
       pubDate,

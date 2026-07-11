@@ -73,6 +73,24 @@ describe('listPublishablePosts', () => {
     expect(posts.map((p) => p.slug)).toEqual(['series/part-one']);
   });
 
+  it('includes .mdx posts, strips a trailing /index, and honours a frontmatter slug', async () => {
+    const fs = createMemoryFileSystem({
+      [`${CONTENT_DIR}/series/part-one/index.md`]: postFile(
+        `title: 'Part one'\ndescription: 'd'\npubDate: 2026-06-20`,
+      ),
+      [`${CONTENT_DIR}/component-post.mdx`]: postFile(
+        `title: 'MDX'\ndescription: 'd'\npubDate: 2026-06-21`,
+      ),
+      [`${CONTENT_DIR}/renamed.md`]: postFile(
+        `title: 'Renamed'\ndescription: 'd'\npubDate: 2026-06-22\nslug: my-custom-slug`,
+      ),
+    });
+
+    const slugs = (await listPublishablePosts(fs, ROOT)).map((p) => p.slug);
+
+    expect(slugs).toEqual(['component-post', 'my-custom-slug', 'series/part-one']);
+  });
+
   it('errors clearly on missing required fields and bad dates', async () => {
     const missingField = createMemoryFileSystem({
       [`${CONTENT_DIR}/bad.md`]: postFile(`title: 'No description'\npubDate: 2026-06-20`),

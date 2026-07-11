@@ -129,6 +129,16 @@ export async function init(
 
   const record = publicationRecord(pds, `https://${ctx.domain}`);
   const existingUri = await readWellKnownUri(ctx.ports.fs, root, ctx.config);
+  if (existingUri && !existingUri.startsWith(`at://${did}/`)) {
+    // A committed well-known from a fork or an account migration: adopting it
+    // would publish document records that point at a publication this account
+    // does not own, silently breaking standard.site verification.
+    throw new Error(
+      `${wellKnownPath(ctx.config)} points at ${existingUri}, which belongs to a different ` +
+        `account than ${did} — delete the file to create a fresh publication, or log in ` +
+        `with the owning account`,
+    );
+  }
   let publicationUri: string;
   if (existingUri) {
     await repo.putRecord(PUBLICATION_COLLECTION, rkeyFromUri(existingUri), record);

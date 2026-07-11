@@ -47,7 +47,7 @@ function ctx(
 async function markInitialised(c: PdsContext): Promise<void> {
   await c.ports.fs.writeText(
     `${ROOT}/public/.well-known/site.standard.publication`,
-    'at://x/p/r\n',
+    'at://did:plc:me/site.standard.publication/r\n',
   );
 }
 
@@ -145,6 +145,25 @@ describe('init', () => {
       async () => undefined,
     );
     expect(puts).toEqual(['site.standard.publication/r']);
+  });
+
+  it('refuses a committed well-known that belongs to a different account', async () => {
+    const c = ctx('production');
+    await c.ports.fs.writeText(
+      `${ROOT}/public/.well-known/site.standard.publication`,
+      'at://did:plc:someone-else/site.standard.publication/r\n',
+    );
+    const { repo, puts } = repoStub();
+
+    await expect(
+      init(
+        c,
+        ROOT,
+        async () => ({ did: 'did:plc:me', repo }),
+        async () => undefined,
+      ),
+    ).rejects.toThrow(/different\s+account/);
+    expect(puts).toEqual([]);
   });
 
   it('writes real files through the node adapter', async () => {

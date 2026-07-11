@@ -137,7 +137,13 @@ export async function syncPublication(
   if (existing && !recordsDiffer(existing.value, desired, PUBLICATION_DIFF_FIELDS)) {
     return 'unchanged';
   }
-  await client.putRecord(PUBLICATION_COLLECTION, rkey, desired);
+  // Preserve preferences the owner set out-of-band (e.g. showInDiscover off in
+  // a standard.site client) — a config-driven update must not clobber them.
+  const next =
+    existing && existing.value.preferences !== undefined
+      ? { ...desired, preferences: existing.value.preferences }
+      : desired;
+  await client.putRecord(PUBLICATION_COLLECTION, rkey, next);
   return 'updated';
 }
 

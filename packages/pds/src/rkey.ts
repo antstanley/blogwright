@@ -23,9 +23,17 @@ export const tidFromPath = (path: string): string => {
   let tid: bigint;
   if (dateStr) {
     const date = new Date(dateStr);
-    const micros = (BigInt(date.getTime()) * 1000n) & ((1n << 53n) - 1n);
-    const clockId = hashBits(path, 10);
-    tid = (micros << 10n) | clockId;
+    if (Number.isNaN(date.getTime())) {
+      // A date-like digit pattern that is not a real date (e.g. a product
+      // slug "sku-3456-78-90"). The reference implementation throws here, so
+      // no existing record can hold a date-derived TID for such a path —
+      // falling back to the whole-path hash cannot diverge from live rkeys.
+      tid = hashBits(path, 63);
+    } else {
+      const micros = (BigInt(date.getTime()) * 1000n) & ((1n << 53n) - 1n);
+      const clockId = hashBits(path, 10);
+      tid = (micros << 10n) | clockId;
+    }
   } else {
     tid = hashBits(path, 63);
   }

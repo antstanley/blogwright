@@ -27,6 +27,18 @@ describe('tidFromPath', () => {
     }
   });
 
+  it('falls back to the path hash for date-like patterns that are not real dates', () => {
+    // The reference implementation throws RangeError(BigInt NaN) here, so no
+    // live record can depend on these paths — the hash fallback is safe and
+    // must stay deterministic.
+    const a = tidFromPath('/posts/sku-3456-78-90/');
+    const b = tidFromPath('/posts/2019-12-32-retro/');
+    expect(a).toMatch(/^[2-7a-z]{13}$/);
+    expect(b).toMatch(/^[2-7a-z]{13}$/);
+    expect(a).not.toBe(b);
+    expect(tidFromPath('/posts/sku-3456-78-90/')).toBe(a);
+  });
+
   it('rejects an effectively empty path', () => {
     expect(() => tidFromPath('///')).toThrow(/empty path/);
   });

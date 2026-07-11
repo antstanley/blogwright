@@ -112,6 +112,22 @@ describe('syncPublication', () => {
     expect(await syncPublication(repo, { ...desired, name: 'New' }, PUB_URI)).toBe('updated');
     expect(repo.writes).toHaveLength(2);
   });
+
+  it('preserves preferences set out-of-band when pushing a config-driven update', async () => {
+    const repo = new StubRepo();
+    await syncPublication(repo, desired, PUB_URI);
+    const key = `${PUBLICATION_COLLECTION}/3abc`;
+    const stored = repo.records.get(key);
+    repo.records.set(key, {
+      ...stored!,
+      value: { ...stored!.value, preferences: { showInDiscover: false } },
+    });
+
+    await syncPublication(repo, { ...desired, name: 'Renamed' }, PUB_URI);
+
+    const updated = repo.records.get(key)!.value as { preferences: { showInDiscover: boolean } };
+    expect(updated.preferences).toEqual({ showInDiscover: false });
+  });
 });
 
 describe('syncPds', () => {
