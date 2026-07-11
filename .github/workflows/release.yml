@@ -1,0 +1,181 @@
+name: Release
+
+# Tag-driven, staged npm publishing (modeled on antstanley/oidc-exchange):
+# pushing v<x>.<y>.<z> validates versions, stages blogwright-core,
+# blogwright-pds, and blogwright to npm via OIDC trusted publishing, and cuts a
+# GitHub Release. Staged packages are NOT live until approved out-of-band
+# (`npm stage approve` or the npmjs staged-packages UI), so the trusted
+# publisher can be restricted to stage-publish only. No npm token anywhere.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Extract and validate version
+        id: extract
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          for pkg in core pds cli; do
+            PKG_VERSION=$(jq -r '.version' "packages/${pkg}/package.json")
+            if [ "$PKG_VERSION" != "$VERSION" ]; then
+              echo "::error::packages/${pkg}/package.json version ($PKG_VERSION) does not match tag ($VERSION)"
+              exit 1
+            fi
+          done
+          echo "All package versions match: $VERSION"
+
+      - name: Preflight — which packages already have this version
+        # Informational: the stage steps skip already-published packages
+        # individually, so a re-run only stages what is still missing.
+        env:
+          VERSION: ${{ steps.extract.outputs.version }}
+        run: |
+          for name in blogwright-core blogwright-pds blogwright; do
+            if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
+              echo "${name}@${VERSION} already published (its stage step will skip)"
+            else
+              echo "${name}@${VERSION} not on the registry yet"
+            fi
+          done
+
+  publish-npm:
+    name: Stage packages to npm
+    needs: validate
+    # Only this job is granted OIDC token-minting rights, so publish
+    # credentials are never exposed to build or test code.
+    permissions:
+      id-token: write
+      contents: read
+    environment: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Upgrade npm for the `npm stage` command
+        # Node 24's bundled npm has OIDC trusted publishing but predates
+        # `npm stage` (staged publishing); install a newer npm.
+        run: npm install -g npm@latest
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - name: Validate package metadata (publint)
+        run: |
+          set -euo pipefail
+          for pkg in core pds cli; do
+            (cd "packages/${pkg}" && npx --yes publint)
+          done
+
+      - name: Validate type definitions (arethetypeswrong)
+        # --profile esm-only: every package is ESM-only (node >= 22); CJS
+        # consumers are unsupported, so CJS resolution modes are not failures.
+        run: |
+          set -euo pipefail
+          for pkg in core pds cli; do
+            (cd "packages/${pkg}" && npx --yes @arethetypeswrong/cli --pack --profile esm-only)
+          done
+
+      # Publishes are STAGED (npm stage publish), not direct: CI uploads to
+      # npm's staging area and the release is approved out-of-band before it
+      # goes live. pnpm pack first: it rewrites the workspace:* dependency
+      # ranges to the real versions, which npm cannot do.
+      - name: Stage packages (dependency order)
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          stage() {
+            local dir="$1" name="$2" tarball="$3"
+            if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
+              echo "${name}@${VERSION} already published; skipping"
+              return
+            fi
+            echo "staging ${name}@${VERSION}"
+            (cd "${dir}" && pnpm pack --pack-destination "${RUNNER_TEMP}")
+            # Auth is GitHub OIDC trusted publishing (id-token: write +
+            # registry-url); --provenance attests the build to this commit.
+            npm stage publish --provenance --access public --ignore-scripts \
+              "${RUNNER_TEMP}/${tarball}"
+          }
+          stage packages/core blogwright-core "blogwright-core-${VERSION}.tgz"
+          stage packages/pds blogwright-pds "blogwright-pds-${VERSION}.tgz"
+          stage packages/cli blogwright "blogwright-${VERSION}.tgz"
+
+      - name: List pending staged packages (approve these to go live)
+        run: npm stage list || true
+
+  create-release:
+    name: Create GitHub Release
+    needs: [validate, publish-npm]
+    # Run unless something FAILED (a fully-published re-run still gets its release).
+    if: ${{ !cancelled() && needs.publish-npm.result != 'failure' }}
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$PREV_TAG"..HEAD)
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)")
+          fi
+          {
+            echo "changelog<<EOF"
+            echo "$CHANGELOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          tag_name: v${{ needs.validate.outputs.version }}
+          name: v${{ needs.validate.outputs.version }}
+          body: |
+            ## Changelog
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ## npm
+
+            Packages are **staged** by CI and go live once approved
+            (`npm stage approve` or the npmjs staged-packages UI):
+            `blogwright-core`, `blogwright-pds`, `blogwright`.
+
+            ```bash
+            pnpm add -D blogwright@${{ needs.validate.outputs.version }}
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

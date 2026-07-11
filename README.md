@@ -205,7 +205,24 @@ definition of done — live in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## Releasing
 
-Publishing happens from CI when a GitHub release is published (see
-`.github/workflows/publish.yml`; requires the `NPM_TOKEN` repository secret). Bump the
-versions of `packages/core` and `packages/cli` together — the CLI pins core with a
-matching semver range.
+Releases are tag-driven with **staged npm publishing** — no npm token anywhere
+(see `.github/workflows/release.yml`):
+
+1. Bump the versions of `packages/core`, `packages/pds`, and `packages/cli`
+   together (the workflow fails if any differs from the tag) and land the commit
+   on `main`.
+2. Tag it: `git tag v<x>.<y>.<z> && git push origin v<x>.<y>.<z>` (tags are the
+   one place plain git is used — jj does not author tags).
+3. CI validates versions, builds, runs the full gate set plus `publint` and
+   `arethetypeswrong`, then **stages** all three packages to npm via OIDC
+   trusted publishing with provenance, and cuts a GitHub Release with a
+   changelog.
+4. Nothing is live yet: approve the staged packages (`npm stage approve`, or
+   the staged-packages UI on npmjs.com). Re-running a tag is idempotent —
+   already-published packages are skipped.
+
+One-time setup on npmjs.com: each package (`blogwright-core`, `blogwright-pds`,
+`blogwright`) needs a Trusted Publisher pointing at this repository, the
+`release.yml` workflow, and the `publish` environment. The repository needs a
+`publish` GitHub environment (add a required reviewer there for an extra
+approval gate if wanted).
