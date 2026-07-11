@@ -72,7 +72,10 @@ export async function pollBuild(
   token: string,
 ): Promise<AgentStatus> {
   const seen = new Set<string>();
-  const deadline = Date.now() + ctx.config.microvm.maxDurationSeconds * 1000;
+  // Anchored at VM launch (startTime), like the VM's own maximumDuration —
+  // anchoring at poll start would keep polling a VM that is already dead for
+  // however long the RUNNING-wait consumed. One grace minute for log delivery.
+  const deadline = startTime + ctx.config.microvm.maxDurationSeconds * 1000 + 60_000;
   const { terminal } = ctx.ports;
   let tick = 0;
 
@@ -201,7 +204,17 @@ export async function runBuild(
       .catch(() => '');
     result = await pollBuild(ctx, opts.hash, startedAt.getTime(), endpoint, token);
   } finally {
-    await ctx.clients.microvms.terminateMicrovm(run.microvmId);
+    // The pending-job cleanup must survive a terminate failure: a leaked
+    // pending.json is the poison-the-next-image-bake hazard the launch
+    // ordering above exists to avoid. A failed terminate is only logged —
+    // the VM self-terminates at maxDuration, and the build outcome (already
+    // determined) must not be masked by a cleanup error.
+    await ctx.clients.microvms.terminateMicrovm(run.microvmId).catch((err: unknown) => {
+      ctx.logger.warn(
+        `failed to terminate MicroVM ${run.microvmId} (it will expire on its own): ` +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    });
     // Clear the job so a future MicroVM does not re-run it.
     await ctx.clients.s3.deleteObject(ctx.names.bucket, pendingKey).catch(() => undefined);
   }

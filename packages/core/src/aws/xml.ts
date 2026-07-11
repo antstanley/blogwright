@@ -46,6 +46,15 @@ export function textTag(xml: string, name: string): string | undefined {
   return inner === undefined ? undefined : decodeEntities(inner.trim());
 }
 
+/**
+ * Like {@link textTag} but verbatim — no trimming. For values where whitespace
+ * is data, like S3 object keys (a trimmed key would target a different object).
+ */
+export function rawTextTag(xml: string, name: string): string | undefined {
+  const inner = firstTag(xml, name);
+  return inner === undefined ? undefined : decodeEntities(inner);
+}
+
 /** Return the inner content of every `<name>…</name>` element. */
 export function allTags(xml: string, name: string): string[] {
   const re = new RegExp(

@@ -34,7 +34,9 @@ export class StateStore {
     // environment). A present-but-corrupt document must NOT be silently treated as empty —
     // that would cause duplicate-resource creation — so let a parse error surface.
     const text = await this.s3.getObjectText(this.bucket, stateKey(this.env));
-    if (!text) return emptyState(this.env);
+    // Strictly undefined: a present-but-empty (zero-byte) state object is
+    // corruption, not a fresh environment, and must hit the guard below.
+    if (text === undefined) return emptyState(this.env);
     try {
       return JSON.parse(text) as OpsState;
     } catch (err) {

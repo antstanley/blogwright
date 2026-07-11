@@ -156,7 +156,11 @@ export class SigningClient {
           headers: signed.headers as Record<string, string>,
           body: opts.body,
         });
-        if (response.statusCode >= 400) throw parseError(opts.service, response);
+        // Anything outside 2xx is a failure. 3xx matters: S3's region-mismatch
+        // PermanentRedirect is a 301 with no Location header, which fetch
+        // returns as final — treating it as success would report writes as
+        // stored and listings as empty against the wrong endpoint.
+        if (response.statusCode >= 300) throw parseError(opts.service, response);
         return response;
       },
       { retryable },

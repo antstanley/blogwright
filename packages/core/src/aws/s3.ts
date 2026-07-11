@@ -1,4 +1,4 @@
-import { allTags, encodeEntities, textTag } from './xml.js';
+import { allTags, encodeEntities, rawTextTag, textTag } from './xml.js';
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
 
@@ -158,7 +158,7 @@ export class S3Client {
       });
       const xml = res.text();
       for (const block of allTags(xml, 'Contents')) {
-        const key = textTag(block, 'Key');
+        const key = rawTextTag(block, 'Key');
         if (key === undefined) continue;
         out.push({
           key,

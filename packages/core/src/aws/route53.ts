@@ -1,3 +1,4 @@
+import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
 import { encodeEntities, textTag } from './xml.js';
 
@@ -66,8 +67,15 @@ export class Route53Client {
   async deleteRecord(zoneId: string, record: DnsRecord): Promise<void> {
     try {
       await this.change(zoneId, 'DELETE', record);
-    } catch {
-      // Route53 errors if the exact record doesn't exist — treat as already gone.
+    } catch (err) {
+      // Route53 rejects a DELETE whose record doesn't exactly match/exist —
+      // that (and only that) means "already gone". Throttling, auth, and other
+      // failures must surface, or a teardown leaves the record dangling while
+      // reporting success.
+      const gone =
+        err instanceof AwsError &&
+        (err.isNotFound || (err.code === 'InvalidChangeBatch' && /not found/i.test(err.message)));
+      if (!gone) throw err;
     }
   }
 }

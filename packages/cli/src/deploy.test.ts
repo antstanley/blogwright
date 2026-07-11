@@ -62,7 +62,7 @@ describe('pollBuild nudge', () => {
         },
       });
 
-      const result: AgentStatus = await pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN);
+      const result: AgentStatus = await pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN);
 
       expect(result).toEqual({ state: 'done' });
       expect(pings).toEqual([
@@ -81,7 +81,7 @@ describe('pollBuild nudge', () => {
         },
       },
     });
-    await expect(pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN)).resolves.toEqual({ state: 'done' });
+    await expect(pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN)).resolves.toEqual({ state: 'done' });
   });
 
   it('shows a live status line per cycle and clears it when the poll ends', async () => {
@@ -91,7 +91,7 @@ describe('pollBuild nudge', () => {
       ports: { terminal, ping: async () => undefined },
     });
 
-    await pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN);
+    await pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN);
 
     expect(terminal.statuses.at(-1)).toBe('');
     const shown = terminal.statuses.slice(0, -1);
@@ -111,7 +111,7 @@ describe('pollBuild nudge', () => {
       ports: { terminal, ping: async () => undefined },
     });
 
-    const result = await pollBuild(ctx, HASH, 0, ENDPOINT, TOKEN);
+    const result = await pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN);
 
     expect(result.state).toBe('failed');
     expect(terminal.statuses.at(-1)).toBe('');
@@ -127,8 +127,8 @@ describe('pollBuild nudge', () => {
         },
       },
     });
-    await pollBuild(ctx, HASH, 0, '', TOKEN);
-    await pollBuild(ctx, HASH, 0, ENDPOINT, '');
+    await pollBuild(ctx, HASH, Date.now(), '', TOKEN);
+    await pollBuild(ctx, HASH, Date.now(), ENDPOINT, '');
     expect(pinged).toBe(0);
   });
 });
