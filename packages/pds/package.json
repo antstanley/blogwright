@@ -1,6 +1,6 @@
 {
   "name": "blogwright-pds",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "sideEffects": false,
   "files": [
