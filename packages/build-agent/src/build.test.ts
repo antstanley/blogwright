@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   contentType,
   DEFAULT_CONTENT_TYPE,
+  extensionOf,
   generateSitemap,
   invalidationPaths,
   resolveWithin,
@@ -117,6 +118,27 @@ describe('contentType coverage', () => {
   it('falls back for a genuinely unknown extension', () => {
     expect(contentType('archive.tar.zst')).toBe(DEFAULT_CONTENT_TYPE);
     expect(contentType('no-extension')).toBe(DEFAULT_CONTENT_TYPE);
+  });
+});
+
+describe('extensionOf', () => {
+  it('reads the extension from the basename only', () => {
+    expect(extensionOf('site/assets/app.CSS')).toBe('css');
+    expect(extensionOf('site/a.b/index.html')).toBe('html');
+  });
+
+  it('reports no extension for extensionless files, dotfiles, and trailing dots', () => {
+    // Splitting the whole path would call these "site/license" and "site/_headers".
+    expect(extensionOf('site/LICENSE')).toBeUndefined();
+    expect(extensionOf('site/_headers')).toBeUndefined();
+    expect(extensionOf('site/.nojekyll')).toBeUndefined();
+    expect(extensionOf('site/weird.')).toBeUndefined();
+  });
+
+  it('keeps extensionless files out of the content-type map', () => {
+    // A file named exactly like an extension must not inherit that type.
+    expect(contentType('site/json')).toBe(DEFAULT_CONTENT_TYPE);
+    expect(contentType('site/LICENSE')).toBe(DEFAULT_CONTENT_TYPE);
   });
 });
 

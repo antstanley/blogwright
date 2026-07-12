@@ -228,13 +228,27 @@ export function shouldUpload(
 }
 
 /**
+ * The lowercase extension of a key, or undefined when it has none (`LICENSE`,
+ * `_headers`) — a leading dot is a dotfile, not an extension (`.nojekyll`).
+ * Splitting the whole path would treat an extensionless *key* as its own
+ * extension, which both mistypes files and produces nonsense diagnostics.
+ */
+export function extensionOf(path: string): string | undefined {
+  const base = path.split('/').pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return undefined;
+  return base.slice(dot + 1).toLowerCase();
+}
+
+/**
  * Content type for a key, or {@link DEFAULT_CONTENT_TYPE} when the extension is
- * unmapped. The default is deliberate — it makes a browser download rather than
- * mis-render an unknown payload — but a *silently* wrong header is how the
- * .webmanifest gap survived, so callers log unmapped extensions (see runBuild).
+ * unmapped or absent. The default is deliberate — it makes a browser download
+ * rather than mis-render an unknown payload — but a *silently* wrong header is
+ * how the .webmanifest gap survived, so runBuild logs unmapped extensions.
  */
 export function contentType(path: string): string {
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  const ext = extensionOf(path);
+  if (ext === undefined) return DEFAULT_CONTENT_TYPE;
   // Object.hasOwn guards against inherited keys (e.g. a file named "x.constructor"
   // would otherwise resolve to Object.prototype.constructor — a truthy function).
   const type = Object.hasOwn(CONTENT_TYPES, ext) ? CONTENT_TYPES[ext] : undefined;
@@ -379,7 +393,10 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
     const content = await readFile(file);
     const md5 = createHash('md5').update(content).digest('hex');
     const type = contentType(key);
-    if (type === DEFAULT_CONTENT_TYPE) unmapped.add(key.split('.').pop()?.toLowerCase() ?? '');
+    // Only real extensions are worth warning about: for an extensionless file
+    // (LICENSE, _headers) octet-stream is the correct answer, not a gap.
+    const ext = extensionOf(key);
+    if (type === DEFAULT_CONTENT_TYPE && ext !== undefined) unmapped.add(ext);
     if (!shouldUpload(existing.get(key), md5, payload.refresh)) continue;
     await s3.putObject(payload.bucket, key, content, type, payload.objectTags);
     changedKeys.add(key);
