@@ -161,6 +161,8 @@ export async function previewDeploy(ctx: OpsContext, id: string): Promise<string
     sitePrefix: `previews/${id}/site/`,
     target: `preview-${id}`,
     baseUrl: url,
+    // Per-PR objects carry the PR id in the environment tag (preview-pr-42).
+    objectTags: { ...ctx.tags, environment: `preview-${id}` },
   });
   ctx.logger.ok(`preview ready in ${formatDuration(Date.now() - startedAt)}: ${url}`);
   return url;

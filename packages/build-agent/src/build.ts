@@ -26,6 +26,8 @@ export interface BuildPayload {
   robots?: string | undefined;
   /** When set, generate sitemap.xml from the built pages using this origin. */
   sitemapBaseUrl?: string | undefined;
+  /** S3 object tags for the synced site files (environment/app; preview deploys carry the PR id). */
+  objectTags?: Record<string, string> | undefined;
 }
 
 /** The job document the CLI drops at s3://<bucket>/build/pending.json. */
@@ -37,6 +39,7 @@ export interface PendingJob {
   distDir?: string;
   robots?: string;
   sitemapBaseUrl?: string;
+  objectTags?: Record<string, string>;
 }
 
 export type LogFn = (line: string) => void;
@@ -324,7 +327,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
     const content = await readFile(file);
     const md5 = createHash('md5').update(content).digest('hex');
     if (existing.get(key) === md5) continue; // unchanged — skip upload + invalidation
-    await s3.putObject(payload.bucket, key, content, contentType(key));
+    await s3.putObject(payload.bucket, key, content, contentType(key), payload.objectTags);
     changedKeys.add(key);
   }
   for (const key of existing.keys()) {

@@ -1,5 +1,6 @@
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
+import type { ResourceTags } from '../tags.js';
 import { encodeEntities, textTag } from './xml.js';
 
 const API = '/2020-05-31';
@@ -112,6 +113,21 @@ export class CloudFrontClient {
       if (err instanceof AwsError && err.isNotFound) return undefined;
       throw err;
     }
+  }
+
+  /** Apply tags to a distribution (or any taggable CloudFront resource) by ARN. */
+  async tagResource(resourceArn: string, tags: ResourceTags): Promise<void> {
+    const items = Object.entries(tags)
+      .map(([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`)
+      .join('');
+    await this.client.send({
+      service: 'cloudfront',
+      method: 'POST',
+      path: `${API}/tagging`,
+      query: { Resource: resourceArn },
+      headers: { 'content-type': 'application/xml' },
+      body: `<?xml version="1.0" encoding="UTF-8"?><Tags xmlns="${XMLNS}"><Items>${items}</Items></Tags>`,
+    });
   }
 
   /** Fetch the raw DistributionConfig XML plus its ETag (needed to update/disable). */

@@ -1,4 +1,5 @@
 import { allTags, encodeEntities, rawTextTag, textTag } from './xml.js';
+import { encodeTagQuery, type ResourceTags } from '../tags.js';
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
 
@@ -94,13 +95,32 @@ export class S3Client {
     key: string,
     body: string | Uint8Array,
     contentType = 'application/octet-stream',
+    tags?: ResourceTags,
   ): Promise<void> {
     await this.client.send({
       service: 's3',
       method: 'PUT',
       path: this.objectPath(bucket, key),
-      headers: { 'content-type': contentType },
+      headers: {
+        'content-type': contentType,
+        ...(tags && Object.keys(tags).length > 0 ? { 'x-amz-tagging': encodeTagQuery(tags) } : {}),
+      },
       body,
+    });
+  }
+
+  /** Apply bucket tags (idempotent full replace). */
+  async putBucketTagging(bucket: string, tags: ResourceTags): Promise<void> {
+    const tagSet = Object.entries(tags)
+      .map(([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`)
+      .join('');
+    await this.client.send({
+      service: 's3',
+      method: 'PUT',
+      path: `/${bucket}`,
+      query: { tagging: '' },
+      headers: { 'content-type': 'application/xml' },
+      body: `<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>${tagSet}</TagSet></Tagging>`,
     });
   }
 

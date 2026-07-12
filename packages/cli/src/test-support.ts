@@ -46,6 +46,7 @@ export interface TestContextOverrides {
   logger?: Partial<Logger> | undefined;
   ports?: Partial<Ports> | undefined;
   agentDir?: string | undefined;
+  tags?: Record<string, string> | undefined;
   save?: (() => Promise<void>) | undefined;
 }
 
@@ -171,6 +172,11 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     clients,
     ports,
     agentDir: overrides.agentDir ?? TEST_AGENT_DIR,
+    // Mirrors production derivation (context.ts deriveAppTag) with '/repo' as root.
+    tags: overrides.tags ?? {
+      environment: env,
+      app: config.app ?? overrides.domain ?? config.domain ?? 'repo',
+    },
     state,
     store: new StateStore(clients.s3, names.bucket, env),
     logger: { ...NOOP_LOGGER, ...overrides.logger },

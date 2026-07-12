@@ -44,7 +44,7 @@ export async function keygen(
     pds.secretName,
     (secret) => ({ ...secret, clientKey, session: undefined }),
     // keygen is the migration entry point — a legacy app-password value is replaced
-    { replaceLegacy: true },
+    { replaceLegacy: true, tags: ctx.tags },
   );
   ctx.logger.ok(`stored private key "${kid}" in secret "${pds.secretName}"`);
 

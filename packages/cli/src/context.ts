@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -38,11 +38,29 @@ export interface OpsContext {
    * (scripts/copy-agent.mjs). Resolved at the composition root; tests inject one.
    */
   agentDir: string;
+  /**
+   * Tags applied to every AWS resource this stack creates:
+   * `environment` (the env name) and `app` (see {@link deriveAppTag}).
+   */
+  tags: Record<string, string>;
   state: OpsState;
   store: StateStore;
   logger: Logger;
   /** Persist the working state to S3. */
   save(): Promise<void>;
+}
+
+/**
+ * The `app` tag value, by precedence: the explicit `config.app`, else the
+ * site's domain, else the repo directory name — always something a human can
+ * trace back to the project from a billing or resource listing.
+ */
+export function deriveAppTag(
+  config: Pick<OpsConfig, 'app'>,
+  domain: string | undefined,
+  repoRoot: string,
+): string {
+  return config.app ?? domain ?? basename(repoRoot);
 }
 
 export interface ContextOptions {
@@ -128,6 +146,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     clients,
     ports,
     agentDir,
+    tags: { environment: opts.env, app: deriveAppTag(config, domain, root) },
     state,
     store,
     logger,

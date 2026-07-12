@@ -1,5 +1,6 @@
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
+import type { ResourceTags } from '../tags.js';
 
 const TARGET = 'secretsmanager';
 
@@ -30,7 +31,12 @@ export class SecretsManagerClient {
   }
 
   /** Create the secret, or update its value if it already exists. */
-  async upsertSecret(name: string, value: string, description?: string): Promise<void> {
+  async upsertSecret(
+    name: string,
+    value: string,
+    description?: string,
+    tags?: ResourceTags,
+  ): Promise<void> {
     // The raw API requires the idempotency token SDKs normally generate.
     try {
       await this.call('CreateSecret', {
@@ -38,6 +44,9 @@ export class SecretsManagerClient {
         SecretString: value,
         ClientRequestToken: crypto.randomUUID(),
         ...(description ? { Description: description } : {}),
+        ...(tags && Object.keys(tags).length > 0
+          ? { Tags: Object.entries(tags).map(([Key, Value]) => ({ Key, Value })) }
+          : {}),
       });
     } catch (err) {
       // Secrets Manager reports an existing secret as ResourceExistsException.

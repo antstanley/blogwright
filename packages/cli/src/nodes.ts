@@ -43,6 +43,7 @@ function bucketNode(): ResourceNode {
     },
     async create(ctx) {
       await ctx.clients.s3.createBucket(ctx.names.bucket);
+      await ctx.clients.s3.putBucketTagging(ctx.names.bucket, ctx.tags);
       await ctx.clients.s3.putPublicAccessBlock(ctx.names.bucket);
       output(ctx, 'bucket').name = ctx.names.bucket;
     },
@@ -75,7 +76,7 @@ function logGroupNode(
       return exists;
     },
     async create(ctx) {
-      await logs(ctx).ensureLogGroup(name(ctx));
+      await logs(ctx).ensureLogGroup(name(ctx), ctx.tags);
       await logs(ctx).putRetentionPolicy(name(ctx), days(ctx));
       output(ctx, id).arn = logGroupArn(ctx, name(ctx), region(ctx));
     },
@@ -145,6 +146,7 @@ function buildRoleNode(): ResourceNode {
         ctx.names.buildRole,
         LAMBDA_TRUST,
         `Builds the ${ctx.config.siteName} MicroVM image`,
+        ctx.tags,
       );
       await applyBuildRolePolicy(ctx);
       output(ctx, 'iam-build-role').arn = arn;
@@ -211,6 +213,7 @@ function execRoleNode(): ResourceNode {
         ctx.names.execRole,
         LAMBDA_TRUST,
         `Runtime role for the ${ctx.config.siteName} builder MicroVM`,
+        ctx.tags,
       );
       await applyExecRolePolicy(ctx);
       output(ctx, 'iam-exec-role').arn = arn;
@@ -395,7 +398,7 @@ function certificateNode(): ResourceNode {
       if (!arn) {
         // ACM idempotency token must match \w+ (no dashes).
         const token = `${ctx.config.siteName}${ctx.env}`.replace(/\W/g, '');
-        arn = await ctx.clients.acm.requestCertificate(certDomain, token);
+        arn = await ctx.clients.acm.requestCertificate(certDomain, token, ctx.tags);
         output(ctx, 'acm-certificate').arn = arn;
         await ctx.save();
       }
@@ -571,6 +574,7 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       out.id = dist.id;
       out.arn = dist.arn;
       out.domainName = dist.domainName;
+      await ctx.clients.cloudfront.tagResource(dist.arn, ctx.tags);
       ctx.logger.info(`  CloudFront domain: ${dist.domainName}`);
       if (ctx.domain && !preview) {
         // Preview stacks create the wildcard record themselves (preview-dns
@@ -627,6 +631,7 @@ function logDeliveryNode(): ResourceNode {
       ctx.names.deliverySource,
       distArn,
       'ACCESS_LOGS',
+      ctx.tags,
     );
     const destArn = await ctx.clients.logsUsEast1.putDeliveryDestination(
       ctx.names.deliveryDestination,
@@ -859,6 +864,7 @@ async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
       ],
     },
     `GitHub Actions ${ctx.env} deploy role`,
+    ctx.tags,
   );
   await ctx.clients.iam.putRolePolicy(roleName, `${ctx.env}-deploy`, {
     Version: '2012-10-17',

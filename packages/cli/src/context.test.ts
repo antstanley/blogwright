@@ -1,7 +1,7 @@
 import { createMemoryFileSystem } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig } from './context.js';
+import { deriveAppTag, loadConfig } from './context.js';
 
 const ROOT = '/repo';
 
@@ -51,5 +51,15 @@ describe('loadConfig', () => {
     await expect(loadConfig(fs, { env: 'production', root: ROOT })).rejects.toThrow(
       /siteName is required/,
     );
+  });
+});
+
+describe('deriveAppTag', () => {
+  it('prefers the explicit config option, then domain, then repo directory name', () => {
+    expect(deriveAppTag({ app: 'my-app' }, 'blog.example.com', '/home/x/site')).toBe('my-app');
+    expect(deriveAppTag({ app: undefined }, 'blog.example.com', '/home/x/site')).toBe(
+      'blog.example.com',
+    );
+    expect(deriveAppTag({ app: undefined }, undefined, '/home/x/site')).toBe('site');
   });
 });

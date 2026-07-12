@@ -84,7 +84,7 @@ export async function updatePdsSecret(
   secrets: SecretsStore,
   secretName: string,
   mutate: (secret: PdsSecret) => PdsSecret,
-  opts: { replaceLegacy?: boolean } = {},
+  opts: { replaceLegacy?: boolean; tags?: Record<string, string> | undefined } = {},
 ): Promise<PdsSecret> {
   const raw = await secrets.getSecretValue(secretName);
   const current: PdsSecret =
@@ -92,7 +92,8 @@ export async function updatePdsSecret(
       ? { version: 1 }
       : parsePdsSecret(raw, secretName);
   const next = mutate(current);
-  await secrets.upsertSecret(secretName, JSON.stringify(next), SECRET_DESCRIPTION);
+  // Tags apply only when the secret is first created; upsert ignores them after.
+  await secrets.upsertSecret(secretName, JSON.stringify(next), SECRET_DESCRIPTION, opts.tags);
   return next;
 }
 

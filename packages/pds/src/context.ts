@@ -29,4 +29,6 @@ export interface PdsContext {
   clients: { secrets: SecretsManagerClient };
   ports: PdsPorts;
   logger: PdsLogger;
+  /** Resource tags the host applies to created AWS resources (the secret). */
+  tags?: Record<string, string> | undefined;
 }

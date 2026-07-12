@@ -70,6 +70,11 @@ export interface OpsConfig {
   region: string;
   /** Stable slug used in every derived AWS resource name. Required. */
   siteName: string;
+  /**
+   * Value of the `app` tag applied to every created AWS resource. Falls back
+   * to the domain, then the repo directory name, when unset.
+   */
+  app?: string | undefined;
   /** Custom domain; may also be supplied via --domain. */
   domain?: string | undefined;
   /** MicroVM builder sizing / lifecycle. */

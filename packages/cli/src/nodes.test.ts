@@ -266,6 +266,7 @@ describe('distributionNode.update', () => {
 describe('distributionNode SPA mode', () => {
   function createCtx(spa: boolean) {
     const inputs: DistributionConfigInput[] = [];
+    const tagged: Array<{ arn: string; tags: Record<string, string> }> = [];
     const ctx = createTestContext({
       config: spa ? { spa: true } : {},
       state: {
@@ -286,11 +287,22 @@ describe('distributionNode SPA mode', () => {
               etag: 'E',
             };
           },
+          tagResource: async (arn: string, tags: Record<string, string>) => {
+            tagged.push({ arn, tags });
+          },
         },
       },
     });
-    return { ctx, inputs };
+    return { ctx, inputs, tagged };
   }
+
+  it('tags the distribution with environment and app on create', async () => {
+    const { ctx, tagged } = createCtx(false);
+    const node = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    await node!.create(ctx);
+    expect(tagged).toEqual([{ arn: 'a', tags: ctx.tags }]);
+    expect(ctx.tags.environment).toBe('test');
+  });
 
   it('maps origin 403/404 to /index.html with 200 when spa is set', async () => {
     const { ctx, inputs } = createCtx(true);

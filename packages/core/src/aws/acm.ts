@@ -1,5 +1,6 @@
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
+import type { ResourceTags } from '../tags.js';
 
 const TARGET = 'CertificateManager';
 
@@ -34,11 +35,18 @@ export class AcmClient {
   }
 
   /** Request a DNS-validated certificate and return its ARN. */
-  async requestCertificate(domainName: string, idempotencyToken: string): Promise<string> {
+  async requestCertificate(
+    domainName: string,
+    idempotencyToken: string,
+    tags?: ResourceTags,
+  ): Promise<string> {
     const out = await this.call<{ CertificateArn: string }>('RequestCertificate', {
       DomainName: domainName,
       ValidationMethod: 'DNS',
       IdempotencyToken: idempotencyToken,
+      ...(tags && Object.keys(tags).length > 0
+        ? { Tags: Object.entries(tags).map(([Key, Value]) => ({ Key, Value })) }
+        : {}),
     });
     return out.CertificateArn;
   }

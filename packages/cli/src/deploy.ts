@@ -178,6 +178,8 @@ export async function runBuild(
     target?: string;
     /** Canonical origin the site is served from, for robots.txt/sitemap.xml. */
     baseUrl?: string | undefined;
+    /** S3 object tags for the synced site files; defaults to the stack tags. */
+    objectTags?: Record<string, string> | undefined;
   },
 ): Promise<DeployManifest> {
   const sitePrefix = opts.sitePrefix ?? 'site/';
@@ -233,6 +235,7 @@ export async function runBuild(
         // older agents ignore unknown fields and use their root/dist defaults.
         appDir: ctx.config.paths.app,
         distDir: ctx.config.paths.dist,
+        objectTags: opts.objectTags ?? ctx.tags,
         ...seo,
       }),
       'application/json',

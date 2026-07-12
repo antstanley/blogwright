@@ -88,6 +88,12 @@ works from any subdirectory. Minimal example:
 }
 ```
 
+Every AWS resource blogwright creates is tagged: `environment` (the env name) and
+`app` — the explicit `"app"` config option, falling back to the domain, then the
+repo directory name. Site files get the same tags as S3 object tags, and preview
+deploys stamp the PR into them (`environment: preview-pr-42`), so per-PR cost and
+cleanup queries work.
+
 Everything else has defaults: `microvm` sizing/lifecycle, CloudWatch `retention`,
 `sourceIgnore` prefixes, `invalidationMaxPaths`, `seo` (robots/sitemap policy: production
 indexable, everything else blocked), and `paths` — override `publicDir`, `content`, and

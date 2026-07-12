@@ -88,6 +88,7 @@ async function poll(): Promise<void> {
       distDir: next.distDir,
       robots: next.robots,
       sitemapBaseUrl: next.sitemapBaseUrl,
+      objectTags: next.objectTags,
     });
   } finally {
     polling = false;

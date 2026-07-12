@@ -1,5 +1,6 @@
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
+import type { ResourceTags } from '../tags.js';
 
 const TARGET = 'Logs_20140328';
 
@@ -33,9 +34,12 @@ export class LogsClient {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
-  async ensureLogGroup(name: string): Promise<void> {
+  async ensureLogGroup(name: string, tags?: ResourceTags): Promise<void> {
     try {
-      await this.call('CreateLogGroup', { logGroupName: name });
+      await this.call('CreateLogGroup', {
+        logGroupName: name,
+        ...(tags && Object.keys(tags).length > 0 ? { tags } : {}),
+      });
     } catch (err) {
       if (err instanceof AwsError && err.isAlreadyExists) return;
       throw err;
@@ -84,11 +88,17 @@ export class LogsClient {
 
   // --- CloudWatch vended log delivery (used to send CloudFront access logs here) ---
 
-  async putDeliverySource(name: string, resourceArn: string, logType: string): Promise<string> {
+  async putDeliverySource(
+    name: string,
+    resourceArn: string,
+    logType: string,
+    tags?: ResourceTags,
+  ): Promise<string> {
     const out = await this.call<{ deliverySource?: { arn?: string } }>('PutDeliverySource', {
       name,
       resourceArn,
       logType,
+      ...(tags && Object.keys(tags).length > 0 ? { tags } : {}),
     });
     return out.deliverySource?.arn ?? '';
   }

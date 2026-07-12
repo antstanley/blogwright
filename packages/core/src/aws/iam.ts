@@ -1,5 +1,6 @@
 import { AwsError } from './errors.js';
 import { formEncode } from './form.js';
+import type { ResourceTags } from '../tags.js';
 import type { SigningClient } from './signer.js';
 import { allTags, textTag } from './xml.js';
 
@@ -31,11 +32,21 @@ export class IamClient {
     }
   }
 
-  /** Create a role (idempotent) and return its ARN. */
+  private tagParams(tags: ResourceTags | undefined): Record<string, string> {
+    const params: Record<string, string> = {};
+    Object.entries(tags ?? {}).forEach(([key, value], i) => {
+      params[`Tags.member.${i + 1}.Key`] = key;
+      params[`Tags.member.${i + 1}.Value`] = value;
+    });
+    return params;
+  }
+
+  /** Create a role (idempotent) and return its ARN; tags reconcile on the exists path. */
   async ensureRole(
     roleName: string,
     assumeRolePolicy: object,
     description?: string,
+    tags?: ResourceTags,
   ): Promise<string> {
     try {
       const xml = await this.call({
@@ -43,6 +54,7 @@ export class IamClient {
         RoleName: roleName,
         AssumeRolePolicyDocument: JSON.stringify(assumeRolePolicy),
         Description: description,
+        ...this.tagParams(tags),
       });
       const arn = textTag(xml, 'Arn');
       if (!arn) throw new Error('CreateRole returned no Arn');
@@ -59,6 +71,9 @@ export class IamClient {
             RoleName: roleName,
             PolicyDocument: JSON.stringify(assumeRolePolicy),
           });
+          if (tags && Object.keys(tags).length > 0) {
+            await this.call({ Action: 'TagRole', RoleName: roleName, ...this.tagParams(tags) });
+          }
           return arn;
         }
       }

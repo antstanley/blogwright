@@ -58,3 +58,30 @@ describe('IamClient.ensureRole', () => {
     expect(actions).toEqual(['CreateRole']);
   });
 });
+
+describe('IamClient.ensureRole tags', () => {
+  it('sends Tags.member params on create and TagRole on the exists path', async () => {
+    const bodies: string[] = [];
+    let phase = 0;
+    const transport: Transport = async (req) => {
+      const body = decodeURIComponent(String(req.body ?? ''));
+      bodies.push(body);
+      if (body.includes('Action=CreateRole')) return response(409, ALREADY_EXISTS);
+      if (body.includes('Action=GetRole')) return response(200, GET_ROLE);
+      phase += 1;
+      return response(200, '<ok/>');
+    };
+
+    await iamWith(transport).ensureRole('deploy', TRUST, 'd', {
+      environment: 'production',
+      app: 'blog.example.com',
+    });
+
+    expect(bodies[0]).toContain('Tags.member.1.Key=environment');
+    expect(bodies[0]).toContain('Tags.member.1.Value=production');
+    expect(bodies[0]).toContain('Tags.member.2.Key=app');
+    const tagRole = bodies.find((b) => b.includes('Action=TagRole'));
+    expect(tagRole).toContain('Tags.member.2.Value=blog.example.com');
+    expect(phase).toBeGreaterThan(0);
+  });
+});

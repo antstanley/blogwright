@@ -46,3 +46,32 @@ describe('S3Client.objectExists', () => {
     expect(await s3With(transport).objectExists('bucket', 'there')).toBe(true);
   });
 });
+
+describe('S3Client tagging', () => {
+  it('putObject sends x-amz-tagging when tags are given', async () => {
+    let headers: Record<string, string> = {};
+    const transport: Transport = async (req) => {
+      headers = req.headers;
+      return response(200, '');
+    };
+    await s3With(transport).putObject('b', 'site/index.html', 'x', 'text/html', {
+      environment: 'preview-pr-42',
+      app: 'mason',
+    });
+    expect(headers['x-amz-tagging']).toBe('environment=preview-pr-42&app=mason');
+  });
+
+  it('putBucketTagging sends an XML TagSet to ?tagging', async () => {
+    let url = '';
+    let body = '';
+    const transport: Transport = async (req) => {
+      url = req.url;
+      body = String(req.body ?? '');
+      return response(200, '');
+    };
+    await s3With(transport).putBucketTagging('b', { environment: 'staging', app: 'blog' });
+    expect(url).toContain('tagging');
+    expect(body).toContain('<Tag><Key>environment</Key><Value>staging</Value></Tag>');
+    expect(body).toContain('<Tag><Key>app</Key><Value>blog</Value></Tag>');
+  });
+});
