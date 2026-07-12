@@ -55,6 +55,11 @@ No TTY? Create the config by hand — only two fields are required:
 | `pds …` | standard.site publishing: `keygen`, `login`, `init`, `sync`, `secret status` |
 | `delete` / `destroy --yes` | Empty the live site / tear everything down |
 
+`deploy --refresh` re-uploads every file, even unchanged ones. Deploys normally
+skip content-identical files, but S3 only writes object metadata (content type,
+tags) on a PUT — so use it once after an upgrade that fixes a content type or
+adds tags, to push that metadata onto live objects.
+
 Environment defaults to `production`; pass `staging` (or anything) positionally.
 Each environment is fully isolated: its own bucket, distribution, roles, and
 state, all named `<env>-<siteName>-…`.

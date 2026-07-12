@@ -66,6 +66,11 @@ blogwright destroy --yes                    # tear everything down
 Environment defaults to `production`; pass another as the positional `[env]` or `--env`.
 Credentials are read from the ambient AWS provider chain.
 
+A deploy only re-uploads files whose content changed. S3 writes object metadata
+(content type, tags) on the PUT, so a metadata fix — an upgrade that corrects a
+content type, or newly added tags — never reaches an unchanged object. Pass
+`--refresh` once after such an upgrade to re-upload every file.
+
 Output is pretty on a TTY — live build progress, a deploy summary card, a status
 drift tree. Piped output, CI, and `--plain` get stable line-oriented text for
 machines and agents (the plain formats are a compatibility contract); `NO_COLOR`

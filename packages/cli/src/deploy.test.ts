@@ -9,7 +9,13 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
-import { microvmLogGroup, pollBuild, runMicrovmWithRetry, type AgentStatus } from './deploy.js';
+import {
+  microvmLogGroup,
+  pollBuild,
+  runBuild,
+  runMicrovmWithRetry,
+  type AgentStatus,
+} from './deploy.js';
 import { createTestContext } from './test-support.js';
 
 function ctxWith(resources: Record<string, ResourceOutputs>): OpsContext {
@@ -217,5 +223,53 @@ describe('runMicrovmWithRetry', () => {
     await expect(runMicrovmWithRetry(ctx, INPUT, [1, 1])).rejects.toThrow(/AccessDenied/);
     expect(attempts()).toBe(1);
     expect(warns).toHaveLength(0);
+  });
+});
+
+describe('runBuild pending job', () => {
+  /** Capture the pending-job document runBuild writes for the agent. */
+  async function pendingJobFor(opts: { refresh?: boolean }): Promise<Record<string, unknown>> {
+    const puts: Array<{ key: string; body: string }> = [];
+    const ctx = createTestContext({
+      state: {
+        resources: {
+          'microvm-image': { arn: 'arn:img' },
+          'iam-exec-role': { arn: 'arn:role' },
+        },
+      },
+      clients: {
+        s3: {
+          putObject: async (_b: string, key: string, body: string | Uint8Array) => {
+            puts.push({ key, body: typeof body === 'string' ? body : '' });
+          },
+          deleteObject: async () => undefined,
+          objectExists: async () => true, // completion signal → poll returns immediately
+        },
+        microvms: {
+          runMicrovm: async () => ({ microvmId: 'vm-1', state: 'PENDING', endpoint: '' }),
+          getMicrovm: async () => ({ microvmId: 'vm-1', state: 'RUNNING', endpoint: 'e' }),
+          createAuthToken: async () => 'tok',
+          terminateMicrovm: async () => undefined,
+        },
+        logs: { filterEvents: async () => [] },
+      },
+    });
+
+    await runBuild(ctx, { hash: 'abc123', sourceKey: 'build/abc123.zip', ...opts });
+
+    const pending = puts.find((p) => p.key.startsWith('build/pending/'));
+    if (!pending) throw new Error('no pending job written');
+    return JSON.parse(pending.body) as Record<string, unknown>;
+  }
+
+  it('omits refresh by default', async () => {
+    const job = await pendingJobFor({});
+    expect(job.refresh).toBeUndefined();
+    expect(job.hash).toBe('abc123');
+  });
+
+  it('passes refresh through so the agent re-uploads unchanged files', async () => {
+    const job = await pendingJobFor({ refresh: true });
+    expect(job.refresh).toBe(true);
   });
 });

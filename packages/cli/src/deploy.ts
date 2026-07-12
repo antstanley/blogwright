@@ -180,6 +180,8 @@ export async function runBuild(
     baseUrl?: string | undefined;
     /** S3 object tags for the synced site files; defaults to the stack tags. */
     objectTags?: Record<string, string> | undefined;
+    /** Re-upload every file, so metadata-only fixes (content type, tags) land. */
+    refresh?: boolean | undefined;
   },
 ): Promise<DeployManifest> {
   const sitePrefix = opts.sitePrefix ?? 'site/';
@@ -236,6 +238,7 @@ export async function runBuild(
         appDir: ctx.config.paths.app,
         distDir: ctx.config.paths.dist,
         objectTags: opts.objectTags ?? ctx.tags,
+        ...(opts.refresh ? { refresh: true } : {}),
         ...seo,
       }),
       'application/json',

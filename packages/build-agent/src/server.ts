@@ -89,6 +89,7 @@ async function poll(): Promise<void> {
       robots: next.robots,
       sitemapBaseUrl: next.sitemapBaseUrl,
       objectTags: next.objectTags,
+      refresh: next.refresh,
     });
   } finally {
     polling = false;

@@ -28,6 +28,12 @@ export interface BuildPayload {
   sitemapBaseUrl?: string | undefined;
   /** S3 object tags for the synced site files (environment/app; preview deploys carry the PR id). */
   objectTags?: Record<string, string> | undefined;
+  /**
+   * Re-upload every built file even when its content is unchanged. S3 metadata
+   * (content type, object tags) is only written on a PUT, so a metadata fix
+   * never reaches objects the ETag comparison would otherwise skip.
+   */
+  refresh?: boolean | undefined;
 }
 
 /** The job document the CLI drops at s3://<bucket>/build/pending.json. */
@@ -40,6 +46,7 @@ export interface PendingJob {
   robots?: string;
   sitemapBaseUrl?: string;
   objectTags?: Record<string, string>;
+  refresh?: boolean;
 }
 
 export type LogFn = (line: string) => void;
@@ -183,14 +190,55 @@ const CONTENT_TYPES: Record<string, string> = {
   markdown: 'text/markdown; charset=utf-8',
   map: 'application/json',
   wasm: 'application/wasm',
+  // PWA manifest. Chrome parses it whatever the type, which is why serving it as
+  // application/octet-stream went unnoticed; stricter consumers reject that.
+  webmanifest: 'application/manifest+json',
+  jsonld: 'application/ld+json',
+  // Fonts beyond woff/woff2 (a site may still ship legacy faces).
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  // Media. Deliberately no `ts` entry (video/mp2t): in a site's build output a
+  // .ts file is far more likely stray TypeScript than an HLS segment, and
+  // mistyping source is worse than leaving a segment as octet-stream.
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  m3u8: 'application/vnd.apple.mpegurl',
+  mp3: 'audio/mpeg',
+  vtt: 'text/vtt; charset=utf-8',
+  pdf: 'application/pdf',
+  csv: 'text/csv; charset=utf-8',
 };
 
+/** Served for any extension the map does not cover; see {@link contentType}. */
+export const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
+
+/**
+ * Whether a built file must be PUT again. Content-identical files are normally
+ * skipped (that is what keeps a redeploy cheap and its invalidation narrow),
+ * but S3 writes object metadata — content type, tags — only on a PUT, so a
+ * metadata fix would never reach them. `refresh` forces the upload.
+ */
+export function shouldUpload(
+  existingEtag: string | undefined,
+  md5: string,
+  refresh: boolean | undefined,
+): boolean {
+  if (refresh) return true;
+  return existingEtag !== md5;
+}
+
+/**
+ * Content type for a key, or {@link DEFAULT_CONTENT_TYPE} when the extension is
+ * unmapped. The default is deliberate — it makes a browser download rather than
+ * mis-render an unknown payload — but a *silently* wrong header is how the
+ * .webmanifest gap survived, so callers log unmapped extensions (see runBuild).
+ */
 export function contentType(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   // Object.hasOwn guards against inherited keys (e.g. a file named "x.constructor"
   // would otherwise resolve to Object.prototype.constructor — a truthy function).
   const type = Object.hasOwn(CONTENT_TYPES, ext) ? CONTENT_TYPES[ext] : undefined;
-  return type ?? 'application/octet-stream';
+  return type ?? DEFAULT_CONTENT_TYPE;
 }
 
 /** Resolve a repo-relative dir, rejecting anything that escapes the work dir. */
@@ -321,14 +369,27 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   );
   const uploaded = new Set<string>();
   const changedKeys = new Set<string>();
+  const unmapped = new Set<string>();
+  if (payload.refresh) {
+    log('refresh: re-uploading every file (metadata — content type, tags — may have changed)');
+  }
   for (const file of built) {
     const key = prefix + relative(distDir, file).split('\\').join('/');
     uploaded.add(key);
     const content = await readFile(file);
     const md5 = createHash('md5').update(content).digest('hex');
-    if (existing.get(key) === md5) continue; // unchanged — skip upload + invalidation
-    await s3.putObject(payload.bucket, key, content, contentType(key), payload.objectTags);
+    const type = contentType(key);
+    if (type === DEFAULT_CONTENT_TYPE) unmapped.add(key.split('.').pop()?.toLowerCase() ?? '');
+    if (!shouldUpload(existing.get(key), md5, payload.refresh)) continue;
+    await s3.putObject(payload.bucket, key, content, type, payload.objectTags);
     changedKeys.add(key);
+  }
+  if (unmapped.size > 0) {
+    // A silently wrong header is how the .webmanifest gap survived; say it out loud.
+    log(
+      `warning: no content type mapped for extension(s) ${[...unmapped].sort().join(', ')} — ` +
+        `serving them as ${DEFAULT_CONTENT_TYPE}`,
+    );
   }
   for (const key of existing.keys()) {
     if (!uploaded.has(key)) {

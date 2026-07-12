@@ -55,6 +55,9 @@ Options:
   --plain           Minimal machine-friendly output (no colour, no live status,
                     no prompts) — for CI systems and agents; also automatic when
                     output is piped. NO_COLOR disables colour only.
+  --refresh         Re-upload every file on deploy, even unchanged ones, so
+                    metadata fixes (content types, object tags) reach live
+                    objects the ETag comparison would otherwise skip.
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -87,6 +90,7 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
       id: { type: 'string' },
       identifier: { type: 'string' },
       plain: { type: 'boolean', default: false },
+      refresh: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -140,11 +144,11 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
       await commands.bootstrap(ctx);
       break;
     case 'deploy':
-      await commands.deploy(ctx);
+      await commands.deploy(ctx, { refresh: values.refresh });
       break;
     case 'rollback':
       if (!hash) throw new Error('rollback requires a <hash>');
-      await commands.rollback(ctx, hash);
+      await commands.rollback(ctx, hash, { refresh: values.refresh });
       break;
     case 'delete':
       await commands.deleteSite(ctx);
@@ -232,6 +236,7 @@ interface PreviewValues {
   config?: string | undefined;
   endpoint?: string | undefined;
   id?: string | undefined;
+  refresh: boolean;
   yes: boolean;
 }
 
@@ -266,7 +271,7 @@ async function runPreview(
       break;
     case 'deploy':
       if (!id) throw new Error('preview deploy requires an <id> (e.g. pr-42)');
-      await commands.previewDeploy(ctx, id);
+      await commands.previewDeploy(ctx, id, { refresh: values.refresh });
       break;
     case 'destroy':
       if (!id) throw new Error('preview destroy requires an <id>');

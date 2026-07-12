@@ -65,7 +65,7 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
 }
 
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
-export async function deploy(ctx: OpsContext): Promise<void> {
+export async function deploy(ctx: OpsContext, opts: { refresh?: boolean } = {}): Promise<void> {
   const startedAt = Date.now();
   const cwd = await findRepoRoot(ctx.ports.fs);
   const hash = await ctx.ports.vcs.revisionHash(cwd);
@@ -81,7 +81,12 @@ export async function deploy(ctx: OpsContext): Promise<void> {
   // Rebuild the builder image first if the agent bundle changed, so build-agent fixes
   // ship on the same deploy (no-op when unchanged).
   await reconcileBuilderImage(ctx);
-  const manifest = await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
+  const manifest = await runBuild(ctx, {
+    hash,
+    sourceKey,
+    baseUrl: siteBaseUrl(ctx),
+    ...(opts.refresh ? { refresh: true } : {}),
+  });
   const invalidation = await invalidateChanged(ctx, hash);
   // Production content changed — mirror it to the PDS (non-fatal; see syncAfterDeploy).
   await syncAfterDeploy(ctx);
@@ -102,14 +107,23 @@ export async function deploy(ctx: OpsContext): Promise<void> {
 }
 
 /** Re-run the builder against an existing source zip for the given hash. */
-export async function rollback(ctx: OpsContext, hash: string): Promise<void> {
+export async function rollback(
+  ctx: OpsContext,
+  hash: string,
+  opts: { refresh?: boolean } = {},
+): Promise<void> {
   const sourceKey = `build/${hash}.zip`;
   if (!(await ctx.clients.s3.objectExists(ctx.names.bucket, sourceKey))) {
     throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
   }
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
   const startedAt = Date.now();
-  await runBuild(ctx, { hash, sourceKey, baseUrl: siteBaseUrl(ctx) });
+  await runBuild(ctx, {
+    hash,
+    sourceKey,
+    baseUrl: siteBaseUrl(ctx),
+    ...(opts.refresh ? { refresh: true } : {}),
+  });
   await invalidateChanged(ctx, hash);
   // A rollback changes production content too, but the PDS mirrors the *working tree*
   // content, which a rollback does not restore — so only warn about the divergence.
@@ -138,7 +152,11 @@ export async function previewBootstrap(ctx: OpsContext): Promise<void> {
 }
 
 /** Build the current repo and publish it to this PR's preview prefix. Prints the URL. */
-export async function previewDeploy(ctx: OpsContext, id: string): Promise<string> {
+export async function previewDeploy(
+  ctx: OpsContext,
+  id: string,
+  opts: { refresh?: boolean } = {},
+): Promise<string> {
   assertPreviewId(id);
   const startedAt = Date.now();
   const cwd = await findRepoRoot(ctx.ports.fs);
@@ -163,6 +181,7 @@ export async function previewDeploy(ctx: OpsContext, id: string): Promise<string
     baseUrl: url,
     // Per-PR objects carry the PR id in the environment tag (preview-pr-42).
     objectTags: { ...ctx.tags, environment: `preview-${id}` },
+    ...(opts.refresh ? { refresh: true } : {}),
   });
   ctx.logger.ok(`preview ready in ${formatDuration(Date.now() - startedAt)}: ${url}`);
   return url;
