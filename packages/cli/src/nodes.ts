@@ -112,8 +112,11 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
       { Effect: 'Allow', Action: ['s3:GetObject'], Resource: `arn:aws:s3:::${ctx.names.bucket}/*` },
       { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
       {
+        // s3:PutObjectTagging is required even though the tags ride on the PUT
+        // itself (x-amz-tagging header) — AWS checks it as a distinct action, and
+        // PutObject does not imply it. Without it every tagged upload 403s.
         Effect: 'Allow',
-        Action: ['s3:PutObject', 's3:DeleteObject'],
+        Action: ['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject'],
         Resource: siteWriteResource(ctx),
       },
       {
@@ -170,8 +173,9 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
         Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
       },
       {
+        // s3:PutObjectTagging: see the build role — a tagged PUT needs it explicitly.
         Effect: 'Allow',
-        Action: ['s3:PutObject', 's3:DeleteObject'],
+        Action: ['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject'],
         Resource: siteWriteResource(ctx),
       },
       {

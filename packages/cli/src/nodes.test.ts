@@ -453,3 +453,43 @@ describe('cloudfront log nodes use the us-east-1 logs client', () => {
     expect(String(ctx.state.resources['cloudfront-log-group']?.arn)).toContain(':us-east-1:');
   });
 });
+
+describe('site-write roles can tag objects (#7)', () => {
+  /** The inline policy a role node writes at create. */
+  interface PolicyDoc {
+    Statement: Array<{ Action: string[]; Resource: string | string[] }>;
+  }
+
+  async function policyFor(roleId: 'iam-build-role' | 'iam-exec-role'): Promise<PolicyDoc> {
+    let policy: PolicyDoc | undefined;
+    const ctx = createTestContext({
+      clients: {
+        iam: {
+          ensureRole: async () => 'arn:aws:iam::1:role/r',
+          putRolePolicy: async (_role: string, _name: string, doc: object) => {
+            policy = doc as PolicyDoc;
+          },
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === roleId);
+    await node!.create(ctx);
+    if (!policy) throw new Error('no policy written');
+    return policy;
+  }
+
+  // Object tags ride on the PUT (x-amz-tagging), but AWS checks PutObjectTagging
+  // as a distinct action: without it every tagged upload 403s (issue #7).
+  it.each(['iam-build-role', 'iam-exec-role'] as const)(
+    '%s grants s3:PutObjectTagging alongside PutObject on the site prefix',
+    async (roleId) => {
+      const policy = await policyFor(roleId);
+      const siteWrite = policy.Statement.find(
+        (s) => s.Action.includes('s3:PutObject') && s.Action.includes('s3:DeleteObject'),
+      );
+      expect(siteWrite).toBeDefined();
+      expect(siteWrite!.Action).toContain('s3:PutObjectTagging');
+      expect(String(siteWrite!.Resource)).toContain('/site/*');
+    },
+  );
+});

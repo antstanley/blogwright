@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 
 import {
+  AwsError,
   S3Client,
   SigningClient,
   type AwsCredentials,
@@ -227,6 +228,53 @@ export function shouldUpload(
   return existingEtag !== md5;
 }
 
+/** True for the 403 a role without `s3:PutObjectTagging` gets on a tagged PUT. */
+function isAccessDenied(err: unknown): boolean {
+  return (
+    err instanceof AwsError && (err.statusCode === 403 || /AccessDenied/i.test(err.code))
+  );
+}
+
+/**
+ * Upload the site files, degrading gracefully when the role may not tag.
+ *
+ * Object tags ride on the PUT (`x-amz-tagging`), but AWS still checks
+ * `s3:PutObjectTagging` as a distinct action — a role granted only `s3:PutObject`
+ * gets a 403 and the whole upload fails. Tags are metadata, not content: rather
+ * than fail a deploy whose files are otherwise fine, drop the tags for the rest
+ * of the run and say so. (A stack bootstrapped on a version that grants the
+ * action never takes this path; one upgrading in place does, until it
+ * re-bootstraps — and a CI deploy role cannot fix its own IAM.)
+ */
+export function createSiteUploader(s3: S3Client, log: LogFn) {
+  let taggingDenied = false;
+  return async function upload(
+    bucket: string,
+    key: string,
+    content: Uint8Array,
+    type: string,
+    tags: Record<string, string> | undefined,
+  ): Promise<void> {
+    const wantsTags = tags !== undefined && Object.keys(tags).length > 0;
+    if (wantsTags && !taggingDenied) {
+      try {
+        await s3.putObject(bucket, key, content, type, tags);
+        return;
+      } catch (err) {
+        // A plain PutObject denial re-throws below, from the untagged retry.
+        if (!isAccessDenied(err)) throw err;
+        taggingDenied = true;
+        log(
+          'warning: this role cannot tag objects (s3:PutObjectTagging denied) — ' +
+            'uploading untagged. Run `blogwright bootstrap <env>` to grant it, then ' +
+            'redeploy with --refresh to tag the existing objects.',
+        );
+      }
+    }
+    await s3.putObject(bucket, key, content, type);
+  };
+}
+
 /**
  * The lowercase extension of a key, or undefined when it has none (`LICENSE`,
  * `_headers`) — a leading dot is a dotfile, not an extension (`.nojekyll`).
@@ -381,6 +429,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   const existing = new Map(
     (await s3.listObjects(payload.bucket, prefix)).map((o) => [o.key, o.etag]),
   );
+  const uploadSiteFile = createSiteUploader(s3, log);
   const uploaded = new Set<string>();
   const changedKeys = new Set<string>();
   const unmapped = new Set<string>();
@@ -398,7 +447,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
     const ext = extensionOf(key);
     if (type === DEFAULT_CONTENT_TYPE && ext !== undefined) unmapped.add(ext);
     if (!shouldUpload(existing.get(key), md5, payload.refresh)) continue;
-    await s3.putObject(payload.bucket, key, content, type, payload.objectTags);
+    await uploadSiteFile(payload.bucket, key, content, type, payload.objectTags);
     changedKeys.add(key);
   }
   if (unmapped.size > 0) {

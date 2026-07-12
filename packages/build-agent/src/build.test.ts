@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { AwsError, type S3Client } from 'blogwright-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -9,6 +10,7 @@ import {
   DEFAULT_CONTENT_TYPE,
   extensionOf,
   generateSitemap,
+  createSiteUploader,
   invalidationPaths,
   resolveWithin,
   shouldUpload,
@@ -157,5 +159,89 @@ describe('shouldUpload', () => {
 
   it('uploads even an identical file under refresh, so metadata fixes land', () => {
     expect(shouldUpload(MD5, MD5, true)).toBe(true);
+  });
+});
+
+describe('createSiteUploader (issue #7 fail-soft tagging)', () => {
+  const CONTENT = new TextEncoder().encode('body');
+  const TAGS = { environment: 'production', app: 'blog' };
+
+  function denied(): AwsError {
+    return new AwsError({
+      service: 's3',
+      code: 'AccessDenied',
+      message: 'not authorized to perform: s3:PutObjectTagging',
+      statusCode: 403,
+    });
+  }
+
+  function fakeS3(failTagged: boolean) {
+    const puts: Array<{ key: string; tags: Record<string, string> | undefined }> = [];
+    const s3 = {
+      putObject: async (
+        _b: string,
+        key: string,
+        _c: Uint8Array,
+        _t: string,
+        tags?: Record<string, string>,
+      ) => {
+        if (failTagged && tags) throw denied();
+        puts.push({ key, tags });
+      },
+    } as unknown as S3Client;
+    return { s3, puts };
+  }
+
+  it('tags normally when the role is allowed to', async () => {
+    const { s3, puts } = fakeS3(false);
+    const logs: string[] = [];
+    const upload = createSiteUploader(s3, (l) => logs.push(l));
+
+    await upload('b', 'site/a.html', CONTENT, 'text/html', TAGS);
+
+    expect(puts).toEqual([{ key: 'site/a.html', tags: TAGS }]);
+    expect(logs).toEqual([]);
+  });
+
+  it('falls back to an untagged upload — once — when tagging is denied', async () => {
+    const { s3, puts } = fakeS3(true);
+    const logs: string[] = [];
+    const upload = createSiteUploader(s3, (l) => logs.push(l));
+
+    await upload('b', 'site/a.html', CONTENT, 'text/html', TAGS);
+    await upload('b', 'site/b.html', CONTENT, 'text/html', TAGS);
+
+    // Both files land, untagged; the deploy is not failed by a metadata denial.
+    expect(puts).toEqual([
+      { key: 'site/a.html', tags: undefined },
+      { key: 'site/b.html', tags: undefined },
+    ]);
+    // Warned once, not per file, and it names the remedy.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('s3:PutObjectTagging');
+    expect(logs[0]).toContain('bootstrap');
+  });
+
+  it('rethrows a denial that is not about tagging (untagged retry also fails)', async () => {
+    const s3 = {
+      putObject: async () => {
+        throw denied();
+      },
+    } as unknown as S3Client;
+    const upload = createSiteUploader(s3, () => undefined);
+
+    await expect(upload('b', 'site/a.html', CONTENT, 'text/html', TAGS)).rejects.toThrow(
+      /AccessDenied/,
+    );
+  });
+
+  it('does not attempt a tagged put when there are no tags', async () => {
+    const { s3, puts } = fakeS3(true); // would throw on a tagged put
+    const upload = createSiteUploader(s3, () => undefined);
+
+    await upload('b', 'site/a.html', CONTENT, 'text/html', undefined);
+    await upload('b', 'site/c.html', CONTENT, 'text/html', {});
+
+    expect(puts.map((p) => p.key)).toEqual(['site/a.html', 'site/c.html']);
   });
 });
