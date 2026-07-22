@@ -1,5 +1,12 @@
 # blogwright-pds
 
+## 0.3.2
+
+### Patch Changes
+
+- Updated dependencies [[`804edda`](https://github.com/antstanley/blogwright/commit/804eddace8698417a0ac99083daa8fe0e428c722), [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13), [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13)]:
+  - blogwright-core@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes
