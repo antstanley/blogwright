@@ -48,6 +48,61 @@ describe('applyGraph / destroyGraph', () => {
     expect(log).toEqual(['delete:a', 'delete:b']);
   });
 
+  it('persists outputs a node recorded before its create() failed', async () => {
+    const savedSnapshots: string[] = [];
+    const ctx = createTestContext({
+      save: async () => {
+        savedSnapshots.push(JSON.stringify(ctx.state.resources));
+      },
+    });
+    const failing: ResourceNode = {
+      id: 'dist',
+      dependsOn: [],
+      title: 'dist',
+      read: async () => false,
+      // Mirrors a real node: the remote create succeeded (identity recorded), a
+      // secondary mutation then threw.
+      create: async (c) => {
+        c.state.resources['dist'] = { id: 'D1' };
+        throw new Error('TagResource failed');
+      },
+      delete: async () => undefined,
+    };
+
+    await expect(applyGraph([failing], ctx)).rejects.toThrow(/TagResource failed/);
+
+    expect(savedSnapshots).toHaveLength(1);
+    expect(JSON.parse(savedSnapshots[0]!)).toEqual({ dist: { id: 'D1' } });
+  });
+
+  it('a failing save on the failure path warns but never masks the node error', async () => {
+    const warnings: string[] = [];
+    const ctx = createTestContext({
+      save: async () => {
+        throw new Error('NoSuchBucket');
+      },
+      logger: {
+        warn: (msg) => {
+          warnings.push(msg);
+        },
+      },
+    });
+    const failing: ResourceNode = {
+      id: 'bucket',
+      dependsOn: [],
+      title: 'bucket',
+      read: async () => false,
+      create: async () => {
+        throw new Error('CreateBucket denied');
+      },
+      delete: async () => undefined,
+    };
+
+    // The bucket's own failure surfaces — not the (inevitable) save failure after it.
+    await expect(applyGraph([failing], ctx)).rejects.toThrow(/CreateBucket denied/);
+    expect(warnings.join('\n')).toContain('NoSuchBucket');
+  });
+
   it('reconciles existing nodes via update instead of create', async () => {
     const log: string[] = [];
     const updating: ResourceNode = {

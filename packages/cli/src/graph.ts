@@ -58,17 +58,28 @@ export function topoSort(nodes: ResourceNode[]): ResourceNode[] {
 export async function applyGraph(nodes: ResourceNode[], ctx: OpsContext): Promise<void> {
   for (const node of topoSort(nodes)) {
     const exists = await node.read(ctx);
-    if (exists) {
-      if (node.update) {
-        ctx.logger.step(`reconcile ${node.title}`);
-        await node.update(ctx);
+    try {
+      if (exists) {
+        if (node.update) {
+          ctx.logger.step(`reconcile ${node.title}`);
+          await node.update(ctx);
+        } else {
+          ctx.logger.ok(`${node.title} (exists)`);
+        }
       } else {
-        ctx.logger.ok(`${node.title} (exists)`);
+        ctx.logger.step(`create ${node.title}`);
+        await node.create(ctx);
+        ctx.logger.ok(`created ${node.title}`);
       }
-    } else {
-      ctx.logger.step(`create ${node.title}`);
-      await node.create(ctx);
-      ctx.logger.ok(`created ${node.title}`);
+    } catch (err) {
+      // Persist whatever outputs the node recorded before it failed, so a resource
+      // created just before the throw is not orphaned outside the state file.
+      // Best-effort: the state bucket may itself be what failed to create, and a
+      // save error must never mask the node's own failure.
+      await ctx.save().catch((saveErr: unknown) => {
+        ctx.logger.warn(`could not save state after ${node.title} failed: ${String(saveErr)}`);
+      });
+      throw err;
     }
     await ctx.save();
   }

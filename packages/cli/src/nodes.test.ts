@@ -325,6 +325,125 @@ describe('distributionNode SPA mode', () => {
   });
 });
 
+describe('distributionNode adoption', () => {
+  // The deterministic identity for the default test context (site "example", env
+  // "test", account 123456789012).
+  const OWN_REFERENCE = 'test-example-123456789012';
+
+  function adoptCtx(existingReference: string) {
+    const tagged: Array<{ arn: string; tags: Record<string, string> }> = [];
+    const configFetches: string[] = [];
+    const ctx = createTestContext({
+      state: {
+        resources: {
+          oac: { id: 'oac1' },
+          'cloudfront-function': { arn: 'arn:cf:fn' },
+        },
+      },
+      clients: {
+        cloudfront: {
+          createDistribution: async () => {
+            // CloudFront's alias-conflict check fires before CallerReference
+            // idempotency, so a re-run against an orphan always lands here.
+            throw new AwsError({
+              service: 'cloudfront',
+              code: 'CNAMEAlreadyExists',
+              message: 'One or more of the CNAMEs are already associated with a different resource',
+              statusCode: 409,
+            });
+          },
+          listDistributions: async () => [
+            { id: 'D-OTHER', arn: 'arn:other', domainName: 'other.cloudfront.net', comment: 'another site' },
+            { id: 'D-ORPHAN', arn: 'arn:orphan', domainName: 'orphan.cloudfront.net', comment: 'example test' },
+          ],
+          getDistributionConfig: async (id: string) => {
+            configFetches.push(id);
+            return {
+              config: `<DistributionConfig><CallerReference>${existingReference}</CallerReference></DistributionConfig>`,
+              etag: 'E1',
+            };
+          },
+          tagResource: async (arn: string, tags: Record<string, string>) => {
+            tagged.push({ arn, tags });
+          },
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    if (!node) throw new Error('cloudfront-distribution node not found');
+    return { ctx, node, tagged, configFetches };
+  }
+
+  it('adopts the orphaned distribution when its CallerReference matches', async () => {
+    const { ctx, node, tagged, configFetches } = adoptCtx(OWN_REFERENCE);
+
+    await node.create(ctx);
+
+    // Comment narrows the candidates; only the matching-comment config is fetched.
+    expect(configFetches).toEqual(['D-ORPHAN']);
+    expect(ctx.state.resources['cloudfront-distribution']).toEqual({
+      id: 'D-ORPHAN',
+      arn: 'arn:orphan',
+      domainName: 'orphan.cloudfront.net',
+    });
+    expect(tagged).toEqual([{ arn: 'arn:orphan', tags: ctx.tags }]);
+  });
+
+  it('rethrows the original conflict when no candidate CallerReference matches', async () => {
+    const { ctx, node, tagged } = adoptCtx('staging-example-999999999999');
+
+    // A foreign distribution holding the alias is a real conflict — surface it.
+    await expect(node.create(ctx)).rejects.toThrow(/CNAMEAlreadyExists/);
+    expect(ctx.state.resources['cloudfront-distribution']).toBeUndefined();
+    expect(tagged).toEqual([]);
+  });
+});
+
+describe('bucketNode partial-bootstrap resilience', () => {
+  it('records the bucket name before tagging, so a crash mid-create keeps it in state', async () => {
+    const ctx = createTestContext({
+      clients: {
+        s3: {
+          createBucket: async () => undefined,
+          putBucketTagging: async () => {
+            throw new AwsError({
+              service: 's3',
+              code: 'InternalError',
+              message: 'transient',
+              statusCode: 500,
+            });
+          },
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'bucket');
+
+    await expect(node!.create(ctx)).rejects.toThrow(/InternalError/);
+    expect(ctx.state.resources['bucket']?.name).toBe(ctx.names.bucket);
+  });
+
+  it('re-applies tagging and the public-access block on update', async () => {
+    const calls: string[] = [];
+    const ctx = createTestContext({
+      clients: {
+        s3: {
+          putBucketTagging: async () => {
+            calls.push('tagging');
+          },
+          putPublicAccessBlock: async () => {
+            calls.push('publicAccessBlock');
+          },
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'bucket');
+
+    // A bucket left half-configured by a crashed run converges on the next apply.
+    await node!.update!(ctx);
+    expect(calls).toEqual(['tagging', 'publicAccessBlock']);
+  });
+});
+
 describe('previewDnsNode', () => {
   function dnsCtx(existing?: { record: string; zoneId: string; value: string }) {
     const upserts: Array<{ type: string; name: string; value: string; aliasZoneId?: string }> = [];
