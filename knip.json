@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreWorkspaces": ["."],
+  "ignoreWorkspaces": [".", "docs"],
   "workspaces": {
     "packages/core": { "project": "src/**/*.ts" },
     "packages/pds": { "project": "src/**/*.ts" },

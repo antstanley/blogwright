@@ -1,7 +1,19 @@
+import { createHash } from 'node:crypto';
+
 import { allTags, encodeEntities, rawTextTag, textTag } from './xml.js';
 import { encodeTagQuery, type ResourceTags } from '../tags.js';
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
+
+/**
+ * Base64 SHA-256 of a request body. The bucket-configuration APIs
+ * (?publicAccessBlock, ?tagging, ?policy) reject requests that carry neither
+ * a Content-MD5 nor an x-amz-checksum-* header; the SigV4 x-amz-content-sha256
+ * header does not satisfy the requirement.
+ */
+function bodyChecksum(body: string): string {
+  return createHash('sha256').update(body).digest('base64');
+}
 
 export interface S3Object {
   key: string;
@@ -85,7 +97,7 @@ export class S3Client {
       method: 'PUT',
       path: `/${bucket}`,
       query: { publicAccessBlock: '' },
-      headers: { 'content-type': 'application/xml' },
+      headers: { 'content-type': 'application/xml', 'x-amz-checksum-sha256': bodyChecksum(body) },
       body,
     });
   }
@@ -114,13 +126,14 @@ export class S3Client {
     const tagSet = Object.entries(tags)
       .map(([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`)
       .join('');
+    const body = `<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>${tagSet}</TagSet></Tagging>`;
     await this.client.send({
       service: 's3',
       method: 'PUT',
       path: `/${bucket}`,
       query: { tagging: '' },
-      headers: { 'content-type': 'application/xml' },
-      body: `<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>${tagSet}</TagSet></Tagging>`,
+      headers: { 'content-type': 'application/xml', 'x-amz-checksum-sha256': bodyChecksum(body) },
+      body,
     });
   }
 
@@ -208,7 +221,7 @@ export class S3Client {
       method: 'PUT',
       path: `/${bucket}`,
       query: { policy: '' },
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-amz-checksum-sha256': bodyChecksum(policy) },
       body: policy,
     });
   }

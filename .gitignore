@@ -1,5 +1,6 @@
 # build output
 dist/
+.astro/
 # build-agent artifacts copied into the CLI package by its build
 packages/cli/agent/
 

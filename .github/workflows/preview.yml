@@ -1,0 +1,111 @@
+name: PR preview
+
+# Stand up a per-PR docs preview on open/update, tear it down on close/merge.
+# Served at https://pr-<n>.preview.blogwright.iamstan.dev from the shared preview
+# stack (see config/preview.jsonc). The deploy dogfoods the workspace's own CLI.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    # Only docs changes get a preview — CLI-only PRs skip the MicroVM build.
+    # Paths are evaluated against the PR's full changed-file set, so the
+    # close-time destroy fires for exactly the PRs that deployed.
+    paths:
+      - "docs/**"
+      - "config/preview.jsonc"
+      - ".github/workflows/preview.yml"
+
+# Only one run per PR at a time; a new push cancels an in-flight deploy of the same PR.
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write # assume the AWS role via OIDC
+  contents: read
+  pull-requests: write # comment the preview URL
+
+env:
+  AWS_REGION: us-east-1
+  # Created by `blogwright preview bootstrap` (arn:aws:iam::<account>:role/preview-blogwright-gh).
+  ROLE_ARN: arn:aws:iam::403884279830:role/preview-blogwright-gh
+  PREVIEW_ID: pr-${{ github.event.pull_request.number }}
+  PREVIEW_URL: https://pr-${{ github.event.pull_request.number }}.preview.blogwright.iamstan.dev
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the blogwright CLI
+        # The CLI and its workspace dependencies only — the docs site itself is
+        # built inside the MicroVM, not on this runner.
+        run: pnpm --filter blogwright... build
+      - uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy preview
+        # Invoke the built bin directly: the node_modules/.bin link is only
+        # created if dist/bin.js exists at install time, which it doesn't in CI.
+        run: node packages/cli/dist/bin.js preview deploy "$PREVIEW_ID"
+      - name: Comment preview URL
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const url = process.env.PREVIEW_URL;
+            const marker = '<!-- preview-deploy -->';
+            const body = `${marker}\n🚀 Preview deployed: ${url}\n\n_Updates on every push; removed when this PR closes._`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+
+  destroy:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the blogwright CLI
+        run: pnpm --filter blogwright... build
+      - uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Destroy preview
+        # See "Deploy preview" for why the bin is invoked directly.
+        run: node packages/cli/dist/bin.js preview destroy "$PREVIEW_ID"
+      - name: Comment removal
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const marker = '<!-- preview-deploy -->';
+            const body = `${marker}\n🧹 Preview removed.`;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            }

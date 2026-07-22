@@ -247,7 +247,9 @@ async function imageInput(ctx: OpsContext): Promise<{ input: CreateImageInput; h
       // resolves credentials from IMDS (→ the build role identity). Hookless: hooks are
       // delivered over TLS which the agent can't satisfy, and are unnecessary here.
       environmentVariables: { BUILD_BUCKET: ctx.names.bucket, BUILD_REGION: ctx.config.region },
-      clientToken: `img-${artifact.hash}`,
+      // Scoped by image name, not just agent hash: two environments in one account
+      // share the hash, and reusing a clientToken with different parameters is a 400.
+      clientToken: `img-${ctx.names.microvmImage}-${artifact.hash}`,
       description: `${ctx.config.siteName} ${ctx.env} builder`,
     },
   };
@@ -406,7 +408,21 @@ function certificateNode(): ResourceNode {
         output(ctx, 'acm-certificate').arn = arn;
         await ctx.save();
       }
-      const initial = await ctx.clients.acm.describeCertificate(arn);
+      let initial = await ctx.clients.acm.describeCertificate(arn);
+      if (initial.status === 'PENDING_VALIDATION' && initial.validation.length === 0) {
+        // ACM populates the validation ResourceRecords asynchronously after
+        // RequestCertificate — an empty set here is that race, not "nothing to
+        // validate". Acting on it would skip record creation entirely and the
+        // issuance poll below could never succeed.
+        initial = await pollUntil(
+          () => ctx.clients.acm.describeCertificate(arn),
+          (s) => s.status !== 'PENDING_VALIDATION' || s.validation.length > 0,
+          { intervalMs: 5_000, timeoutMs: 5 * 60_000 },
+        );
+        if (initial.status === 'PENDING_VALIDATION' && initial.validation.length === 0) {
+          throw new Error('ACM returned no validation records for the certificate; re-run bootstrap');
+        }
+      }
       if (initial.status !== 'ISSUED' && initial.validation.length > 0) {
         if (ctx.preview) {
           // Preview domain is a Route53 hosted zone — create the validation records for you.

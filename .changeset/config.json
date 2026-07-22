@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["blogwright-build-agent"]
+  "ignore": ["blogwright-build-agent", "blogwright-docs"]
 }

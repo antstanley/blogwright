@@ -1,0 +1,65 @@
+{
+  // The blogwright docs site (docs/ workspace), served at blogwright.iamstan.dev.
+  // Production lives in the same AWS account as iamstan.dev production; deploys are
+  // release-gated (see .github/workflows/production.yml). PR previews live in a
+  // separate account — see preview.jsonc.
+  "region": "us-east-1",
+
+  // Stable slug used in resource names: production-blogwright-<accountId>, etc.
+  "siteName": "blogwright",
+
+  // Value of the `app` tag on every created AWS resource; set explicitly so it is
+  // identical across environments.
+  "app": "blogwright",
+
+  // Custom domain. The blogwright.iamstan.dev hosted zone lives in this account
+  // (preview.blogwright.iamstan.dev is NS-delegated from it to the preview
+  // account). Main-site DNS is still manual: `blogwright bootstrap production`
+  // prints the ACM validation CNAMEs — create them in the zone, then point the
+  // zone apex at the distribution's *.cloudfront.net domain with an ALIAS A
+  // record (the apex cannot be a CNAME).
+  "domain": "blogwright.iamstan.dev",
+
+  // The docs site lives in the docs/ workspace: the MicroVM runs
+  // `pnpm install && pnpm build` there and publishes docs/dist.
+  "paths": {
+    "app": "docs",
+    "dist": "docs/dist"
+  },
+
+  // Builder MicroVM sizing + lifecycle (2 GB is plenty for pnpm install + astro build).
+  "microvm": {
+    "memory": 2,
+    "maxDurationSeconds": 1800,
+    "idle": {
+      "autoResumeEnabled": false,
+      "maxIdleDurationSeconds": 1500,
+      "suspendedDurationSeconds": 120
+    }
+  },
+
+  // CloudWatch retention.
+  "retention": {
+    "microvmDays": 365, // build logs — 1 year
+    "cloudfrontDays": 90 // access logs — 3 months
+  },
+
+  // Keep the whole workspace in the source zip so `pnpm install --frozen-lockfile`
+  // inside the MicroVM matches the committed lockfile (docs/ and packages/* are
+  // workspace members). Only exclude VCS metadata and build output.
+  "sourceIgnore": [".git/", ".jj/", "node_modules/", "dist/", ".astro/"],
+
+  "defaultRootObject": "index.html",
+
+  // Each deploy invalidates only the CloudFront paths whose content actually changed.
+  "invalidationMaxPaths": 1000,
+
+  // Production defaults ("auto") already index + emit a sitemap; set explicitly
+  // for clarity, mirroring iamstan.dev.
+  "seo": { "robots": "index", "sitemap": "on" },
+
+  // owner/repo — scopes the production GitHub OIDC deploy role's trust policy
+  // (the `production` GitHub environment). Re-run `blogwright bootstrap` after
+  // changing.
+  "githubRepo": "antstanley/blogwright"
+}
