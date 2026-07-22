@@ -1,5 +1,17 @@
 # blogwright
 
+## 0.3.2
+
+### Patch Changes
+
+- [#11](https://github.com/antstanley/blogwright/pull/11) [`804edda`](https://github.com/antstanley/blogwright/commit/804eddace8698417a0ac99083daa8fe0e428c722) Thanks [@antstanley](https://github.com/antstanley)! - Make `bootstrap` resumable after a partial failure. The graph engine now persists whatever outputs a node recorded even when its create/update throws (best-effort — a save error never masks the node's own failure), and nodes record identity outputs before secondary mutations (bucket name before tagging, log-delivery ARNs as they are created). Re-running against a partial environment recovers automatically: the distribution node adopts an orphaned distribution on `CNAMEAlreadyExists`/`DistributionAlreadyExists` by matching the deterministic comment and verifying `CallerReference` (via a new `listDistributions` method on the CloudFront client), and the bucket node reconciles tagging and the public-access block on every apply. No more hand-editing `state/<env>.json` in S3.
+
+- [#9](https://github.com/antstanley/blogwright/pull/9) [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13) Thanks [@antstanley](https://github.com/antstanley)! - Two bootstrap fixes: wait for ACM to publish the DNS validation records before creating/printing them (a fresh certificate's first describe can return an empty set, which skipped validation entirely and stalled bootstrap until timeout), and scope the builder-image clientToken by image name so two environments bootstrapping concurrently in one account no longer collide on the shared agent hash.
+
+- Updated dependencies [[`804edda`](https://github.com/antstanley/blogwright/commit/804eddace8698417a0ac99083daa8fe0e428c722), [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13), [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13)]:
+  - blogwright-core@0.3.2
+  - blogwright-pds@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes
