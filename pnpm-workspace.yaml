@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - docs
 
 allowBuilds:
   # core-js (transitive via @atproto/oauth-client-node) postinstall only prints

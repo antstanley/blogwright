@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { staticCredentials } from './credentials.js';
@@ -73,5 +75,42 @@ describe('S3Client tagging', () => {
     expect(url).toContain('tagging');
     expect(body).toContain('<Tag><Key>environment</Key><Value>staging</Value></Tag>');
     expect(body).toContain('<Tag><Key>app</Key><Value>blog</Value></Tag>');
+  });
+});
+
+describe('S3Client bucket-configuration checksums', () => {
+  // The ?publicAccessBlock, ?tagging, and ?policy APIs reject requests without
+  // a Content-MD5 or x-amz-checksum-* header (the SigV4 x-amz-content-sha256
+  // header does not count).
+  async function captured(run: (s3: S3Client) => Promise<void>) {
+    let headers: Record<string, string> = {};
+    let body = '';
+    const transport: Transport = async (req) => {
+      headers = req.headers;
+      body = String(req.body ?? '');
+      return response(200, '');
+    };
+    await run(s3With(transport));
+    return { headers, body };
+  }
+
+  function sha256Base64(body: string): string {
+    return createHash('sha256').update(body).digest('base64');
+  }
+
+  it('putPublicAccessBlock sends x-amz-checksum-sha256 for its body', async () => {
+    const { headers, body } = await captured((s3) => s3.putPublicAccessBlock('b'));
+    expect(headers['x-amz-checksum-sha256']).toBe(sha256Base64(body));
+  });
+
+  it('putBucketTagging sends x-amz-checksum-sha256 for its body', async () => {
+    const { headers, body } = await captured((s3) => s3.putBucketTagging('b', { app: 'blog' }));
+    expect(headers['x-amz-checksum-sha256']).toBe(sha256Base64(body));
+  });
+
+  it('putBucketPolicy sends x-amz-checksum-sha256 for its body', async () => {
+    const { headers, body } = await captured((s3) => s3.putBucketPolicy('b', '{"Version":"2012-10-17"}'));
+    expect(body).toBe('{"Version":"2012-10-17"}');
+    expect(headers['x-amz-checksum-sha256']).toBe(sha256Base64(body));
   });
 });

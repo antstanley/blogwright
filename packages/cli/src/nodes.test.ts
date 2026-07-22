@@ -493,3 +493,41 @@ describe('site-write roles can tag objects (#7)', () => {
     },
   );
 });
+
+describe('certificateNode validation race', () => {
+  // ACM fills DomainValidationOptions asynchronously after RequestCertificate:
+  // the first describe can legitimately return no validation records for a
+  // pending certificate, and the node must wait for them instead of skipping
+  // record creation (which would leave the cert unvalidatable).
+  it('waits for ACM to publish validation records before creating them', async () => {
+    const record = { name: '_x.preview.example.com.', type: 'CNAME', value: '_y.acm.aws.' };
+    const upserts: Array<{ name: string; type: string; value: string }> = [];
+    let describes = 0;
+    const ctx = createTestContext({
+      preview: true,
+      env: 'preview',
+      config: { domain: 'preview.example.com' },
+      clients: {
+        acm: {
+          requestCertificate: async () => 'arn:aws:acm:us-east-1:1:certificate/new',
+          describeCertificate: async () => {
+            describes += 1;
+            if (describes === 1) return { status: 'PENDING_VALIDATION', validation: [] };
+            if (describes === 2) return { status: 'PENDING_VALIDATION', validation: [record] };
+            return { status: 'ISSUED', validation: [record] };
+          },
+        },
+        route53: {
+          hostedZoneId: async () => 'Z1',
+          upsertRecord: async (_zone: string, r: (typeof upserts)[number]) => {
+            upserts.push(r);
+          },
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'acm-certificate');
+    await node!.create(ctx);
+    expect(upserts).toEqual([record]);
+    expect(describes).toBeGreaterThanOrEqual(3);
+  });
+});

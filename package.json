@@ -13,6 +13,7 @@
     "changeset:version": "changeset version && pnpm install --no-frozen-lockfile"
   },
   "devDependencies": {
+    "blogwright": "workspace:*",
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.0",
     "knip": "^6.24.0",

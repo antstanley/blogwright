@@ -124,7 +124,9 @@ export class CloudFrontClient {
       service: 'cloudfront',
       method: 'POST',
       path: `${API}/tagging`,
-      query: { Resource: resourceArn },
+      // Operation=Tag is required — the tagging path is shared with UntagResource
+      // (Operation=Untag) and CloudFront routes on it; without it: InvalidAction.
+      query: { Operation: 'Tag', Resource: resourceArn },
       headers: { 'content-type': 'application/xml' },
       body: `<?xml version="1.0" encoding="UTF-8"?><Tags xmlns="${XMLNS}"><Items>${items}</Items></Tags>`,
     });

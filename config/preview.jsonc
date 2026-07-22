@@ -1,0 +1,47 @@
+{
+  // Shared preview stack for docs PRs: one CloudFront distribution (caching disabled)
+  // that routes <pr-id>.preview.blogwright.iamstan.dev to previews/<pr-id>/site/ via a
+  // CloudFront Function. The preview domain must be its own Route53 hosted zone —
+  // the zone lookup is an exact name match — so preview.blogwright.iamstan.dev is a
+  // child zone NS-delegated from the blogwright.iamstan.dev zone. With the zone in
+  // place, the wildcard cert + DNS are fully automated. Previews live in this
+  // account; production lives in the iamstan.dev production account (see
+  // production.jsonc).
+  "region": "us-east-1",
+  "siteName": "blogwright",
+  // `app` tag value, kept identical across environments (see production.jsonc).
+  "app": "blogwright",
+  "domain": "preview.blogwright.iamstan.dev",
+
+  // The docs site lives in the docs/ workspace (see production.jsonc).
+  "paths": {
+    "app": "docs",
+    "dist": "docs/dist"
+  },
+
+  // owner/repo — scopes the GitHub OIDC deploy role's trust policy.
+  "githubRepo": "antstanley/blogwright",
+
+  "microvm": {
+    "memory": 2,
+    "maxDurationSeconds": 1800,
+    "idle": {
+      "autoResumeEnabled": false,
+      "maxIdleDurationSeconds": 1500,
+      "suspendedDurationSeconds": 120
+    }
+  },
+
+  "retention": {
+    "microvmDays": 365,
+    "cloudfrontDays": 90
+  },
+
+  "sourceIgnore": [".git/", ".jj/", "node_modules/", "dist/", ".astro/"],
+  "defaultRootObject": "index.html",
+  "invalidationMaxPaths": 1000,
+
+  // Previews are non-production, so the default ("auto") already publishes a robots.txt
+  // that blocks all crawlers and skips the sitemap. Set explicitly here for clarity.
+  "seo": { "robots": "noindex", "sitemap": "off" }
+}

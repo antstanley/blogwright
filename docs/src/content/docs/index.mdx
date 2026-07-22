@@ -1,0 +1,52 @@
+---
+title: blogwright
+description: Full operations for a blog site on AWS — S3 + CloudFront hosting with builds in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site publishing.
+template: splash
+hero:
+  tagline: Full operations for a blog site on AWS. One CLI, no CloudFormation, no Terraform, no CDK.
+  actions:
+    - text: Get started
+      link: /getting-started/introduction/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/antstanley/blogwright
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="S3 + CloudFront hosting" icon="cloud-download">
+    One private S3 bucket per environment behind CloudFront with Origin Access
+    Control. Custom domains get an ACM certificate and alias automatically.
+  </Card>
+  <Card title="Builds in a Lambda MicroVM" icon="rocket">
+    Every deploy zips your repo, builds it in an isolated MicroVM with
+    `pnpm install && pnpm build`, and syncs the output to S3 — only changed
+    files are re-uploaded and only changed paths are invalidated.
+  </Card>
+  <Card title="PR previews & CI deploys" icon="github">
+    A shared preview stack serves every pull request at its own subdomain, and
+    GitHub OIDC deploy roles mean CI never stores AWS keys.
+  </Card>
+  <Card title="standard.site publishing" icon="star">
+    Mirror your posts to your AT Protocol PDS as standard.site records, with
+    OAuth handled by the CLI and deterministic record keys derived from URLs.
+  </Card>
+</CardGrid>
+
+## From zero to live site
+
+```sh
+pnpm add -D blogwright
+
+pnpm exec blogwright init       # first-run wizard — writes config/production.jsonc
+pnpm exec blogwright bootstrap  # create the infrastructure graph
+pnpm exec blogwright deploy     # build in a MicroVM and publish
+```
+
+The [quickstart](/getting-started/quickstart/) walks every step, and the
+[configuration reference](/reference/configuration/) covers everything beyond
+the defaults. Reading by machine? Every page is Markdown — append `.md` to any
+URL, or start from [/llms.txt](/llms.txt).

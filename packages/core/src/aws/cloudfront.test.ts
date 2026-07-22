@@ -110,3 +110,22 @@ describe('CloudFrontClient.setDistributionAliases', () => {
     ).rejects.toThrow(/D-gone/);
   });
 });
+
+describe('CloudFrontClient.tagResource', () => {
+  it('sends Operation=Tag alongside the encoded Resource ARN', async () => {
+    let url = '';
+    let body = '';
+    const transport: Transport = async (req) => {
+      url = req.url;
+      body = String(req.body ?? '');
+      return response(204, '');
+    };
+    await cloudfrontWith(transport).tagResource('arn:aws:cloudfront::1:distribution/D1', {
+      environment: 'staging',
+    });
+    // The tagging path routes on Operation (Tag vs Untag); omitting it is InvalidAction.
+    expect(url).toContain('Operation=Tag');
+    expect(url).toContain('Resource=arn%3Aaws%3Acloudfront%3A%3A1%3Adistribution%2FD1');
+    expect(body).toContain('<Tag><Key>environment</Key><Value>staging</Value></Tag>');
+  });
+});

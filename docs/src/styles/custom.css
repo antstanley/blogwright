@@ -1,0 +1,25 @@
+/*
+ * Brand alignment: Starlight's accent tokens tuned to the blogwright mark
+ * (white pen nib on indigo #6366f1 → #4338ca, see public/favicon.svg).
+ * Links, active nav items, primary buttons, and focus rings all derive from
+ * these three stops per theme.
+ */
+
+/* Dark theme (Starlight's default :root) */
+:root {
+  --sl-color-accent-low: #312e81; /* indigo-900 — subtle tints, selection */
+  --sl-color-accent: #6366f1; /* indigo-500 — primary actions, matches the mark */
+  --sl-color-accent-high: #c7d2fe; /* indigo-200 — link text on dark (≈12:1 on the page bg) */
+}
+
+/* Light theme */
+[data-theme='light'] {
+  --sl-color-accent-low: #e0e7ff; /* indigo-100 — subtle tints, selection */
+  --sl-color-accent: #4f46e5; /* indigo-600 — links + buttons on white (6.3:1) */
+  --sl-color-accent-high: #312e81; /* indigo-900 — emphasized accent text */
+}
+
+/* Fewer orphans in prose; balanced headings. */
+.sl-markdown-content p {
+  text-wrap: pretty;
+}
