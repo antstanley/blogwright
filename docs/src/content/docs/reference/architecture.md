@@ -23,13 +23,13 @@ interface ResourceNode {
 }
 ```
 
-`bootstrap` applies the graph: nodes are topologically sorted (Kahn's algorithm), then visited in dependency order. For each node the CLI calls `read` — if the resource exists it is reconciled via `update` (or left as-is when there is nothing to reconcile); if not, it is created. State is persisted after **every** node, so an interrupted bootstrap resumes where it left off instead of re-creating resources. `destroy` walks the same graph in reverse dependency order.
+`bootstrap` applies the graph: nodes are topologically sorted (Kahn's algorithm), then visited in dependency order. For each node the CLI calls `read` — if the resource exists it is reconciled via `update` (or left as-is when there is nothing to reconcile); if not, it is created. State is persisted after **every** node — including when a node fails partway: nodes record identity outputs (ids, ARNs) immediately after the call that creates a resource, and the apply loop saves whatever was recorded before re-throwing the node's error (best-effort — a failed save is a warning, never a mask over the real error). An interrupted bootstrap therefore resumes where it left off instead of re-creating — or orphaning — resources. `destroy` walks the same graph in reverse dependency order.
 
 The node set for a standard (non-preview) environment:
 
 | Node id | Resource |
 | --- | --- |
-| `bucket` | The S3 bucket (`<env>-<siteName>-<accountId>`) with public access blocked and bucket tags applied. Holds artifacts, the site, and state. |
+| `bucket` | The S3 bucket (`<env>-<siteName>-<accountId>`) with public access blocked and bucket tags applied. Holds artifacts, the site, and state. Tags and the public-access block are re-applied on every apply (both idempotent), so a bucket left half-configured by an interrupted run converges on the next bootstrap. |
 | `microvm-log-group` | CloudWatch log group for builder MicroVM output (`/aws/lambda/microvms/<env>-<siteName>-builder`), retention from `retention.microvmDays`. |
 | `cloudfront-log-group` | CloudWatch log group for CloudFront access logs (`/<siteName>/<env>/cloudfront`), retention from `retention.cloudfrontDays`. Always created in us-east-1 — CloudFront vended log delivery exists only there. |
 | `iam-build-role` | IAM role Lambda assumes to build the MicroVM image. It is also the running MicroVM's ambient identity (via IMDS), so its policy covers reading source zips, writing `site/`, and writing build logs. |
@@ -37,7 +37,7 @@ The node set for a standard (non-preview) environment:
 | `microvm-image` | The builder MicroVM image, baked from the packaged build-agent bundle. Both `create` and `update` run the same reconcile: create if missing, rebuild if the agent bundle or log group changed, otherwise no-op. |
 | `oac` | CloudFront Origin Access Control, so the distribution reads S3 privately. |
 | `cloudfront-function` | A viewer-request CloudFront Function (`<env>-<siteName>-router`) that resolves directory URLs to `index.html` — required because the private S3 REST origin, unlike a website endpoint, does no index-document resolution. Preview stacks use a variant that also routes the request's Host to its `previews/<id>/site/` prefix. |
-| `cloudfront-distribution` | The distribution: OAC-secured S3 origin with origin path `/site`, the router function attached, 403/404 mapped to the site's 404 page (or to `/index.html` with a 200 in `spa` mode). Preview stacks disable caching instead. |
+| `cloudfront-distribution` | The distribution: OAC-secured S3 origin with origin path `/site`, the router function attached, 403/404 mapped to the site's 404 page (or to `/index.html` with a 200 in `spa` mode). Preview stacks disable caching instead. If creation hits a duplicate-alias conflict left by a crashed earlier run, the node adopts the existing distribution — candidates are narrowed by the deterministic comment (`<siteName> <env>`) and confirmed by the immutable CallerReference; anything unconfirmed re-raises the conflict. |
 | `cloudfront-log-delivery` | Vended log delivery wiring (delivery source, destination, and delivery in us-east-1) from the distribution to the CloudFront log group. |
 | `bucket-policy` | Bucket policy allowing `cloudfront.amazonaws.com` to `s3:GetObject` on `site/*`, conditioned on the distribution's ARN. Its `read` always returns false, so the policy is re-applied on every apply and tracks the distribution ARN. |
 

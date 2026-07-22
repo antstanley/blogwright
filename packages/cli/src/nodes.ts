@@ -3,7 +3,9 @@ import {
   CACHING_DISABLED,
   CLOUDFRONT_ALIAS_ZONE_ID,
   pollUntil,
+  textTag,
   type CreateImageInput,
+  type DistributionListItem,
 } from 'blogwright-core';
 
 import { packageAndUploadAgent } from './agent-package.js';
@@ -30,6 +32,12 @@ function siteWriteResource(ctx: OpsContext): string {
     : `arn:aws:s3:::${ctx.names.bucket}/site/*`;
 }
 
+/** Tagging + public-access block are idempotent PUTs, shared by create and update. */
+async function applyBucketConfiguration(ctx: OpsContext): Promise<void> {
+  await ctx.clients.s3.putBucketTagging(ctx.names.bucket, ctx.tags);
+  await ctx.clients.s3.putPublicAccessBlock(ctx.names.bucket);
+}
+
 /** The S3 bucket holding build artifacts, the live site, and topology state. */
 function bucketNode(): ResourceNode {
   return {
@@ -43,9 +51,15 @@ function bucketNode(): ResourceNode {
     },
     async create(ctx) {
       await ctx.clients.s3.createBucket(ctx.names.bucket);
-      await ctx.clients.s3.putBucketTagging(ctx.names.bucket, ctx.tags);
-      await ctx.clients.s3.putPublicAccessBlock(ctx.names.bucket);
+      // Identity output before the secondary mutations: a crash between CreateBucket
+      // and tagging/PAB must still leave the bucket recorded in state.
       output(ctx, 'bucket').name = ctx.names.bucket;
+      await applyBucketConfiguration(ctx);
+    },
+    async update(ctx) {
+      // Reconcile on every apply: a bucket created by a crashed earlier run (before
+      // its tagging/PAB calls) converges to the configured shape on the next run.
+      await applyBucketConfiguration(ctx);
     },
     async delete(ctx) {
       // Empty every prefix (site/build/state) before removing the bucket.
@@ -546,6 +560,30 @@ function routerFunctionNode(preview: boolean): ResourceNode {
   };
 }
 
+/**
+ * Find the distribution a crashed earlier bootstrap created but never recorded in
+ * state. The deterministic comment (`"<siteName> <env>"`) narrows candidates; identity
+ * is confirmed by CallerReference — comments are editable in the console, while the
+ * reference is immutable for the distribution's life and collision-free across
+ * environments by construction.
+ */
+async function findAdoptableDistribution(
+  ctx: OpsContext,
+  comment: string,
+  callerReference: string,
+): Promise<DistributionListItem | undefined> {
+  const candidates = (await ctx.clients.cloudfront.listDistributions()).filter(
+    (d) => d.comment === comment,
+  );
+  for (const candidate of candidates) {
+    const config = await ctx.clients.cloudfront.getDistributionConfig(candidate.id);
+    if (config && textTag(config.config, 'CallerReference') === callerReference) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 /** The CloudFront distribution. Preview stacks use a host-routing function + no caching. */
 function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
   const dependsOn = [
@@ -565,31 +603,58 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       return Boolean(dist);
     },
     async create(ctx) {
-      const dist = await ctx.clients.cloudfront.createDistribution({
-        callerReference: `${ctx.names.prefix}-${ctx.accountId}`,
-        comment: `${ctx.config.siteName} ${ctx.env}`,
-        bucketDomainName: `${ctx.names.bucket}.s3.${ctx.config.region}.amazonaws.com`,
-        // Preview: function rewrites the full path, so the origin path is the bucket root.
-        originPath: preview ? '' : '/site',
-        originAccessControlId: String(output(ctx, 'oac').id),
-        defaultRootObject: ctx.config.defaultRootObject,
-        aliases: ctx.domain ? [preview ? `*.${ctx.domain}` : ctx.domain] : [],
-        acmCertificateArn: hasDomain ? String(output(ctx, 'acm-certificate').arn) : undefined,
-        functionArn: String(output(ctx, 'cloudfront-function').arn),
-        // Previews are served uncached (per-PR content, host-routed); staging/production
-        // keep the default cache policy. Non-preview stacks map the S3 REST origin's
-        // 403/404 (a missing key) to the site's 404 page — or, in SPA mode, to
-        // /index.html with a 200 so client-side routes deep-link correctly.
-        ...(preview
-          ? { cachePolicyId: CACHING_DISABLED }
-          : {
-              customErrorResponses: [403, 404].map((errorCode) => ({
-                errorCode,
-                responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
-                responseCode: ctx.config.spa ? 200 : 404,
-              })),
-            }),
-      });
+      const callerReference = `${ctx.names.prefix}-${ctx.accountId}`;
+      const comment = `${ctx.config.siteName} ${ctx.env}`;
+      // What create and adopt agree on: enough identity to record outputs and tag.
+      let dist: Pick<DistributionListItem, 'id' | 'arn' | 'domainName'>;
+      try {
+        dist = await ctx.clients.cloudfront.createDistribution({
+          callerReference,
+          comment,
+          bucketDomainName: `${ctx.names.bucket}.s3.${ctx.config.region}.amazonaws.com`,
+          // Preview: function rewrites the full path, so the origin path is the bucket root.
+          originPath: preview ? '' : '/site',
+          originAccessControlId: String(output(ctx, 'oac').id),
+          defaultRootObject: ctx.config.defaultRootObject,
+          aliases: ctx.domain ? [preview ? `*.${ctx.domain}` : ctx.domain] : [],
+          acmCertificateArn: hasDomain ? String(output(ctx, 'acm-certificate').arn) : undefined,
+          functionArn: String(output(ctx, 'cloudfront-function').arn),
+          // Previews are served uncached (per-PR content, host-routed); staging/production
+          // keep the default cache policy. Non-preview stacks map the S3 REST origin's
+          // 403/404 (a missing key) to the site's 404 page — or, in SPA mode, to
+          // /index.html with a 200 so client-side routes deep-link correctly.
+          ...(preview
+            ? { cachePolicyId: CACHING_DISABLED }
+            : {
+                customErrorResponses: [403, 404].map((errorCode) => ({
+                  errorCode,
+                  responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
+                  responseCode: ctx.config.spa ? 200 : 404,
+                })),
+              }),
+        });
+      } catch (err) {
+        // A crashed earlier bootstrap can leave a distribution in AWS that state never
+        // recorded. Retrying then 409s on the duplicate alias — CloudFront's CNAME
+        // conflict check fires before the CallerReference idempotency match — so adopt
+        // the orphan instead. No verified match means the alias belongs to a foreign
+        // distribution: that conflict is real and must surface.
+        const conflict =
+          err instanceof AwsError &&
+          /^(?:CNAMEAlreadyExists|DistributionAlreadyExists)$/.test(err.code);
+        if (!conflict) throw err;
+        // Best-effort, like the failure-path state save: a broken lookup (e.g. missing
+        // ListDistributions permission) must not displace the actionable conflict error.
+        let adopted: DistributionListItem | undefined;
+        try {
+          adopted = await findAdoptableDistribution(ctx, comment, callerReference);
+        } catch (lookupErr) {
+          ctx.logger.warn(`adoption lookup failed (${(lookupErr as Error).message})`);
+        }
+        if (!adopted) throw err;
+        ctx.logger.ok(`adopted existing distribution ${adopted.id} (created by an earlier run)`);
+        dist = adopted;
+      }
       const out = output(ctx, 'cloudfront-distribution');
       out.id = dist.id;
       out.arn = dist.arn;
@@ -647,7 +712,11 @@ function logDeliveryNode(): ResourceNode {
   async function wire(ctx: OpsContext): Promise<void> {
     const distArn = String(output(ctx, 'cloudfront-distribution').arn);
     const groupArn = String(output(ctx, 'cloudfront-log-group').arn).replace(/:\*$/, '');
-    const sourceArn = await ctx.clients.logsUsEast1.putDeliverySource(
+    // Record each ARN as it is created (not after the trio completes): a crash midway
+    // still leaves the source/destination in state for destroy to clean up. read()
+    // keys off `delivery`, which is only set once the wiring is complete.
+    const out = output(ctx, 'cloudfront-log-delivery');
+    out.source = await ctx.clients.logsUsEast1.putDeliverySource(
       ctx.names.deliverySource,
       distArn,
       'ACCESS_LOGS',
@@ -657,11 +726,9 @@ function logDeliveryNode(): ResourceNode {
       ctx.names.deliveryDestination,
       groupArn,
     );
-    await ctx.clients.logsUsEast1.createDelivery(ctx.names.deliverySource, destArn);
-    const out = output(ctx, 'cloudfront-log-delivery');
-    out.delivery = 'configured';
-    out.source = sourceArn;
     out.destination = destArn;
+    await ctx.clients.logsUsEast1.createDelivery(ctx.names.deliverySource, destArn);
+    out.delivery = 'configured';
   }
 
   return {

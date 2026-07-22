@@ -1,7 +1,7 @@
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
 import type { ResourceTags } from '../tags.js';
-import { encodeEntities, textTag } from './xml.js';
+import { allTags, encodeEntities, textTag } from './xml.js';
 
 const API = '/2020-05-31';
 const XMLNS = 'http://cloudfront.amazonaws.com/doc/2020-05-31/';
@@ -16,6 +16,14 @@ export interface DistributionSummary {
   domainName: string;
   status: string;
   etag: string | undefined;
+}
+
+/** One entry from ListDistributions — enough to identify a distribution for adoption. */
+export interface DistributionListItem {
+  id: string;
+  arn: string;
+  domainName: string;
+  comment: string;
 }
 
 export interface DistributionConfigInput {
@@ -113,6 +121,34 @@ export class CloudFrontClient {
       if (err instanceof AwsError && err.isNotFound) return undefined;
       throw err;
     }
+  }
+
+  /**
+   * List every distribution in the account (paginated via Marker/NextMarker).
+   * Used to find a distribution a crashed bootstrap created but never recorded.
+   */
+  async listDistributions(): Promise<DistributionListItem[]> {
+    const items: DistributionListItem[] = [];
+    let marker: string | undefined;
+    do {
+      const res = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/distribution`,
+        ...(marker ? { query: { Marker: marker } } : {}),
+      });
+      const xml = res.text();
+      for (const summary of allTags(xml, 'DistributionSummary')) {
+        items.push({
+          id: textTag(summary, 'Id') ?? '',
+          arn: textTag(summary, 'ARN') ?? '',
+          domainName: textTag(summary, 'DomainName') ?? '',
+          comment: textTag(summary, 'Comment') ?? '',
+        });
+      }
+      marker = textTag(xml, 'IsTruncated') === 'true' ? textTag(xml, 'NextMarker') : undefined;
+    } while (marker);
+    return items;
   }
 
   /** Apply tags to a distribution (or any taggable CloudFront resource) by ARN. */

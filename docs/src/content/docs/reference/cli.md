@@ -54,7 +54,7 @@ Each question allows three attempts before the wizard gives up.
 blogwright bootstrap [env]
 ```
 
-Creates or reconciles the full infrastructure graph for the environment — safe to re-run. When a domain is configured (via `--domain` or the config), bootstrap requests the ACM certificate and prints the DNS validation CNAMEs, and the distribution gets the domain as an alias. On completion it prints the CloudFront domain the site is served from. See [deploying](/guides/deploying/) and [custom domains](/guides/custom-domains/).
+Creates or reconciles the full infrastructure graph for the environment — safe to re-run, including after a failure partway: state is persisted even when a step fails, and resources a crashed run created but never recorded (such as a CloudFront distribution hitting a duplicate-alias conflict) are adopted rather than duplicated. When a domain is configured (via `--domain` or the config), bootstrap requests the ACM certificate and prints the DNS validation CNAMEs, and the distribution gets the domain as an alias. On completion it prints the CloudFront domain the site is served from. See [deploying](/guides/deploying/) and [custom domains](/guides/custom-domains/).
 
 ### deploy
 

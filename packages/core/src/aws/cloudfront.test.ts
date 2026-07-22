@@ -111,6 +111,64 @@ describe('CloudFrontClient.setDistributionAliases', () => {
   });
 });
 
+describe('CloudFrontClient.listDistributions', () => {
+  function summaryXml(id: string, comment: string): string {
+    return (
+      `<DistributionSummary><Id>${id}</Id>` +
+      `<ARN>arn:aws:cloudfront::1:distribution/${id}</ARN>` +
+      `<Status>Deployed</Status><DomainName>${id.toLowerCase()}.cloudfront.net</DomainName>` +
+      `<Aliases><Quantity>0</Quantity></Aliases>` +
+      `<Comment>${comment}</Comment></DistributionSummary>`
+    );
+  }
+
+  it('follows NextMarker pagination and extracts id/arn/domainName/comment', async () => {
+    const urls: string[] = [];
+    const page1 =
+      `<DistributionList><Marker></Marker><NextMarker>M2</NextMarker><MaxItems>1</MaxItems>` +
+      `<IsTruncated>true</IsTruncated><Quantity>1</Quantity><Items>` +
+      summaryXml('D1', 'example staging') +
+      `</Items></DistributionList>`;
+    const page2 =
+      `<DistributionList><Marker>M2</Marker><MaxItems>1</MaxItems>` +
+      `<IsTruncated>false</IsTruncated><Quantity>1</Quantity><Items>` +
+      summaryXml('D2', 'example production') +
+      `</Items></DistributionList>`;
+    const transport: Transport = async (req) => {
+      urls.push(req.url);
+      return response(200, req.url.includes('Marker=M2') ? page2 : page1);
+    };
+
+    const items = await cloudfrontWith(transport).listDistributions();
+
+    expect(items).toEqual([
+      {
+        id: 'D1',
+        arn: 'arn:aws:cloudfront::1:distribution/D1',
+        domainName: 'd1.cloudfront.net',
+        comment: 'example staging',
+      },
+      {
+        id: 'D2',
+        arn: 'arn:aws:cloudfront::1:distribution/D2',
+        domainName: 'd2.cloudfront.net',
+        comment: 'example production',
+      },
+    ]);
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toContain('Marker=M2');
+  });
+
+  it('returns an empty list for an account with no distributions', async () => {
+    const empty =
+      `<DistributionList><Marker></Marker><MaxItems>100</MaxItems>` +
+      `<IsTruncated>false</IsTruncated><Quantity>0</Quantity></DistributionList>`;
+    const transport: Transport = async () => response(200, empty);
+
+    expect(await cloudfrontWith(transport).listDistributions()).toEqual([]);
+  });
+});
+
 describe('CloudFrontClient.tagResource', () => {
   it('sends Operation=Tag alongside the encoded Resource ARN', async () => {
     let url = '';
