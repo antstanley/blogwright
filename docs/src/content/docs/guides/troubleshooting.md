@@ -75,6 +75,27 @@ Bootstrapping with a custom domain requests an ACM certificate that must be vali
 
 For the preview stack the domain must be a Route53 hosted zone, so validation records are created for you and this error usually means DNS was still propagating — just re-run.
 
+### `CNAMEAlreadyExists` on a bootstrap re-run
+
+A bootstrap that failed partway can leave a CloudFront distribution in your
+account that state never recorded; re-running then trips CloudFront's duplicate-alias
+check (`One or more of the CNAMEs you provided are already associated with a
+different resource`) before its idempotency match applies. blogwright recovers from
+this automatically: it looks for a distribution whose comment matches this
+environment and whose immutable CallerReference proves it was created by an earlier
+run of the same bootstrap, adopts it into state (`adopted existing distribution
+<id>`), and continues.
+
+If the error still surfaces, no adoptable match was found — the alias genuinely
+belongs to another distribution (possibly in another AWS account). Find who owns it
+and remove the alias there, or change `domain`. If the message is preceded by an
+`adoption lookup failed` warning, the recovery itself couldn't run (usually missing
+`cloudfront:ListDistributions` permission) — fix that and re-run.
+
+More generally, an interrupted bootstrap is safe to re-run: state is persisted even
+when a step fails, so completed resources are found and reconciled rather than
+re-created.
+
 ### `refusing to destroy "<env>" without --yes`
 
 Destructive operations require explicit confirmation via the `--yes` flag — there is no interactive prompt to fumble in CI. The same guard protects the other irreversible commands:
