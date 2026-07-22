@@ -13,14 +13,12 @@ spec set is created here later, that page moves to `development-guidelines.md`.
 
 ## Change specs
 
-Pending proposals under [`changes/`](changes/); merged history moves to
-`changes/merged/`.
+Pending proposals live under [`changes/`](changes/); merged history under
+[`changes/merged/`](changes/merged/). None pending. Merged:
 
-- [Persist node outputs when create() fails partway](changes/2026-07-22-persist_partial_bootstrap_state.md) —
-  save state on the failure path and record identity outputs before secondary
-  mutations, so a crashed bootstrap never orphans a resource outside
-  `state/<env>.json`.
-- [Adopt orphaned resources when re-bootstrapping a partial environment](changes/2026-07-22-adopt_orphaned_resources_on_bootstrap.md) —
-  distribution adoption on `CNAMEAlreadyExists` (verified by CallerReference) and
-  bucket config reconcile, so re-running bootstrap recovers without manual state
-  surgery.
+- [Persist node outputs when create() fails partway](changes/merged/2026-07-22-persist_partial_bootstrap_state.md)
+  (merged 2026-07-22) — state saves on the failure path; identity outputs are
+  recorded before secondary mutations.
+- [Adopt orphaned resources when re-bootstrapping a partial environment](changes/merged/2026-07-22-adopt_orphaned_resources_on_bootstrap.md)
+  (merged 2026-07-22) — distribution adoption on `CNAMEAlreadyExists` (verified by
+  CallerReference) and bucket config reconcile on every apply.

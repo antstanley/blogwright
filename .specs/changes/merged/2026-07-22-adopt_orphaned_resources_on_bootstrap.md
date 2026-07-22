@@ -1,6 +1,6 @@
 # Change: Adopt orphaned resources when re-bootstrapping a partial environment
 
-**Status:** Implemented · **Date:** 2026-07-22 · **Owner:** Ant Stanley · **Target:** packages/cli (resource nodes) + packages/core (CloudFront client)
+**Status:** Merged · **Merged:** 2026-07-22 · **Date:** 2026-07-22 · **Owner:** Ant Stanley · **Target:** packages/cli (resource nodes) + packages/core (CloudFront client)
 
 Re-running `bootstrap` against a partially bootstrapped environment dead-ends
 when a resource exists in AWS but not in state: `CreateDistribution` fails with

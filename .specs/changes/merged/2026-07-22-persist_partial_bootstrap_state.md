@@ -1,6 +1,6 @@
 # Change: Persist node outputs when create() fails partway
 
-**Status:** Implemented · **Date:** 2026-07-22 · **Owner:** Ant Stanley · **Target:** packages/cli (graph engine)
+**Status:** Merged · **Merged:** 2026-07-22 · **Date:** 2026-07-22 · **Owner:** Ant Stanley · **Target:** packages/cli (graph engine)
 
 State is only persisted after a node's `create()` returns, so a failure between a
 remote mutation and that save orphans the resource outside the state file. This
