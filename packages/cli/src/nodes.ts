@@ -434,7 +434,9 @@ function certificateNode(): ResourceNode {
           { intervalMs: 5_000, timeoutMs: 5 * 60_000 },
         );
         if (initial.status === 'PENDING_VALIDATION' && initial.validation.length === 0) {
-          throw new Error('ACM returned no validation records for the certificate; re-run bootstrap');
+          throw new Error(
+            'ACM returned no validation records for the certificate; re-run bootstrap',
+          );
         }
       }
       if (initial.status !== 'ISSUED' && initial.validation.length > 0) {
@@ -748,7 +750,9 @@ function logDeliveryNode(): ResourceNode {
         // delivery/source/destination trio and retry once.
         if (!(err instanceof AwsError && /Conflict/i.test(err.code))) throw err;
         ctx.logger.step('stale log delivery from a previous stack — removing and retrying');
-        for (const id of await ctx.clients.logsUsEast1.deliveriesForSource(ctx.names.deliverySource)) {
+        for (const id of await ctx.clients.logsUsEast1.deliveriesForSource(
+          ctx.names.deliverySource,
+        )) {
           await ctx.clients.logsUsEast1.deleteDelivery(id);
         }
         await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
@@ -762,7 +766,9 @@ function logDeliveryNode(): ResourceNode {
       // distribution ARN fails with ConflictException ("Update to existing Delivery Source
       // with new ResourceId is not allowed"). Delete the delivery first (it references both),
       // then the source and destination. The id isn't in state, so look it up by source name.
-      const deliveryId = await ctx.clients.logsUsEast1.findDeliveryIdBySource(ctx.names.deliverySource);
+      const deliveryId = await ctx.clients.logsUsEast1.findDeliveryIdBySource(
+        ctx.names.deliverySource,
+      );
       if (deliveryId) await ctx.clients.logsUsEast1.deleteDelivery(deliveryId);
       await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
       await ctx.clients.logsUsEast1.deleteDeliveryDestination(ctx.names.deliveryDestination);

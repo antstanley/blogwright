@@ -109,7 +109,10 @@ export async function initSite(
     validate: (v) => (GITHUB_REPO_PATTERN.test(v) ? undefined : 'expected owner/repo'),
   });
 
-  await fs.writeText(configPath, renderConfig({ region: region!, siteName: siteName!, domain, githubRepo }));
+  await fs.writeText(
+    configPath,
+    renderConfig({ region: region!, siteName: siteName!, domain, githubRepo }),
+  );
   logger.ok(`wrote ${configPath}`);
   logger.info('');
   logger.info(colors.bold('Next steps:'));

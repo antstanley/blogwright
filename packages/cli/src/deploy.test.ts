@@ -94,7 +94,9 @@ describe('pollBuild nudge', () => {
         },
       },
     });
-    await expect(pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN)).resolves.toEqual({ state: 'done' });
+    await expect(pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN)).resolves.toEqual({
+      state: 'done',
+    });
   });
 
   it('shows a live status line per cycle and clears it when the poll ends', async () => {
@@ -152,7 +154,11 @@ describe('runMicrovmWithRetry', () => {
     executionRoleArn: 'arn:role',
     clientToken: 'run-abc-1',
     maximumDurationInSeconds: 1800,
-    idlePolicy: { autoResumeEnabled: false, maxIdleDurationSeconds: 300, suspendedDurationSeconds: 120 },
+    idlePolicy: {
+      autoResumeEnabled: false,
+      maxIdleDurationSeconds: 300,
+      suspendedDurationSeconds: 120,
+    },
     ingressNetworkConnectors: [],
     egressNetworkConnectors: [],
   };

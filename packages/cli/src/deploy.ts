@@ -51,7 +51,10 @@ async function nudge(ctx: OpsContext, endpoint: string, token: string): Promise<
 const RUN_RETRY_DELAYS_MS: readonly number[] = [2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
 
 function isGatewayError(err: unknown): boolean {
-  return err instanceof AwsError && (err.statusCode === 502 || err.statusCode === 503 || err.statusCode === 504);
+  return (
+    err instanceof AwsError &&
+    (err.statusCode === 502 || err.statusCode === 503 || err.statusCode === 504)
+  );
 }
 
 /**

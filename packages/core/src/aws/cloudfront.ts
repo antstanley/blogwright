@@ -154,7 +154,9 @@ export class CloudFrontClient {
   /** Apply tags to a distribution (or any taggable CloudFront resource) by ARN. */
   async tagResource(resourceArn: string, tags: ResourceTags): Promise<void> {
     const items = Object.entries(tags)
-      .map(([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`)
+      .map(
+        ([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`,
+      )
       .join('');
     await this.client.send({
       service: 'cloudfront',
@@ -208,7 +210,10 @@ export class CloudFrontClient {
     if (sameAliases && currentCert === acmCertificateArn) return false;
     const next = current.config
       .replace(/<Aliases>.*?<\/Aliases>/s, aliasesBlock(aliases))
-      .replace(/<ViewerCertificate>.*?<\/ViewerCertificate>/s, viewerCertificateBlock(acmCertificateArn));
+      .replace(
+        /<ViewerCertificate>.*?<\/ViewerCertificate>/s,
+        viewerCertificateBlock(acmCertificateArn),
+      );
     await this.client.send({
       service: 'cloudfront',
       method: 'PUT',

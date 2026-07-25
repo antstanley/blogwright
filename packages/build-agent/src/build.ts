@@ -230,9 +230,7 @@ export function shouldUpload(
 
 /** True for the 403 a role without `s3:PutObjectTagging` gets on a tagged PUT. */
 function isAccessDenied(err: unknown): boolean {
-  return (
-    err instanceof AwsError && (err.statusCode === 403 || /AccessDenied/i.test(err.code))
-  );
+  return err instanceof AwsError && (err.statusCode === 403 || /AccessDenied/i.test(err.code));
 }
 
 /**
