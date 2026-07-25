@@ -131,7 +131,9 @@ describe('deployment shape config', () => {
 
   it('accepts a monorepo layout and SPA mode', () => {
     const cfg = parseConfig(
-      withSite('{ "spa": true, "paths": { "app": "web", "dist": "web/build" }, "sourceInclude": ["web/src/lib/pkg/"] }'),
+      withSite(
+        '{ "spa": true, "paths": { "app": "web", "dist": "web/build" }, "sourceInclude": ["web/src/lib/pkg/"] }',
+      ),
     );
     expect(cfg.paths.app).toBe('web');
     expect(cfg.paths.dist).toBe('web/build');
@@ -142,9 +144,7 @@ describe('deployment shape config', () => {
   it('rejects escaping or absolute app/dist/sourceInclude paths', () => {
     expect(() => parseConfig(withSite('{ "paths": { "app": "../up" } }'))).toThrow(/paths.app/);
     expect(() => parseConfig(withSite('{ "paths": { "dist": "/abs" } }'))).toThrow(/paths.dist/);
-    expect(() => parseConfig(withSite('{ "sourceInclude": ["a/../b"] }'))).toThrow(
-      /sourceInclude/,
-    );
+    expect(() => parseConfig(withSite('{ "sourceInclude": ["a/../b"] }'))).toThrow(/sourceInclude/);
   });
 });
 

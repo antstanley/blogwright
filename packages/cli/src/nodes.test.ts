@@ -106,15 +106,16 @@ describe('cloudfront log delivery self-heal', () => {
 
   it('rethrows non-conflict errors untouched', async () => {
     const { ctx } = deliveryCtx(false);
-    (ctx.clients.logsUsEast1 as unknown as { putDeliverySource: () => Promise<string> }).putDeliverySource =
-      async () => {
-        throw new AwsError({
-          service: 'logs',
-          code: 'AccessDenied',
-          message: 'no',
-          statusCode: 403,
-        });
-      };
+    (
+      ctx.clients.logsUsEast1 as unknown as { putDeliverySource: () => Promise<string> }
+    ).putDeliverySource = async () => {
+      throw new AwsError({
+        service: 'logs',
+        code: 'AccessDenied',
+        message: 'no',
+        statusCode: 403,
+      });
+    };
     await expect(node(ctx).create(ctx)).rejects.toThrow(/AccessDenied/);
   });
 });
@@ -353,8 +354,18 @@ describe('distributionNode adoption', () => {
             });
           },
           listDistributions: async () => [
-            { id: 'D-OTHER', arn: 'arn:other', domainName: 'other.cloudfront.net', comment: 'another site' },
-            { id: 'D-ORPHAN', arn: 'arn:orphan', domainName: 'orphan.cloudfront.net', comment: 'example test' },
+            {
+              id: 'D-OTHER',
+              arn: 'arn:other',
+              domainName: 'other.cloudfront.net',
+              comment: 'another site',
+            },
+            {
+              id: 'D-ORPHAN',
+              arn: 'arn:orphan',
+              domainName: 'orphan.cloudfront.net',
+              comment: 'example test',
+            },
           ],
           getDistributionConfig: async (id: string) => {
             configFetches.push(id);
@@ -509,7 +520,9 @@ describe('previewDnsNode', () => {
 
     await node.update!(ctx);
 
-    expect(deletes).toEqual([{ name: '*.preview.example.com', type: 'CNAME', value: 'd123.cloudfront.net' }]);
+    expect(deletes).toEqual([
+      { name: '*.preview.example.com', type: 'CNAME', value: 'd123.cloudfront.net' },
+    ]);
     expect(upserts.map((u) => u.type)).toEqual(['A', 'AAAA']);
     expect(ctx.state.resources['preview-dns']?.type).toBe('ALIAS');
   });

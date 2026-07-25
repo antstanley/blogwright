@@ -109,7 +109,9 @@ describe('S3Client bucket-configuration checksums', () => {
   });
 
   it('putBucketPolicy sends x-amz-checksum-sha256 for its body', async () => {
-    const { headers, body } = await captured((s3) => s3.putBucketPolicy('b', '{"Version":"2012-10-17"}'));
+    const { headers, body } = await captured((s3) =>
+      s3.putBucketPolicy('b', '{"Version":"2012-10-17"}'),
+    );
     expect(body).toBe('{"Version":"2012-10-17"}');
     expect(headers['x-amz-checksum-sha256']).toBe(sha256Base64(body));
   });

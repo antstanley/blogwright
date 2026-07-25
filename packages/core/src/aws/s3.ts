@@ -124,7 +124,9 @@ export class S3Client {
   /** Apply bucket tags (idempotent full replace). */
   async putBucketTagging(bucket: string, tags: ResourceTags): Promise<void> {
     const tagSet = Object.entries(tags)
-      .map(([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`)
+      .map(
+        ([k, v]) => `<Tag><Key>${encodeEntities(k)}</Key><Value>${encodeEntities(v)}</Value></Tag>`,
+      )
       .join('');
     const body = `<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet>${tagSet}</TagSet></Tagging>`;
     await this.client.send({
@@ -221,7 +223,10 @@ export class S3Client {
       method: 'PUT',
       path: `/${bucket}`,
       query: { policy: '' },
-      headers: { 'content-type': 'application/json', 'x-amz-checksum-sha256': bodyChecksum(policy) },
+      headers: {
+        'content-type': 'application/json',
+        'x-amz-checksum-sha256': bodyChecksum(policy),
+      },
       body: policy,
     });
   }

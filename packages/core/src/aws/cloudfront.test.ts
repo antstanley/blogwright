@@ -64,7 +64,8 @@ describe('CloudFrontClient.setDistributionAliases', () => {
   it('is a no-op when the alias set and certificate already match (legacy elements ignored)', async () => {
     let puts = 0;
     const transport: Transport = async (req) => {
-      if (req.method === 'GET') return response(200, configXml(['example.com'], CERT), { etag: 'E1' });
+      if (req.method === 'GET')
+        return response(200, configXml(['example.com'], CERT), { etag: 'E1' });
       puts += 1;
       return response(200, '', {});
     };
@@ -83,9 +84,13 @@ describe('CloudFrontClient.setDistributionAliases', () => {
     let putBody = '';
     const transport: Transport = async (req) => {
       if (req.method === 'GET') {
-        return response(200, configXml(['example.com'], 'arn:aws:acm:us-east-1:1:certificate/old'), {
-          etag: 'E1',
-        });
+        return response(
+          200,
+          configXml(['example.com'], 'arn:aws:acm:us-east-1:1:certificate/old'),
+          {
+            etag: 'E1',
+          },
+        );
       }
       putBody = String(req.body ?? '');
       return response(200, '', {});
@@ -103,7 +108,10 @@ describe('CloudFrontClient.setDistributionAliases', () => {
 
   it('throws with the distribution id when the distribution is gone', async () => {
     const transport: Transport = async () =>
-      response(404, '<ErrorResponse><Error><Code>NoSuchDistribution</Code></Error></ErrorResponse>');
+      response(
+        404,
+        '<ErrorResponse><Error><Code>NoSuchDistribution</Code></Error></ErrorResponse>',
+      );
 
     await expect(
       cloudfrontWith(transport).setDistributionAliases('D-gone', ['x.com'], CERT),

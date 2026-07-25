@@ -56,11 +56,7 @@ export async function listRepoFiles(
  * pre-deploy build (e.g. `just wasm`) did not run, and shipping without the
  * artifacts would deploy a broken site.
  */
-async function includedFiles(
-  fs: FileSystem,
-  cwd: string,
-  entry: string,
-): Promise<string[]> {
+async function includedFiles(fs: FileSystem, cwd: string, entry: string): Promise<string[]> {
   const rel = entry.replace(/\/+$/, '');
   const abs = `${cwd}/${rel}`;
   try {

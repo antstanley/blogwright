@@ -30,10 +30,14 @@ describe('LogsClient.findDeliveryIdBySource', () => {
       }
       return response(
         200,
-        JSON.stringify({ deliveries: [{ id: 'want', deliverySourceName: 'preview-example-cf-source' }] }),
+        JSON.stringify({
+          deliveries: [{ id: 'want', deliverySourceName: 'preview-example-cf-source' }],
+        }),
       );
     };
-    expect(await logsWith(transport).findDeliveryIdBySource('preview-example-cf-source')).toBe('want');
+    expect(await logsWith(transport).findDeliveryIdBySource('preview-example-cf-source')).toBe(
+      'want',
+    );
   });
 
   it('returns undefined when nothing matches', async () => {
@@ -55,6 +59,8 @@ describe('LogsClient delete* idempotency', () => {
   it('rethrows non-not-found errors', async () => {
     const transport: Transport = async () =>
       response(400, JSON.stringify({ __type: 'ValidationException', message: 'bad input' }));
-    await expect(logsWith(transport).deleteDeliverySource('s')).rejects.toThrow(/ValidationException|bad input/);
+    await expect(logsWith(transport).deleteDeliverySource('s')).rejects.toThrow(
+      /ValidationException|bad input/,
+    );
   });
 });
