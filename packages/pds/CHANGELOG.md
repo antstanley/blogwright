@@ -1,5 +1,16 @@
 # blogwright-pds
 
+## 0.3.3
+
+### Patch Changes
+
+- [#13](https://github.com/antstanley/blogwright/pull/13) [`b760320`](https://github.com/antstanley/blogwright/commit/b760320bef4a0ba479f847027ef66d1528d21d48) Thanks [@antstanley](https://github.com/antstanley)! - Ship smaller packages. The published tarballs no longer carry `.js.map` sourcemaps (`sourceMap` was set repo-wide in `tsconfig.base.json` and every emitted map was landing in `dist`), and `test-support.ts` — scaffolding imported only by `*.test.ts` — is now excluded from the build configs of `blogwright` and `blogwright-pds` rather than compiled into `dist`. It is still fully typechecked, since the `tsconfig.typecheck.json` files override `exclude` to `[]`.
+
+  Unpacked sizes drop by a quarter overall: `blogwright` 540.4 kB → 437.9 kB, `blogwright-core` 205.1 kB → 127.8 kB, `blogwright-pds` 99.9 kB → 58.9 kB, and the three packages together go from 183 files to 121. No runtime code changed.
+
+- Updated dependencies [[`b760320`](https://github.com/antstanley/blogwright/commit/b760320bef4a0ba479f847027ef66d1528d21d48)]:
+  - blogwright-core@0.3.3
+
 ## 0.3.2
 
 ### Patch Changes
