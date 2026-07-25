@@ -4,5 +4,28 @@
   "semi": true,
   "singleQuote": true,
   "trailingComma": "all",
-  "arrowParens": "always"
+  "arrowParens": "always",
+  // oxfmt owns this repo's TypeScript and JavaScript, nothing else. Build output
+  // (dist/, packages/cli/agent/, node_modules/) needs no entry here — oxfmt reads
+  // .gitignore by default. Patterns are relative to this file.
+  "ignorePatterns": [
+    // Owned by changesets: `pnpm changeset` writes the frontmatter with double
+    // quotes and rewrites these files on every release, so formatting them just
+    // starts a fight the CLI wins.
+    ".changeset/**",
+    "**/CHANGELOG.md",
+
+    // Authored prose — the Starlight docs site, specs, and READMEs. Reflowing
+    // hand-written documentation is a content change, not formatting.
+    "**/*.md",
+    "**/*.mdx",
+
+    // Hand-tuned config where key order and comments carry meaning: package.json
+    // field order, the commented .oxlintrc.json and config/*.jsonc deploy files.
+    "**/*.json",
+    "**/*.jsonc",
+
+    // CI workflows: YAML layout is deliberate and reformatting risks semantics.
+    ".github/**"
+  ]
 }
