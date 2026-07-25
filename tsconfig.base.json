@@ -14,7 +14,6 @@
     "noFallthroughCasesInSwitch": true,
     "exactOptionalPropertyTypes": true,
     "declaration": true,
-    "sourceMap": true,
     "skipLibCheck": true
   }
 }
