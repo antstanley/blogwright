@@ -21,9 +21,10 @@ repository hygiene, agent-specific emphases, and the definition of done.
 | rolldown   | latest                   | bundles the build-agent server only (`packages/build-agent`)          |
 | jj         | 0.43+                    | version-control front end (colocated Git backend)                     |
 
-CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm test`, `pnpm lint`, and
-`pnpm knip` on every push to `main` and every pull request. There are no local
-pre-commit or pre-push hooks; CI is the enforcement gate.
+CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `pnpm test`,
+`pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` on every push to `main`
+and every pull request. There are no local pre-commit or pre-push hooks; CI is
+the enforcement gate.
 
 ## Clean Code — the pervasive style
 
@@ -312,8 +313,8 @@ A change is done when:
 - Errors are raised with context; no `null` is returned or passed for a domain value.
 - New external interactions (network, disk, process, terminal) go through a port;
   no direct Node API or vendor-SDK calls were added to domain modules.
-- `pnpm build`, `pnpm test`, `pnpm lint`, and `pnpm knip` all pass locally — the same
-  gates CI runs (CI adds `pnpm typecheck`).
+- `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip`
+  all pass locally — the same gates CI runs (CI adds `pnpm typecheck`).
 - A user-facing change ships with a changeset (`pnpm changeset`) describing its
   semver impact; internal-only changes (docs, tests, refactors) do not need one.
 - Pinned rkey vectors and derived AWS resource names are unchanged for existing

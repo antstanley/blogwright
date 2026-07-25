@@ -22,4 +22,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm lint
+      # Scope lives in .oxfmtrc.json (ignorePatterns), so a bare `.` is safe:
+      # it formats TypeScript and JavaScript and skips prose, generated files,
+      # and hand-tuned config. Fix locally with `pnpm exec oxfmt .`.
+      - run: pnpm exec oxfmt --check .
       - run: pnpm knip
