@@ -100,6 +100,8 @@ export async function publicClientJwk(clientKey: Jwk): Promise<Record<string, un
   // Round-trip through JSON: drops `d: undefined` left by the getter and
   // matches exactly what the committed jwks.json file will contain.
   const plain = JSON.parse(JSON.stringify(source)) as Record<string, unknown>;
+  // `d` is the private key component: it must be absent from the key set, not present-and-undefined.
+  // eslint-disable-next-line e18e/no-delete-property
   delete plain.d;
   return plain;
 }

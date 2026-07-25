@@ -1,6 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "plugins": ["typescript", "unicorn", "oxc"],
+  "jsPlugins": ["@e18e/eslint-plugin"],
   "categories": {
     "correctness": "error",
     "suspicious": "warn",
@@ -11,6 +12,37 @@
     "es2023": true
   },
   "rules": {
+    // @e18e/eslint-plugin. Its `recommended`/`modernization`/`performanceImprovements`
+    // presets are ESLint flat-config objects, which oxlint cannot consume, so the rules
+    // are listed individually. Omitted on purpose: prefer-array-at, prefer-array-to-reversed,
+    // prefer-array-to-sorted, prefer-regex-test, prefer-spread-syntax, no-indexof-equality
+    // and prefer-inline-equality all require type information and throw under oxlint,
+    // which has no typescript-eslint parser services.
+    //
+    // prefer-static-regex is off deliberately: V8 caches compiled patterns by
+    // pattern+flags, so hoisting a one-shot literal saves an allocation, not a
+    // recompile. It fired on 110 ordinary validators and guard clauses, where
+    // moving the regex away from the line that reads it costs more than it buys.
+    "e18e/prefer-static-regex": "off",
+    "e18e/prefer-array-fill": "error",
+    "e18e/prefer-array-from-map": "error",
+    "e18e/prefer-array-some": "error",
+    "e18e/prefer-array-to-spliced": "error",
+    "e18e/prefer-date-now": "error",
+    "e18e/prefer-includes": "error",
+    "e18e/prefer-nullish-coalescing": "error",
+    "e18e/prefer-object-has-own": "error",
+    "e18e/prefer-string-fromcharcode": "error",
+    "e18e/prefer-timer-args": "error",
+    "e18e/prefer-url-canparse": "error",
+    "e18e/ban-dependencies": "error",
+    "e18e/no-delete-property": "warn",
+    "e18e/no-spread-in-reduce": "warn",
+    "e18e/prefer-exponentiation-operator": "warn",
+    "e18e/prefer-flatmap-over-map-flat": "warn",
+    "e18e/prefer-get-or-insert": "warn",
+    "e18e/prefer-includes-over-regex-test": "warn",
+    "e18e/prefer-static-collator": "warn",
     "no-console": "off",
     "typescript/no-explicit-any": "warn",
     "no-underscore-dangle": "off",
