@@ -197,9 +197,10 @@ export class CloudFrontClient {
   ): Promise<boolean> {
     const current = await this.getDistributionConfig(id);
     if (!current) throw new Error(`distribution ${id} not found while reconciling aliases`);
-    const currentAliases = [...current.config.matchAll(/<CNAME>(.*?)<\/CNAME>/g)]
-      .map((m) => m[1] ?? '')
-      .sort();
+    const currentAliases = Array.from(
+      current.config.matchAll(/<CNAME>(.*?)<\/CNAME>/g),
+      (m) => m[1] ?? '',
+    ).sort();
     const currentCert = textTag(current.config, 'ACMCertificateArn');
     const sameAliases =
       currentAliases.length === aliases.length &&

@@ -79,5 +79,6 @@ export async function listPublishablePosts(
       pubDate,
     });
   }
-  return posts.sort((a, b) => a.slug.localeCompare(b.slug));
+  // Codepoint sort, not localeCompare: collation must not depend on host locale/ICU.
+  return posts.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
 }

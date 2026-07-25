@@ -240,7 +240,11 @@ export async function history(ctx: OpsContext): Promise<void> {
       ctx.logger.warn(`skipping unreadable manifest ${obj.key}`);
     }
   }
-  manifests.sort((a, b) => b.finishedAt.localeCompare(a.finishedAt));
+  // Newest first. Codepoint sort, not localeCompare: collation must not depend on host locale/ICU
+  // (finishedAt is ISO-8601, which orders correctly by codepoint).
+  manifests.sort((a, b) =>
+    a.finishedAt > b.finishedAt ? -1 : a.finishedAt < b.finishedAt ? 1 : 0,
+  );
   if (ctx.ports.terminal.isInteractive) {
     for (const line of renderHistoryTable(manifests, Date.now())) ctx.logger.info(line);
     return;
