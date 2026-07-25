@@ -108,6 +108,7 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
+          : > "${RUNNER_TEMP}/staged.log"
           stage() {
             local dir="$1" name="$2" tarball="$3"
             if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
@@ -118,15 +119,38 @@ jobs:
             (cd "${dir}" && pnpm pack --pack-destination "${RUNNER_TEMP}")
             # Auth is GitHub OIDC trusted publishing (id-token: write +
             # registry-url); --provenance attests the build to this commit.
+            # Tee the output: its "(staged with id ...)" lines are the only
+            # token-free source of the staging ids (see the summary step below).
+            # 2>&1 because npm splits notices onto stderr, and this must not
+            # depend on which stream carries the result line.
             npm stage publish --provenance --access public --ignore-scripts \
-              "${RUNNER_TEMP}/${tarball}"
+              "${RUNNER_TEMP}/${tarball}" 2>&1 | tee -a "${RUNNER_TEMP}/staged.log"
           }
           stage packages/core blogwright-core "blogwright-core-${VERSION}.tgz"
           stage packages/pds blogwright-pds "blogwright-pds-${VERSION}.tgz"
           stage packages/cli blogwright "blogwright-${VERSION}.tgz"
 
-      - name: List pending staged packages (approve these to go live)
-        run: npm stage list || true
+      # Reads the ids back out of the publish output rather than calling
+      # `npm stage list`, which cannot authenticate here: setup-node writes
+      # .npmrc with _authToken=${NODE_AUTH_TOKEN}, and this workflow ships no
+      # npm token by design, so that value is setup-node's placeholder. Publish
+      # commands survive because npm swaps the Actions OIDC token for a
+      # short-lived credential; a plain account read like `stage list` does not,
+      # and returned E401 — silently, since the step ended in `|| true`.
+      - name: Summarize staged packages (approve these to go live)
+        run: |
+          set -euo pipefail
+          {
+            echo "## Staged packages"
+            echo
+            if grep -q 'staged with id' "${RUNNER_TEMP}/staged.log"; then
+              grep 'staged with id' "${RUNNER_TEMP}/staged.log" | sed 's/^+ /- /'
+              echo
+              echo 'Not live yet. Approve with `npm stage approve` or the npmjs staged-packages UI.'
+            else
+              echo 'Nothing staged — every package was already published at this version.'
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   create-release:
     name: Create GitHub Release
