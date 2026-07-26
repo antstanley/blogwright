@@ -1,6 +1,6 @@
-# Task 36 — Optional output format, record fields and field delimiter on LogsClient deliveries
+# Task 38 — Optional output format, record fields and field delimiter on LogsClient deliveries
 
-**Plan:** [plan.md](../plan.md) · **Certificate:** [36-core_logs_delivery_configuration-certificate.md](36-core_logs_delivery_configuration-certificate.md)
+**Plan:** [plan.md](../plan.md) · **Certificate:** [37-core_logs_delivery_configuration-certificate.md](37-core_logs_delivery_configuration-certificate.md)
 
 **Implements:** [2026-07-26-analytics_plugin.md §`blogwright-core` → `LogsClient` delivery configuration (Modify)](../../../changes/2026-07-26-analytics_plugin.md) ("Both are optional and default to today's behaviour, so the site's existing CloudWatch delivery is unchanged")
 **Depends on:** —

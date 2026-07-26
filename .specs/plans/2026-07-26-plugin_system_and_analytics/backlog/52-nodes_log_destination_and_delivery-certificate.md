@@ -17,14 +17,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **P1 — Goal.** `analytics-log-destination` and `analytics-log-delivery` add a second delivery hanging off the site's existing delivery source, which the plugin reads but never creates, never repoints and never deletes.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the site's vended log delivery (`packages/cli/src/nodes.ts:713` `logDeliveryNode`, its `ConflictException` self-heal at `:743-762` and its teardown at `:763-775`), the `LogsClient` request bodies task 36 pinned for the no-options path, or the plugin's read-only access to the site's state (`ctx.siteState`, typed `SiteState`, from task 01 — distinct from `ctx.state`, which holds the plugin's own outputs).
+- **P3 — Invariants.** Must not break the site's vended log delivery (`packages/cli/src/nodes.ts:713` `logDeliveryNode`, its `ConflictException` self-heal at `:743-762` and its teardown at `:763-775`), the `LogsClient` request bodies task 37 pinned for the no-options path, or the plugin's read-only access to the site's state (`ctx.siteState`, typed `SiteState`, from task 01 — distinct from `ctx.state`, which holds the plugin's own outputs).
 
 ## Obligations
 
 - **O1 — Destination with an immutable output format.**
   - *Claim:* the destination points at the Firehose stream with the required output format and is replaced, not updated, when the recorded format differs from the configured one.
   - *Evidence to collect:* read the destination node's `create`/`update` bodies and the recorded-format comparison in `packages/analytics/src/nodes.ts`; run `pnpm test -- nodes` in `packages/analytics` and confirm the format-change case asserts a delete-then-create call sequence rather than a repeated put.
-  - *Checks:* resolve the output-format argument — confirm it reaches `putDeliveryDestination`'s task 36 option (`packages/core/src/aws/logs.ts:106-112`) and not a hand-built request body.
+  - *Checks:* resolve the output-format argument — confirm it reaches `putDeliveryDestination`'s task 37 option (`packages/core/src/aws/logs.ts:106-112`) and not a hand-built request body.
   - *Status:* ☐ unverified
 
 - **O2 — Delivery joins the site's source; absence fails with an actionable message.**
@@ -59,7 +59,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `packages/cli/src/nodes.ts:743` `logDeliveryNode.create` with a stale source (the `ConflictException` path) → expect the existing sequence `putSource, listDeliveries, deleteDelivery:d-1, deleteSource, deleteDest, putSource, putDest, createDelivery` pinned at `packages/cli/src/nodes.test.ts:88-97` : ☐ (PRESERVED / REGRESSION)
-- `packages/core/src/aws/logs.ts:114` `createDelivery` called by the site with no options → expect the body pinned by task 36 (`{ deliverySourceName, deliveryDestinationArn }`) with no record-field keys added : ☐ (PRESERVED / REGRESSION)
+- `packages/core/src/aws/logs.ts:114` `createDelivery` called by the site with no options → expect the body pinned by task 37 (`{ deliverySourceName, deliveryDestinationArn }`) with no record-field keys added : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

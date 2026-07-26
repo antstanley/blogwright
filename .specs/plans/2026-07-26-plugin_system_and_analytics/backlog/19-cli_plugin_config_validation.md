@@ -3,7 +3,7 @@
 **Plan:** [plan.md](../plan.md) · **Certificate:** [19-cli_plugin_config_validation-certificate.md](19-cli_plugin_config_validation-certificate.md)
 
 **Implements:** [2026-07-26-cli_plugin_system.md §CLI → Config ownership (Add)](../../../changes/2026-07-26-cli_plugin_system.md) ("the CLI calls each loaded plugin's `validateConfig` after parsing. A config file carrying a block for a plugin that is not installed is valid and inert — the same contract `pds` has today.")
-**Depends on:** 08, 10
+**Depends on:** 03, 08, 10
 **Produces:** after `parseConfig`, the CLI hands each loaded plugin the raw block its `configKey` names for validation, with blocks for uninstalled plugins left inert and duplicate `configKey` claims rejected
 **Pointers:** `packages/cli/src/context.ts:120-124` (the `loadConfig` call inside `createContext` — the seam validation hooks onto), `packages/cli/src/context.ts:85-102` (`loadConfig`, which calls `parseConfig` at `:94`), `packages/cli/src/plugins.ts` (task 08 — `discover`, and task 09's collision pass where a duplicate `configKey` check belongs), `packages/core/src/config.ts:242` (`parseConfig`), `packages/core/src/config.ts:253-255` (the spread that keeps unknown keys intact), `packages/core/src/config.ts:314-330` (core's `pds` branch — deliberately untouched by this task; task 27 removes it)
 

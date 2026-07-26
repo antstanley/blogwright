@@ -1,6 +1,6 @@
-# Task 38 — Scaffold the blogwright-analytics workspace package
+# Task 33 — Scaffold the blogwright-analytics workspace package
 
-**Plan:** [plan.md](../plan.md) · **Certificate:** [38-analytics_package_skeleton-certificate.md](38-analytics_package_skeleton-certificate.md)
+**Plan:** [plan.md](../plan.md) · **Certificate:** [32-analytics_package_skeleton-certificate.md](32-analytics_package_skeleton-certificate.md)
 
 **Implements:** [2026-07-26-analytics_plugin.md §Analytics plugin → Namespace and commands](../../../changes/2026-07-26-analytics_plugin.md) (the plugin is a package installed with `blogwright plugin add analytics`, never a CLI dependency) and [DEVELOPMENT.md §Hexagonal architecture — ports and adapters](../../../../DEVELOPMENT.md) ("Features live in their own packages" — a coherent feature with its own domain is its own workspace package depending on `blogwright-core`)
 **Depends on:** —
@@ -15,6 +15,7 @@
 - [ ] Add `packages/analytics/tsconfig.json` and `packages/analytics/tsconfig.typecheck.json` mirroring the pds pair: extend `../../tsconfig.base.json`, `rootDir: src`, `outDir: dist`, `types: ["node"]`, exclude `dist` and `**/*.test.ts` in the build config, and clear the exclusions under `noEmit` in the typecheck config.
 - [ ] Add `packages/analytics/vitest.config.ts` with the `blogwright-core` source alias from `packages/pds/vitest.config.ts`, `environment: 'node'`, and `include: ['src/**/*.test.ts']` — task 40 widens the include to cover `transform/**` when the transform lands.
 - [ ] Add a `packages/analytics` entry to the `workspaces` map at `knip.json:4-12` alongside the existing four, and seed `packages/analytics/src/index.ts` with the module doc comment stating what the package owns and no export knip would report unused.
+- [ ] Seed one real test alongside it — `packages/analytics/src/index.test.ts` asserting the exported `ANALYTICS_NAMESPACE = 'analytics'` constant that task 47's `Plugin.name` later consumes. `vitest run` exits NON-ZERO when it finds no test files, so a package carrying the pds `test` script with no tests turns `pnpm -r test` red from this task until task 39 adds `schema.test.ts` — breaking one of the five definition-of-done gates every task in between inherits, and falsifying this task's own "`pnpm -r test` lists the new package" claim. A real assertion on a value that survives beats `passWithNoTests`, which would also mask a genuinely empty suite later.
 - [ ] Deliberately omit the `blogwright.plugin` manifest field, leave `packages/cli/package.json:26-30` untouched, and state in the package `description` that the plugin is installed on demand rather than shipped with the CLI.
 
 ## Definition of done

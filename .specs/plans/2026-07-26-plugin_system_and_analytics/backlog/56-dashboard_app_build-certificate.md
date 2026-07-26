@@ -64,7 +64,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator: the app's own component tests (if any) are outside the DoD — the package's `test` script covers `src/**/*.test.ts` per task 38, and whether the Svelte tree joins it is undecided here. Bundle size, browser support and offline behaviour of the prebuilt app are unaddressed. `dist/app` inherits the repo-wide `dist` gitignore; confirm it is not accidentally committed. Whether `blogwright-analytics` needs a `prepack` guard so a stale `dist/app` cannot ship is a follow-up, not an obligation.
+Notes for the validator: the app's own component tests (if any) are outside the DoD — the package's `test` script covers `src/**/*.test.ts` per task 32, and whether the Svelte tree joins it is undecided here. Bundle size, browser support and offline behaviour of the prebuilt app are unaddressed. `dist/app` inherits the repo-wide `dist` gitignore; confirm it is not accidentally committed. Whether `blogwright-analytics` needs a `prepack` guard so a stale `dist/app` cannot ship is a follow-up, not an obligation.
 
 ## Conclusion
 

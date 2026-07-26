@@ -1,6 +1,6 @@
-# Done Certificate — Task 31: Add s3tables, firehose, glue and lambda to the AWS endpoint resolver
+# Done Certificate — Task 31: Open the transport so a plugin can supply its own AWS services
 
-**Task:** [31-core_endpoint_signing_names.md](31-core_endpoint_signing_names.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [31-core_transport_seam.md](31-core_transport_seam.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
 > This certificate is a verification protocol for Task 31. A validating agent discharges it:
@@ -15,14 +15,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `resolveEndpoint` accepts `s3tables`, `firehose`, `glue` and `lambda`, each resolving to its canonical regional host under its own signing name, with `microvms` provably unchanged.
+- **P1 — Goal.** `resolveEndpoint` and `SendOptions.service` accept a plugin-supplied service descriptor as well as a core `ServiceKey`, so a plugin signs against any AWS service without an edit to core — with `SIGNING_NAMES` unchanged and every existing core request byte-identical.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the MicroVM control-plane path (`packages/core/src/aws/microvms.ts` through `SigningClient.send` at `packages/core/src/aws/signer.ts:96`), the global-service signing rule for `iam`/`cloudfront`/`route53` (`packages/core/src/aws/endpoint.ts:36`), or the floci endpoint-override route used by `packages/core/src/aws/s3.floci.test.ts`.
 
 ## Obligations
 
 - **O1 — The four keys join `SIGNING_NAMES` without disturbing an existing entry.**
-  - *Claim:* `SIGNING_NAMES` at `packages/core/src/aws/endpoint.ts:19` contains `s3tables: 's3tables'`, `firehose: 'firehose'`, `glue: 'glue'` and `lambda: 'lambda'`, and every pre-existing key/value pair — `s3`, `sts`, `iam`, `logs`, `acm`, `cloudfront`, `route53`, `microvms: 'lambda'`, `secretsmanager` — is unchanged.
+  - *Claim:* `SIGNING_NAMES` at `packages/core/src/aws/endpoint.ts:19` is byte-identical to today — it gains NO keys — and `resolveEndpoint`/`SendOptions.service` additionally accept a `{ service, signingName, global? }` descriptor.
   - *Evidence to collect:* read `packages/core/src/aws/endpoint.ts:19-33`; run `jj diff packages/core/src/aws/endpoint.ts` and confirm the hunk inside `SIGNING_NAMES` is additive only (four added lines, zero removed, zero modified).
   - *Status:* ☐ unverified
 
@@ -62,7 +62,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator: the task deliberately adds no `canonicalHost` `case` and no `GLOBAL_SERVICES` entry — an added `case` for any of the four keys is a defect even if the host string is right, because it duplicates the default branch. The `lambda` key is unused until task 35 lands, so `pnpm knip` will not flag it (the map is a single exported constant) but a reviewer should expect no consumer yet. Firehose and S3 Tables are not offered in every region; region availability is task 37's concern, not this one.
+Notes for the validator: the task deliberately adds no `canonicalHost` `case` and no `GLOBAL_SERVICES` entry — an added `case` for any of the four keys is a defect even if the host string is right, because it duplicates the default branch. The `lambda` key is unused until task 36 lands, so `pnpm knip` will not flag it (the map is a single exported constant) but a reviewer should expect no consumer yet. Firehose and S3 Tables are not offered in every region; region availability is task 38's concern, not this one.
 
 ## Conclusion
 

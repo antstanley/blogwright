@@ -61,7 +61,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator: the bot heuristic's pattern list is not specified by the change spec — the DoD requires only that a match sets the flag and that no record is dropped for it, so the list's coverage is a judgement call, not an obligation. If the salt decision landed on Secrets Manager, the secret's provisioning node is not in this task's scope and must be traced to whichever later task creates it (nothing in tasks 38–46 does); flag that as a gap rather than a failure of this obligation. Retention/expiry of `visitor_key` values remains an open question in the change spec and is out of scope here.
+Notes for the validator: the bot heuristic's pattern list is not specified by the change spec — the DoD requires only that a match sets the flag and that no record is dropped for it, so the list's coverage is a judgement call, not an obligation. If the salt decision landed on Secrets Manager, the secret's provisioning node is not in this task's scope and must be traced to whichever later task creates it (nothing in tasks 32–46 does); flag that as a gap rather than a failure of this obligation. Retention/expiry of `visitor_key` values remains an open question in the change spec and is out of scope here.
 
 ## Conclusion
 

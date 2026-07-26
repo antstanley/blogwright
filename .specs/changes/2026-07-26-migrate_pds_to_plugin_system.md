@@ -3,7 +3,8 @@
 **Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/pds + packages/cli (dispatch) + packages/core (config)
 
 `blogwright-pds` becomes a plugin: it declares a manifest field, exports a
-`Plugin`, owns and validates its `pds` config key, and answers
+`Plugin`, owns and validates its `pds` config key, contributes the one resource
+node its feature needs, and answers
 `blogwright pds <action>` through generic dispatch instead of the hardcoded
 `runPds`. It remains a default dependency of the CLI, so nothing changes for
 users — `blogwright pds sync` keeps working with no install step. The migration
@@ -19,10 +20,16 @@ The plugin SPI proposed in
 against exactly one real feature. An abstraction validated by one example is the
 wrong abstraction waiting to be discovered — and DEVELOPMENT.md's Clean Code
 section says so directly. Migrating pds gives the SPI a second consumer with a
-genuinely different shape: pds contributes no resource-graph nodes at all, does
-its work through Secrets Manager and repo files, and has an interactive OAuth
-flow. Analytics is nearly its inverse. If the contract survives both, it is
-close to right.
+genuinely different shape: pds does its work through Secrets Manager and repo
+files, has an interactive OAuth flow, and contributes exactly one resource node
+where analytics contributes eleven. If the contract survives both, it is close
+to right.
+
+It also closes a layering leak. The site's GitHub-OIDC deploy role grants
+Secrets Manager access to the pds secret, which means the CLI's own resource
+graph reads a plugin's config key and derives a plugin's resource name — the
+one place plugin topography still lives outside its plugin. Moving it is what
+makes "a plugin owns its own topography" true rather than aspirational.
 
 The migration is also a straightforward simplification. `runPds`
 ([`cli.ts:187`](../../packages/cli/src/cli.ts)) hand-rolls positional shifting
@@ -83,6 +90,39 @@ this change cannot land before it.
 > required and non-empty, `handleResolver` must be an https URL when present,
 > `secretName` must match the permitted character class — and applies the
 > `<siteName>/atproto` default for `secretName` when it is absent.
+
+### `blogwright-pds` → Its own IAM policy node (Add)
+
+> The plugin contributes one resource node. The site's GitHub-OIDC deploy role
+> currently carries a Secrets Manager statement that exists only for pds — the
+> site graph branches on `ctx.config.pds` and derives the secret ARN from that
+> plugin's config key ([`nodes.ts:906`](../../packages/cli/src/nodes.ts)). That
+> is plugin topography in the site graph, and it moves.
+>
+> pds instead attaches a **named inline policy** to the site's role —
+> `putRolePolicy(role, 'blogwright-pds', …)` — granting `GetSecretValue`,
+> `PutSecretValue` and `CreateSecret` on its own secret's ARN. `IamClient`
+> already exposes `putRolePolicy`, `listRolePolicies` and `deleteRolePolicy`
+> ([`iam.ts:84,93,108`](../../packages/core/src/aws/iam.ts)), so the site's node
+> keeps managing only its own document and the plugin's grant is created and
+> removed with the plugin. The node reads the role name from the site's state
+> and fails with an actionable message when the site is not bootstrapped.
+>
+> This gives pds resource nodes, which it does not have today. It also makes it
+> the second consumer to exercise `nodes(ctx)`, rather than only the no-nodes
+> path.
+
+### `blogwright-cli` → The site graph drops its pds branch (Remove)
+
+> `oidcRolePolicyStatements` ([`nodes.ts:863`](../../packages/cli/src/nodes.ts))
+> loses its `if (ctx.config.pds)` branch entirely, and the CLI's resource graph
+> stops importing anything from `blogwright-pds`.
+>
+> The two changes are sequenced additive-first: pds attaches its own policy
+> before the site drops its statement. The policies are separately named, so
+> both grants coexist for one step and there is never a commit at which a CI
+> deploy loses access to the secret. Without that ordering this would be a
+> user-visible break in a migration whose whole promise is that there is none.
 
 ### `blogwright-core` → Config (Modify)
 
@@ -211,6 +251,11 @@ no user-visible change to assert beyond "the same commands still work".
 
 **Decisions**
 
+- *The pds grant moves to pds, and the move is additive-first.* **pds attaches
+  its own named inline policy before the site drops its statement.** IAM inline
+  policies are named, so the two coexist for one step and no commit leaves a CI
+  deploy without access to the secret. Doing it in the other order would be a
+  real outage inside a migration that promises no user-visible change.
 - *pds ships by default; it becomes a plugin architecturally, not
   distributionally.* **No install step, no user-visible change.** The point of
   migrating is to validate the SPI against a second consumer, not to make

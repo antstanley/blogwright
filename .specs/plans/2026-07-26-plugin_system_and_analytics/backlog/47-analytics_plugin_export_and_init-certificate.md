@@ -17,7 +17,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **P1 — Goal.** `packages/analytics/src/plugin.ts` default-exports a `Plugin` claiming the `analytics` namespace with `configKey: 'analytics'`, task 44's validator, an `init` contributor and a command table consistent with task 16's precedence, and `packages/analytics/package.json` declares the manifest field so the CLI discovers the package as a plugin.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the CLI's plugin discovery and boundary check (`packages/cli/src/plugins.ts` from task 08 and `validatePlugin` in `packages/core/src/plugin.ts`), the analytics package's existing named exports and build scripts from task 38, or task 44's config validator, which this task binds rather than reimplements.
+- **P3 — Invariants.** Must not break the CLI's plugin discovery and boundary check (`packages/cli/src/plugins.ts` from task 08 and `validatePlugin` in `packages/core/src/plugin.ts`), the analytics package's existing named exports and build scripts from task 32, or task 44's config validator, which this task binds rather than reimplements.
 
 ## Obligations
 
@@ -59,7 +59,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `packages/cli/src/plugins.ts` (task 08 discovery) reads `packages/analytics/package.json`'s manifest field and loads the module → expect `validatePlugin` to return a typed `Plugin` naming the `analytics` namespace : ☐ (PRESERVED / REGRESSION)
-- `packages/analytics/src/index.ts` re-exported named symbols (task 38's seeded barrel, task 44's config exports) imported by an existing package test → expect every existing named export still importable beside the new default export : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/index.ts` re-exported named symbols (task 32's seeded barrel, task 44's config exports) imported by an existing package test → expect every existing named export still importable beside the new default export : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

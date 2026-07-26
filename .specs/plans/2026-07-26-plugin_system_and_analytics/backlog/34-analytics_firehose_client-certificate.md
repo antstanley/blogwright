@@ -1,16 +1,16 @@
-# Done Certificate — Task 33: FirehoseClient in blogwright-core
+# Done Certificate — Task 35: FirehoseClient in blogwright-core
 
-**Task:** [33-core_firehose_client.md](33-core_firehose_client.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [34-analytics_firehose_client.md](34-analytics_firehose_client.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 33. A validating agent discharges it:
+> This certificate is a verification protocol for Task 34. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 33) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 35) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -22,20 +22,20 @@ names (a file location, a test result, or an execution trace) — not by asserti
 ## Obligations
 
 - **O1 — The surface is four operations, with a typed destination input.**
-  - *Claim:* `FirehoseClient` in `packages/core/src/aws/firehose.ts` declares `createDeliveryStream`, `describeDeliveryStream`, `deleteDeliveryStream` and `tagDeliveryStream` and no other public method, and the Iceberg destination is a declared interface with named fields, not `Record<string, unknown>` or an inline object literal type.
-  - *Evidence to collect:* read the class body and the exported interfaces of `packages/core/src/aws/firehose.ts`; confirm the destination parameter's type is a named interface whose fields cover the catalog ARN, delivery role ARN, destination table, error-output prefix and bucket, buffering hints, and transform Lambda ARN.
-  - *Checks:* grep `packages/core/src/aws/firehose.ts` for `any`, `unknown` and `Record<string, unknown>` in the destination input's type — expect no match, per DEVELOPMENT.md §Code style.
+  - *Claim:* `FirehoseClient` in `packages/analytics/src/aws/firehose.ts` declares `createDeliveryStream`, `describeDeliveryStream`, `deleteDeliveryStream` and `tagDeliveryStream` and no other public method, and the Iceberg destination is a declared interface with named fields, not `Record<string, unknown>` or an inline object literal type.
+  - *Evidence to collect:* read the class body and the exported interfaces of `packages/analytics/src/aws/firehose.ts`; confirm the destination parameter's type is a named interface whose fields cover the catalog ARN, delivery role ARN, destination table, error-output prefix and bucket, buffering hints, and transform Lambda ARN.
+  - *Checks:* grep `packages/analytics/src/aws/firehose.ts` for `any`, `unknown` and `Record<string, unknown>` in the destination input's type — expect no match, per DEVELOPMENT.md §Code style.
   - *Status:* ☐ unverified
 
 - **O2 — Describe returns domain state or `undefined`; delete is re-runnable and every other error keeps its context.**
   - *Claim:* `describeDeliveryStream` returns a narrow domain type carrying the stream's delivery state (not the raw `DescribeDeliveryStream` response) and `undefined` on `AwsError.isNotFound`; `deleteDeliveryStream` resolves on `isNotFound` and rejects on any other failure with the operation and stream name in the message.
-  - *Evidence to collect:* read `describeDeliveryStream`, `deleteDeliveryStream` and their return types in `packages/core/src/aws/firehose.ts`; run `pnpm test -- firehose` and confirm four named cases exist — a populated describe expecting the mapped domain fields, a `ResourceNotFoundException` describe expecting `undefined`, a `ResourceNotFoundException` delete expecting `resolves.toBeUndefined()`, and a `ValidationException` delete expecting `rejects.toThrow` (the `packages/core/src/aws/logs.test.ts:49-66` shape).
-  - *Checks:* resolve the rethrow construction in `packages/core/src/aws/firehose.ts` — confirm it preserves `code`, `statusCode` and `requestId` from `packages/core/src/aws/errors.ts:8-21` rather than throwing a bare `Error`, so downstream `isNotFound` narrowing still works.
+  - *Evidence to collect:* read `describeDeliveryStream`, `deleteDeliveryStream` and their return types in `packages/analytics/src/aws/firehose.ts`; run `pnpm test -- firehose` and confirm four named cases exist — a populated describe expecting the mapped domain fields, a `ResourceNotFoundException` describe expecting `undefined`, a `ResourceNotFoundException` delete expecting `resolves.toBeUndefined()`, and a `ValidationException` delete expecting `rejects.toThrow` (the `packages/core/src/aws/logs.test.ts:49-66` shape).
+  - *Checks:* resolve the rethrow construction in `packages/analytics/src/aws/firehose.ts` — confirm it preserves `code`, `statusCode` and `requestId` from `packages/core/src/aws/errors.ts:8-21` rather than throwing a bare `Error`, so downstream `isNotFound` narrowing still works.
   - *Status:* ☐ unverified
 
 - **O3 — Every request shape is pinned, with no network access.**
-  - *Claim:* `packages/core/src/aws/firehose.test.ts` asserts the `x-amz-target` header and the parsed request body for all four operations, driving a stub `Transport` through `SigningClient`.
-  - *Evidence to collect:* read `packages/core/src/aws/firehose.test.ts` and confirm each operation has a recorded header and body assertion; run `pnpm test -- firehose` and record the case names.
+  - *Claim:* `packages/analytics/src/aws/firehose.test.ts` asserts the `x-amz-target` header and the parsed request body for all four operations, driving a stub `Transport` through `SigningClient`.
+  - *Evidence to collect:* read `packages/analytics/src/aws/firehose.test.ts` and confirm each operation has a recorded header and body assertion; run `pnpm test -- firehose` and record the case names.
   - *Checks:* grep the test file for `fetchTransport`, `fetch(` and `AWS_ENDPOINT_URL` — expect no match.
   - *Status:* ☐ unverified
 
@@ -65,7 +65,7 @@ Otherwise: new code with no existing callers — `FirehoseClient` is first consu
 
 ## Residue
 
-Notes for the validator: buffering-hint bounds and the error-output prefix are values the stream node (task 51) supplies; this task only has to type them, so a missing range check here is not a defect. The stream's region pinning is task 37's obligation, not this one. Firehose request shapes cannot be validated without real AWS — a body that passes the pinned assertions can still be rejected by the service, so a path or key that diverges from the published API reference is a defect even with a green suite.
+Notes for the validator: buffering-hint bounds and the error-output prefix are values the stream node (task 51) supplies; this task only has to type them, so a missing range check here is not a defect. The stream's region pinning is task 38's obligation, not this one. Firehose request shapes cannot be validated without real AWS — a body that passes the pinned assertions can still be rejected by the service, so a path or key that diverges from the published API reference is a defect even with a green suite.
 
 ## Conclusion
 

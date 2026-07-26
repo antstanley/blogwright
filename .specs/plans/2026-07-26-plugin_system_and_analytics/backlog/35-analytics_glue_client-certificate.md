@@ -1,16 +1,16 @@
-# Done Certificate — Task 34: GlueClient in blogwright-core
+# Done Certificate — Task 36: GlueClient in blogwright-core
 
-**Task:** [34-core_glue_client.md](34-core_glue_client.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [35-analytics_glue_client.md](35-analytics_glue_client.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 34. A validating agent discharges it:
+> This certificate is a verification protocol for Task 35. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 34) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 36) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -22,19 +22,19 @@ names (a file location, a test result, or an execution trace) — not by asserti
 ## Obligations
 
 - **O1 — The surface is exactly two operations.**
-  - *Claim:* `GlueClient` in `packages/core/src/aws/glue.ts` declares `createCatalogFederation` and `getCatalogFederation` and no other public method.
-  - *Evidence to collect:* read the class body of `packages/core/src/aws/glue.ts` and enumerate every public method; confirm each maps to a call the catalog-integration node makes per the change spec §Analytics pipeline → Resource nodes (`analytics-catalog-integration`).
+  - *Claim:* `GlueClient` in `packages/analytics/src/aws/glue.ts` declares `createCatalogFederation` and `getCatalogFederation` and no other public method.
+  - *Evidence to collect:* read the class body of `packages/analytics/src/aws/glue.ts` and enumerate every public method; confirm each maps to a call the catalog-integration node makes per the change spec §Analytics pipeline → Resource nodes (`analytics-catalog-integration`).
   - *Status:* ☐ unverified
 
 - **O2 — Absent lookup yields `undefined`; create is idempotent on already-exists.**
   - *Claim:* `getCatalogFederation` returns `undefined` when the federation does not exist and the mapped domain value when it does; `createCatalogFederation` returns normally when the service reports an already-exists error.
   - *Evidence to collect:* run `pnpm test -- glue` and confirm three named cases exist — a populated `GetCatalog`-style response expecting the mapped value, an `EntityNotFoundException` body expecting `undefined`, and an `AlreadyExistsException` body on create expecting `resolves.toBeUndefined()`.
-  - *Checks:* resolve `err.isNotFound` and `err.isAlreadyExists` at the catch sites in `packages/core/src/aws/glue.ts` against the regexes at `packages/core/src/aws/errors.ts:27,33` — confirm `EntityNotFoundException` matches `NotFound` and `AlreadyExistsException` matches `AlreadyExists`, so neither branch relies on a code the predicates do not actually cover.
+  - *Checks:* resolve `err.isNotFound` and `err.isAlreadyExists` at the catch sites in `packages/analytics/src/aws/glue.ts` against the regexes at `packages/core/src/aws/errors.ts:27,33` — confirm `EntityNotFoundException` matches `NotFound` and `AlreadyExistsException` matches `AlreadyExists`, so neither branch relies on a code the predicates do not actually cover.
   - *Status:* ☐ unverified
 
 - **O3 — Request shapes are pinned and non-not-found errors are rethrown with context.**
-  - *Claim:* `packages/core/src/aws/glue.test.ts` asserts the `x-amz-target` header and the parsed request body for both operations, and a `ValidationException` fed back to either operation produces a rejection whose message names the operation and the catalog.
-  - *Evidence to collect:* read `packages/core/src/aws/glue.test.ts` and confirm both operations have header and body assertions plus a `ValidationException` rejection case; run `pnpm test -- glue` and record the case names.
+  - *Claim:* `packages/analytics/src/aws/glue.test.ts` asserts the `x-amz-target` header and the parsed request body for both operations, and a `ValidationException` fed back to either operation produces a rejection whose message names the operation and the catalog.
+  - *Evidence to collect:* read `packages/analytics/src/aws/glue.test.ts` and confirm both operations have header and body assertions plus a `ValidationException` rejection case; run `pnpm test -- glue` and record the case names.
   - *Checks:* grep the test file for `fetchTransport`, `fetch(` and `AWS_ENDPOINT_URL` — expect no match, confirming substitution at the `Transport` port.
   - *Status:* ☐ unverified
 
@@ -50,7 +50,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O6 — Run `pnpm test -- glue`; confirm the suite covers present, absent, already-exists and non-not-found, and that the class body declares no third public method (Reviewable).**
   - *Claim:* a reviewer can run the filtered suite, observe four named behavioural cases, and read a two-method class.
-  - *Evidence to collect:* run `pnpm test -- glue` and record the pass count and case names; read `packages/core/src/aws/glue.ts` and count the public methods.
+  - *Evidence to collect:* run `pnpm test -- glue` and record the pass count and case names; read `packages/analytics/src/aws/glue.ts` and count the public methods.
   - *Status:* ☐ unverified
 
 ## Regression check

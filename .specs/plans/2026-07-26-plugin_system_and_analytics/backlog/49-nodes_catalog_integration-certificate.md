@@ -22,9 +22,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
 ## Obligations
 
 - **O1 — The node and its dependency.**
-  - *Claim:* `analytics-catalog-integration` declares `dependsOn: ['analytics-table']` and creates the Glue `s3tablescatalog` federation Firehose reads the table through, via `ctx.clients.glue`.
-  - *Evidence to collect:* read the node factory in `packages/analytics/src/nodes.ts` for its `id`, `dependsOn` and the create call; confirm the operation name matches task 34's `GlueClient` federation create.
-  - *Checks:* resolve the create call — confirm it is `ctx.clients.glue` from the `PluginContext` and not a locally constructed client.
+  - *Claim:* `analytics-catalog-integration` declares `dependsOn: ['analytics-table']` and creates the Glue `s3tablescatalog` federation Firehose reads the table through, via `clients.glue`.
+  - *Evidence to collect:* read the node factory in `packages/analytics/src/nodes.ts` for its `id`, `dependsOn` and the create call; confirm the operation name matches task 35's `GlueClient` federation create.
+  - *Checks:* resolve the create call — confirm it is `clients.glue` from the `PluginContext` and not a locally constructed client.
   - *Status:* ☐ unverified
 
 - **O2 — Adopt, not create; and an inert delete.**

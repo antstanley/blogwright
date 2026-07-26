@@ -1,6 +1,6 @@
 # Change: Analytics plugin — CloudFront logs to Iceberg, with a local dashboard
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` + packages/core (four new service clients, delivery-configuration parameters)
+**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes and dashboard) + packages/core (delivery-configuration parameters on the existing `LogsClient` only)
 
 A new plugin, `blogwright-analytics`, adds traffic analytics to a blogwright
 site. It taps the CloudFront access logs blogwright already delivers, routes
@@ -37,7 +37,7 @@ the calls involved.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package, eleven resource nodes, four AWS service clients, and delivery-configuration parameters on `LogsClient` |
+| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying eleven resource nodes and four plugin-owned AWS service clients; the only core change is delivery-configuration parameters on the existing `LogsClient` |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` port joins the ports table |
 
@@ -167,13 +167,17 @@ and, for SPI confidence, on
 > its `delete()` is a no-op, so two environments never fight over it and
 > tearing one down never breaks the other.
 
-### `blogwright-core` → New service clients (Add)
+### Analytics plugin → Its own service clients (Add)
 
-> Four service keys join `SIGNING_NAMES`
-> ([`endpoint.ts:19`](../../packages/core/src/aws/endpoint.ts)) — `s3tables`,
-> `firehose`, `glue`, and `lambda` — each with a client alongside the existing
-> ones. `canonicalHost`'s default branch already produces the correct host for
-> all four. The clients expose only the operations the nodes need:
+> The four clients the pipeline needs live in `blogwright-analytics`, not in
+> core. The plugin builds them over the `SigningClient` already on its context
+> and supplies its own service descriptors through the transport seam the plugin
+> SPI defines, so core gains no service that exists only for this plugin and its
+> published surface does not move.
+>
+> `pnpm knip` is the check that keeps this honest: four clients exported from
+> core and consumed by nothing in core or the CLI would be reported as dead.
+> The clients expose only the operations the nodes need:
 >
 > - `S3TablesClient` — REST-JSON: create/get/delete for table buckets,
 >   namespaces, and tables.
@@ -183,6 +187,9 @@ and, for SPI confidence, on
 >   This is the standard Lambda API, distinct from
 >   [`MicrovmsClient`](../../packages/core/src/aws/microvms.ts), which shares the
 >   host and signing name but addresses the `/2025-09-09/` MicroVM paths.
+>
+> `LogsClient` is the exception that stays in core, because the site graph owns
+> it — see the next block.
 
 ### `blogwright-core` → `LogsClient` delivery configuration (Modify)
 

@@ -9,6 +9,7 @@
 
 ## Steps
 
+- [ ] Add `rolldown` to `packages/analytics` devDependencies in the same commit that rewrites the build script to invoke it. Task 32 fixed devDependencies to the pds four (`@types/node`, `oxlint`, `typescript`, `vitest`), so without this `pnpm build` fails on a missing binary and `pnpm knip` flags the script's binary. `packages/build-agent/package.json` carries rolldown as a devDependency for exactly this reason.
 - [ ] Write `packages/analytics/src/transform/rolldown.config.ts` following `packages/build-agent/rolldown.config.ts`: the handler as input, `platform: 'node'`, `format: 'esm'`, `codeSplitting: false`, output to a single file, plus a second entry for the manifest writer.
 - [ ] Write `transformSourceHash(dir)` in `packages/analytics/src/transform-hash.ts` over the transform's *source* — the `transform/` and `src/` trees excluding `*.test.ts` — plus `rolldown.config.ts`, `tsconfig.json`, `package.json` and the workspace lockfile, sorted by label with a codepoint comparison, digested with the label/NUL framing `agentSourceHash` uses.
 - [ ] Write `packages/analytics/src/transform/write-manifest.ts` stamping the hash into a manifest file beside the bundle at build time, following `packages/build-agent/src/write-manifest.ts`, so the plugin reads the hash at runtime without access to the source tree.

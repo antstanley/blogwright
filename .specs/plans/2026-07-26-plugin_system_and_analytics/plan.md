@@ -16,7 +16,9 @@ discovery, dispatch, help, the `plugin` verbs. The pds migration then validates
 the SPI against a second consumer of the opposite shape (no graph nodes, an
 interactive OAuth flow) before analytics ships. The two analytics milestones
 that touch only `blogwright-core` and the new package (M5 and M6) depend on
-nothing above them and may be worked from day one; everything after them is
+nothing in the plugin-system or pds streams and may be worked from day one —
+though tasks 33–35 need the analytics package skeleton (task 32) to exist,
+because the plugin's clients live in it; everything after them is
 reviewed through the ten-node graph reconciling against its own scoped state
 key.
 
@@ -171,62 +173,63 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | Task | Depends on | Edge kind | Produces (reviewable artifact) |
 |---|---|---|---|
 | 01 · plugin context in core | — | — | `PluginContext` exists in core and a CLI test fails the build the moment `OpsContext` stops satisfying it |
-| 02 · ResourceNode moves to core | 01 | build | a node typed only against core's `PluginContext` compiles as a `ResourceNode`; `nodes.ts` changed only its imports |
-| 03 · Plugin contract and validator | 01, 02 | build, contract | `validatePlugin` turns an imported module into a typed `Plugin` or raises naming the offending package |
+| 02 · ResourceNode moves to core | 1 | build | a node typed only against core's `PluginContext` compiles as a `ResourceNode`; `nodes.ts` changed only its imports |
+| 03 · Plugin contract and validator | 1, 2 | build, contract | `validatePlugin` turns an imported module into a typed `Plugin` or raises naming the offending package |
 | 04 · scoped state store | — | — | a scoped `StateStore` keys `state/<env>.<plugin>.json` while the unscoped key stays byte-identical |
 | 05 · ModuleLoader port | — | — | plugin modules load through an injected port; `node:module` is lint-restricted outside adapters |
 | 06 · PackageManager port | — | — | lockfile detection and install/uninstall run behind a port, with no test spawning a process |
 | 07 · main() test seam | — | — | `cli.test.ts` pins today's help, unknown-command and `pds` dispatch behaviour with no AWS access |
-| 08 · plugin discovery | 03, 05 | build, contract | `discover()` returns loaded plugins and failures, including plugins bundled with the CLI itself |
-| 09 · namespace collision rules | 08 | build | a plugin claiming a reserved or already-claimed namespace is rejected naming both packages |
-| 10 · plugin dispatch | 07, 08, 09 | build, review | `blogwright <plugin> <action>` runs a plugin command, flags and multi-word actions included, with discovery still lazy for built-ins |
-| 11 · help plugin sections | 07, 10 | build | `blogwright --help` lists installed plugins, and is byte-identical to today's USAGE with none installed |
+| 08 · plugin discovery | 3, 5 | build, contract | `discover()` returns loaded plugins and failures, including plugins bundled with the CLI itself |
+| 09 · namespace collision rules | 8 | build | a plugin claiming a reserved or already-claimed namespace is rejected naming both packages |
+| 10 · plugin dispatch | 7, 8, 9 | build, review | `blogwright <plugin> <action>` runs a plugin command, flags and multi-word actions included, with discovery still lazy for built-ins |
+| 11 · help plugin sections | 7, 10 | build | `blogwright --help` lists installed plugins, and is byte-identical to today's USAGE with none installed |
 | 12 · JSONC config-block splice | — | — | a hand-commented `config/production.jsonc` gains a block and comes back byte-identical outside the insertion |
-| 13 · generic plugin init action | 03, 10, 12 | build, contract | `blogwright <plugin> init` writes the plugin's block into the environment's existing config file |
+| 13 · generic plugin init action | 3, 10, 12 | build, contract | `blogwright <plugin> init` writes the plugin's block into the environment's existing config file |
 | 14 · init wizard plugin blocks | 13 | build | `blogwright init` asks every discovered plugin's questions and writes one file carrying every answered block |
-| 15 · extract status read loop | 02 | build | the node read-and-report loop is a reusable function and `blogwright status` output is unchanged |
-| 16 · plugin lifecycle verbs | 02, 04, 10, 15 | build, contract | `<plugin> bootstrap\|status\|destroy` reconcile the plugin's nodes against its own scoped state key |
-| 17 · plugin list | 08, 09, 10 | build | `blogwright plugin list` reports namespaces, versions, config keys and load failures |
-| 18 · plugin add and remove | 06, 17 | build | `blogwright plugin add analytics` installs `blogwright-analytics` pinned to the running CLI's version |
-| 19 · plugin config validation | 03, 08, 10 | build, contract | a plugin validates its own config block; a block for an uninstalled plugin stays inert |
-| 20 · plugin system docs and closure | 05, 06, 11, 14, 16, 18, 19 | review | the plugin surface is documented, changeset-covered, and its change spec is merged |
+| 15 · extract status read loop | 2 | build | the node read-and-report loop is a reusable function and `blogwright status` output is unchanged |
+| 16 · plugin lifecycle verbs | 2, 4, 10, 15 | build, contract | `<plugin> bootstrap\|status\|destroy` reconcile the plugin's nodes against its own scoped state key |
+| 17 · plugin list | 8, 9, 10 | build | `blogwright plugin list` reports namespaces, versions, config keys and load failures |
+| 18 · plugin add and remove | 6, 17 | build | `blogwright plugin add analytics` installs `blogwright-analytics` pinned to the running CLI's version |
+| 19 · plugin config validation | 3, 8, 10 | build, contract | a plugin validates its own config block; a block for an uninstalled plugin stays inert |
+| 20 · plugin system docs and closure | 5, 6, 11, 14, 16, 18, 19 | review | the plugin surface is documented, changeset-covered, and its change spec is merged |
 | 21 · pds config ownership | — | — | `blogwright-pds` validates the `pds` block and derives `<siteName>/atproto` with core's messages unchanged |
 | 22 · pds resolved secretName | 21 | build | `requirePdsConfig` returns a resolved `secretName` and the default has exactly one home |
-| 23 · pds secret ARN default | 22 | build, data | the OIDC role's secret ARN is pinned for a `pds` block that declares no `secretName` |
-| 24 · PdsContext narrows PluginContext | 01 | contract | `PdsContext` is expressed in core's SPI vocabulary and duplicates no core shape |
-| 25 · pds Plugin export | 03, 21, 24 | build, contract | `blogwright-pds` default-exports a `Plugin` declaring the six existing pds actions |
-| 26 · pds package manifest | 08, 25 | build | discovery finds `blogwright-pds` from a consuming repo that depends only on `blogwright` |
+| 23 · pds owns its OIDC policy node | 22 | build, contract | pds attaches its own named inline policy to the site's deploy role — additive, no gap |
+| 24 · PdsContext narrows PluginContext | 1 | contract | `PdsContext` is expressed in core's SPI vocabulary and duplicates no core shape |
+| 25 · pds Plugin export | 3, 21, 24 | build, contract | `blogwright-pds` default-exports a `Plugin` declaring the six existing pds actions |
+| 26 · pds package manifest | 8, 25 | build | discovery finds `blogwright-pds` from a consuming repo that depends only on `blogwright` |
 | 27 · core config drops pds | 19, 23, 26 | build, contract | core's config holds no pds domain knowledge and an unknown top-level block round-trips untouched |
 | 28 · pds config validation timing | 25, 26, 27 | build, review | the outcome of a malformed `pds` block on built-in commands is pinned by tests, not assumed |
 | 29 · remove runPds dispatch | 10, 26 | build, review | `cli.ts` mentions pds nowhere and all six pds actions run through generic dispatch |
 | 30 · pds migration closure | 28, 29 | review | the migration ships with its changeset and its change spec is merged |
-| 31 · endpoint signing names | — | — | `resolveEndpoint` answers for s3tables, firehose, glue and lambda with `microvms` unchanged |
-| 32 · S3TablesClient | 31 | build | table buckets, namespaces and tables are created, read and deleted over the shared signer |
-| 33 · FirehoseClient | 31 | build | a delivery stream is created, described, tagged and deleted idempotently |
-| 34 · GlueClient | 31 | build | the `s3tablescatalog` federation can be created or adopted |
-| 35 · LambdaClient | 31 | build | the standard Lambda API is reachable without colliding with the MicroVM paths |
-| 36 · logs delivery configuration | — | — | deliveries accept an output format, record fields and a delimiter; today's request body is unchanged |
-| 37 · client bundle wiring | 32, 33, 34, 35 | build | `ctx.clients.s3tables/firehose/glue/lambda` exist and sign against us-east-1 |
-| 38 · analytics package skeleton | — | — | `packages/analytics` builds, tests and lints under the workspace's five gates |
-| 39 · schema and field selection | 38 | build | the `page_views` columns, the day partition and the CloudFront field selection have one home |
+| 31 · open the transport seam | — | build, contract | `resolveEndpoint`/`SendOptions` accept a plugin-supplied service descriptor; core's `SIGNING_NAMES` stays closed |
+| 32 · analytics package skeleton | — | — | `packages/analytics` builds, tests and lints under the workspace's five gates |
+| 33 · S3TablesClient | 31, 32 | build | table buckets, namespaces and tables are created, read and deleted over the shared signer |
+| 34 · FirehoseClient | 31, 32 | build | a delivery stream is created, described, tagged and deleted idempotently |
+| 35 · GlueClient | 31, 32 | build | the `s3tablescatalog` federation can be created or adopted |
+| 36 · LambdaClient | 31, 32 | build | the standard Lambda API is reachable without colliding with the MicroVM paths |
+| 37 · logs delivery configuration | — | — | deliveries accept an output format, record fields and a delimiter; today's request body is unchanged |
+| 38 · plugin client bundle | 33, 34, 35, 36 | build | the plugin builds its four clients over the shared signer, pinned to us-east-1; core's `AwsClients` unchanged |
+| 39 · schema and field selection | 32 | build | the `page_views` columns, the day partition and the CloudFront field selection have one home |
 | 40 · transform field mapping | 39 | build, data | one CloudFront record maps to one `page_views` row, day boundaries included |
 | 41 · visitor key and bot flag | 40 | build, data | `visitor_key` is a pinned-vector digest and no column carries the raw viewer IP |
 | 42 · Firehose transform envelope | 41 | build | a batch containing one unmappable record still returns Ok for the rest, record ids echoed |
 | 43 · transform bundle and source hash | 42 | build, data | the transform bundles to one file whose zip key is a stable hash of its source |
-| 44 · analytics config block | 38 | build, contract | an empty `analytics` block validates and produces every default |
+| 44 · analytics config block | 32 | build, contract | an empty `analytics` block validates and produces every default |
 | 45 · AnalyticsQuery port and named queries | 44 | build, contract | the named query set is parameterised and readable through a fixture-backed fake |
 | 46 · DuckDB query adapter | 45 | build | the port runs against the S3 Tables catalog read-only with credentials passed in explicitly |
-| 47 · analytics Plugin export and init | 03, 16, 44 | build, contract | `blogwright-analytics` is discoverable and `analytics init` returns its config block |
-| 48 · table bucket, namespace, table nodes | 02, 37, 39, 44 | build, data | the Iceberg table is created from the shared column set, pinned to us-east-1 |
+| 47 · analytics Plugin export and init | 3, 16, 44 | build, contract | `blogwright-analytics` is discoverable and `analytics init` returns its config block |
+| 48 · table bucket, namespace, table nodes | 2, 38, 39, 44 | build, data | the Iceberg table is created from the shared column set, pinned to us-east-1 |
 | 49 · catalog integration node | 48 | build | the account-scoped federation is adopted rather than created, and no teardown deletes it |
-| 50 · transform role and function nodes | 02, 37, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
+| 50 · transform role and function nodes | 2, 38, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants |
-| 52 · log destination and delivery nodes | 36, 51 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
+| 52 · log destination and delivery nodes | 37, 51 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
 | 53 · analytics graph and lifecycle | 16, 47, 50, 52 | build, contract | `analytics bootstrap\|destroy` reconcile eleven nodes against `state/<env>.analytics.json` |
 | 54 · analytics status | 45, 53 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
 | 55 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
 | 56 · dashboard app build | 55 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
 | 57 · analytics docs and closure | 20, 30, 54, 56 | review | the analytics plugin is documented, changeset-covered, and its change spec is merged |
+| 58 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge; the grant lives only in the plugin |
 
 ---
 
@@ -246,8 +249,10 @@ against a second consumer before analytics is written against it, and task 23
 precedes task 27 by a real edge rather than by convenience, because removing
 core's `secretName` default first would grant the GitHub OIDC deploy role
 `secret:undefined-*` — a wrong permission, not a crash, that no existing test
-catches. Milestones M5 and M6 depend on nothing above them and may be worked
-concurrently from day one, while tasks 20, 30 and 57 are last in their streams
+catches. Milestones M5 and M6 depend on nothing in the plugin-system or pds
+streams and may be worked concurrently from day one (tasks 31 and 36 are core
+and fully independent; 32–35 wait only on the package skeleton at 38), while
+tasks 20, 30 and 57 are last in their streams
 by construction: each executes a change spec's merge plan, which is only
 truthful once the work it describes has landed.
 
@@ -259,7 +264,7 @@ truthful once the work it describes has landed.
 | M2 — CLI plugin surface | 05, 06, 07, 08, 09, 10, 11 | `blogwright <plugin> <action>` routes to an installed plugin's command and `blogwright --help` reflects what is actually installed | dispatch asserted in `cli.test.ts` with no cloud access; a test proves built-in commands load no plugin module |
 | M3 — plugin commands | 12, 13, 14, 15, 16, 17, 18, 19, 20 | `blogwright plugin add\|list\|remove`, `<plugin> init`, and the generic `bootstrap\|status\|destroy` verbs all work against a plugin's scoped store | the plugin system releases on its own with pds still on its hardcoded branch; the plugin-system change spec is merged |
 | M4 — pds migration | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | all six pds actions reach the same functions with the same arguments through generic dispatch; `runPds`, the pds import and the static pds USAGE block are gone | `cli.ts` greps clean for `pds`; the post-deploy sync still fires; tasks 27 and 28 ship in the same release |
-| M5 — analytics clients in core | 31, 32, 33, 34, 35, 36, 37 | `AwsClients` carries `s3tables`, `firehose`, `glue` and `lambda` pinned to us-east-1, and `LogsClient` deliveries take an output format, record fields and a delimiter | every existing AWS request is byte-identical, `microvms` still signs against the primary region |
+| M5 — the transport seam and the plugin's clients | 31, 32, 33, 34, 35, 36, 37 | core's transport accepts a plugin-supplied service descriptor and `LogsClient` deliveries take an output format, record fields and a delimiter; the plugin builds `s3tables`, `firehose`, `glue` and `lambda` over the shared signer, pinned to us-east-1 | every existing AWS request is byte-identical, `microvms` still signs against the primary region, and core gains no service key |
 | M6 — analytics foundations | 38, 39, 40, 41, 42, 43, 44, 45, 46 | `packages/analytics` builds; the schema, the transform's mapping, `visitor_key`, the bot flag, the per-record drop path, the config block and the query layer are all covered by tests | the package is inert — not published, not a CLI dependency, no manifest field; no test starts DuckDB |
 | M7 — analytics graph | 47, 48, 49, 50, 51, 52, 53, 54 | `blogwright analytics bootstrap` provisions the ten-node pipeline and `analytics status` reports it; CloudFront logs land in the Iceberg table | the site's CloudWatch delivery survives; `blogwright bootstrap`/`destroy` neither provision nor remove any of it |
 | M8 — analytics dashboard | 55, 56, 57 | `blogwright analytics dashboard` serves the prebuilt SvelteKit app over a fixed named-query set from 127.0.0.1 | no route accepts SQL; five gates green with the app tree present; all three change specs merged |
@@ -282,10 +287,10 @@ truthful once the work it describes has landed.
   been validated by a second consumer of genuinely different shape. Releasable.
   Tasks 27 and 28 must ship in the same release — 27 removes core's pds
   validation and 28 pins what replaces it — so do not cut between them.
-- *After task 37.* `blogwright-core` has four new AWS clients and configurable
+- *After task 38.* `blogwright-core` has four new AWS clients and configurable
   log deliveries, all behaviour-neutral for existing calls. Releasable as a
   minor, at the cost of published surface nothing consumes yet. This milestone
-  depends on nothing above it and can be worked from day one.
+  depends on nothing in the plugin-system or pds streams and can be worked from day one.
 - *After task 46.* `packages/analytics` exists and builds, with the
   load-bearing transform tests, the schema, the config block and the query layer
   all proven. The package is not published, is not a dependency of the CLI, and
@@ -430,7 +435,37 @@ silently resolved. Both were settled 2026-07-26 and the tasks now carry them.
   `blogwright-analytics@<cli version>`; the group at `.changeset/config.json:5`
   did not include the package, so that version would never have existed on the
   registry and the plan's headline install path would have failed silently.
-  Task 38 now adds it to the group.
+  Task 32 now adds it to the group.
+
+---
+
+## Decision — a plugin owns its own topography
+
+Settled 2026-07-26, after the review surfaced MIN-5. **Neither `blogwright-core`
+nor the CLI's site graph carries resource topography for any plugin.** Two
+violations existed and both are now planned out:
+
+- The site's OIDC role policy branched on `ctx.config.pds` and derived that
+  plugin's secret ARN (`packages/cli/src/nodes.ts:906`). pds now attaches its own
+  **named inline policy** to the site's role (task 23) and the site drops its
+  branch (task 58). `IamClient` already has `putRolePolicy`/`listRolePolicies`/
+  `deleteRolePolicy`, so no client work. The two tasks are sequenced
+  additive-first, so no commit leaves a CI deploy without the grant.
+- Four AWS clients existed in core solely for the analytics plugin. They move
+  into `blogwright-analytics` (tasks 33–35, 37), built over the `SigningClient`
+  already on the plugin's context. `pnpm knip` corroborates: core would export
+  four clients nothing in core or the CLI consumes.
+
+This was only possible after opening the transport. `ServiceKey` is
+`keyof typeof SIGNING_NAMES` and `SendOptions.service` is typed to it, so a
+plugin could not sign against a service core did not enumerate — every new
+service meant an edit to core. Task 31 changes from "add four signing names" to
+"accept a plugin-supplied service descriptor", which is the enabling change for
+this principle and for every future plugin.
+
+Consequence worth noting: pds gains resource nodes, which it did not have. It is
+still the differently-shaped consumer — one node against analytics' eleven — but
+it no longer exercises the no-nodes path.
 
 ---
 

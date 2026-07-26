@@ -1,16 +1,16 @@
-# Done Certificate — Task 36: Optional output format, record fields and field delimiter on LogsClient deliveries
+# Done Certificate — Task 38: Optional output format, record fields and field delimiter on LogsClient deliveries
 
-**Task:** [36-core_logs_delivery_configuration.md](36-core_logs_delivery_configuration.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [37-core_logs_delivery_configuration.md](37-core_logs_delivery_configuration.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 36. A validating agent discharges it:
+> This certificate is a verification protocol for Task 37. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 36) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 38) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

@@ -104,6 +104,37 @@ plugin that ships outside the CLI). Both depend on this change.
 > dispatch boundary and is covered by a test asserting both fields are populated
 > from different keys.
 
+### Plugin SPI → A plugin owns its own topography (Add)
+
+> Every resource a plugin needs is declared by that plugin's own `nodes(ctx)`
+> and reconciled against that plugin's own scoped state. Neither
+> `blogwright-core` nor the CLI's site graph carries resource topography for any
+> plugin: no config key of a plugin's is read by a site node, and no service
+> exists in core solely because a plugin needs it.
+>
+> Where a plugin needs to attach something to a resource the *site* owns, it
+> does so through a separately-named sub-resource it can create and delete
+> without touching the site's own. The worked case is IAM: a plugin attaches a
+> **named inline policy** to the site's deploy role
+> (`putRolePolicy(role, '<plugin>', …)`), so the site's node manages only its own
+> policy document and the plugin's grant is added and removed with the plugin.
+
+### Plugin SPI → Plugin-supplied AWS services (Add)
+
+> A plugin may talk to AWS services core does not know. `SendOptions.service`
+> accepts a **service descriptor** — the service name, its SigV4 signing name,
+> and whether it is global — as well as the keys core's own clients use. A
+> plugin constructs its clients over the `SigningClient` already on its context
+> and passes its own descriptors; core's `SIGNING_NAMES` stays closed around the
+> services core itself uses.
+>
+> Without this seam a plugin cannot reach a new service at all: `ServiceKey` is
+> `keyof typeof SIGNING_NAMES` ([`endpoint.ts:33`](../../packages/core/src/aws/endpoint.ts))
+> and `SendOptions.service` is typed to it, so every new service would mean an
+> edit to core and a published-surface change. `canonicalHost`'s default branch
+> already resolves `<service>.<region>.amazonaws.com` correctly, so the
+> resolution logic is unchanged.
+
 ### Plugin SPI → Recording node outputs (Add)
 
 > A plugin's resource nodes record their outputs through
@@ -404,6 +435,14 @@ then analytics.
   wrong abstraction happens. Two differently-shaped features — one that is
   mostly secrets and repo files, one that is mostly graph nodes — will surface
   bad assumptions before anything is frozen.
+- *A plugin's topography lives entirely in the plugin.* **Core and the site
+  graph carry nothing plugin-specific — not a config branch, not a service
+  client.** Two concrete consequences were found while planning: the site's
+  OIDC role policy branched on `ctx.config.pds`
+  ([`nodes.ts:906`](../../packages/cli/src/nodes.ts)), and four AWS clients
+  existed in core solely for the analytics plugin. Both move to their plugins.
+  `pnpm knip` corroborates the second: core would export four clients nothing in
+  core or the CLI consumes.
 - *Plugins own their lifecycle, not the site graph.* **Separate node set,
   separate state key, separate verbs.** Folding plugin nodes into `buildNodes`
   ([`nodes.ts:1053`](../../packages/cli/src/nodes.ts)) would mean

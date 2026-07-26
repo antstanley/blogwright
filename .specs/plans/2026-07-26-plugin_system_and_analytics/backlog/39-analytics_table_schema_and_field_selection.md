@@ -3,7 +3,7 @@
 **Plan:** [plan.md](../plan.md) · **Certificate:** [39-analytics_table_schema_and_field_selection-certificate.md](39-analytics_table_schema_and_field_selection-certificate.md)
 
 **Implements:** [2026-07-26-analytics_plugin.md §Analytics pipeline → Table schema](../../../changes/2026-07-26-analytics_plugin.md) (the twenty lowercase columns, the `day` partition, the selected CloudFront fields, and the ban on `cs(Cookie)` and `x-forwarded-for` ever leaving CloudFront) and §Type changes (the `PageView` `$defs` block and its `required` list)
-**Depends on:** 38
+**Depends on:** 32
 **Produces:** `packages/analytics/src/schema.ts` — one ordered column table for `page_views`, its `day` partition, the CloudFront record-field selection, and the field-to-column mapping that the transform (task 40), the table node (task 48) and the delivery node (task 52) all read instead of restating
 **Pointers:** `packages/analytics/src/schema.ts` (new — the single home for the column set, the field selection and the mapping), `packages/analytics/src/schema.test.ts` (new — the totality and lowercase tests), `.specs/changes/2026-07-26-analytics_plugin.md:117-131` (the §Table schema block listing the twenty columns and the excluded fields), `.specs/changes/2026-07-26-analytics_plugin.md:247-277` (the `PageView` `$defs` fragment giving each column's JSON type and the five required columns), `packages/core/src/config.ts:341-372` (`Names`/`deriveNames` — the precedent for a pure derived-vocabulary module with no side effects), `packages/core/src/aws/logs.ts:114` (`createDelivery`, whose record-fields parameter task 52 feeds from this selection)
 

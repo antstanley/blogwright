@@ -22,9 +22,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
 ## Obligations
 
 - **O1 — Three chained nodes, incremental recording, and the pinned client.**
-  - *Claim:* `analytics-table-bucket`, `analytics-namespace` and `analytics-table` implement `read`/`create`/`delete`, chain bucket → namespace → table through `dependsOn`, record each identifier into the plugin's scoped state as its resource is created, and reach AWS only through `ctx.clients.s3tables`, which signs against `us-east-1` whatever `config.region` says.
+  - *Claim:* `analytics-table-bucket`, `analytics-namespace` and `analytics-table` implement `read`/`create`/`delete`, chain bucket → namespace → table through `dependsOn`, record each identifier into the plugin's scoped state as its resource is created, and reach AWS only through the plugin's own `createAnalyticsClients(ctx)` bundle (task 38) — never through `ctx.clients`, which carries only core's services, which signs against `us-east-1` whatever `config.region` says.
   - *Evidence to collect:* read the three node factories in `packages/analytics/src/nodes.ts` for their `id`, `dependsOn` and the position of the state write inside `create` (before any secondary call, as at `packages/cli/src/nodes.ts:54-56`); run `pnpm test -- nodes` in `packages/analytics` and confirm the region test builds the context with a non-`us-east-1` `config.region` and asserts `/us-east-1/s3tables/` in the recorded `authorization` header.
-  - *Checks:* resolve every AWS call in the three nodes — confirm each goes through `ctx.clients.s3tables` from the `PluginContext`, and that no `fetch`, no vendor SDK and no second client construction appears in `packages/analytics/src/nodes.ts`.
+  - *Checks:* resolve every AWS call in the three nodes — confirm each goes through `clients.s3tables` from the `PluginContext`, and that no `fetch`, no vendor SDK and no second client construction appears in `packages/analytics/src/nodes.ts`.
   - *Status:* ☐ unverified
 
 - **O2 — The table is built from the schema module.**
@@ -61,7 +61,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-The plugin's `output(ctx, id)` equivalent duplicates a three-line helper from `packages/cli/src/nodes.ts:20-22` because a plugin may not import the CLI; note whether the duplication is stated in a comment. The spec's open question on record expiration for the table is not covered by the DoD and stays open. Whether the S3 Tables API reports an absent namespace as a not-found error or an empty result determines how `read` distinguishes absence from failure — confirm the adapter (task 32) returns `undefined` for absence rather than throwing, so the node's absence path is real rather than a swallowed error.
+The plugin's `output(ctx, id)` equivalent duplicates a three-line helper from `packages/cli/src/nodes.ts:20-22` because a plugin may not import the CLI; note whether the duplication is stated in a comment. The spec's open question on record expiration for the table is not covered by the DoD and stays open. Whether the S3 Tables API reports an absent namespace as a not-found error or an empty result determines how `read` distinguishes absence from failure — confirm the adapter (task 33) returns `undefined` for absence rather than throwing, so the node's absence path is real rather than a swallowed error.
 
 ## Conclusion
 
