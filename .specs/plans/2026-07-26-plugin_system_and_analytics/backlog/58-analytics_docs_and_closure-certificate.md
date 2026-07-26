@@ -1,16 +1,16 @@
-# Done Certificate — Task 57: Document the analytics plugin, update the toolchain and ports tables, and close the change spec
+# Done Certificate — Task 59: Document the analytics plugin, update the toolchain and ports tables, and close the change spec
 
-**Task:** [57-analytics_docs_and_closure.md](57-analytics_docs_and_closure.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [58-analytics_docs_and_closure.md](58-analytics_docs_and_closure.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 57. A validating agent discharges it:
+> This certificate is a verification protocol for Task 58. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 57) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 59) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

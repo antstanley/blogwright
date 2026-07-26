@@ -1,6 +1,6 @@
-# Task 55 — The loopback dashboard server and the analytics dashboard command
+# Task 57 — The loopback dashboard server and the analytics dashboard command
 
-**Plan:** [plan.md](../plan.md) · **Certificate:** [55-dashboard_server_and_command-certificate.md](55-dashboard_server_and_command-certificate.md)
+**Plan:** [plan.md](../plan.md) · **Certificate:** [56-dashboard_server_and_command-certificate.md](56-dashboard_server_and_command-certificate.md)
 
 **Implements:** [2026-07-26-analytics_plugin.md §Analytics dashboard → Local server](../../../changes/2026-07-26-analytics_plugin.md) (an HTTP server bound to `127.0.0.1` serving the prebuilt application and answering a fixed set of named, parameterised queries — never SQL supplied by the client — each taking a date range and a bot-inclusion flag) and §Analytics dashboard → Credentials (the plugin resolves credentials through blogwright's existing provider chain and passes them into the adapter) and §Analytics plugin → Namespace and commands (`analytics dashboard` — starts the local dashboard server)
 **Depends on:** 46, 47
@@ -11,7 +11,7 @@
 
 - [ ] Write `packages/analytics/src/server.ts` exporting `createDashboardServer({ query, port, appDir })` returning a handle carrying the resolved address and a `close()`, with a module doc comment stating that this module is the package's edge — the one place `node:http` is imported and the one place a request becomes a port call.
 - [ ] Bind the listener explicitly to the loopback address as a named module constant (`const LOOPBACK_ADDRESS = '127.0.0.1'`) and take the port from the resolved `config.analytics.dashboard.port` the caller passes in, never from a literal at the call site and never from `process.env`.
-- [ ] Route the request surface as exactly two families — static assets served from `appDir` (task 56's `dist/app`) and one named-query route per entry in `queries.ts` — resolving the requested name through task 45's lookup so an unknown name answers 404 with the available names, and add no route, method, or body handler that accepts SQL text.
+- [ ] Route the request surface as exactly two families — static assets served from `appDir` (task 57's `dist/app`) and one named-query route per entry in `queries.ts` — resolving the requested name through task 45's lookup so an unknown name answers 404 with the available names, and add no route, method, or body handler that accepts SQL text.
 - [ ] Parse the date range and the bot-inclusion flag from the request at the boundary, validate them there through task 45's parameter validation, and hand them to `AnalyticsQuery.run(name, params)` unmodified, so no request value is ever concatenated into a query.
 - [ ] Implement the `dashboard` handler in `packages/analytics/src/commands.ts` as the plugin's composition root: resolve credentials through `createCredentialProvider` (`packages/core/src/aws/credentials.ts:19`), construct `createDuckDbAnalyticsQuery` there and nowhere else, start the server, print the resolved URL through `ctx.logger.info`, and register the shutdown path that awaits `close()` on SIGINT and on an explicit stop.
 - [ ] Fill in the `dashboard` handler in `packages/analytics/src/commands.ts` — do NOT add an entry to the command table. Task 47 writes that table once, declaring `dashboard` with its `summary` and pointing it at a named function that raises until this task fills it in, and task 47's DoD says no later task edits the table.

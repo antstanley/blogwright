@@ -4,9 +4,9 @@
 
 **Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Its own IAM policy node (Add)](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) and [2026-07-26-cli_plugin_system.md §Plugin SPI → A plugin owns its own topography (Add)](../../../changes/2026-07-26-cli_plugin_system.md)
 **Depends on:** 22
-**Produces:** `blogwright-pds` contributes one `ResourceNode` that attaches a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret — additive, so the site's existing statement (removed at task 58) and this one coexist without a gap
+**Produces:** `blogwright-pds` contributes one `ResourceNode` that attaches a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret — additive, so the site's existing statement (removed at task 59) and this one coexist without a gap
 
-**Pointers:** `packages/pds/src/nodes.ts` (new — the plugin's node module), `packages/pds/src/nodes.test.ts` (new), `packages/core/src/aws/iam.ts:84` (`putRolePolicy(roleName, policyName, policy)` — already exists, no client work), `:93` (`listRolePolicies`), `:108` (`deleteRolePolicy`), `packages/cli/src/nodes.ts:906-928` (the `if (ctx.config.pds)` statement this node replaces — read it, do NOT edit it here; task 58 removes it), `packages/cli/src/nodes.ts:925` (the exact ARN pattern to reproduce), `packages/core/src/config.ts:364` (`names.buildRole`/the OIDC role name derivation), `packages/pds/src/config.ts` (task 21's `resolvePdsSecretName`), `packages/core/src/plugin.ts` (task 01 — `ResourceNode`, `PluginContext`, `siteState`, `record()`)
+**Pointers:** `packages/pds/src/nodes.ts` (new — the plugin's node module), `packages/pds/src/nodes.test.ts` (new), `packages/core/src/aws/iam.ts:84` (`putRolePolicy(roleName, policyName, policy)` — already exists, no client work), `:93` (`listRolePolicies`), `:108` (`deleteRolePolicy`), `packages/cli/src/nodes.ts:906-928` (the `if (ctx.config.pds)` statement this node replaces — read it, do NOT edit it here; task 59 removes it), `packages/cli/src/nodes.ts:925` (the exact ARN pattern to reproduce), `packages/core/src/config.ts:364` (`names.buildRole`/the OIDC role name derivation), `packages/pds/src/config.ts` (task 21's `resolvePdsSecretName`), `packages/core/src/plugin.ts` (task 01 — `ResourceNode`, `PluginContext`, `siteState`, `record()`)
 
 ## Steps
 
@@ -19,9 +19,9 @@
 
 ## Definition of done
 
-- [ ] `blogwright-pds` exports one resource node attaching a `blogwright-pds`-named inline policy to the site's OIDC role, and a test asserts its policy document is byte-identical to the statement the site graph produces today — this is the evidence that task 58's removal is safe.
+- [ ] `blogwright-pds` exports one resource node attaching a `blogwright-pds`-named inline policy to the site's OIDC role, and a test asserts its policy document is byte-identical to the statement the site graph produces today — this is the evidence that task 59's removal is safe.
 - [ ] The node is additive only: it does not read, modify or delete the site's own inline policy, proved by a recording IAM client asserting `putRolePolicy` is called with policy name `blogwright-pds` and no other policy name is touched.
-- [ ] `packages/cli/src/nodes.ts` is UNCHANGED by this task — `git diff packages/cli/src/nodes.ts` is empty. The site's statement stays until task 58, so at no commit does a CI deploy lose access to the secret.
+- [ ] `packages/cli/src/nodes.ts` is UNCHANGED by this task — `git diff packages/cli/src/nodes.ts` is empty. The site's statement stays until task 59, so at no commit does a CI deploy lose access to the secret.
 - [ ] The node is skipped, not failed, when `config.pds` is absent or the site has no `githubRepo`; a site that is not bootstrapped fails with a message naming `blogwright bootstrap` (negative-space tests for all three).
 - [ ] Meets the repo definition of done (see plan.md baseline).
 - [ ] Reviewable: run `pnpm --filter blogwright-pds test -- nodes`; confirm the emitted policy document matches the site's current statement field for field, and that `git diff packages/cli/` shows nothing.

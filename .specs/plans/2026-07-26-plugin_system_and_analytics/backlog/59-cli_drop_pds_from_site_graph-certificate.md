@@ -1,16 +1,16 @@
-# Done Certificate — Task 58: Remove the pds branch from the site's OIDC policy
+# Done Certificate — Task 52: Remove the pds branch from the site's OIDC policy
 
-**Task:** [58-cli_drop_pds_from_site_graph.md](58-cli_drop_pds_from_site_graph.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [59-cli_drop_pds_from_site_graph.md](59-cli_drop_pds_from_site_graph.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 58. A validating agent discharges it:
+> This certificate is a verification protocol for Task 59. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 58) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 52) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

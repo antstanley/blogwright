@@ -1,16 +1,16 @@
-# Done Certificate — Task 53: Assemble the ten-node graph and run it through the plugin lifecycle verbs
+# Done Certificate — Task 55: Assemble the ten-node graph and run it through the plugin lifecycle verbs
 
-**Task:** [53-analytics_graph_and_lifecycle_commands.md](53-analytics_graph_and_lifecycle_commands.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [54-analytics_graph_and_lifecycle_commands.md](54-analytics_graph_and_lifecycle_commands.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 53. A validating agent discharges it:
+> This certificate is a verification protocol for Task 54. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 53) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 55) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

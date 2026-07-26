@@ -9,6 +9,7 @@
 
 ## Steps
 
+- [ ] Add `signingUsEast1: SigningClient` to `AwsClients` and `createClients` (`packages/core/src/clients.ts:21,42`) — the us-east-1 signer already exists as a local `const` at `:54` but is reachable only through the pre-built `acm`/`cloudfront`/`route53`/`logsUsEast1` clients. A `SigningClient`'s region is fixed at construction (`packages/core/src/aws/signer.ts:83`), so without this the plugin cannot build a us-east-1 client at all, and every analytics service is us-east-1. This is a core change, but a generic one: it exposes a signer, not a plugin's service.
 - [ ] Build the clients in `packages/analytics/src/aws/clients.ts`, NOT in core's `createClients`. Core's `AwsClients` gains nothing: adding four plugin-only services there would put analytics topography in core, construct them for every `deploy`, and leave `pnpm knip` reporting four exported clients nothing in core or the CLI consumes. Each client is constructed with the service descriptor task 31's transport seam accepts.
 - [ ] Assert core is untouched: a test (or the task's review step) confirms `packages/core/src/clients.ts` has no `s3tables`/`firehose`/`glue`/`lambda` key and `SIGNING_NAMES` is unchanged.
 - [ ] Add `s3tables`, `firehose`, `glue` and `lambda` to the `AwsClients` interface at `packages/core/src/clients.ts:21`, each carrying a doc comment in the shape of the `logsUsEast1` comment at `:28-32` that states the reason for the pin once: CloudFront standard logging accepts a Firehose stream only in `us-east-1`, so the whole analytics pipeline — stream, transform function, table bucket and catalog federation — is created there regardless of `config.region`.
@@ -17,13 +18,13 @@
 - [ ] Add the negative half of the same test: `logs`, `s3`, `microvms` and `secrets` still scope to `/eu-west-1/`, with `microvms` asserted explicitly because it shares the `lambda` signing name and is the client most likely to be moved by mistake.
 - [ ] Widen the explicit client enumeration in `testClients` at `packages/cli/src/test-support.ts:69-88` with the four new keys so `ClientOverrides` (`:35`), which derives from `keyof AwsClients` at `:32`, can actually substitute them for the node tasks that follow — without this the four spread from `...base` and every override is silently ignored.
 - [ ] Confirm the four clients are exported from `packages/core/src/index.ts` (added by tasks 33–35) and run `pnpm knip` from the repo root to check no export or dependency is left unused.
-- [ ] Record the changeset decision: either add a `.changeset/*.md` marking a minor on `blogwright-core` covering the four clients and task 37's `LogsClient` delivery-configuration parameters, or state in the change description that it is deferred to task 57 — and say which in the certificate's residue.
+- [ ] Record the changeset decision: either add a `.changeset/*.md` marking a minor on `blogwright-core` covering the four clients and task 37's `LogsClient` delivery-configuration parameters, or state in the change description that it is deferred to task 58 — and say which in the certificate's residue.
 
 ## Definition of done
 
 - [ ] `AwsClients` gains `s3tables`, `firehose`, `glue` and `lambda`, constructed in `createClients` against the existing `usEast1` signer, each with a doc comment stating why it is region-pinned — the same shape as the existing `logsUsEast1` comment.
 - [ ] A test constructs the bundle with a non-`us-east-1` region and asserts, through a recording transport, that all four sign against `us-east-1` while `logs`, `s3`, `microvms` and `secrets` still sign against the configured region; no existing client's signer changes, and `microvms` is asserted explicitly.
 - [ ] `pnpm knip` reports no unused export and no unused dependency.
-- [ ] A changeset records the minor on `blogwright-core` for the four clients plus the `LogsClient` parameters, or the change description states in writing that it is deferred to task 57.
+- [ ] A changeset records the minor on `blogwright-core` for the four clients plus the `LogsClient` parameters, or the change description states in writing that it is deferred to task 58.
 - [ ] Meets the repo definition of done (see plan.md baseline).
 - [ ] Reviewable: run `pnpm test -- clients` and `pnpm knip`; confirm the recorded `authorization` headers show `us-east-1` for the four new clients and `eu-west-1` for `logs`/`s3`/`microvms`/`secrets`, and that `pnpm test -- nodes` still passes with no change to its client fakes.

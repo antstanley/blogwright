@@ -63,7 +63,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator, not obligations: the merge plan's step 1 ("apply the blocks to whichever canonical page first documents CLI dispatch") is vacuous while the repo has no canonical spec pages, and step 3 (folding the `PluginManifest` `$def` into a canonical schema) is likewise deferred — confirm the closure records that rather than silently skipping both; task 30 closes the pds migration spec and task 57 the analytics one, so this task must not move those two files; and DEVELOPMENT.md's own open-questions list is a reasonable home for the carried-forward items if the merged spec is not.
+Notes for the validator, not obligations: the merge plan's step 1 ("apply the blocks to whichever canonical page first documents CLI dispatch") is vacuous while the repo has no canonical spec pages, and step 3 (folding the `PluginManifest` `$def` into a canonical schema) is likewise deferred — confirm the closure records that rather than silently skipping both; task 30 closes the pds migration spec and task 58 the analytics one, so this task must not move those two files; and DEVELOPMENT.md's own open-questions list is a reasonable home for the carried-forward items if the merged spec is not.
 
 ## Conclusion
 

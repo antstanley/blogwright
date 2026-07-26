@@ -1,16 +1,16 @@
-# Done Certificate — Task 55: The loopback dashboard server and the analytics dashboard command
+# Done Certificate — Task 57: The loopback dashboard server and the analytics dashboard command
 
-**Task:** [55-dashboard_server_and_command.md](55-dashboard_server_and_command.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [56-dashboard_server_and_command.md](56-dashboard_server_and_command.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 55. A validating agent discharges it:
+> This certificate is a verification protocol for Task 56. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 55) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 57) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -58,13 +58,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `packages/cli/src/cli.ts` (task 10's plugin fall-through) dispatches `blogwright analytics status` against the plugin whose table now carries a fifth action → expect task 54's status output, unchanged : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/cli.ts` (task 10's plugin fall-through) dispatches `blogwright analytics status` against the plugin whose table now carries a fifth action → expect task 55's status output, unchanged : ☐ (PRESERVED / REGRESSION)
 - `packages/analytics/src/plugin.ts` default export passes core's `validatePlugin` at the discovery boundary with the `dashboard` entry present → expect validation to pass and all five actions to be listed : ☐ (PRESERVED / REGRESSION)
 - `packages/analytics/src/queries.ts` is imported by `server.ts` for its lookup → expect `pnpm test -- queries` to still pass and `queries.ts` to import no `node:http` : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 
-Notes for the validator: the static-asset branch serves task 56's `dist/app`, which does not exist until that task lands — confirm the server degrades with a clear error rather than a stack trace when `appDir` is absent, though the DoD does not require it. Concurrency (two dashboards on the same port) and an occupied-port failure message are outside the obligations. The SIGINT handler is a process-level side effect registered by the command; whether it should be a port is a question the DoD does not settle.
+Notes for the validator: the static-asset branch serves task 57's `dist/app`, which does not exist until that task lands — confirm the server degrades with a clear error rather than a stack trace when `appDir` is absent, though the DoD does not require it. Concurrency (two dashboards on the same port) and an occupied-port failure message are outside the obligations. The SIGINT handler is a process-level side effect registered by the command; whether it should be a port is a question the DoD does not settle.
 
 ## Conclusion
 

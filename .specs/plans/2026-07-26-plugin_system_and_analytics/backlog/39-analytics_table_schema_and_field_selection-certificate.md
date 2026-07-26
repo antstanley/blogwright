@@ -54,7 +54,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Regression check
 
-No existing callers in scope — `packages/analytics/src/schema.ts` is new and, at this task, imported only by its own test. The consumers this module is written for (task 40's `mapRecord`, task 48's table node, task 52's delivery node) do not exist yet.
+No existing callers in scope — `packages/analytics/src/schema.ts` is new and, at this task, imported only by its own test. The consumers this module is written for (task 40's `mapRecord`, task 48's table node, task 53's delivery node) do not exist yet.
 
 ## Residue
 

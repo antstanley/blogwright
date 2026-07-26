@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `blogwright-pds` contributes one `ResourceNode` attaching a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret — additive, so it coexists with the site's existing statement until task 58 removes it.
+- **P1 — Goal.** `blogwright-pds` contributes one `ResourceNode` attaching a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret — additive, so it coexists with the site's existing statement until task 59 removes it.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the site's own OIDC policy document (`packages/cli/src/nodes.ts:863`), the six pds commands, or the pinned rkey vectors. Must not modify `packages/cli/` at all.
 
@@ -33,7 +33,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* `read()` uses `listRolePolicies` and `delete()` uses `deleteRolePolicy`, both scoped to the `blogwright-pds` name.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O3 — The CLI is untouched by this task.**
-  - *Claim:* `packages/cli/src/nodes.ts` is unchanged; the site's statement stays until task 58.
+  - *Claim:* `packages/cli/src/nodes.ts` is unchanged; the site's statement stays until task 59.
   - *Evidence to collect:* run `git diff packages/cli/` (or `jj diff packages/cli/`) for this task's commit — expect no output.
   - *Checks:* if `packages/cli/src/nodes.ts` changed, the additive-first ordering has been broken and the migration has a window where CI deploys lose the grant; mark UNSATISFIED.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->

@@ -1,6 +1,6 @@
 # Change: Migrate blogwright-pds onto the plugin system
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/pds + packages/cli (dispatch) + packages/core (config)
+**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/pds (plugin export, config ownership, one IAM node) + packages/cli (dispatch, site-graph pds removal) + packages/core (config)
 
 `blogwright-pds` becomes a plugin: it declares a manifest field, exports a
 `Plugin`, owns and validates its `pds` config key, contributes the one resource
@@ -77,9 +77,12 @@ this change cannot land before it.
 
 ### `blogwright-pds` → Context (Modify)
 
-> `PdsContext` becomes a narrowing of core's `PluginContext` rather than an
-> independently declared interface. The types it names — `PdsLogger`,
-> `PdsPorts` — resolve to the core equivalents. The structural-satisfaction
+> `PdsContext` becomes a narrowing of core's `PluginContext<PdsConfig>` rather
+> than an independently declared interface. The types it names — `PdsLogger`,
+> `PdsPorts` — resolve to the core equivalents. It narrows `clients` to
+> `{ secrets }` rather than widening to the full `AwsClients`, because
+> [`test-support.ts:102`](../../packages/pds/src/test-support.ts) supplies only
+> that one client. The structural-satisfaction
 > property is unchanged: the CLI's `OpsContext` still satisfies it by plain
 > assignment, and the package still imports no CLI type.
 
@@ -88,8 +91,19 @@ this change cannot land before it.
 > The plugin owns the `pds` config block end to end. Its `validateConfig`
 > performs the checks core's `validateConfig` performs today — `name` is
 > required and non-empty, `handleResolver` must be an https URL when present,
-> `secretName` must match the permitted character class — and applies the
-> `<siteName>/atproto` default for `secretName` when it is absent.
+> `secretName` must match the permitted character class — applies the
+> `<siteName>/atproto` default for `secretName` when it is absent, and
+> **returns** the resolved block.
+>
+> Returning it is what keeps the migration type-safe. `secretName` is read as a
+> required `string` at a dozen call sites across `commands.ts`, `oauth.ts` and
+> `secret.ts`, all of which reach it through `requirePdsConfig`
+> ([`sync.ts:50`](../../packages/pds/src/sync.ts)), which today returns
+> `ctx.config.pds` verbatim and relies on core having already applied the
+> default. Moving the default into the plugin without giving it somewhere to
+> land would widen every one of those reads to `string | undefined`.
+> `requirePdsConfig` instead returns `ctx.pluginConfig`, which the CLI populated
+> from `validateConfig` at dispatch, so the resolved type stays total.
 
 ### `blogwright-pds` → Its own IAM policy node (Add)
 
@@ -175,7 +189,7 @@ this change cannot land before it.
         "secretName": {
           "type": "string",
           "pattern": "^[\\w/+=.@-]+$",
-          "description": "Defaults to `<siteName>/atproto`, applied by the pds plugin."
+          "description": "Optional as written on disk; the pds plugin's validateConfig applies the `<siteName>/atproto` default and returns a resolved block in which it is always present."
         }
       }
     }

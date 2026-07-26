@@ -9,6 +9,7 @@
 
 ## Steps
 
+- [ ] The client lives in `packages/analytics/src/aws/` and supplies its own service descriptor through task 31's transport seam. Core's `SIGNING_NAMES` gains nothing and `AwsClients` gains no `s3tables` key — a test or review step asserts `grep -rn "s3tables" packages/core/src/` returns nothing.
 - [ ] Write `packages/analytics/src/aws/s3tables.ts` opening with a module doc comment (the `packages/core/src/aws/microvms.ts:4-11` shape) naming the protocol — REST-JSON over the `s3tables` signing key added in task 31 — and stating that the floci emulator does not implement the service, so it is covered by transport mocks.
 - [ ] Declare a `PATHS` table in the `packages/core/src/aws/microvms.ts:15-21` shape covering `PUT /buckets`, `GET|DELETE /buckets/{tableBucketArn}`, `PUT /namespaces/{tableBucketArn}`, `GET|DELETE /namespaces/{tableBucketArn}/{namespace}`, `PUT /tables/{tableBucketArn}/{namespace}` and `GET|DELETE /tables/{tableBucketArn}/{namespace}/{name}`, percent-encoding every interpolated segment as `microvms.ts:17` does — and verify each method and path against the S3 Tables API reference before writing, because no SDK validates them.
 - [ ] Add a private `call<T>(method, path, payload?)` helper in the `packages/core/src/aws/microvms.ts:124-140` shape, sending `service: 's3tables'` with `content-type: application/json` and parsing an empty body as `{}`.

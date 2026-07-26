@@ -1,23 +1,23 @@
-# Done Certificate — Task 54: analytics status: nodes against scoped state, stream health and row count
+# Done Certificate — Task 56: analytics status: nodes against scoped state, stream health and row count
 
-**Task:** [54-analytics_status_command.md](54-analytics_status_command.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [55-analytics_status_command.md](55-analytics_status_command.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 54. A validating agent discharges it:
+> This certificate is a verification protocol for Task 55. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 54) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 56) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
 - **P1 — Goal.** `analytics status` lists the eleven nodes present or missing against `state/<env>.analytics.json` in the same pretty/plain split as the site's `status`, and appends the Firehose stream's delivery health and the table's row count, degrading each to a warning when its read fails.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the site's `status` (`packages/cli/src/commands.ts:301-329`) or task 15's extracted read loop, task 53's node set and its scoped state store, or task 45's port contract — no DuckDB may start anywhere in the package's test suite.
+- **P3 — Invariants.** Must not break the site's `status` (`packages/cli/src/commands.ts:301-329`) or task 15's extracted read loop, task 54's node set and its scoped state store, or task 45's port contract — no DuckDB may start anywhere in the package's test suite.
 
 ## Obligations
 

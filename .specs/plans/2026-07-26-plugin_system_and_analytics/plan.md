@@ -223,13 +223,14 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 49 · catalog integration node | 48 | build | the account-scoped federation is adopted rather than created, and no teardown deletes it |
 | 50 · transform role and function nodes | 2, 38, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants |
-| 52 · log destination and delivery nodes | 37, 51 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
-| 53 · analytics graph and lifecycle | 16, 47, 50, 52 | build, contract | `analytics bootstrap\|destroy` reconcile eleven nodes against `state/<env>.analytics.json` |
-| 54 · analytics status | 45, 53 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
-| 55 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
-| 56 · dashboard app build | 55 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
-| 57 · analytics docs and closure | 20, 30, 54, 56 | review | the analytics plugin is documented, changeset-covered, and its change spec is merged |
-| 58 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge; the grant lives only in the plugin |
+| 52 · shared delivery-source guards | 37 | build, contract | the site's log-delivery node never deletes a source it shares, and its retry scopes to its own delivery |
+| 53 · log destination and delivery nodes | 37, 51, 52 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
+| 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile eleven nodes against `state/<env>.analytics.json` |
+| 55 · analytics status | 45, 54 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
+| 56 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
+| 57 · dashboard app build | 56 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
+| 58 · analytics docs and closure | 20, 30, 55, 57 | review | the analytics plugin is documented, changeset-covered, and its change spec is merged |
+| 59 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge; the grant lives only in the plugin |
 
 ---
 
@@ -296,12 +297,12 @@ truthful once the work it describes has landed.
   all proven. The package is not published, is not a dependency of the CLI, and
   declares no plugin manifest, so it is inert in the repo. Also independent of
   everything above it.
-- *After task 54.* `blogwright plugin add analytics` then `analytics bootstrap`
+- *After task 55.* `blogwright plugin add analytics` then `analytics bootstrap`
   and `analytics status` provision and report the pipeline, and CloudFront logs
   land in the Iceberg table. Shippable provided the `dashboard` action is
   dropped from task 47's command table or reports that it is not yet available;
   the transform, graph and status paths are complete without it.
-- *After task 57.* All three change specs merged and `.specs/README.md`'s
+- *After task 58.* All three change specs merged and `.specs/README.md`'s
   pending list empty.
 
 ---
@@ -404,7 +405,7 @@ truthful once the work it describes has landed.
   about live plugin resources it does not own? (Blocks nothing; carried forward
   at 20.)
 - *Analytics scope left open by its spec.* Backfill of historical CloudFront
-  logs and record expiration on the Iceberg table are unresolved; task 57
+  logs and record expiration on the Iceberg table are unresolved; task 58
   records each as resolved or out of scope with an owner.
 
 ---
@@ -448,7 +449,7 @@ violations existed and both are now planned out:
 - The site's OIDC role policy branched on `ctx.config.pds` and derived that
   plugin's secret ARN (`packages/cli/src/nodes.ts:906`). pds now attaches its own
   **named inline policy** to the site's role (task 23) and the site drops its
-  branch (task 58). `IamClient` already has `putRolePolicy`/`listRolePolicies`/
+  branch (task 59). `IamClient` already has `putRolePolicy`/`listRolePolicies`/
   `deleteRolePolicy`, so no client work. The two tasks are sequenced
   additive-first, so no commit leaves a CI deploy without the grant.
 - Four AWS clients existed in core solely for the analytics plugin. They move

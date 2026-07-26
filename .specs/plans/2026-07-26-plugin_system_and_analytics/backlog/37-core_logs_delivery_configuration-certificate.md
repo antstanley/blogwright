@@ -62,7 +62,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator: the spec also states that the output format is immutable once a destination exists, so the delivery-destination node replaces rather than updates when the configured format differs — that is task 52's obligation, not this one, and its absence here is not a defect. Validating the record-field names against the CloudFront field set is task 39's concern. If the `DeliveryOutputFormat` union omits a member the API accepts, the omission is a follow-up rather than a regression, since no existing caller supplies a format at all.
+Notes for the validator: the spec also states that the output format is immutable once a destination exists, so the delivery-destination node replaces rather than updates when the configured format differs — that is task 53's obligation, not this one, and its absence here is not a defect. Validating the record-field names against the CloudFront field set is task 39's concern. If the `DeliveryOutputFormat` union omits a member the API accepts, the omission is a follow-up rather than a regression, since no existing caller supplies a format at all.
 
 ## Conclusion
 

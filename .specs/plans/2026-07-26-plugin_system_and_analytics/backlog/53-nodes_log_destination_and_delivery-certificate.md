@@ -1,16 +1,16 @@
-# Done Certificate — Task 52: The CloudWatch delivery destination and the second delivery off the site's source
+# Done Certificate — Task 54: The CloudWatch delivery destination and the second delivery off the site's source
 
-**Task:** [52-nodes_log_destination_and_delivery.md](52-nodes_log_destination_and_delivery.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [53-nodes_log_destination_and_delivery.md](53-nodes_log_destination_and_delivery.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 52. A validating agent discharges it:
+> This certificate is a verification protocol for Task 53. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 52) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 54) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

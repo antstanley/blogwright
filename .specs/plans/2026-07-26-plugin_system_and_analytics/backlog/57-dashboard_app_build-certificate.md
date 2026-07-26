@@ -1,23 +1,23 @@
-# Done Certificate — Task 56: The SvelteKit dashboard app, built to dist/app and shipped prebuilt
+# Done Certificate — Task 58: The SvelteKit dashboard app, built to dist/app and shipped prebuilt
 
-**Task:** [56-dashboard_app_build.md](56-dashboard_app_build.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [57-dashboard_app_build.md](57-dashboard_app_build.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
-> This certificate is a verification protocol for Task 56. A validating agent discharges it:
+> This certificate is a verification protocol for Task 57. A validating agent discharges it:
 > for each obligation, collect the named evidence, run the named checks, set the Status, then
 > derive the Conclusion by the rubric below. Do not mark an obligation SATISFIED without its
 > evidence; do not record DONE with any non-SATISFIED obligation.
 
 ## Definition
 
-DONE(Task 56) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 58) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
 - **P1 — Goal.** The SvelteKit + LayerChart application under `packages/analytics/app/` builds to `dist/app` through the package's own `build` script, ships in its `files`, calls only the named-query routes, and every gate exclusion the new toolchain needs is recorded with its reason while CI stays unchanged.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the four existing packages' `build` scripts fanned out by the root `pnpm -r build` (`package.json:6`), the five gates as CI runs them (`.github/workflows/ci.yml:20-29`) for the TypeScript trees they already cover, or task 55's `packages/analytics/src/server.ts`, whose `appDir` contract this build satisfies.
+- **P3 — Invariants.** Must not break the four existing packages' `build` scripts fanned out by the root `pnpm -r build` (`package.json:6`), the five gates as CI runs them (`.github/workflows/ci.yml:20-29`) for the TypeScript trees they already cover, or task 56's `packages/analytics/src/server.ts`, whose `appDir` contract this build satisfies.
 
 ## Obligations
 
@@ -59,7 +59,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `package.json:6` (`pnpm -r build`) fans out to `packages/analytics` with the extended two-step script → expect the other three packages' builds to be unaffected and the whole run to stay green : ☐ (PRESERVED / REGRESSION)
-- `packages/analytics/src/server.ts` (task 55) serves `appDir` → expect the built `dist/app` to satisfy that contract, with `index.html` at its root : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/server.ts` (task 56) serves `appDir` → expect the built `dist/app` to satisfy that contract, with `index.html` at its root : ☐ (PRESERVED / REGRESSION)
 - `knip.json:4-12` workspaces map with the added exclusion → expect `pnpm knip` to still report the existing four workspaces' unused exports and dependencies, not to fall silent : ☐ (PRESERVED / REGRESSION)
 
 ## Residue

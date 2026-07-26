@@ -39,8 +39,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O4 — The changeset decision is recorded.**
-  - *Claim:* either a `.changeset/*.md` exists marking a minor on `blogwright-core` covering the four clients and the `LogsClient` delivery-configuration parameters, or the change description states that the changeset is deferred to task 57.
-  - *Evidence to collect:* list `.changeset/*.md` and read any file added by this task; if none exists, read the change description (`jj log -r @ -T description`) and confirm it names the deferral to task 57 explicitly.
+  - *Claim:* either a `.changeset/*.md` exists marking a minor on `blogwright-core` covering the four clients and the `LogsClient` delivery-configuration parameters, or the change description states that the changeset is deferred to task 58.
+  - *Evidence to collect:* list `.changeset/*.md` and read any file added by this task; if none exists, read the change description (`jj log -r @ -T description`) and confirm it names the deferral to task 58 explicitly.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**

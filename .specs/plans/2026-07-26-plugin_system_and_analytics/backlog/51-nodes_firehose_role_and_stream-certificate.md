@@ -40,7 +40,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O4 — Health readable, absence safe, teardown re-runnable.**
   - *Claim:* `read` hydrates the stream's delivery state into the plugin's scoped state and returns `false` without throwing when the stream is absent; `delete` is idempotent and completes after a partial teardown.
-  - *Evidence to collect:* run `pnpm test -- nodes` in `packages/analytics`; confirm one case asserts the delivery state is recorded where task 54 will read it, one asserts a `false` return for an absent stream with no throw, and one deletes with the stream already gone and asserts the role deletion still issued.
+  - *Evidence to collect:* run `pnpm test -- nodes` in `packages/analytics`; confirm one case asserts the delivery state is recorded where task 55 will read it, one asserts a `false` return for an absent stream with no throw, and one deletes with the stream already gone and asserts the role deletion still issued.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -62,7 +62,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Whether the stream must reach `ACTIVE` before task 52's delivery targets it is not in the DoD; if the delivery creation races a `CREATING` stream, a `pollUntil` in the shape of `packages/cli/src/nodes.ts:702-707` belongs here and the validator should note its absence. Buffering hints, compression and the Iceberg destination's retry duration are configuration surface the DoD does not pin — note whether they are named constants or literals. The spec's open question on record expiration for the table is unrelated and stays open.
+Whether the stream must reach `ACTIVE` before task 53's delivery targets it is not in the DoD; if the delivery creation races a `CREATING` stream, a `pollUntil` in the shape of `packages/cli/src/nodes.ts:702-707` belongs here and the validator should note its absence. Buffering hints, compression and the Iceberg destination's retry duration are configuration surface the DoD does not pin — note whether they are named constants or literals. The spec's open question on record expiration for the table is unrelated and stays open.
 
 ## Conclusion
 

@@ -63,7 +63,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-The `status` and `dashboard` entries point at `packages/analytics/src/commands.ts` functions whose bodies land at tasks 54 and 55; until then they raise an error naming their task, and the validator should confirm the message names the task rather than reading as a bare TODO. If task 16 decided a precedence other than the recommended one, O2's expected action set changes with it — read `plugin-commands.ts`'s module comment first and judge the table against what is recorded there, not against the wording in this certificate. Whether the analytics package ships a changeset here or at task 57 is a closure decision; note which was chosen.
+The `status` and `dashboard` entries point at `packages/analytics/src/commands.ts` functions whose bodies land at tasks 55 and 55; until then they raise an error naming their task, and the validator should confirm the message names the task rather than reading as a bare TODO. If task 16 decided a precedence other than the recommended one, O2's expected action set changes with it — read `plugin-commands.ts`'s module comment first and judge the table against what is recorded there, not against the wording in this certificate. Whether the analytics package ships a changeset here or at task 58 is a closure decision; note which was chosen.
 
 ## Conclusion
 

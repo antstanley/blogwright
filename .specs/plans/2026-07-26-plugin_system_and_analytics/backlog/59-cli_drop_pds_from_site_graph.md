@@ -1,6 +1,6 @@
-# Task 58 — Remove the pds branch from the site's OIDC policy
+# Task 52 — Remove the pds branch from the site's OIDC policy
 
-**Plan:** [plan.md](../plan.md) · **Certificate:** [58-cli_drop_pds_from_site_graph-certificate.md](58-cli_drop_pds_from_site_graph-certificate.md)
+**Plan:** [plan.md](../plan.md) · **Certificate:** [59-cli_drop_pds_from_site_graph-certificate.md](59-cli_drop_pds_from_site_graph-certificate.md)
 
 **Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-cli` → The site graph drops its pds branch (Remove)](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) and [2026-07-26-cli_plugin_system.md §Plugin SPI → A plugin owns its own topography (Add)](../../../changes/2026-07-26-cli_plugin_system.md)
 **Depends on:** 23, 29

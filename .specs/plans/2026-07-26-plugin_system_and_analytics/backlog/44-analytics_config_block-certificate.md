@@ -24,7 +24,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 - **O1 — Shape, defaults and named constants.**
   - *Claim:* `AnalyticsConfig` carries `tableBucket`, `namespace` (default `web`), `table` (default `page_views`), `bots` (`'flag' | 'filter'`, default `flag`) and `dashboard.port` (default `4317`); a `{}` block validates and produces every default; defaults and limits are named module constants; the port default is one exported constant.
   - *Evidence to collect:* read `packages/analytics/src/config.ts` and compare its fields, patterns and defaults against `.specs/changes/2026-07-26-analytics_plugin.md:230-246`; run `pnpm test -- config` in `packages/analytics` › the `{}` case and confirm it asserts each default field by name; run `grep -n "4317\|1024\|65535\|63" packages/analytics/src/` and confirm each number appears once, in a named constant declaration, not at a call site.
-  - *Checks:* resolve the port-default identifier the dashboard server will import — confirm it is exported from this module, so task 55 can share it rather than restate `4317`.
+  - *Checks:* resolve the port-default identifier the dashboard server will import — confirm it is exported from this module, so task 56 can share it rather than restate `4317`.
   - *Status:* ☐ unverified
 
 - **O2 — The table-bucket open question is settled and implemented.**

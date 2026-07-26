@@ -15,7 +15,7 @@
 - [ ] Attach the S3 Tables catalog in read-only mode as a named step, so the attach target and its mode are one identifiable call the test can observe.
 - [ ] Wrap every DuckDB call in a translation boundary raising the repo's own `Error` with the query name and the attach target in the message; no vendor error object escapes the module.
 - [ ] Write `packages/analytics/src/adapters/duckdb-query.test.ts` observing the secret statement built from `staticCredentials` values, asserting the read-only attach, and asserting a vendor failure surfaces as a repo `Error` with context.
-- [ ] Construct the adapter only at the plugin's composition root (task 55's dashboard command wires it); leave every domain module importing the port.
+- [ ] Construct the adapter only at the plugin's composition root (task 56's dashboard command wires it); leave every domain module importing the port.
 
 ## Definition of done
 
