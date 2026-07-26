@@ -1,0 +1,27 @@
+# Task 41 — visitor_key derivation and the is_bot flag
+
+**Plan:** [plan.md](../plan.md) · **Certificate:** [41-transform_visitor_key_and_bot_flag-certificate.md](41-transform_visitor_key_and_bot_flag-certificate.md)
+
+**Implements:** [2026-07-26-analytics_plugin.md §Analytics pipeline → Record transformation](../../../changes/2026-07-26-analytics_plugin.md) (steps 3 and 4: replace the viewer IP with `visitor_key`, a SHA-256 of IP, user agent and a daily-rotating salt, and set `is_bot` from a user-agent match so bot traffic is flagged in place rather than discarded) and §Assumptions and open questions (the open question on whether the daily salt must be stable across a redeploy)
+**Depends on:** 40
+**Produces:** `visitorKey(ip, userAgent, salt)` and the bot matcher in `packages/analytics/transform/`, wired into `mapRecord` so the produced row carries a defined `visitor_key` and `is_bot` and no field anywhere in it holds the raw viewer IP; the salt-stability open question is answered in the code and in this task's decision note
+**Pointers:** `packages/analytics/transform/visitor-key.ts` (new — the salted digest), `packages/analytics/transform/visitor-key.test.ts` (new — the pinned vector and the rotation tests), `packages/analytics/transform/bots.ts` (new — the user-agent matcher), `packages/analytics/transform/bots.test.ts` (new), `packages/analytics/transform/map-record.ts` (task 40 — the caller that must stop emitting the viewer IP and start emitting the two derived columns), `packages/core/src/aws/s3.ts:1` (`createHash` from `node:crypto` — the precedent that `node:crypto` is not a restricted import under `.oxlintrc.json:53-69`), `packages/pds/src/rkey.test.ts` (the pinned-vector precedent: fixed inputs, known digest, DEVELOPMENT.md §Testing "Pinned vectors are contracts")
+
+## Steps
+
+- [ ] Settle and record the salt decision: does the daily salt need to be stable across a redeploy (stored in Secrets Manager) or is a value derived from the date sufficient? Write the answer as a decision note in the module doc comment, stating that changing it after rows exist breaks unique-visitor counts across the boundary.
+- [ ] Write `visitorKey(ip, userAgent, salt)` in `packages/analytics/transform/visitor-key.ts` as a SHA-256 digest over the three inputs with an unambiguous separator, returning a hex string; the salt is a parameter derived from an injected day, never read from a wall clock inside the function.
+- [ ] Write the salt derivation as its own named function taking the day value the record already carries (task 40's `day`), so a test can pass two different days without stubbing time.
+- [ ] Write the bot matcher in `packages/analytics/transform/bots.ts` over a named module constant of user-agent patterns, returning a boolean for every input including an absent or empty user agent.
+- [ ] Rewire `mapRecord` so the viewer-IP field feeds `visitorKey` and is never assigned to a column, and so `is_bot` is always set; the record is still returned when the matcher says bot.
+- [ ] Write `visitor-key.test.ts` pinning a fixed salt, IP and user agent to a known digest; add the same-day/next-day rotation assertions; write `bots.test.ts` covering a known bot agent, a browser agent, an empty agent and an absent agent.
+- [ ] Add a whole-row assertion in the transform tests that searches every value of the produced row for the fixture IP and expects no match.
+
+## Definition of done
+
+- [ ] `visitorKey(ip, userAgent, salt)` is a SHA-256 digest of the three inputs, locked by a pinned-vector test (fixed salt and inputs, known digest) so the algorithm cannot drift silently, and by rotation assertions: the same IP + user agent + day yields the same key, and the same IP + user agent on the next day yields a different key.
+- [ ] A test asserts the raw viewer IP appears in no field of the produced row — searched across every value of the row, not just the expected column.
+- [ ] The spec's open question is answered in the code and in the module's decision note: whether the daily salt is stored (Secrets Manager) or derived from the date. The salt is taken as a parameter derived from an injected day, never from the wall clock in a test body, and a test passes two different days without stubbing time.
+- [ ] `is_bot` is set from a user-agent match and a bot record is still returned with every other column populated (asserted), because a dropped record cannot be recovered when the bot heuristic turns out to be wrong; negative-space: an absent or empty user agent still produces a row with a defined `is_bot` and a defined `visitor_key`, with no `null` for either domain value.
+- [ ] Meets the repo definition of done (see plan.md baseline).
+- [ ] Reviewable: run `pnpm test -- visitor-key bots map-record` inside `packages/analytics`; confirm the pinned digest is a literal in the test file and that the whole-row IP search test fails if the viewer-IP field is added back to `FIELD_TO_COLUMN`.
