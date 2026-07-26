@@ -17,7 +17,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **P1 — Goal.** `analytics-log-destination` and `analytics-log-delivery` add a second delivery hanging off the site's existing delivery source, which the plugin reads but never creates, never repoints and never deletes.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the site's vended log delivery (`packages/cli/src/nodes.ts:713` `logDeliveryNode`, its `ConflictException` self-heal at `:743-762` and its teardown at `:763-775`), the `LogsClient` request bodies task 36 pinned for the no-options path, or the plugin's read-only access to the site's state (`SiteState` from task 01).
+- **P3 — Invariants.** Must not break the site's vended log delivery (`packages/cli/src/nodes.ts:713` `logDeliveryNode`, its `ConflictException` self-heal at `:743-762` and its teardown at `:763-775`), the `LogsClient` request bodies task 36 pinned for the no-options path, or the plugin's read-only access to the site's state (`ctx.siteState`, typed `SiteState`, from task 01 — distinct from `ctx.state`, which holds the plugin's own outputs).
 
 ## Obligations
 
@@ -28,7 +28,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O2 — Delivery joins the site's source; absence fails with an actionable message.**
-  - *Claim:* the delivery is created against the site's delivery source with `schema.ts`'s record-field selection, `putDeliverySource` is never called, the source name and distribution ARN are read through `ctx.names` and the read-only `SiteState` view, and an absent source or distribution ARN fails before any AWS call with a message naming `blogwright bootstrap`.
+  - *Claim:* the delivery is created against the site's delivery source with `schema.ts`'s record-field selection, `putDeliverySource` is never called, the source name and distribution ARN are read through `ctx.names` and `ctx.siteState`, and an absent source or distribution ARN fails before any AWS call with a message naming `blogwright bootstrap`.
   - *Evidence to collect:* read the delivery node's body for its source-name and distribution-ARN reads and the guard preceding the first call; run `grep -n "StateStore\|putDeliverySource" packages/analytics/src/nodes.ts` and expect no hit; run `pnpm test -- nodes` in `packages/analytics` and confirm the negative-space case asserts both the message text and that the recorded call list is empty.
   - *Checks:* resolve the record-field argument — confirm it is `CLOUDFRONT_RECORD_FIELDS` from `packages/analytics/src/schema.ts` (task 39), not a list restated in `nodes.ts`.
   - *Status:* ☐ unverified

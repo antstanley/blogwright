@@ -15,25 +15,25 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `PluginContext`, `PluginLogger`, `PluginPorts` and `SiteState` are declared in `packages/core/src/plugin.ts` and exported from core's index, with a CLI test that fails the build the moment `OpsContext` stops satisfying `PluginContext`.
+- **P1 — Goal.** `PluginContext`, `PluginLogger`, `PluginPorts`, `PluginOutputs` and `SiteState` are declared in `packages/core/src/plugin.ts` and exported from core's index, with a CLI test that fails the build the moment `OpsContext` stops satisfying `PluginContext`.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `packages/cli/src/context.ts` (`OpsContext` and `createContext` keep their current shape and wiring), `packages/cli/src/test-support.ts` (`createTestContext` still returns a complete `OpsContext`), `packages/pds/src/context.ts` (`PdsContext` unchanged until task 24), or `packages/core/src/index.ts`'s existing exports (no name collision introduced by the new barrel line).
 
 ## Obligations
 
 - **O1 — `PluginContext` names exactly the agreed twelve fields and nothing more.**
-  - *Claim:* the interface declares `env`, `domain`, `preview`, `config`, `names`, `accountId`, `clients`, `ports`, `tags`, `logger`, `store` and `state`, with `agentDir` and `save()` absent and their absence recorded in a doc comment.
+  - *Claim:* the interface declares `env`, `domain`, `preview`, `config`, `names`, `accountId`, `clients`, `ports`, `tags`, `logger`, `store`, `state` (the plugin's own outputs), `siteState` (the read-only site view) and `record()`, with `agentDir` and `save()` absent and their absence recorded in a doc comment.
   - *Evidence to collect:* read the `PluginContext` declaration in `packages/core/src/plugin.ts` and enumerate its members; compare against `OpsContext` at `packages/cli/src/context.ts:25-51` and confirm `agentDir` (:40) and `save()` (:50) appear in `OpsContext` only, with a comment in `plugin.ts` saying why.
   - *Status:* ☐ unverified
 
 - **O2 — The load-bearing fields are justified, and every export is documented.**
-  - *Claim:* `names`, `accountId` and `state` carry doc comments naming their real consumers (task 52's log-delivery node reading `names.deliverySource` and the site's recorded distribution outputs; the analytics IAM roles reading the account id), and every exported symbol in the module has a doc comment.
+  - *Claim:* `names`, `accountId` and `siteState` carry doc comments naming their real consumers (task 52's log-delivery node reading `names.deliverySource` and the site's recorded distribution outputs; the analytics IAM roles reading the account id), and every exported symbol in the module has a doc comment.
   - *Evidence to collect:* read every `export` in `packages/core/src/plugin.ts` and confirm each is preceded by a `/** … */` block; confirm `packages/core/src/config.ts:343` really declares `deliverySource` and that the comment names it; confirm `.specs/changes/2026-07-26-analytics_plugin.md` §Analytics pipeline → Shape states the plugin reads `ctx.names.deliverySource`.
   - *Status:* ☐ unverified
 
 - **O3 — Read-only site view, scoped store, and no CLI import.**
-  - *Claim:* `state` is typed so an assignment into `ctx.state.resources` does not compile, `store` is documented as the plugin's own scoped store, `plugin.ts` imports only core modules, and `packages/pds/src/context.ts` is unchanged.
-  - *Evidence to collect:* read the `SiteState` declaration and `PluginContext.state`; temporarily add `const c: PluginContext = createTestContext(); c.state.resources['x'] = {};` to `packages/cli/src/context.test.ts`, run `pnpm typecheck`, expect a read-only assignment error, then remove the probe; read the import list at the top of `packages/core/src/plugin.ts` and confirm every specifier is a relative `./…` core module; run `git diff --stat packages/pds/` and expect no output.
+  - *Claim:* `siteState` is typed so an assignment into `ctx.siteState.resources` does not compile, `state` and `siteState` are distinct fields of distinct types, `record()` writes to the former only, `store` is documented as the plugin's own scoped store, `plugin.ts` imports only core modules, and `packages/pds/src/context.ts` is unchanged.
+  - *Evidence to collect:* read the `SiteState` and `PluginOutputs` declarations and confirm `PluginContext.state` and `PluginContext.siteState` are separate fields of separate types; confirm a `ResourceNode<PluginContext>` test calls `ctx.record(...)` and reads the value back from `ctx.state` while `ctx.siteState` is unaffected; temporarily add `const c: PluginContext = createTestContext(); c.siteState.resources['x'] = {};` to `packages/cli/src/context.test.ts`, run `pnpm typecheck`, expect a read-only assignment error, then remove the probe; read the import list at the top of `packages/core/src/plugin.ts` and confirm every specifier is a relative `./…` core module; run `git diff --stat packages/pds/` and expect no output.
   - *Checks:* resolve the type of `PluginContext.store` — confirm it is core's `StateStore` from `packages/core/src/state.ts:25` and not a CLI type.
   - *Status:* ☐ unverified
 
