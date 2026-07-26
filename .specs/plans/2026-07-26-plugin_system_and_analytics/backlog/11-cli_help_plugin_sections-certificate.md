@@ -23,7 +23,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — `--help` runs discovery, deliberately.**
   - *Claim:* the help path triggers discovery, a test proves it, and the module comment records the exception to task 10's laziness rule with the pds-migration reason.
-  - *Evidence to collect:* run `pnpm --filter blogwright test -- cli` › the help-discovery case — expect a test asserting the `ModuleLoader` fake recorded at least one call for a `--help` invocation; read the module comment in `packages/cli/src/cli.ts` and confirm it names `--help` as the one deliberate exception and states the reason (task 29 removes the static `pds` block at `:33-47`, and all six pds actions must still be listed).
+  - *Evidence to collect:* run `pnpm --filter blogwright test -- cli` › the help-discovery case — expect a test asserting the `ModuleLoader` fake recorded at least one call for a `--help` invocation; read the module comment in `packages/cli/src/cli.ts` and confirm it names the paths that run discovery — plugin dispatch, `--help` and a bare invocation, `blogwright plugin list` (task 17) and `blogwright init` (task 14) — against the built-in commands that do not, which are `deploy`, `bootstrap` and `status`, and states the reason for the help case (task 29 removes the static `pds` block at `:33-47`, and all six pds actions must still be listed). A comment naming only three paths is a defect: task 14 runs discovery in the `init` branch at `packages/cli/src/cli.ts:107-110`.
   - *Checks:* resolve the discovery call in the help branch (`packages/cli/src/cli.ts:102-106`) — confirm it is the same `discover` from `packages/cli/src/plugins.ts` that dispatch uses, not a second, differently-scoped reader.
   - *Status:* ☐ unverified
 

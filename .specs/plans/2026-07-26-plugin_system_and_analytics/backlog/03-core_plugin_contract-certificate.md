@@ -10,19 +10,19 @@
 
 ## Definition
 
-DONE(Task 03) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 03) ≡ every obligation O1…O8 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
 - **P1 — Goal.** `Plugin`, `PluginCommand`, `PluginInitIo`, `ConfigBlockEntry` and `PluginManifest` are declared in `packages/core/src/plugin.ts`, and `validatePlugin(module, packageName)` turns an arbitrary imported module into a trusted `Plugin` or raises naming the package.
-- **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
+- **P2 — Obligations.** The task is done iff O1…O8 all hold. One Oi per definition-of-done item, in DoD order; O8 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `packages/core/src/plugin.ts`'s existing contents from tasks 01 and 02 (`PluginContext` and `ResourceNode` keep their declarations and doc comments), nor `packages/core/src/index.ts`'s export surface (the new symbols must not collide with `config.js`, `ports.js` or `state.js` exports).
 
 ## Obligations
 
 - **O1 — The `Plugin` and `PluginCommand` member lists are exactly as specified.**
-  - *Claim:* `Plugin` declares `name`, `description`, `commands`, optional `nodes(ctx)`, `configKey`, `validateConfig(raw)` and `init(io)` and nothing else; `PluginCommand` declares `action`, `summary` and `run(ctx: PluginContext, args: string[])`, and `action` is a plain string so `secret status` is representable.
+  - *Claim:* `Plugin<TConfig = never>` declares `name`, `description`, `commands`, optional `nodes(ctx)`, `configKey`, `validateConfig(raw): TConfig` and `init(io)` and nothing else; `PluginCommand` declares `action`, `summary` and `run(ctx: PluginContext<TConfig>, args: string[])`, and `action` is a plain string so `secret status` is representable.
   - *Evidence to collect:* read both declarations in `packages/core/src/plugin.ts` and enumerate their members against `.specs/changes/2026-07-26-cli_plugin_system.md` §Plugin SPI → The `Plugin` contract; confirm no member named `hooks`, `dependsOn`, `ports` or `middleware` exists; compare the action strings in `packages/cli/src/cli.ts:198` (`secret status`, `secret delete`) against the `action` type and confirm they need no encoding.
   - *Status:* ☐ unverified
 
@@ -43,12 +43,24 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* trace `validatePlugin`'s body for any call expression on a value read from `module` — expect none; the only operations are property reads and `typeof`/`Array.isArray` narrowing.
   - *Status:* ☐ unverified
 
-- **O5 — Meets the repo definition of done.**
+- **O5 — The heterogeneous registry compiles without a cast, and `Plugin<never>` has no readable config *property*.**
+  - *Claim:* a `Plugin<{ a: string }>` and a `Plugin<{ b: number }>` both join one `Plugin<unknown>[]` and a `PluginContext<unknown>` dispatches through it with no cast; a property read off `ctx.pluginConfig` inside a bare `Plugin` is a compile error, while a whole-field assignment is documented as compiling.
+  - *Evidence to collect:* read the two type-level tests in `packages/core/src/plugin.test.ts`; run `pnpm typecheck` and confirm the `Plugin<never>` property-read probe is guarded by `@ts-expect-error` whose directive is *satisfied* — an unsatisfied directive means the read compiled, which is the defect the `never` default exists to prevent. Confirm the whole-field case is NOT guarded by `@ts-expect-error`: `never` is assignable to every type, so `const n: number = ctx.pluginConfig` compiles, and an `@ts-expect-error` there would itself be unsatisfied and fail the build.
+  - *Checks:* resolve why the heterogeneous array is accepted — confirm it is method-declared bivariance on `run`/`nodes`, not a widening cast or an `any` in the registry type. Confirm no code anywhere constructs a `PluginContext<never>`: the type has no inhabitant for `pluginConfig`, so a construction would need a cast.
+  - *Status:* ☐ unverified
+
+- **O6 — `parseConfigDocument` gives the host a typed route to a plugin's raw block.**
+  - *Claim:* `parseConfigDocument(text)` returns `{ config: OpsConfig; raw: Readonly<Record<string, unknown>> }`, `parseConfig` keeps its signature as the `config` half, and `pluginBlock(raw, key)` reads a block out of that document.
+  - *Evidence to collect:* read `packages/core/src/config.ts:242-255`; run `pnpm test -- config` and confirm a case feeds a document with an unknown top-level key and asserts it survives into `raw` while `config` is byte-identical to today's `parseConfig` output.
+  - *Checks:* confirm nothing indexes `OpsConfig` by a `string` — `config[plugin.configKey]` is `TS7053` under this repo's settings, and the point of the raw document is that no cast on `OpsConfig` is needed anywhere.
+  - *Status:* ☐ unverified
+
+- **O7 — Meets the repo definition of done.**
   - *Claim:* tests written with the change pass, the lint/format/dead-code gates are clean, and limits are named constants or validated config fields.
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean; confirm `PLUGIN_NAME_PATTERN` is a module-level `SCREAMING_SNAKE_CASE` constant rather than an inline literal, and that a changeset exists only if the change is user-facing.
   - *Status:* ☐ unverified
 
-- **O6 — The negative-space suite is legible in one run (Reviewable).**
+- **O8 — The negative-space suite is legible in one run (Reviewable).**
   - *Claim:* a reviewer can run `pnpm test -- plugin` and observe the seven negative cases each asserting the package name, then `grep -n ': any' packages/core/src/plugin.ts` returning nothing.
   - *Evidence to collect:* run both commands and record their output verbatim, including the test names.
   - *Status:* ☐ unverified

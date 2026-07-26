@@ -10,13 +10,13 @@
 
 ## Definition
 
-DONE(Task 16) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 16) ≡ every obligation O1…O7 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
-- **P1 — Goal.** `blogwright <plugin> bootstrap|status|destroy` reconcile, read and tear down a plugin's `nodes(ctx)` set through the CLI's existing engine against `state/<env>.<plugin>.json`, with the precedence between these generic verbs and plugin-declared commands of the same name decided and tested.
-- **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
+- **P1 — Goal.** `blogwright <plugin> bootstrap|status|destroy` reconcile, read and tear down a plugin's `nodes(ctx)` set through the CLI's existing engine against `state/<env>.<plugin>.json`, the site's own `destroy` refuses while such an object exists, and the precedence between these generic verbs and plugin-declared commands of the same name is decided and tested.
+- **P2 — Obligations.** The task is done iff O1…O7 all hold. One Oi per definition-of-done item, in DoD order; O7 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `commands.bootstrap`/`commands.destroy`/`commands.status` (`packages/cli/src/commands.ts:44,54,301`), `buildNodes` (`packages/cli/src/nodes.ts:1053`), the graph engine's save-on-failure behaviour (`packages/cli/src/graph.ts:74-85`), or the unscoped `state/<env>.json` key (`packages/core/src/state.ts:17`).
 
 ## Obligations
@@ -44,12 +44,18 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* run `pnpm test -- plugin-commands`; for the `--yes` case confirm the assertion matches the message shape at `packages/cli/src/commands.ts:56` and that the recording S3 client shows no `deleteObject` and the fake nodes' `delete` was never called; for the no-nodes case confirm the listed actions come from the fake plugin's `commands` array and the exit code assertion is non-zero.
   - *Status:* ☐ unverified
 
-- **O5 — Meets the repo definition of done.**
+- **O5 — `blogwright destroy` refuses while a plugin's state object exists.**
+  - *Claim:* with `state/<env>.analytics.json` present in the site's bucket, `blogwright destroy --yes` refuses, names the scope and its `blogwright analytics destroy --yes`, and issues no delete at all; with no scoped object present its call sequence is unchanged from today.
+  - *Evidence to collect:* read the guard in `packages/cli/src/commands.ts` ahead of `destroyGraph(buildNodes(ctx), ctx)` at `:62`; run `pnpm test -- plugin-commands` (or `-- commands`) in `packages/cli` and record both cases from the recording S3 client — the refusing run's call list must contain no `DELETE`, and the clean run's must match the pre-task sequence.
+  - *Checks:* confirm the guard reads the bucket listing rather than the plugin registry, so it still fires for a plugin that has been uninstalled; confirm it lives inside `destroy` and not in `createContext`, so no other command pays for it and discovery stays lazy.
+  - *Status:* ☐ unverified
+
+- **O6 — Meets the repo definition of done.**
   - *Claim:* tests written with the change pass, the lint/format/dead-code gates are clean, and limits are named constants or validated config fields.
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean; confirm a changeset exists in `.changeset/` naming the three new user-facing verbs and stating the semver impact.
   - *Status:* ☐ unverified
 
-- **O6 — Reviewable: the recorded state keys prove the scoping (Reviewable).**
+- **O7 — Reviewable: the recorded state keys prove the scoping (Reviewable).**
   - *Claim:* a reviewer can run `pnpm test -- plugin-commands` and observe exactly one state key for a plugin bootstrap — `state/<env>.<plugin>.json` — and only `state/<env>.json` for a site bootstrap with the same plugin installed.
   - *Evidence to collect:* run `pnpm test -- plugin-commands`; read the two recording-client assertions and confirm they assert on the full key list, not on membership.
   - *Status:* ☐ unverified
@@ -59,13 +65,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `packages/cli/src/cli.ts:143` (`main`, `case 'bootstrap'`) calls `commands.bootstrap(ctx)` on a repo with a node-contributing plugin installed → expect the same node set and the same `state/<env>.json` writes as before this task : ☐ (PRESERVED / REGRESSION)
-- `packages/cli/src/cli.ts:156` (`main`, `case 'destroy'`) calls `commands.destroy(ctx, { yes })` → expect the plugin's scoped state object is not deleted and the plugin's nodes are not torn down : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/cli.ts:156` (`main`, `case 'destroy'`) calls `commands.destroy(ctx, { yes })` with a plugin's scoped state object present → expect the refusal, no delete issued, and the plugin's nodes untouched; with none present, expect today's teardown unchanged : ☐ (PRESERVED / REGRESSION)
 - `packages/cli/src/commands.ts:301` (`status`) calls task 15's extracted read loop → expect `blogwright status` output unchanged; `pnpm test -- commands` passes unmodified : ☐ (PRESERVED / REGRESSION)
 - `packages/core/src/state.ts` (`StateStore`) constructed without a scope by `packages/cli/src/context.ts:134` → expect `state/<env>.json`, unchanged : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 
-Notes for the validator, not obligations: the spec's open question — whether `blogwright destroy` should refuse or warn when a plugin's scoped state shows live resources referencing site resources — is deliberately left open here and carried forward at task 20; the analytics change spec declares its own `bootstrap`/`status`/`destroy`, so task 47's command table must be re-read against whatever precedence this task fixed; and whether a plugin verb should run when the site itself has never been bootstrapped is not covered by the DoD.
+Notes for the validator, not obligations: the spec settles `blogwright destroy` against live plugin state by refusing (§State → Scoped state stores), which O5 discharges — what remains open, and is carried forward at task 20, is whether `plugin remove` should offer to run the plugin's teardown first; the analytics change spec declares its own `bootstrap`/`status`/`destroy`, so task 47's command table must be re-read against whatever precedence this task fixed; and whether a plugin verb should run when the site itself has never been bootstrapped is not covered by the DoD.
 
 ## Conclusion
 

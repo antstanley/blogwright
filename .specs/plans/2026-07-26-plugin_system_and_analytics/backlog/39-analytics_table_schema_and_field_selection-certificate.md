@@ -17,13 +17,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **P1 — Goal.** `packages/analytics/src/schema.ts` is the single home for the `page_views` column set, its `day` partition, the CloudFront record-field selection and the field-to-column mapping, read by the transform, the table node and the delivery node rather than restated in each.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break anything — this task adds a new module in a package that has no consumers yet. The invariant to protect is the spec's own contract: the twenty column names and the five-column `required` set in `.specs/changes/2026-07-26-analytics_plugin.md:247-277` are the authority, and a divergence here silently corrupts every later task.
+- **P3 — Invariants.** Must not break anything — this task adds a new module in a package that has no consumers yet. The invariant to protect is the spec's own contract: the twenty column names and the five-column `required` set in the spec's §Type changes `PageView` fragment are the authority, and a divergence here silently corrupts every later task.
 
 ## Obligations
 
 - **O1 — Column table, types, partition, required split, lowercase names.**
   - *Claim:* `PAGE_VIEWS_COLUMNS` lists exactly the twenty columns the spec names, in order, with Iceberg types matching the `PageView` `$defs` JSON types, `required: true` exactly for `event_time`, `day`, `host`, `uri`, `status`, the `day` partition declared as a named constant, and a test iterating the table asserts `^[a-z0-9_]+$` on every name.
-  - *Evidence to collect:* read `packages/analytics/src/schema.ts` and set-compare its column names against the twenty in `.specs/changes/2026-07-26-analytics_plugin.md:121-124` — expect an exact match with no extras and no omissions; compare the `required: true` subset against the `required` array at `.specs/changes/2026-07-26-analytics_plugin.md:250`; run `pnpm test -- schema` in `packages/analytics` and confirm the lowercase-name test executes once per column (assert the iteration count equals the column count, not a hardcoded sample).
+  - *Evidence to collect:* read `packages/analytics/src/schema.ts` and set-compare its column names against the twenty in the spec's §Analytics pipeline → Table schema — expect an exact match with no extras and no omissions; compare the `required: true` subset against the `required` array in the spec's `PageView` fragment; run `pnpm test -- schema` in `packages/analytics` and confirm the lowercase-name test executes once per column (assert the iteration count equals the column count, not a hardcoded sample).
   - *Status:* ☐ unverified
 
 - **O2 — Field selection excludes personal-data fields and keeps the viewer IP.**

@@ -10,14 +10,14 @@
 
 ## Definition
 
-DONE(Task 25) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 25) ≡ every obligation O1…O7 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
-- **P1 — Goal.** `packages/pds/src/plugin.ts` declares the `pds` namespace with six commands wrapping the existing exported functions, default-exported from `index.ts` beside the unchanged named exports, and is inert until the manifest field lands at task 26.
-- **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the six pds command functions (`packages/pds/src/commands.ts:32,68,82,106,118,169`), `syncAfterDeploy` (`:204`) as imported by `packages/cli/src/commands.ts:2`, the `blogwright-pds/rkey` subpath, or the current `runPds` dispatch at `packages/cli/src/cli.ts:186-232`.
+- **P1 — Goal.** `packages/pds/src/plugin.ts` declares the `pds` namespace with six commands wrapping the existing exported functions and a `nodes(ctx)` returning task 23's policy node, default-exported from `index.ts` beside the unchanged named exports, and is inert until the manifest field lands at task 26.
+- **P2 — Obligations.** The task is done iff O1…O7 all hold. One Oi per definition-of-done item, in DoD order; O7 is the `Reviewable:` item.
+- **P3 — Invariants.** Must not break the six pds command functions (`packages/pds/src/commands.ts:32,68,82,106,118,169`), `syncAfterDeploy` (`:204`) as imported by `packages/cli/src/commands.ts:2`, the `blogwright-pds/rkey` subpath, task 23's `buildPdsNodes` and its tests, or the current `runPds` dispatch at `packages/cli/src/cli.ts:186-232`.
 
 ## Obligations
 
@@ -43,12 +43,18 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* run `grep -rnE "as PdsContext|as unknown as|process\.argv" packages/pds/src/plugin.ts` and expect no hits; run `git diff --stat packages/cli` and expect no output; run `pnpm test -- cli` in `packages/cli` and confirm the existing `runPds` behaviour is unaffected.
   - *Status:* ☐ unverified
 
-- **O5 — Meets the repo definition of done.**
+- **O5 — The node contributor is declared and returns task 23's node.**
+  - *Claim:* `plugin.nodes(ctx)` returns exactly `buildPdsNodes(ctx)` — the single `pds-oidc-policy` node — with no wrapper filtering or re-ordering it, so pds contributes topography through the SPI rather than through the site graph.
+  - *Evidence to collect:* read the `nodes` member in `packages/pds/src/plugin.ts`; run `pnpm test -- plugin` in `packages/pds` and record the case asserting the returned ids.
+  - *Checks:* confirm `nodes` takes the full `PluginContext<PdsConfig>` and not the narrowed `PdsContext` — only the lifecycle verbs build a plugin context, and a node reading `siteState`/`record()` cannot be typed on the command context; confirm task 23's `packages/pds/src/nodes.ts` is unchanged by this task apart from being imported.
+  - *Status:* ☐ unverified
+
+- **O6 — Meets the repo definition of done.**
   - *Claim:* tests written with the change pass, the lint/format/dead-code gates are clean, and limits are named constants or validated config fields.
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean, with knip raising no unused-export complaint about the new default export; confirm the pinned rkey vectors in `packages/pds/src/rkey.test.ts` pass; no changeset is needed while the plugin is inert.
   - *Status:* ☐ unverified
 
-- **O6 — Reviewable: the six actions and the surviving named exports (Reviewable).**
+- **O7 — Reviewable: the six actions and the surviving named exports (Reviewable).**
   - *Claim:* a reviewer can run `pnpm test -- plugin` in `packages/pds` and inspect the built package's exports, observing the six actions and every pre-existing named export.
   - *Evidence to collect:* run `pnpm test -- plugin` in `packages/pds` and capture the pass list; run `pnpm build` then `node -e "import('blogwright-pds').then(m => console.log(m.default.name, m.default.commands.map(c => c.action), Object.keys(m)))"` from `packages/cli` and capture the printed namespace, action list and export names.
   - *Status:* ☐ unverified

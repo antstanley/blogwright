@@ -15,7 +15,7 @@ spec set is created here later, that page moves to `development-guidelines.md`.
   `blogwright-core` with discovery and generic dispatch in the CLI, the migration of
   `blogwright-pds` onto it with no user-visible change, and a `blogwright-analytics`
   plugin delivering CloudFront logs to an Iceberg table with a local dashboard;
-  57 tasks, eight milestones.
+  59 tasks, eight milestones.
 
 ## Change specs
 

@@ -29,7 +29,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O2 — The named set is complete and every definition is parameterised.**
   - *Claim:* the set covers views over time, top paths, referrers, countries, status codes, cache hit ratio and unique visitors by `visitor_key`; each takes a date range and a bot-inclusion flag defaulting from `config.analytics.bots`; and a test iterating the whole set asserts no interpolated caller value in any SQL text.
-  - *Evidence to collect:* read `packages/analytics/src/queries.ts` and set-compare the query names against the seven the spec lists at `.specs/changes/2026-07-26-analytics_plugin.md:186-188`; run `pnpm test -- queries` in `packages/analytics` and confirm the parameterisation assertion iterates the set (assert its iteration count equals the set size, not a hardcoded sample); confirm the bot default is read from the config module, not a literal.
+  - *Evidence to collect:* read `packages/analytics/src/queries.ts` and set-compare the query names against the seven the spec lists in §Analytics dashboard → Local server; run `pnpm test -- queries` in `packages/analytics` and confirm the parameterisation assertion iterates the set (assert its iteration count equals the set size, not a hardcoded sample); confirm the bot default is read from the config module, not a literal.
   - *Status:* ☐ unverified
 
 - **O3 — Unknown name and bad date range both raise.**

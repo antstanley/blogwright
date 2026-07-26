@@ -1,6 +1,6 @@
 # Change: Analytics plugin — CloudFront logs to Iceberg, with a local dashboard
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes and dashboard) + packages/core (delivery-configuration parameters on the existing `LogsClient`, and `signingUsEast1` on `AwsClients`) + packages/cli (two guards on the shared log-delivery node)
+**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes and dashboard) + packages/core (delivery-configuration parameters on the existing `LogsClient`) + packages/cli (two guards on the shared log-delivery node)
 
 A new plugin, `blogwright-analytics`, adds traffic analytics to a blogwright
 site. It taps the CloudFront access logs blogwright already delivers, routes
@@ -37,7 +37,7 @@ the calls involved.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients; the only core change is delivery-configuration parameters on the existing `LogsClient` |
+| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
 | *(none — no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` port joins the ports table |
@@ -54,21 +54,29 @@ and, for SPI confidence, on
 
 > `blogwright-analytics` declares the manifest field
 > `{ "blogwright": { "plugin": "analytics" } }` and claims the `analytics`
-> namespace with five actions:
+> namespace. It **declares two commands** and contributes an `init`; the other
+> two actions are the CLI's generic lifecycle verbs, under the precedence rule
+> the plugin SPI states in §CLI → Plugin lifecycle:
 >
+> - `analytics status` — **declared**, because it does strictly more than the
+>   generic verb: the plugin's nodes against its scoped state, plus the Firehose
+>   stream's delivery health and the table's current row count.
+> - `analytics dashboard` — **declared**; starts the local dashboard server.
 > - `analytics init` — supplied as the plugin's `init` contributor, **not** as a
 >   declared command, so the generic action renders and splices the config
 >   block. A plugin that declares an `init` command owns the write itself; this
 >   one does not declare one.
-> - `analytics bootstrap` — reconciles the plugin's resource graph.
-> - `analytics status` — the plugin's nodes against its scoped state, plus the
->   Firehose stream's delivery health and the table's current row count.
-> - `analytics dashboard` — starts the local dashboard server.
-> - `analytics destroy --yes` — tears the plugin's graph down in reverse order.
+> - `analytics bootstrap` and `analytics destroy --yes` — **generic**, never
+>   declared. They reconcile and tear down the plugin's resource graph through
+>   the CLI's own engine, which a plugin cannot run itself. Declaring either is
+>   rejected at discovery.
 >
 > The plugin's resources live in its own scoped state store
 > (`state/<env>.analytics.json`), so `blogwright destroy` neither provisions nor
-> removes them.
+> removes them — and, per the plugin SPI's §State → Scoped state stores, it
+> refuses while that object exists, naming `blogwright analytics destroy --yes`.
+> The refusal is what keeps a site teardown from emptying the bucket the
+> plugin's own record lives in and orphaning twelve resources.
 
 ### Analytics pipeline → Shape (Add)
 
@@ -103,15 +111,28 @@ and, for SPI confidence, on
 >   `deliveriesForSource` returns any delivery other than its own, failing with a
 >   message naming `blogwright analytics destroy`. Today it deletes one delivery
 >   found by `.find()` ([`logs.ts:131`](../../packages/core/src/aws/logs.ts)) and
->   then the source; with the analytics delivery still attached AWS returns a
->   Conflict that `deleteDeliverySource` does not catch (it handles only
->   `isNotFound`), so `blogwright destroy` throws partway through teardown.
+>   then the source; with the analytics delivery still attached AWS rejects the
+>   delete, and `deleteDeliverySource` catches only `isNotFound`
+>   ([`logs.ts:164-171`](../../packages/core/src/aws/logs.ts)), so whatever the
+>   error code, `blogwright destroy` throws partway through teardown. The guard
+>   turns that into an early, actionable refusal and does not depend on the code
+>   AWS returns.
 > - **The `ConflictException` retry deletes only the site's own delivery id.**
 >   Today it iterates `deliveriesForSource` and deletes every delivery
 >   ([`nodes.ts:751-761`](../../packages/cli/src/nodes.ts)) before rewiring —
 >   which silently removes the analytics delivery while the plugin's scoped state
 >   still records it as `configured`, so `analytics status` reports healthy and
 >   log delivery has stopped.
+>
+> Both guards have to tell the site's delivery from the plugin's, and neither
+> lookup the CLI has can express that: `deliveriesForSource`
+> ([`logs.ts:139`](../../packages/core/src/aws/logs.ts)) returns bare ids, and
+> `findDeliveryIdBySource` returns whichever AWS lists first. So
+> `deliveriesForSource` returns each delivery's destination ARN alongside its
+> id — `DescribeDeliveries` already carries the field — and the site's node
+> matches on `names.deliveryDestination`. The retry loop
+> ([`nodes.ts:753-757`](../../packages/cli/src/nodes.ts)) is its only caller, so
+> the widening moves with the guards that need it rather than ahead of them.
 >
 > Both are site-graph changes that the analytics plugin depends on but does not
 > make. They are the concrete form of the ownership rule the plugin SPI states:
@@ -120,11 +141,23 @@ and, for SPI confidence, on
 ### Analytics pipeline → Region pinning (Add)
 
 > CloudFront standard logging accepts a Firehose stream only in `us-east-1`.
-> The stream, its transform Lambda, its IAM roles, the S3 Tables bucket, and the
-> Glue catalog integration are therefore all created in `us-east-1` regardless
-> of `config.region`. The plugin states this at bootstrap rather than deriving
-> it silently, because it is the one place its resources diverge from the
-> site's.
+> **Every one of the plugin's twelve nodes is therefore created in `us-east-1`
+> regardless of `config.region`** — the stream, its transform Lambda, its two
+> IAM roles, the S3 Tables bucket with its namespace and table, the Glue catalog
+> integration, the Firehose error bucket, the `visitor_key` salt secret, and the
+> log destination and delivery. The plugin states this at bootstrap rather than
+> deriving it silently, because it is the one place its resources diverge from
+> the site's.
+>
+> The pin is enforced at one place: the plugin builds every client it uses over
+> `ctx.clients.signingUsEast1`, never over a client core pre-built for the
+> site's region. The salt secret is where that matters and would otherwise be
+> missed — `ctx.clients.secrets` is constructed over the primary-region signer
+> ([`clients.ts:68`](../../packages/core/src/clients.ts)), so reusing it would
+> put the secret in `config.region` while the transform Lambda that reads it and
+> the role ARN that grants `secretsmanager:GetSecretValue` on it are both
+> `us-east-1`. The plugin constructs its own `SecretsManagerClient` over
+> `signingUsEast1` instead.
 
 ### Analytics pipeline → Record transformation (Add)
 
@@ -170,9 +203,15 @@ and, for SPI confidence, on
 >
 > The delivery selects only the CloudFront fields these columns need. Fields
 > that carry personal data and have no analytic use — `cs(Cookie)` and
-> `x-forwarded-for` — are never selected, so they do not leave CloudFront. The
-> viewer IP is selected because the transform needs it to derive `visitor_key`,
-> and is discarded there.
+> `x-forwarded-for` — are never selected, so they never reach Firehose, the
+> transform, or the table. This governs the analytics delivery only: the site's
+> existing CloudWatch delivery is created with no `recordFields`
+> ([`logs.ts:114`](../../packages/core/src/aws/logs.ts),
+> [`nodes.ts:732`](../../packages/cli/src/nodes.ts)), so AWS's default field
+> list — which includes both — still applies to the CloudWatch copy. Narrowing
+> that is a separate change to the site's node, not this one. The viewer IP is
+> selected for the analytics delivery because the transform needs it to derive
+> `visitor_key`, and is discarded there.
 
 ### Analytics pipeline → Resource nodes (Add)
 
@@ -219,6 +258,13 @@ and, for SPI confidence, on
 >   [`MicrovmsClient`](../../packages/core/src/aws/microvms.ts), which shares the
 >   host and signing name but addresses the `/2025-09-09/` MicroVM paths.
 >
+> Four is the count of *new* clients, not of clients in the plugin's bundle.
+> `analytics-error-bucket` is a plain S3 bucket and `analytics-salt-secret` a
+> plain Secrets Manager secret, so neither needs a new client: the plugin
+> constructs core's existing `S3Client` and `SecretsManagerClient` over
+> `signingUsEast1`, which is why that signer is on the context. Reusing
+> `ctx.clients.s3` or `ctx.clients.secrets` would put those two resources in
+> `config.region`, outside the region pin every other node obeys.
 > `LogsClient` is the exception that stays in core, because the site graph owns
 > it — see the next block.
 
@@ -272,17 +318,17 @@ and, for SPI confidence, on
 > - `saltSecretName` — Secrets Manager secret holding the `visitor_key` salt;
 >   defaults to `<siteName>/<env>/analytics-salt`. Mirrors how `pds.secretName`
 >   names its secret.
+> - `dashboard.port` — local port; defaults to `4317`.
 >
-> Every default carries the environment, matching `deriveNames`' `<env>-<siteName>`
-> prefix ([`config.ts:352`](../../packages/core/src/config.ts)). Without it two
-> environments would write into one Iceberg table and
+> Every derived default carries the environment, matching `deriveNames`'
+> `<env>-<siteName>` prefix ([`config.ts:352`](../../packages/core/src/config.ts)).
+> Without it two environments would write into one Iceberg table and
 > `blogwright analytics destroy --yes` in staging would run `DeleteTableBucket`
 > against production's data — scoped state (`state/<env>.analytics.json`) would
 > not detect the collision. AWS gives a second reason: Firehose "does not
 > recommend using multiple Firehose streams to write data to the same Apache
 > Iceberg table", because Iceberg's optimistic concurrency makes the streams
 > contend.
-> - `dashboard.port` — local port; defaults to `4317`.
 >
 > A config carrying an `analytics` block when the plugin is not installed is
 > valid and inert.
@@ -364,11 +410,21 @@ Stage 1 — the core seams (no plugin service client lands in core)
      accept a { service, signingName, global? } descriptor as well as a
      ServiceKey. SIGNING_NAMES gains NO keys: s3tables, firehose, glue and
      lambda are the plugin's, supplied as descriptors. canonicalHost's default
-     branch (:63) already returns <service>.<region>.amazonaws.com.
+     branch (:63) already returns <service>.<region>.amazonaws.com and its
+     branches do not move, though its parameter widens to `string`; four other
+     sites key off `service` and read the resolved value through one helper:
+     GLOBAL_SERVICES (endpoint.ts:36, a Set<ServiceKey>),
+     SIGNING_NAMES[opts.service] (signer.ts:124, the signing name),
+     `uriEscapePath: opts.service !== 's3'` (signer.ts:135, the service name),
+     and parseError(opts.service, response) (signer.ts:163, the service name —
+     it feeds AwsError's `service` field, so the raw union would print
+     [object Object]). Owned by the plugin-system change spec; listed here
+     because this is its first consumer.
   2. packages/core/src/clients.ts:21,42 — expose signingUsEast1 alongside
      signing. The us-east-1 SigningClient is a local const at :54 today, so a
      plugin cannot build a us-east-1 client without it — and every analytics
-     service is us-east-1.
+     service is us-east-1. Owned by the plugin-system change spec; listed here
+     because this is its first consumer.
   3. packages/core/src/aws/logs.ts:106 — putDeliveryDestination takes an
      optional outputFormat; :114 createDelivery takes optional recordFields
      and fieldDelimiter. Defaults preserve today's behaviour exactly; assert
@@ -380,35 +436,46 @@ Stage 1 — the core seams (no plugin service client lands in core)
   5. The four clients live in packages/analytics/src/aws/, built over
      ctx.clients.signingUsEast1 with their own descriptors. Follow
      secretsmanager.ts for AWS-JSON services and s3.ts for REST ones;
-     transport-level tests for each, per the existing pattern.
+     transport-level tests for each, per the existing pattern. Core's S3Client
+     and SecretsManagerClient join the same bundle over the same signer — no
+     new client, but the error bucket and the salt secret must be created in
+     us-east-1 like everything else the plugin owns.
 
 Stage 2 — the transform Lambda
-  5. packages/analytics/src/transform/ — the handler plus a rolldown config,
+  6. packages/analytics/src/transform/ — the handler plus a rolldown config,
      mirroring packages/build-agent (rolldown.config.ts, a source-hash
      manifest). The hash keys the uploaded zip so identical source never
      redeploys the function.
-  6. Unit-test the mapping, the visitor_key derivation (injected salt in, known
+  7. Unit-test the mapping, the visitor_key derivation (injected salt in, known
      digest out), the bot match, and the drop path — this is the one place a
      silent mistake corrupts the whole dataset.
 
 Stage 3 — the plugin and its graph
-  7. packages/analytics/src/ — plugin.ts (the Plugin export), config.ts,
+  8. packages/analytics/src/ — plugin.ts (the Plugin export), config.ts,
      schema.ts (the page_views DDL and the CloudFront field selection),
      nodes.ts (the twelve nodes).
-  8. Node ordering: table-bucket → namespace → table → catalog-integration;
-     transform-role → transform-function; firehose-role →
-     firehose-stream (depends on table + catalog-integration +
-     transform-function); log-destination → log-delivery.
-  9. logDeliveryNode (packages/cli/src/nodes.ts:713) is the model for the
+  9. Node ordering, all twelve: table-bucket → namespace → table →
+     catalog-integration; salt-secret → transform-role → transform-function;
+     error-bucket → firehose-role → firehose-stream; log-destination →
+     log-delivery. A node depends on every node whose recorded ARN it
+     interpolates, so transform-role also depends on salt-secret (its
+     GetSecretValue grant), firehose-role also on table and
+     transform-function (its S3 Tables and lambda:InvokeFunction grants),
+     and firehose-stream also on table, catalog-integration and
+     transform-function. topoSort drains zero-indegree nodes alphabetically
+     (cli/src/graph.ts:34-37), so a role that declares dependsOn: [] is
+     reconciled before its grants' targets and writes an undefined ARN into
+     the policy — a wrong permission, never an error.
+ 10. logDeliveryNode (packages/cli/src/nodes.ts:713) is the model for the
      delivery nodes, including its ConflictException retry (:751) and the
      teardown ordering comment (:764) — read both before writing them.
 
 Stage 4 — the dashboard
- 10. packages/analytics/app/ — SvelteKit + LayerChart 2.0.2 (Svelte 5 only),
+ 11. packages/analytics/app/ — SvelteKit + LayerChart 2.0.2 (Svelte 5 only),
      built to dist/app and shipped in the package's `files`.
- 11. packages/analytics/src/queries.ts (the named set), server.ts (the edge
+ 12. packages/analytics/src/queries.ts (the named set), server.ts (the edge
      adapter), adapters/duckdb-query.ts (the AnalyticsQuery adapter).
- 12. Add the SvelteKit build to the package's build script; docs/ is the
+ 13. Add the SvelteKit build to the package's build script; docs/ is the
      existing precedent for a non-tsc build in this workspace.
 ```
 
@@ -462,7 +529,14 @@ rather than create when it already exists.
 - S3 Tables is available in `us-east-1` and its Iceberg tables are readable by
   DuckDB's `ENDPOINT_TYPE 'S3_TABLES'` attach, which requires `s3tables`
   permissions but no Lake Formation grant. The Glue federation is needed for
-  Firehose to write, not for DuckDB to read.
+  Firehose to write, not for DuckDB to read. Two dependencies this rests on and
+  neither is under blogwright's control: the "no Lake Formation grant" half
+  holds only while the table bucket stays in IAM access-control mode — AWS
+  documents S3 Tables under either IAM *or* Lake Formation access control, and
+  switching the account to the latter would need a grant the plugin does not
+  provision; and DuckDB's iceberg extension is documented as preview, so the
+  attach syntax may move. The `AnalyticsQuery` port is what contains both: the
+  named queries and the dashboard depend on the port, not on DuckDB.
 - Log volume for a blog is small enough that batched Firehose delivery produces
   files large enough not to make S3 Tables compaction the dominant cost.
 
@@ -494,7 +568,10 @@ rather than create when it already exists.
   gives the same daily turnover for a flat $0.40/month with nothing to operate.
   Total cost: one secret, one `secretsmanager:GetSecretValue` grant scoped to
   it, and a `saltSecretName` config field. `SecretsManagerClient` already exists
-  in core, so no new client. (SSM Parameter Store's `SecureString` would be free,
+  in core, so no new client — but the plugin builds its own instance over
+  `signingUsEast1` rather than reusing the primary-region `ctx.clients.secrets`,
+  so the secret lands inside the region pin with the Lambda that reads it.
+  (SSM Parameter Store's `SecureString` would be free,
   but it would cost a hand-rolled `ssm` client — a bad trade against $4.80/year.)
 - *The error bucket is the plugin's own, in us-east-1.* **Not the site's
   environment bucket.** Two reasons beyond the undocumented cross-region
@@ -504,8 +581,14 @@ rather than create when it already exists.
   region-pinning decision.
 - *The stream is created `AppendOnly`.* **`page_views` is insert-only by
   design.** Firehose scales throughput automatically for append-only Iceberg
-  streams; the flag is settable only at `CreateDeliveryStream`, so it has to be
-  right the first time.
+  streams. Whether the flag can be changed afterwards is not settled: the
+  Firehose considerations page says "Currently, you can set this flag only with
+  the CreateDeliveryStream API operation", while the `IcebergDestinationUpdate`
+  API reference lists `AppendOnly` among the fields `UpdateDestination` accepts.
+  The stream node is therefore written defensively rather than against either
+  reading — it attempts the update, and falls back to replacing the stream when
+  the update is rejected. Both branches are covered by tests; neither
+  documentation claim is treated as fact.
 - *Flag bots, do not drop them.* **`is_bot` is a column; filtering is a query
   default.** A dropped record cannot be recovered when the bot heuristic turns
   out to be wrong, and it will be wrong.
@@ -523,6 +606,15 @@ rather than create when it already exists.
 - *One table, partitioned by day.* **No rollup tables in this change.** Rollups
   are an optimisation for a dataset size a blog does not have yet, and they are
   additive later.
+- *`blogwright-analytics` joins the fixed changeset group.* **It versions in
+  lockstep with the CLI.** `blogwright plugin add` installs the plugin at the
+  running CLI's own version, and the group at
+  [`.changeset/config.json:5`](../../.changeset/config.json) today is
+  `["blogwright", "blogwright-core", "blogwright-pds"]` — without adding the
+  package, `blogwright-analytics@<cli version>` would never exist on the
+  registry and the documented install path would fail. Joining the group is the
+  smaller change; the alternative is teaching `plugin add` a second
+  version-resolution rule.
 
 **Open questions**
 
@@ -536,12 +628,6 @@ rather than create when it already exists.
   else the plugin owns is per-environment. Two environments therefore share it,
   and its node adopts rather than creates. Is adopt-and-never-delete the right
   contract, or should the last environment to be torn down remove it?
-- Should `blogwright destroy` refuse while `state/<env>.analytics.json` shows
-  live resources? The plugin's delivery references the site's distribution and
-  its shared delivery source, so a site teardown leaves the plugin's delivery
-  plumbing orphaned — the same failure mode
-  [`nodes.ts:764`](../../packages/cli/src/nodes.ts) already documents. The
-  general form of this question is open in the plugin-system change spec.
 - Rotating the salt daily means `visitor_key` is not comparable across a day
   boundary, so a "unique visitors this month" figure is really the sum of daily
   uniques. Is that the intended semantic, or should the salt rotate less often

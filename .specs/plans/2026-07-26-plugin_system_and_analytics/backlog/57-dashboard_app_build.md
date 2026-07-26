@@ -1,4 +1,4 @@
-# Task 58 — The SvelteKit dashboard app, built to dist/app and shipped prebuilt
+# Task 57 — The SvelteKit dashboard app, built to dist/app and shipped prebuilt
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [57-dashboard_app_build-certificate.md](57-dashboard_app_build-certificate.md)
 

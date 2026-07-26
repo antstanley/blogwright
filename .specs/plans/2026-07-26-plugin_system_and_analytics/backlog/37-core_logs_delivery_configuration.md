@@ -1,4 +1,4 @@
-# Task 38 — Optional output format, record fields and field delimiter on LogsClient deliveries
+# Task 37 — Optional output format, record fields and field delimiter on LogsClient deliveries
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [37-core_logs_delivery_configuration-certificate.md](37-core_logs_delivery_configuration-certificate.md)
 

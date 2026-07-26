@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `discover(repoRoot, ports)` in a new `packages/cli/src/plugins.ts` returns loaded plugins and load failures for both consumer-installed and CLI-bundled plugin packages.
+- **P1 — Goal.** `discover(repoRoot, cliPackageDir, ports)` in a new `packages/cli/src/plugins.ts` returns loaded plugins and load failures for both consumer-installed and CLI-bundled plugin packages, each resolved from its own directory.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the `Ports` contract in `packages/cli/src/ports.ts:24-29` or core's boundary validator `validatePlugin` (`packages/core/src/plugin.ts`, task 03), and must add no new import that the root `.oxlintrc.json` `no-restricted-imports` rule would reject in a domain module.
 
@@ -30,7 +30,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 - **O2 — Bundled plugins are discovered.**
   - *Claim:* a plugin shipped as a dependency of `blogwright` itself is discovered from a consumer `package.json` whose only dependency is `blogwright`.
   - *Evidence to collect:* run `pnpm --filter blogwright test -- plugins` › the bundled-plugin case — expect the memory filesystem to hold a consumer `package.json` listing only `blogwright`, plus a CLI `package.json` listing a `blogwright-*` dependency, and the returned `plugins` array to contain that plugin.
-  - *Checks:* trace the resolution of the CLI's own `package.json` — confirm it goes through `ports.loader.resolve('blogwright/package.json', repoRoot)` (or an equivalent port call) and not through `import.meta.url`, `require.resolve` or `node:module` inside `plugins.ts`; then confirm the bundled candidate is resolved from the CLI package's directory, not from `repoRoot`, since `blogwright-pds` need not be hoisted into the consumer's tree.
+  - *Checks:* trace how the CLI's own `package.json` is located — confirm `cliPackageDir` is derived from `import.meta.url` at the composition root and passed in, and that neither `'blogwright'` nor `'blogwright/package.json'` is ever handed to `ports.loader`. Both throw `ERR_PACKAGE_PATH_NOT_EXPORTED` (verified 2026-07-26: `packages/cli/package.json` declares an `exports` map with a `./rkey` entry and no `.` entry), so a resolver call there is a defect that no map-backed fake can expose. Then confirm the bundled candidate is resolved with `fromDir = cliPackageDir`, not `repoRoot`, because under pnpm the consumer's `node_modules` holds only the `blogwright` symlink and `blogwright-pds` is not resolvable from there at all. Confirm `plugins.ts` itself imports neither `node:module` nor `import.meta.url`.
   - *Status:* ☐ unverified
 
 - **O3 — The manifest and validation negative space.**

@@ -1,4 +1,4 @@
-# Done Certificate — Task 36: GlueClient in blogwright-core
+# Done Certificate — Task 35: GlueClient in blogwright-analytics
 
 **Task:** [35-analytics_glue_client.md](35-analytics_glue_client.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 36) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 35) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -39,8 +39,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O4 — Exported and not dead.**
-  - *Claim:* `packages/core/src/index.ts` re-exports `./aws/glue.js`, and `pnpm knip` reports no unused export for the new module.
-  - *Evidence to collect:* read `packages/core/src/index.ts` and confirm the export line sits between `./aws/form.js` and `./aws/iam.js`; run `pnpm knip` from the repo root — expect a clean report.
+  - *Claim:* `packages/analytics/src/index.ts` re-exports `./aws/glue.js`, `packages/core` is untouched, and `pnpm knip` reports no unused export for the new module.
+  - *Evidence to collect:* read `packages/analytics/src/index.ts` and confirm the export line keeps the barrel alphabetical; run `grep -rn "glue" packages/core/src --include='*.ts' --exclude='*.test.ts'` and expect no output; run `pnpm knip` from the repo root — expect a clean report.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -57,7 +57,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `packages/cli/src/context.ts:5` imports from `blogwright-core` → expect the widened barrel at `packages/core/src/index.ts` to still resolve every existing named export : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/context.ts:5` imports from `blogwright-core` → expect `packages/core/src/index.ts` to be unchanged and every existing named export to still resolve : ☐ (PRESERVED / REGRESSION)
 - `packages/pds/src/test-support.ts:13` imports `createClients` from `blogwright-core` → expect `pnpm test` in `packages/pds` to remain green : ☐ (PRESERVED / REGRESSION)
 
 Otherwise: new code with no existing callers — `GlueClient` is first consumed by task 49.

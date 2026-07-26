@@ -1,4 +1,4 @@
-# Done Certificate — Task 52: Remove the pds branch from the site's OIDC policy
+# Done Certificate — Task 59: Remove the pds branch from the site's OIDC policy
 
 **Task:** [59-cli_drop_pds_from_site_graph.md](59-cli_drop_pds_from_site_graph.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 52) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 59) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

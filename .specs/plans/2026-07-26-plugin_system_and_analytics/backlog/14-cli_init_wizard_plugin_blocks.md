@@ -10,7 +10,7 @@
 ## Steps
 
 - [ ] Widen `initSite` (`init.ts:72`) to take the already-discovered plugins from its caller — a plain array, not a loader — so `init.ts` gains no new import and stays a domain module.
-- [ ] Construct the `ModuleLoader` adapter and run discovery in `cli.ts:107-110` beside the existing `createNodeFileSystem()`, passing the result into `initSite`; keep the "runs before any context exists" comment accurate.
+- [ ] Construct the `ModuleLoader` adapter and run discovery in `cli.ts:107-110` beside the existing `createNodeFileSystem()`, passing the result into `initSite`; keep the "runs before any context exists" comment accurate. `init` is one of the four paths the spec's discovery rule names — with dispatch, help and `plugin list` — so task 11's module comment must already list it; if it does not, correct the comment here rather than leaving the code outside the stated rule.
 - [ ] Ask each plugin's questions after the four core questions, in a deterministic order (sort by plugin `name`), reusing the same `ask`/`io` surface task 13 built so the two paths reach the contributor identically.
 - [ ] Collect the answered blocks and render them into the one string `renderConfig` produces, appending each block inside the top-level object with the comma discipline the existing entry loop already uses (`init.ts:62-68`) — one `fs.writeText`, never a write per plugin.
 - [ ] Add `init.test.ts` cases: no plugins (pinned byte-for-byte against today's output), two fake plugins (deterministic order, both blocks present, result re-parsed with `parseConfig`), one plugin declining, and one plugin whose `init` throws.

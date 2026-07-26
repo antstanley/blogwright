@@ -39,7 +39,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 - **O4 — Merge-plan bookkeeping is complete and the open questions survive.**
   - *Claim:* the spec's `Status:` is `Merged` with a `Merged:` date, the file lives at `.specs/changes/merged/2026-07-26-migrate_pds_to_plugin_system.md`, `.specs/README.md`'s pending list no longer lists it, and the three unanswered questions (an `afterDeploy` hook, `OpsConfig` holding plugin blocks as an opaque map, shorter pds aliases) are carried forward.
   - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged` and confirm the file moved; read the moved file's header line and its Open questions section; read `.specs/README.md` and confirm the pending list is renumbered with no dangling link.
-  - *Checks:* resolve every relative link in the moved file — `../../packages/...` and `../../DEVELOPMENT.md` gain a directory level under `merged/`, so confirm they still resolve rather than silently rotting.
+  - *Checks:* resolve every relative link in the moved file — `../../packages/...` and `../../DEVELOPMENT.md` gain a directory level under `merged/`, and the two sibling links to `2026-07-26-cli_plugin_system.md` must have become `../2026-07-26-cli_plugin_system.md`, since that spec is still in `.specs/changes/` at this point (task 20 defers its flip to task 58). Confirm each resolves rather than silently rotting.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -57,7 +57,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `.specs/README.md:26-29` linked `changes/2026-07-26-migrate_pds_to_plugin_system.md` → expect the entry removed from the pending list and the remaining two renumbered, with no broken link left behind : ☐ (PRESERVED / REGRESSION)
-- `.specs/changes/2026-07-26-cli_plugin_system.md:51` and `2026-07-26-analytics_plugin.md` reference the migration spec by relative path → expect those links updated or still resolving after the move : ☐ (PRESERVED / REGRESSION)
+- `.specs/changes/2026-07-26-cli_plugin_system.md` §Affected spec pages and `2026-07-26-analytics_plugin.md` reference the migration spec by relative path → expect those links updated or still resolving after the move : ☐ (PRESERVED / REGRESSION)
 - `DEVELOPMENT.md` §Error handling table and §Assumptions reference `blogwright-pds` as a feature package → expect both still consistent with the amended paragraph : ☐ (PRESERVED / REGRESSION)
 
 ## Residue

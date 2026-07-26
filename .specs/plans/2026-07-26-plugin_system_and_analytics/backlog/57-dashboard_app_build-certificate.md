@@ -1,4 +1,4 @@
-# Done Certificate — Task 58: The SvelteKit dashboard app, built to dist/app and shipped prebuilt
+# Done Certificate — Task 57: The SvelteKit dashboard app, built to dist/app and shipped prebuilt
 
 **Task:** [57-dashboard_app_build.md](57-dashboard_app_build.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 58) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 57) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

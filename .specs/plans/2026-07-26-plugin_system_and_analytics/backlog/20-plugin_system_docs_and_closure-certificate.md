@@ -1,4 +1,4 @@
-# Done Certificate — Task 20: Document the plugin surface and close the plugin-system change spec
+# Done Certificate — Task 20: Document the plugin surface and execute the plugin-system spec's documentation steps
 
 **Task:** [20-plugin_system_docs_and_closure.md](20-plugin_system_docs_and_closure.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -15,9 +15,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** Consumer docs for `blogwright plugin add|list|remove` and `blogwright <plugin> <action>`, the two new ports recorded in DEVELOPMENT.md's ports table, a changeset for the whole user-facing surface, and the change spec merged with its unanswered questions carried forward.
+- **P1 — Goal.** Consumer docs for `blogwright plugin add|list|remove` and `blogwright <plugin> <action>`, the two new ports recorded in DEVELOPMENT.md's ports table, a changeset for the whole user-facing surface, and both merge-plan deferrals written down — the canonical-page fallback, and the `Status:` flip that waits for §Plugin-supplied AWS services at tasks 31 and 38 and lands at task 58 — with the spec's unanswered questions carried forward.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the existing `README.md` Commands block for `init`/`bootstrap`/`deploy`/`preview`/`pds`, the existing rows of DEVELOPMENT.md's ports table, or the two remaining pending entries in `.specs/README.md` (the pds migration and analytics change specs, which link to this spec's new merged path).
+- **P3 — Invariants.** Must not break the existing `README.md` Commands block for `init`/`bootstrap`/`deploy`/`preview`/`pds`, the existing rows of DEVELOPMENT.md's ports table, or `.specs/README.md`'s pending list, which still holds all three change specs after this task.
 
 ## Obligations
 
@@ -33,9 +33,10 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* confirm the adapter paths named in the table are covered by `.oxlintrc.json`'s `overrides.files` globs, so the restricted-import exemption actually applies where the table says the side effect lives.
   - *Status:* ☐ unverified
 
-- **O3 — Changeset written and the merge plan executed.**
-  - *Claim:* a changeset covers this spec's user-facing surface with the semver impact stated, `Status:` is `Merged` with a `Merged:` date, the file sits in `.specs/changes/merged/`, and `.specs/README.md`'s lists are updated.
-  - *Evidence to collect:* read the new file(s) in `.changeset/` and confirm the package name, the bump level and a description naming the plugin commands; run `ls .specs/changes/ .specs/changes/merged/` and confirm the spec moved; read the moved file's header line and confirm both `Status: Merged` and a `Merged:` date; read `.specs/README.md` and confirm the pending list holds two proposals and the merged list gained this one.
+- **O3 — Changeset written, step 2 executed, steps 4–5 deferred in writing.**
+  - *Claim:* a changeset covers this spec's user-facing surface with the semver impact stated; merge-plan step 2 (the ports rows) is executed; and the `Status:` flip and move are deferred to task 58 with the reason recorded, not silently skipped.
+  - *Evidence to collect:* read the new file(s) in `.changeset/` and confirm the package name, the bump level and a description naming the plugin commands; run `ls .specs/changes/` and confirm `2026-07-26-cli_plugin_system.md` is still there; read its header line and confirm it still says `Status: Proposed`; read `.specs/README.md` and confirm the pending list still holds three proposals; locate the written deferral in this task's decision note and in plan.md and confirm it names task 58 as the owner and §Plugin-supplied AWS services (tasks 31 and 38) as the reason.
+  - *Checks:* a flipped header here is a REGRESSION, not an over-delivery — `SendOptions.service` does not yet accept a plugin-supplied descriptor and `AwsClients` has no `signingUsEast1` at this point in the order, so a `Merged` spec would document work that does not exist.
   - *Status:* ☐ unverified
 
 - **O4 — Unanswered questions and the precedence decision carried forward.**
@@ -48,22 +49,22 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean; confirm the changeset from O3 is present.
   - *Status:* ☐ unverified
 
-- **O6 — Reviewable: gates green, the spec moved, no broken links (Reviewable).**
-  - *Claim:* a reviewer can run the five gates, then confirm `.specs/changes/2026-07-26-cli_plugin_system.md` no longer exists at that path, that `.specs/changes/merged/` holds it with a `Merged:` date, and that no link in `.specs/README.md` is broken.
-  - *Evidence to collect:* run `pnpm build && pnpm test && pnpm lint && pnpm exec oxfmt --check . && pnpm knip`; run `ls .specs/changes/` and `ls .specs/changes/merged/`; resolve every relative link in `.specs/README.md` and in the moved spec (its `../../packages/...` and `../../DEVELOPMENT.md` targets shift by one directory level after the move) and confirm each target exists.
+- **O6 — Reviewable: gates green, the spec still pending, no broken links (Reviewable).**
+  - *Claim:* a reviewer can run the five gates, then confirm `.specs/changes/2026-07-26-cli_plugin_system.md` is still at that path with `Status: Proposed`, that the deferral to task 58 is written in this task's decision note and in plan.md, and that no link in `.specs/README.md` is broken.
+  - *Evidence to collect:* run `pnpm build && pnpm test && pnpm lint && pnpm exec oxfmt --check . && pnpm knip`; run `ls .specs/changes/`; read the spec's header line; resolve every relative link in `.specs/README.md` and confirm each target exists.
   - *Status:* ☐ unverified
 
 ## Regression check
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md:18` links to `2026-07-26-cli_plugin_system.md` as a sibling → expect the link updated to the merged path, or the move deliberately deferred; confirm the target resolves : ☐ (PRESERVED / REGRESSION)
+- `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md` §Motivation links to `2026-07-26-cli_plugin_system.md` as a sibling → expect the link untouched and still resolving, because the file has not moved : ☐ (PRESERVED / REGRESSION)
 - `.specs/changes/2026-07-26-analytics_plugin.md` links to the plugin-system spec → expect the same : ☐ (PRESERVED / REGRESSION)
-- The moved spec's own relative links (`../../DEVELOPMENT.md`, `../../packages/cli/src/cli.ts`) resolved from `.specs/changes/merged/` → expect each target exists after the move : ☐ (PRESERVED / REGRESSION)
+- Task 58's merge step, which inherits this deferral → expect it to name both specs and to gate the plugin-system flip on tasks 31 and 38 : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 
-Notes for the validator, not obligations: the merge plan's step 1 ("apply the blocks to whichever canonical page first documents CLI dispatch") is vacuous while the repo has no canonical spec pages, and step 3 (folding the `PluginManifest` `$def` into a canonical schema) is likewise deferred — confirm the closure records that rather than silently skipping both; task 30 closes the pds migration spec and task 58 the analytics one, so this task must not move those two files; and DEVELOPMENT.md's own open-questions list is a reasonable home for the carried-forward items if the merged spec is not.
+Notes for the validator, not obligations: the merge plan's step 1 ("apply the blocks to whichever canonical page first documents CLI dispatch") is vacuous while the repo has no canonical spec pages, and step 3 (folding the `PluginManifest` `$def` into a canonical schema) is likewise deferred — confirm the closure records that rather than silently skipping both; steps 4 and 5 are deferred for a different and harder reason, that §Plugin-supplied AWS services has not landed, and belong to task 58; task 30 closes the pds migration spec and task 58 closes both the analytics spec and this one, so this task moves no file at all; and DEVELOPMENT.md's own open-questions list is a reasonable home for the carried-forward items if the merged spec is not.
 
 ## Conclusion
 

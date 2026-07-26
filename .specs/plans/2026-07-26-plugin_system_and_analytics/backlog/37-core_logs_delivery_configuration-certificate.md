@@ -1,4 +1,4 @@
-# Done Certificate — Task 38: Optional output format, record fields and field delimiter on LogsClient deliveries
+# Done Certificate — Task 37: Optional output format, record fields and field delimiter on LogsClient deliveries
 
 **Task:** [37-core_logs_delivery_configuration.md](37-core_logs_delivery_configuration.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 38) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 37) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -62,7 +62,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator: the spec also states that the output format is immutable once a destination exists, so the delivery-destination node replaces rather than updates when the configured format differs — that is task 53's obligation, not this one, and its absence here is not a defect. Validating the record-field names against the CloudFront field set is task 39's concern. If the `DeliveryOutputFormat` union omits a member the API accepts, the omission is a follow-up rather than a regression, since no existing caller supplies a format at all.
+Notes for the validator: `deliveriesForSource` is untouched here — task 52 widens its return to carry each delivery's destination ARN, because it is the task that rewrites its only caller — so its absence from this task's diff is expected, not a gap. The spec also states that the output format is immutable once a destination exists, so the delivery-destination node replaces rather than updates when the configured format differs — that is task 53's obligation, not this one, and its absence here is not a defect. Validating the record-field names against the CloudFront field set is task 39's concern. If the `DeliveryOutputFormat` union omits a member the API accepts, the omission is a follow-up rather than a regression, since no existing caller supplies a format at all.
 
 ## Conclusion
 

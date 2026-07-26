@@ -1,4 +1,4 @@
-# Done Certificate — Task 37: LambdaClient in blogwright-core, distinct from MicrovmsClient
+# Done Certificate — Task 36: LambdaClient in blogwright-analytics, distinct from MicrovmsClient
 
 **Task:** [36-analytics_lambda_client.md](36-analytics_lambda_client.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 37) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 36) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -39,8 +39,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O4 — Exported and not dead.**
-  - *Claim:* `packages/core/src/index.ts` re-exports `./aws/lambda.js`, and `pnpm knip` reports no unused export for the new module.
-  - *Evidence to collect:* read `packages/core/src/index.ts` and confirm the export line sits between `./aws/iam.js` and `./aws/logs.js`; run `pnpm knip` from the repo root — expect a clean report.
+  - *Claim:* `packages/analytics/src/index.ts` re-exports `./aws/lambda.js`, core gains no `lambda` service key, and `pnpm knip` reports no unused export for the new module.
+  - *Evidence to collect:* read `packages/analytics/src/index.ts` and confirm the export line keeps the barrel alphabetical; read `packages/core/src/aws/endpoint.ts:19-31` and `packages/core/src/clients.ts:21-70` and confirm neither gained a `lambda` key; run `jj diff packages/core/` and confirm the only change anywhere in core is the one-line `LambdaClient` back-reference this task adds to the `MicrovmsClient` doc comment at `packages/core/src/aws/microvms.ts:4-11`; run `pnpm knip` from the repo root — expect a clean report. A grep for `lambda` over core is not the check: `SIGNING_NAMES.microvms` is `'lambda'` by design, and the name already appears in `endpoint.ts`, `microvms.ts` and `config.ts`.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -59,7 +59,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 - `packages/cli/src/nodes.ts:285` calls `ctx.clients.microvms.getImage(arn)` → expect `GET /2025-09-09/microvm-images/<id>` on `lambda.<region>.amazonaws.com`, unchanged : ☐ (PRESERVED / REGRESSION)
 - `packages/cli/src/deploy.ts:75` calls `ctx.clients.microvms.runMicrovm(input)` → expect `POST /2025-09-09/microvms`, unchanged : ☐ (PRESERVED / REGRESSION)
-- `packages/cli/src/context.ts:5` imports from `blogwright-core` → expect the widened barrel at `packages/core/src/index.ts` to still resolve every existing named export : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/context.ts:5` imports from `blogwright-core` → expect `packages/core/src/index.ts` to be unchanged and every existing named export to still resolve : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

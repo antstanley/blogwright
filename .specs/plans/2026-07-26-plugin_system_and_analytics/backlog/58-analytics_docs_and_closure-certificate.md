@@ -1,4 +1,4 @@
-# Done Certificate — Task 59: Document the analytics plugin, update the toolchain and ports tables, and close the change spec
+# Done Certificate — Task 58: Document the analytics plugin, update the toolchain and ports tables, and close the change spec
 
 **Task:** [58-analytics_docs_and_closure.md](58-analytics_docs_and_closure.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,12 +10,12 @@
 
 ## Definition
 
-DONE(Task 59) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 58) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
-- **P1 — Goal.** DEVELOPMENT.md records Vite/SvelteKit and `AnalyticsQuery`, `packages/analytics/README.md` documents install, the five actions, the region pinning and the privacy contract, a changeset states the semver impact, the spec's four open questions are each resolved or owned, and the change spec is merged so no pending change specs remain.
+- **P1 — Goal.** DEVELOPMENT.md records Vite/SvelteKit and `AnalyticsQuery`, `packages/analytics/README.md` documents install, the five actions, the region pinning and the privacy contract, a changeset states the semver impact, the spec's four open questions are each resolved or owned, and both remaining change specs — the analytics spec and the plugin-system spec whose flip task 20 deferred here — are merged so no pending change specs remain.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the existing rows of DEVELOPMENT.md's Toolchain and ports tables (`DEVELOPMENT.md:12-22`, `:72-81`), the merged-spec links in `.specs/README.md:35-42`, the relative links inside the moved change spec (which point at `../../packages/…` and `../../DEVELOPMENT.md` and gain a directory level under `merged/`), or the changeset fixed group at `.changeset/config.json:5`.
 
@@ -34,14 +34,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O3 — The four open questions and no bare TODO.**
-  - *Claim:* backfill, table record expiration, one bucket per environment and salt stability are each resolved in the change description or recorded as out of scope with an owner, and no bare `// TODO` exists in the new code.
-  - *Evidence to collect:* read the change description and confirm four entries, with the bucket-per-environment entry pointing at `packages/analytics/src/config.ts` (task 44) and the salt-stability entry at `packages/analytics/src/transform/visitor-key.ts` (task 41); run `grep -rn "TODO" packages/analytics/` — expect either no output or every match carrying an owner and a tracking reference, per `DEVELOPMENT.md:251`.
+  - *Claim:* backfill, table record expiration, the Glue integration's adopt-and-never-delete contract, and the daily salt's cross-day correlation semantic are each resolved in the change description or recorded as out of scope with an owner; and no bare `// TODO` exists in the new code.
+  - *Evidence to collect:* count the `- ` items under §Open questions in `.specs/changes/2026-07-26-analytics_plugin.md` — expect four, and expect one entry in the change description per item; confirm the Glue entry points at `packages/analytics/src/nodes.ts` (task 49) and the salt-semantic entry at `packages/analytics/src/transform/visitor-key.ts` (task 41); run `grep -rn "TODO" packages/analytics/` — expect either no output or every match carrying an owner and a tracking reference, per `DEVELOPMENT.md:251`.
   - *Status:* ☐ unverified
 
-- **O4 — The changeset and the executed merge plan.**
-  - *Claim:* a changeset states the semver impact and the spec's merge plan is executed, leaving no pending change specs.
-  - *Evidence to collect:* read the new file under `.changeset/` and confirm it declares the new `blogwright-analytics` package and a minor on `blogwright-core`, naming the four service clients and the `LogsClient` delivery parameters as the reason; read `.specs/changes/merged/2026-07-26-analytics_plugin.md:3` and confirm `Status: Merged` with a `Merged:` date; run `ls .specs/changes/` and expect only `merged/`; read `.specs/README.md:19-42` and confirm the pending section records that nothing is pending and the merged list carries all three specs.
-  - *Checks:* resolve every relative link inside the moved spec and inside `.specs/README.md` — the move adds a directory level, so links such as `../../packages/cli/src/nodes.ts` and `../../DEVELOPMENT.md` must have been re-pointed; confirm each target exists.
+- **O4 — The changeset and the two executed merge plans.**
+  - *Claim:* a changeset states the semver impact, and the merge plans of both remaining specs are executed — the analytics spec's and the plugin-system spec's, deferred here by task 20 — leaving no pending change specs.
+  - *Evidence to collect:* read the new file under `.changeset/` and confirm it declares the new `blogwright-analytics` package and a minor on `blogwright-core`, naming `signingUsEast1`, the transport seam and the `LogsClient` delivery parameters as the reason — the plugin's four service clients live in `blogwright-analytics` and are not a core change; read the `Status:` header of `.specs/changes/merged/2026-07-26-analytics_plugin.md` and of `.specs/changes/merged/2026-07-26-cli_plugin_system.md` and confirm each says `Merged` with a `Merged:` date; run `ls .specs/changes/` and expect only `merged/`; read `.specs/README.md:19-42` and confirm the pending section records that nothing is pending and the merged list carries all three specs.
+  - *Checks:* resolve every relative link inside both moved specs and inside `.specs/README.md` — the move adds a directory level, so links such as `../../packages/cli/src/nodes.ts` and `../../DEVELOPMENT.md` must have been re-pointed; confirm each target exists. Confirm the plugin-system flip was earned, not assumed: `SendOptions.service` accepts a plugin-supplied descriptor (task 31) and `AwsClients` carries `signingUsEast1` (task 38); if either is absent the obligation is UNSATISFIED even when the header says `Merged`.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -49,8 +49,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean; confirm a changeset exists (`.changeset/*.md`) if the change is user-facing.
   - *Status:* ☐ unverified
 
-- **O6 — Run the five gates, then confirm the spec moved and every link resolves (Reviewable).**
-  - *Claim:* a reviewer can run `pnpm build && pnpm test && pnpm lint && pnpm exec oxfmt --check . && pnpm knip` and observe clean gates, `.specs/changes/` holding only `merged/`, the merged analytics spec carrying a `Merged:` date, and every link in `.specs/README.md` resolving.
+- **O6 — Run the five gates, then confirm both specs moved and every link resolves (Reviewable).**
+  - *Claim:* a reviewer can run `pnpm build && pnpm test && pnpm lint && pnpm exec oxfmt --check . && pnpm knip` and observe clean gates, `.specs/changes/` holding only `merged/`, the merged analytics and plugin-system specs each carrying a `Merged:` date, and every link in `.specs/README.md` resolving.
   - *Evidence to collect:* run the gate command line and record the output; run `ls .specs/changes/` and expect `merged` alone; run `grep -o "](\([^)]*\))" .specs/README.md` and check each target path exists on disk.
   - *Status:* ☐ unverified
 

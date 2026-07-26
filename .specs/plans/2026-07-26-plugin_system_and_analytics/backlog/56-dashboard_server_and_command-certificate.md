@@ -1,4 +1,4 @@
-# Done Certificate — Task 57: The loopback dashboard server and the analytics dashboard command
+# Done Certificate — Task 56: The loopback dashboard server and the analytics dashboard command
 
 **Task:** [56-dashboard_server_and_command.md](56-dashboard_server_and_command.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 57) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 56) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

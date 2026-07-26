@@ -1,4 +1,4 @@
-# Done Certificate — Task 54: The CloudWatch delivery destination and the second delivery off the site's source
+# Done Certificate — Task 53: The CloudWatch delivery destination and the second delivery off the site's source
 
 **Task:** [53-nodes_log_destination_and_delivery.md](53-nodes_log_destination_and_delivery.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 54) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 53) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -63,7 +63,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-The site's self-heal at `packages/cli/src/nodes.ts:751-759` deletes every delivery on the shared source and then the source itself; when a site re-bootstrap runs that path, the plugin's delivery is collateral damage and the plugin's scoped state will claim a delivery that no longer exists. That interaction is outside this task's DoD and is the concrete form of the open question both change specs raise about `blogwright destroy` and plugin-owned resources — the validator should record whether a follow-up exists. Whether the plugin's delivery id is discoverable after a partial create (it is not recorded by `createDelivery`, which returns nothing) determines how `delete` finds it; confirm the lookup path is by destination and not by assuming a single delivery per source.
+The site's self-heal at `packages/cli/src/nodes.ts:751-759` deletes every delivery on the shared source and then the source itself; when a site re-bootstrap runs that path, the plugin's delivery is collateral damage and the plugin's scoped state will claim a delivery that no longer exists. That interaction is outside this task's DoD: task 52's second guard scopes the retry to the site's own delivery id, and task 16's guard makes `blogwright destroy` refuse while the plugin's state exists — the validator should record whether both are in place, since this node is what they protect. Whether the plugin's delivery id is discoverable after a partial create (it is not recorded by `createDelivery`, which returns nothing) determines how `delete` finds it; confirm the lookup path is by destination and not by assuming a single delivery per source.
 
 ## Conclusion
 

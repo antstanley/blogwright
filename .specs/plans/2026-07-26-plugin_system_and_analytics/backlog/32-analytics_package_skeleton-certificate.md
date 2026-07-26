@@ -1,4 +1,4 @@
-# Done Certificate — Task 33: Scaffold the blogwright-analytics workspace package
+# Done Certificate — Task 32: Scaffold the blogwright-analytics workspace package
 
 **Task:** [32-analytics_package_skeleton.md](32-analytics_package_skeleton.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 33) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 32) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises

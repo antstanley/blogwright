@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `AnalyticsConfig`, its defaults and `validateAnalyticsConfig` live in `packages/analytics/src/config.ts`: an empty block validates and yields every default, every limit is a named constant, every rejection names the offending key and value, and the table-bucket-per-environment open question is settled in code.
+- **P1 — Goal.** `AnalyticsConfig`, its defaults and `validateAnalyticsConfig` live in `packages/analytics/src/config.ts`: an empty block validates and yields every default, every limit is a named constant, every rejection names the offending key and value, and every derived default carries the environment.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `blogwright-core`'s config surface: `parseConfig`/`mergeConfig`/`validateConfig` at `packages/core/src/config.ts:242-340` gain no `analytics` knowledge, `DEFAULT_CONFIG` at `:122-150` is unchanged, and every existing test in `packages/core/src/config.test.ts` still passes.
 
@@ -23,13 +23,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — Shape, defaults and named constants.**
   - *Claim:* `AnalyticsConfig` carries `tableBucket`, `namespace` (default `web`), `table` (default `page_views`), `bots` (`'flag' | 'filter'`, default `flag`) and `dashboard.port` (default `4317`); a `{}` block validates and produces every default; defaults and limits are named module constants; the port default is one exported constant.
-  - *Evidence to collect:* read `packages/analytics/src/config.ts` and compare its fields, patterns and defaults against `.specs/changes/2026-07-26-analytics_plugin.md:230-246`; run `pnpm test -- config` in `packages/analytics` › the `{}` case and confirm it asserts each default field by name; run `grep -n "4317\|1024\|65535\|63" packages/analytics/src/` and confirm each number appears once, in a named constant declaration, not at a call site.
+  - *Evidence to collect:* read `packages/analytics/src/config.ts` and compare its fields, patterns and defaults against the change spec's §Configuration → The `analytics` block; run `pnpm test -- config` in `packages/analytics` › the `{}` case and confirm it asserts each default field by name; run `grep -n "4317\|1024\|65535\|63" packages/analytics/src/` and confirm each number appears once, in a named constant declaration, not at a call site.
   - *Checks:* resolve the port-default identifier the dashboard server will import — confirm it is exported from this module, so task 56 can share it rather than restate `4317`.
   - *Status:* ☐ unverified
 
-- **O2 — The table-bucket open question is settled and implemented.**
-  - *Claim:* the module records the decision (one bucket per environment, or one bucket with a namespace per environment) and implements it; a test asserts two environments cannot derive the same bucket name if per-environment was chosen.
-  - *Evidence to collect:* read the decision note in the doc comment of `packages/analytics/src/config.ts` and confirm it states the answer and the reason (the proposed `<siteName>-analytics` default carries no environment); run `pnpm test -- config` › the two-environment case and confirm it derives the bucket for two different environment names and asserts the outcome the decision requires; confirm the derivation is a function of the environment, not a literal.
+- **O2 — One table bucket per environment, implemented and recorded.**
+  - *Claim:* `tableBucket` defaults to `<env>-<siteName>-analytics` and `saltSecretName` to `<siteName>/<env>/analytics-salt`, both carrying the environment as the spec's §Configuration requires, and the module's doc comment records the consequence a reader must not undo.
+  - *Evidence to collect:* read the doc comment of `packages/analytics/src/config.ts` and confirm it names the failure a missing environment would cause — `blogwright analytics destroy --yes` in staging running `DeleteTableBucket` on production's data, which scoped state cannot detect; run `pnpm test -- config` › the two-environment case and confirm it derives two different bucket names AND two different salt-secret names; confirm both derivations are functions of the environment, not literals.
   - *Status:* ☐ unverified
 
 - **O3 — Boundary and negative-space rejection, with named-value errors.**

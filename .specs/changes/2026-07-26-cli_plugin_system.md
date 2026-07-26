@@ -1,6 +1,6 @@
 # Change: An internal plugin system for the CLI
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/core (plugin SPI, state scoping) + packages/cli (discovery, dispatch, `plugin` commands)
+**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/core (plugin SPI, state scoping, the transport seam and `signingUsEast1` on `AwsClients`) + packages/cli (discovery, dispatch, `plugin` commands)
 
 The CLI gains a plugin system: a small service-provider interface in
 `blogwright-core`, discovery of installed plugins by a manifest field in their
@@ -44,7 +44,7 @@ into it.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for CLI dispatch or the graph engine yet)* | New plugin SPI in `blogwright-core`; `ResourceNode` vocabulary relocates to core; new discovery, dispatch, and `plugin` commands in the CLI; `StateStore` gains an optional scope |
+| *(none — no canonical page for CLI dispatch or the graph engine yet)* | New plugin SPI in `blogwright-core`; `ResourceNode` vocabulary relocates to core; the transport seam accepts a plugin-supplied service descriptor and `AwsClients` gains `signingUsEast1`; new discovery, dispatch, and `plugin` commands in the CLI; `StateStore` gains an optional scope |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `ModuleLoader` and `PackageManager` ports join the ports table |
 
 Companion change specs:
@@ -59,9 +59,10 @@ plugin that ships outside the CLI). Both depend on this change.
 
 ### Plugin SPI → The `Plugin` contract (Add)
 
-> A plugin is a package that exports a `Plugin<TConfig>` object as its default
-> export, generic over the shape of the config block it owns. The contract lives
-> in `blogwright-core` so that plugins depend on core and never on the CLI:
+> A plugin is a package that exports a `Plugin<TConfig = never>` object as its
+> default export, generic over the shape of the config block it owns. The
+> contract lives in `blogwright-core` so that plugins depend on core and never
+> on the CLI:
 >
 > - `name` — the CLI namespace the plugin claims (`analytics` answers
 >   `blogwright analytics <action>`). Lowercase alphanumerics and dashes.
@@ -78,14 +79,65 @@ plugin that ships outside the CLI). Both depend on this change.
 > A plugin declares nothing else. There are no lifecycle hooks, no
 > plugin-to-plugin dependencies, no contributed ports or adapters, and no
 > merged config schemas beyond the one owned key.
+>
+> The default type argument is `never`, not `unknown`, so a plugin that owns no
+> `configKey` writes `Plugin` with no argument. Inside such a plugin
+> `ctx.pluginConfig` is `never`, so every property read off it —
+> `ctx.pluginConfig.anything` — is
+> `TS2339: Property 'anything' does not exist on type 'never'`. That is the
+> check worth having: under `unknown` the same plugin would have to narrow a
+> value it has no schema for. The unsoundness `never` leaves is the whole-field
+> assignment `const n: number = ctx.pluginConfig`, which compiles because
+> `never` is assignable to everything; it is recorded here rather than designed
+> around, because no plugin reads its config that way and the property-level
+> check is what a mistake actually looks like.
+>
+> The host's registry is `Plugin<unknown>[]`; a `Plugin<PdsConfig>` and a
+> `Plugin<AnalyticsConfig>` both join it because `commands[].run` and `nodes`
+> are method-declared and therefore bivariant. The host dispatches through that
+> registry, so the context it constructs is a `PluginContext<unknown>`. It is
+> never a `PluginContext<never>`: nothing inhabits `never`, so that type has no
+> constructible value at all, and reaching one would need the `as` cast
+> DEVELOPMENT.md §Code style bans. For a plugin that owns no `configKey` the
+> host puts an empty object in `pluginConfig` rather than `undefined`, per the
+> no-null rule — and that plugin cannot read it either way.
 
 ### Plugin SPI → `PluginContext` (Add)
 
 > `PluginContext<TConfig>` is the narrow slice of the host CLI's context a plugin
-> command receives — environment, domain, config, `pluginConfig`, the AWS
-> clients, the shared ports, a logger, `save()` (which `applyGraph` calls after
-> every node), and resource tags. No plugin imports a CLI type; `PdsContext`
-> is the existing precedent and becomes a narrowing of this interface.
+> command receives. It names exactly `env`, `domain`, `preview`, `config`,
+> `pluginConfig`, `names`, `accountId`, `clients`, `ports`, `tags`, `logger`,
+> `store`, `state`, `siteState`, `record(nodeId, outputs)` and `save()` (which
+> `applyGraph` calls after every node) — and nothing else.
+>
+> Every member is required except `tags`, which is declared
+> `tags?: Record<string, string> | undefined` — the shape `PdsContext` already
+> has ([`context.ts:33`](../../packages/pds/src/context.ts)) and the reason
+> [`createTestContext`](../../packages/pds/src/test-support.ts) can build a
+> complete feature context without one. A required `tags` would propagate
+> through the pds migration's `Pick` and break every existing pds test.
+>
+> The enumeration is exhaustive on purpose, because both consumers are written
+> against the type before they exercise it. Analytics reads
+> `ctx.names.deliverySource` to hang its delivery off the source the site owns;
+> both plugins build IAM resource ARNs from `accountId` — pds reproduces
+> `arn:aws:secretsmanager:<region>:<accountId>:secret:<name>-*`, and analytics
+> scopes its Firehose and transform roles the same way. A field left out here
+> surfaces as a compile error many tasks downstream.
+>
+> `ports` is a core-declared `PluginPorts` of `fs` and `terminal` — the two
+> ports core owns. Everything else on the CLI's `Ports`
+> ([`ports.ts:25`](../../packages/cli/src/ports.ts)) stays CLI-side: `vcs` and
+> `ping` are declared in the CLI and DEVELOPMENT.md §Hexagonal architecture
+> names them as the ports only the CLI uses, and the `loader` and `packages`
+> ports this change adds join them — a `PluginContext` declared in core cannot
+> name any of those types. `agentDir`
+> ([`context.ts:40`](../../packages/cli/src/context.ts)), which locates the
+> build-agent artifacts the CLI ships, stays CLI-side for the same reason, as
+> does the raw config document the composition root keeps on `OpsContext` for
+> dispatch (see §Typed plugin config). No plugin imports a CLI type;
+> `PdsContext` is the existing precedent and becomes a narrowing of this
+> interface.
 
 ### Plugin SPI → Typed plugin config (Add)
 
@@ -105,6 +157,27 @@ plugin that ships outside the CLI). Both depend on this change.
 > stops applying `pds.secretName`'s default, every reader of that field would
 > otherwise widen to `string | undefined`; with `pluginConfig` the plugin applies
 > its default once, at validation, and every call site keeps a total type.
+>
+> The host needs a typed way to reach the raw block, and today it has none.
+> `parseConfig` ([`config.ts:242`](../../packages/core/src/config.ts)) discards
+> the parsed document and returns `OpsConfig`, and `loadConfig`
+> ([`context.ts:85`](../../packages/cli/src/context.ts)) returns the same. A
+> plugin's key survives the `...raw` spread at `config.ts:255` at runtime, but
+> nothing typed can index it: `config[plugin.configKey]` is
+> `TS7053: No index signature with a parameter of type 'string' was found on
+> type 'OpsConfig'`. Core therefore also exports
+> `parseConfigDocument(text): { config: OpsConfig; raw: Readonly<Record<string, unknown>> }`,
+> with `parseConfig` keeping its signature as the `config` half of it, and
+> `loadConfig` returns both. The raw half needs somewhere to live between the
+> composition root and dispatch, because `createContext` is what reads the file
+> and `runPlugin` is what needs the block: `createContext` therefore keeps it on
+> the CLI's own `OpsContext` as `configDocument`, so a plugin's block is reached
+> without a second read of the file and no plugin ever sees the document. The
+> CLI hands `configDocument[plugin.configKey]` — an `unknown` — straight to
+> `validateConfig`. That one read is the sanctioned cast
+> site under DEVELOPMENT.md §Error handling ("acceptable only when the very next
+> step validates the result"), because the next step is the plugin's own
+> validator.
 
 ### Plugin SPI → The two state surfaces (Add)
 
@@ -115,9 +188,18 @@ plugin that ships outside the CLI). Both depend on this change.
 >   (`state/<env>.json`). A plugin reads it to find resources the site owns; the
 >   analytics log-delivery node reads the distribution ARN through it. The type
 >   is readonly, so a plugin cannot write the site's state at all.
-> - `state` and `store` — the plugin's **own** scoped outputs and the scoped
->   `StateStore` (`state/<env>.<plugin>.json`) they persist through. This is the
+> - `state` and `store` — the plugin's **own** `OpsState`
+>   (`{ version, env, updatedAt, resources }`) loaded from the scoped
+>   `StateStore` (`state/<env>.<plugin>.json`) it persists through. This is the
 >   only state a plugin may write.
+>
+> `state` is the site's own state *type*, not a bare outputs map, because the
+> engine reaches through it: `destroyGraph` does
+> `delete ctx.state.resources[node.id]`
+> ([`graph.ts:94`](../../packages/cli/src/graph.ts)). A plugin state typed as
+> the outputs map itself makes `state.resources` `undefined` and the engine
+> refuses to compile against it. `siteState` is the same shape with `resources`
+> readonly.
 >
 > The CLI builds this context when it dispatches; unlike `PdsContext`, an
 > `OpsContext` does not satisfy it by plain assignment, because the two state
@@ -136,9 +218,16 @@ plugin that ships outside the CLI). Both depend on this change.
 > Where a plugin needs to attach something to a resource the *site* owns, it
 > does so through a separately-named sub-resource it can create and delete
 > without touching the site's own. The worked case is IAM: a plugin attaches a
-> **named inline policy** to the site's deploy role
-> (`putRolePolicy(role, '<plugin>', …)`), so the site's node manages only its own
-> policy document and the plugin's grant is added and removed with the plugin.
+> **named inline policy** to the site's deploy role, named for the plugin's
+> **package** rather than its namespace
+> (`putRolePolicy(role, '<package name>', …)` — `blogwright-pds` for the pds
+> plugin), so the site's node manages only its own policy document and the
+> plugin's grant is added and removed with the plugin. The package name is the
+> durable half of the pair: an inline-policy name is on-the-wire state that
+> `delete()` finds again through `listRolePolicies`/`deleteRolePolicy`
+> ([`iam.ts:93,108`](../../packages/core/src/aws/iam.ts)), a namespace is
+> declared in a manifest and can be re-declared, and changing the name later
+> orphans the old policy on the role.
 
 ### Plugin SPI → Plugin-supplied AWS services (Add)
 
@@ -161,8 +250,33 @@ plugin that ships outside the CLI). Both depend on this change.
 > `keyof typeof SIGNING_NAMES` ([`endpoint.ts:33`](../../packages/core/src/aws/endpoint.ts))
 > and `SendOptions.service` is typed to it, so every new service would mean an
 > edit to core and a published-surface change. `canonicalHost`'s default branch
-> already resolves `<service>.<region>.amazonaws.com` correctly, so the
-> resolution logic is unchanged.
+> already resolves `<service>.<region>.amazonaws.com` correctly, so *host*
+> resolution is unchanged.
+>
+> Four sites key off `service`, and one resolution helper — the one that turns
+> either form into `{ name, signingName, global }` — feeds all four.
+> `GLOBAL_SERVICES` ([`endpoint.ts:36`](../../packages/core/src/aws/endpoint.ts))
+> is a `Set<ServiceKey>` and stays the source of truth for core's own keys; a
+> descriptor carries its own `global` flag instead of joining the set. In the
+> signer, `SIGNING_NAMES[opts.service]`
+> ([`signer.ts:124`](../../packages/core/src/aws/signer.ts)) takes the resolved
+> **signing name**; `uriEscapePath: opts.service !== 's3'`
+> ([`signer.ts:135`](../../packages/core/src/aws/signer.ts)) compares the
+> resolved **service name** rather than the raw union — otherwise a descriptor
+> silently takes the non-S3 escaping branch by virtue of not being a string; and
+> `parseError(opts.service, response)`
+> ([`signer.ts:163`](../../packages/core/src/aws/signer.ts)) takes the resolved
+> service name too. That fourth one is easy to miss and worse to get wrong:
+> `parseError`'s parameter is already `string` (`signer.ts:171`) so widening
+> `opts.service` breaks the call, and widening the parameter to the union
+> instead would put the descriptor object into `new AwsError({ service, … })`
+> (`signer.ts:193`) — every AWS error a plugin's service raised would read
+> `[object Object]` where the service name belongs, which is precisely the error
+> context DEVELOPMENT.md §Error handling requires.
+>
+> `canonicalHost`'s parameter widens to `string` for the same reason, since
+> `resolveEndpoint` hands it the resolved name; its branches and its outputs are
+> unchanged.
 
 ### Plugin SPI → Recording node outputs (Add)
 
@@ -186,40 +300,72 @@ plugin that ships outside the CLI). Both depend on this change.
 > It moves as `ResourceNode<Ctx>`, generic over the context its methods receive,
 > with the engine taking a structural constraint covering what it actually uses —
 > `logger`, `save()`, and `state.resources`. A non-generic core node typed on
-> `PluginContext` would break every site node, which reads `accountId`,
-> `preview`, `agentDir` and `ports.vcs`; the CLI keeps
-> `type ResourceNode = CoreResourceNode<OpsContext>` so `nodes.ts` genuinely
-> changes only its import.
+> `PluginContext` would break every site node, because a site node reads what
+> stays CLI-side: `agentDir`
+> ([`context.ts:40`](../../packages/cli/src/context.ts)), through
+> `packageAndUploadAgent` ([`nodes.ts:11`](../../packages/cli/src/nodes.ts)),
+> and the CLI's own `Ports` rather than the two-member `PluginPorts`. The
+> CLI keeps `type ResourceNode = CoreResourceNode<OpsContext>` so `nodes.ts`
+> genuinely changes only its import.
 
 ### State → Scoped state stores (Modify)
 
 > `StateStore` takes an optional scope. An unscoped store keys
 > `state/<env>.json` as today; a store scoped to a plugin keys
-> `state/<env>.<plugin>.json`. A plugin's resources are therefore recorded
-> separately from the site's, so tearing down one never discards the other's
-> record of what exists.
+> `state/<env>.<plugin>.json`. A plugin's resources are recorded separately from
+> the site's, so `blogwright <plugin> destroy` never discards the site's record
+> of what exists.
+>
+> The other direction does not follow from the key alone, and the CLI closes it
+> explicitly. A scope changes the object key, not the bucket — the store is
+> constructed over `names.bucket` either way
+> ([`context.ts:134`](../../packages/cli/src/context.ts)) — and the site's own
+> bucket node empties every prefix before deleting the bucket
+> (`deletePrefix(ctx.names.bucket, '')`,
+> [`nodes.ts:66`](../../packages/cli/src/nodes.ts), which lists and deletes
+> every object under the empty prefix,
+> [`s3.ts:212`](../../packages/core/src/aws/s3.ts)). That node has no
+> dependencies, so it is destroyed last, and a site teardown would otherwise
+> delete `state/<env>.<plugin>.json` while every resource it records lives on:
+> the plugin's next `destroy` loads empty state, every node's `read()` returns
+> false, and nothing is removed. `blogwright destroy` therefore **refuses while
+> any `state/<env>.<plugin>.json` exists**, naming that plugin's
+> `blogwright <plugin> destroy --yes`. Tearing plugins down first is what makes
+> the two records genuinely independent.
 
 ### CLI → Plugin discovery (Add)
 
-> The candidate set is the union of two sources: every `dependencies` and
-> `devDependencies` entry in `<repoRoot>/package.json` whose name starts with
-> `blogwright-`, **and** the `blogwright` package's own dependencies when the
-> consumer depends on it. The CLI then resolves each package directory and reads
-> that package's `package.json` for a manifest field.
+> The candidate set is the union of two sources, each resolved from a different
+> directory:
 >
-> Both sources are required. A consuming repo depends on `blogwright`, which does
-> not match the `blogwright-` prefix, so scanning the consumer alone finds
-> nothing — this repo's own `package.json` has zero `blogwright-*` entries. Any
-> plugin that ships inside the CLI (`blogwright-pds` today) would be invisible,
-> and `blogwright pds sync` would stop working the moment the hardcoded branch
-> is deleted.
+> - **The consumer's own dependencies.** Every `dependencies` and
+>   `devDependencies` entry in `<repoRoot>/package.json` whose name starts with
+>   `blogwright-`, resolved with `fromDir = <repoRoot>`.
+> - **The CLI's own dependencies.** The CLI locates its own package root from
+>   `import.meta.url` and walks up to the nearest `package.json` — the precedent
+>   is `agentDir` ([`context.ts:118`](../../packages/cli/src/context.ts)), which
+>   resolves the bundled build-agent the same way — reads the `blogwright-*`
+>   entries out of it, and resolves each with
+>   `fromDir = <blogwright package dir>`.
 >
-> Resolution goes through the package's **entry point**, not through
-> `<name>/package.json`. Every package in this workspace declares an `exports`
-> map, and Node's exports encapsulation makes `require.resolve` of a subpath the
-> map does not list throw `ERR_PACKAGE_PATH_NOT_EXPORTED` — which
-> `blogwright-pds/package.json` does today. The loader therefore resolves the
-> bare specifier and walks up from the resolved file to the nearest
+> Both sources are required, and each must be resolved from its own directory.
+> A consuming repo depends on `blogwright`, which does not match the
+> `blogwright-` prefix, so scanning the consumer alone finds nothing — this
+> repo's own `package.json` has zero `blogwright-*` entries. Any plugin that
+> ships inside the CLI (`blogwright-pds` today) would be invisible, and
+> `blogwright pds sync` would stop working the moment the hardcoded branch is
+> deleted. Resolving from the consumer root does not reach it either: under pnpm
+> the consumer's `node_modules` holds only `blogwright`, so `blogwright-pds` is
+> not resolvable from there at all. Self-location must not go through the
+> resolver, because resolving the bare specifier `blogwright` throws too — see
+> the Decision below.
+>
+> Resolution of a *plugin* goes through that package's **entry point**, not
+> through `<name>/package.json`. A package that declares an `exports` map
+> without a `"./package.json"` entry makes `require.resolve` of that subpath
+> throw `ERR_PACKAGE_PATH_NOT_EXPORTED` under Node's exports encapsulation —
+> which `blogwright-pds/package.json` does today. The loader therefore resolves
+> the bare specifier and walks up from the resolved file to the nearest
 > `package.json`, so discovery works against packages whose `exports` map the
 > plugin author never adjusted. Discovery is covered by at least one test using
 > the real loader against a package on disk, not only the map-backed fake —
@@ -236,9 +382,21 @@ plugin that ships outside the CLI). Both depend on this change.
 > `Plugin` contract at the boundary; a module that does not satisfy it raises an
 > error naming the package.
 >
-> Discovery is lazy. It runs only when the first positional argument is neither
-> a built-in command nor `plugin`, so ordinary `deploy` and `status` runs pay
-> nothing for it.
+> Discovery runs for generic plugin dispatch, for `blogwright plugin list`, for
+> `blogwright init`, and for `blogwright --help` and a bare invocation; every
+> other built-in command pays nothing for it, so `deploy`, `bootstrap` and
+> `status` load no plugin module at all. `plugin list` needs it because it names
+> plugins that failed to load, which only a load attempt can discover. `init`
+> needs it because the wizard asks each discovered plugin's questions and writes
+> their blocks into the one file it produces — a built-in that cannot skip
+> discovery and still do its job. Help needs it because help
+> output must reflect what is actually installed — `--help` and a bare
+> invocation reach the USAGE branch
+> ([`cli.ts:101-106`](../../packages/cli/src/cli.ts)) with no positional or with
+> a built-in one, so a rule keyed on the first positional alone would never let
+> `--help` list a plugin at all. This becomes load-bearing at the pds migration,
+> which deletes the static `pds` USAGE block and produces the same content from
+> the plugin's `description`.
 
 ### CLI → Namespace collisions (Add)
 
@@ -289,9 +447,12 @@ plugin that ships outside the CLI). Both depend on this change.
 
 > A plugin owns exactly one top-level config key, named by `configKey`. Core's
 > `parseConfig`/`mergeConfig` keep unknown keys intact and no longer validate
-> plugin-owned blocks; the CLI calls each loaded plugin's `validateConfig` after
-> parsing. A config file carrying a block for a plugin that is not installed is
-> valid and inert — the same contract `pds` has today.
+> plugin-owned blocks; the CLI reads the plugin's block out of the raw document
+> `parseConfigDocument` returns and calls that plugin's `validateConfig` on it.
+> A config file carrying a block for a plugin that is not installed is valid and
+> inert — the same contract `pds` has today, and the reason the raw document is
+> the read path rather than `OpsConfig`: an uninstalled plugin's key has no
+> declaration on the config type and never gains one.
 
 ### CLI → `blogwright <plugin> init` (Add)
 
@@ -328,7 +489,28 @@ plugin that ships outside the CLI). Both depend on this change.
 > status read loop — over the plugin's node set against the plugin's scoped
 > state store. `blogwright bootstrap` and `blogwright destroy` do not reconcile
 > or delete plugin nodes, so a site teardown never takes a plugin's own
-> resources with it.
+> resources with it — and `blogwright destroy` refuses outright while a plugin's
+> scoped state object exists, because emptying the site's bucket would take that
+> record with it (see §State → Scoped state stores).
+>
+> **A plugin's declared commands take precedence over every generic action**,
+> which settles which of the four verbs a plugin may declare:
+>
+> - `bootstrap` and `destroy` are always generic. A plugin may not import the
+>   CLI and therefore cannot run `applyGraph`/`destroyGraph` itself, so a
+>   declared command of either name could only shadow the verb with something
+>   that does less. Declaring one is rejected at discovery with an error naming
+>   the plugin and the colliding action.
+> - `status` is generic unless the plugin declares its own, because `read()`
+>   lives on the plugin's own nodes and a plugin may have more to report than
+>   node presence.
+> - `init` is generic unless the plugin declares its own, under the rule
+>   §`blogwright <plugin> init` states: a plugin that declares `init` owns the
+>   config write, and a plugin that declares `init` *and* relies on the generic
+>   action is rejected.
+>
+> Precedence is stated once, here, and applies to every generic action the CLI
+> contributes.
 >
 > The guarantee is about ownership, not isolation. Where a plugin attaches to a
 > resource the site owns, the site's node must not assume it is the only
@@ -342,10 +524,14 @@ plugin that ships outside the CLI). Both depend on this change.
 
 > Resolving and importing a plugin package is a side effect and crosses a port.
 > `ModuleLoader` exposes `resolve(specifier, fromDir)` returning the resolved
-> module path or nothing, and `load(path)` returning the imported module. The
-> real adapter uses `createRequire` against the consuming repo's root and a
-> dynamic `import()`; tests substitute a map of fake modules. No domain module
-> imports `node:module`.
+> module path or nothing, `packageJsonPathFor(specifier, fromDir)` returning the
+> nearest `package.json` above that resolution, and `load(path)` returning the
+> imported module. `fromDir` is per call, not fixed at construction: discovery
+> resolves the consumer's plugins from the repo root and the CLI's bundled
+> plugins from the CLI's own package directory. The real adapter anchors
+> `createRequire` on the `fromDir` it is given and loads through a dynamic
+> `import()`; tests substitute a map of fake modules. No domain module imports
+> `node:module`.
 
 ### Ports → `PackageManager` (Add)
 
@@ -383,8 +569,11 @@ package's own `package.json`, not in blogwright's config.
 }
 ```
 
-No change to `OpsConfig`'s shape. Core stops validating plugin-owned keys;
-the keys themselves are unchanged on disk.
+No change to `OpsConfig`'s shape, and no change to any config key on disk. Core
+stops validating plugin-owned keys and gains one export — `parseConfigDocument`,
+returning the parsed `OpsConfig` alongside the raw document as a
+`Readonly<Record<string, unknown>>` — so the CLI can reach a plugin's block
+without indexing a type that has no index signature.
 
 ---
 
@@ -398,39 +587,57 @@ the keys themselves are unchanged on disk.
    src/plugin.ts (or src/resource.ts); re-export from index. graph.ts keeps
    topoSort/applyGraph/destroyGraph and imports the type from core.
    nodes.ts (1,087 lines) changes only its import.
-3. packages/core/src/state.ts:22 — StateStore gains an optional 4th ctor arg
+3. packages/core/src/state.ts:26 — StateStore gains an optional 4th ctor arg
    `scope`; stateKey(:17) becomes `state/${env}.json` or
    `state/${env}.${scope}.json`.
 4. packages/core/src/config.ts — remove the pds-specific branches from
    mergeConfig (:266-271) and validateConfig (:314-330); keep the `pds` key
-   on OpsConfig. Unknown keys already survive the spread at :253.
+   on OpsConfig. Unknown keys already survive the `...raw` spread at :255.
+   Add parseConfigDocument returning { config, raw }; parseConfig (:242-245)
+   becomes its `config` half. loadConfig (cli/src/context.ts:85) returns both,
+   and createContext (:110) keeps the raw half on OpsContext as
+   `configDocument` — the CLI-side field dispatch reads a plugin's block from.
    (The pds side of this lands in the companion migration change spec.)
-5. packages/cli/src/ports.ts:25 — add `loader: ModuleLoader` and
+5. packages/core/src/aws — the transport seam: endpoint.ts:33,36
+   (ServiceKey and the GLOBAL_SERVICES Set<ServiceKey>) and signer.ts:124,135,163
+   (SIGNING_NAMES[opts.service], `uriEscapePath: opts.service !== 's3'` and
+   parseError(opts.service, response)) all read the resolved service through one
+   helper rather than the raw union. canonicalHost's parameter (:63) widens to
+   `string`; its branches and outputs are unchanged. In the same step
+   packages/core/src/clients.ts:21,42 exposes `signingUsEast1` alongside
+   `signing`: the us-east-1 SigningClient is a local const at :54, and a
+   SigningClient's region is fixed at construction (signer.ts:83), so without it
+   a plugin cannot build a us-east-1 client at all. (The analytics plugin is its
+   first consumer and lists both in its own notes.)
+6. packages/cli/src/ports.ts:25 — add `loader: ModuleLoader` and
    `packages: PackageManager` to Ports; define both interfaces there.
    New adapters: adapters/node-module-loader.ts (createRequire + import),
    adapters/process-package-manager.ts (lockfile detect + spawn), modelled on
    adapters/process-vcs.ts. Wire both in context.ts:111-116.
-6. packages/cli — new src/plugins.ts: discover(repoRoot, ports) reading
+7. packages/cli — new src/plugins.ts: discover(repoRoot, ports) reading
    <repoRoot>/package.json via ports.fs, filtering `blogwright-*` deps,
-   resolving each via ports.loader, reading its package.json for the manifest
-   field, loading and validating. Reserved-name and duplicate-name checks here.
-7. packages/cli — new src/plugin-commands.ts for `plugin add|list|remove`,
+   resolving each via ports.loader from repoRoot; and the CLI's own
+   package.json, located from import.meta.url as context.ts:118 locates
+   agentDir, whose `blogwright-*` deps resolve from the CLI package dir.
+   Reserved-name and duplicate-name checks here.
+8. packages/cli — new src/plugin-commands.ts for `plugin add|list|remove`,
    and src/config-block.ts for the textual JSONC block splice used by
    `<plugin> init`. init.ts:42 renderConfig is the style to match; the
    existing-file guard at init.ts:87 stays for `blogwright init`.
-8. packages/cli/src/cli.ts — extend KNOWN_COMMANDS (:66) with `plugin`;
+9. packages/cli/src/cli.ts — extend KNOWN_COMMANDS (:66) with `plugin`;
    after the built-in switch, fall through to plugin dispatch instead of the
    unknown-command error at :117. USAGE (:11) gains a Plugins section built at
-   runtime from discovered plugins.
-9. Tests: discovery (manifest present/absent/malformed, reserved name,
-   duplicate name), dispatch (unknown plugin, unknown action), the JSONC
-   splice (comments preserved, existing key refused, non-object refused),
-   scoped state keys, and both new ports substituted with fakes.
+   runtime from discovered plugins, which is why the help branch (:101-106)
+   runs discovery.
+10. Tests: discovery (manifest present/absent/malformed, reserved name,
+    duplicate name), dispatch (unknown plugin, unknown action), the JSONC
+    splice (comments preserved, existing key refused, non-object refused),
+    scoped state keys, and both new ports substituted with fakes.
 ```
 
-Order matters: steps 1–4 (the SPI and the core moves) land first and are
-behaviour-neutral; steps 5–9 add the CLI surface. The pds migration follows,
-then analytics.
+Order matters: steps 1–5 (the SPI, the core moves and the transport seam) land
+first and are behaviour-neutral; steps 6–10 add the CLI surface. The pds
+migration follows, then analytics.
 
 ---
 
@@ -458,8 +665,13 @@ then analytics.
 - A package present in the consumer's dependency tree is trusted. Installing a
   package already runs its install scripts; requiring a second opt-in step in
   config would add ceremony without adding a security boundary.
-- `PdsContext`'s structural-satisfaction trick generalises. It has worked since
-  the 2026-07-11 package extraction and is verified at compile time.
+- `PdsContext`'s structural-satisfaction trick generalises to the *narrow*
+  slice a feature package needs — the fields the host already carries. It has
+  worked since the 2026-07-11 package extraction and is verified at compile
+  time. It does not extend to the full `PluginContext`: `pluginConfig`,
+  `siteState` and `record()` have no counterpart on `OpsContext` and come from
+  the dispatch boundary, which is why §The two state surfaces specifies an
+  adaptation function rather than an assignment.
 
 **Decisions**
 
@@ -476,6 +688,17 @@ then analytics.
   lists only `.` and `./rkey`. Requiring every plugin author to add
   `"./package.json"` to their exports map would make discovery fail for anyone
   who forgot, in a way no map-backed test fake would ever catch.
+- *The CLI locates itself from `import.meta.url`, not through the resolver.*
+  **Self-location is a composition-root concern, and the resolver cannot do it
+  anyway.** Verified 2026-07-26: from a consuming repo's root, both
+  `require.resolve('blogwright')` and `require.resolve('blogwright/package.json')`
+  raise `ERR_PACKAGE_PATH_NOT_EXPORTED`, because
+  [`packages/cli/package.json`](../../packages/cli/package.json) declares an
+  `exports` map with a `./rkey` entry and no `.` entry — the CLI is consumed
+  through its `bin`, not imported. Walking up from `import.meta.url` is the same
+  move `agentDir` already makes
+  ([`context.ts:118`](../../packages/cli/src/context.ts)) and is the only route
+  to the CLI's own dependency list.
 - *`plugin add`/`list`/`remove`, not bare `plugin <name>`.* **Explicit verbs.**
   Bare `blogwright plugin analytics` reads ambiguously between installing and
   invoking, and leaves nowhere to put `list`.
@@ -493,7 +716,8 @@ then analytics.
   graph carry nothing plugin-specific — not a config branch, not a service
   client.** Two concrete consequences were found while planning: the site's
   OIDC role policy branched on `ctx.config.pds`
-  ([`nodes.ts:906`](../../packages/cli/src/nodes.ts)), and four AWS clients
+  ([`nodes.ts:913`](../../packages/cli/src/nodes.ts)) and interpolated that
+  plugin's secret name into an ARN at `nodes.ts:925`, and four AWS clients
   existed in core solely for the analytics plugin. Both move to their plugins.
   `pnpm knip` corroborates the second: core would export four clients nothing in
   core or the CLI consumes.
@@ -501,6 +725,14 @@ then analytics.
   separate state key, separate verbs.** Folding plugin nodes into `buildNodes`
   ([`nodes.ts:1053`](../../packages/cli/src/nodes.ts)) would mean
   `blogwright destroy --yes` deletes a plugin's data along with the site.
+- *A site teardown refuses while a plugin's state object exists.* **`blogwright
+  destroy` stops and names the plugin's own teardown verb.** The scope changes
+  the state key, not the bucket, and the site's bucket node empties every prefix
+  before deleting the bucket ([`nodes.ts:66`](../../packages/cli/src/nodes.ts)) —
+  so the alternative is a plugin's record deleted while its resources live on,
+  which no later `<plugin> destroy` can find. Refusing costs the operator one
+  extra command; warning and proceeding leaves AWS resources only the console
+  can reach.
 - *No lifecycle hooks in v1.* **Commands, nodes, config, init — nothing else.**
   Hooks, middleware, plugin-to-plugin dependencies, and contributed ports are
   all easy to add once a real consumer needs them and impossible to remove.
@@ -517,10 +749,6 @@ then analytics.
   `blogwright.spi` integer in the manifest is the obvious answer; it is not
   specified here because the SPI is internal and both consumers version in
   lockstep with the CLI.
-- Should `blogwright destroy` refuse, or warn, when a plugin's scoped state
-  shows live resources that reference site resources? The analytics change spec
-  raises the concrete case: its log delivery references the site's distribution
-  and its shared delivery source.
 - Should `plugin remove` offer to run the plugin's teardown verb first, or is
   naming it in the output enough?
 - Does `preview` eventually become a plugin? It is the one remaining built-in

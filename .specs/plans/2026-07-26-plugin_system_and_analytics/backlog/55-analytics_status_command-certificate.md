@@ -1,4 +1,4 @@
-# Done Certificate — Task 56: analytics status: nodes against scoped state, stream health and row count
+# Done Certificate — Task 55: analytics status: nodes against scoped state, stream health and row count
 
 **Task:** [55-analytics_status_command.md](55-analytics_status_command.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
@@ -10,7 +10,7 @@
 
 ## Definition
 
-DONE(Task 56) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 55) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
@@ -21,9 +21,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Obligations
 
-- **O1 — Ten nodes listed against scoped state, in both output modes.**
+- **O1 — Twelve nodes listed against scoped state, in both output modes.**
   - *Claim:* the command reports each of the twelve nodes present or missing against `state/<env>.analytics.json`, with a tree when interactive and one stable line per node when not.
-  - *Evidence to collect:* read `status` in `packages/analytics/src/commands.ts`; run `pnpm test -- commands` in `packages/analytics` and confirm the plain-mode case uses a non-interactive terminal and asserts ten lines by node title, and that an interactive case exercises the tree branch.
+  - *Evidence to collect:* read `status` in `packages/analytics/src/commands.ts`; run `pnpm test -- commands` in `packages/analytics` and confirm the plain-mode case uses a non-interactive terminal and asserts twelve lines by node title, and that an interactive case exercises the tree branch.
   - *Checks:* resolve the state the presence check reads — confirm it is the plugin's scoped store, not the site's `state/<env>.json`.
   - *Status:* ☐ unverified
 
@@ -35,13 +35,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O3 — Stream health and row count, both degrading to warnings.**
   - *Claim:* the command reports the stream's delivery health and the table's row count, the count taken through the `AnalyticsQuery` port from task 45's named set, and a failing read of either degrades to a warning while the listing completes.
-  - *Evidence to collect:* run `grep -rn "@duckdb" packages/analytics/src/commands.ts` and expect no output; read the row-count call and confirm it names a query from `packages/analytics/src/queries.ts` rather than SQL text; run `pnpm test -- commands` in `packages/analytics` and confirm the two failure cases assert both the warning line and that all ten node lines are still emitted.
+  - *Evidence to collect:* run `grep -rn "@duckdb" packages/analytics/src/commands.ts` and expect no output; read the row-count call and confirm it names a query from `packages/analytics/src/queries.ts` rather than SQL text; run `pnpm test -- commands` in `packages/analytics` and confirm the two failure cases assert both the warning line and that all twelve node lines are still emitted.
   - *Checks:* resolve the delivery-health value — confirm it comes from the state task 51's stream `read` hydrated, not a second describe call issued by the command.
   - *Status:* ☐ unverified
 
 - **O4 — A never-bootstrapped environment.**
   - *Claim:* `analytics status` on an environment with empty scoped state reports every node missing and exits 0 rather than throwing.
-  - *Evidence to collect:* run `pnpm test -- commands` in `packages/analytics` and read the never-bootstrapped case — confirm it seeds empty scoped state, asserts ten missing lines, and asserts the returned exit code is 0 rather than only the absence of a throw.
+  - *Evidence to collect:* run `pnpm test -- commands` in `packages/analytics` and read the never-bootstrapped case — confirm it seeds empty scoped state, asserts twelve missing lines, and asserts the returned exit code is 0 rather than only the absence of a throw.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -49,8 +49,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean; confirm a changeset exists (`.changeset/*.md`) if the change is user-facing.
   - *Status:* ☐ unverified
 
-- **O6 — Run `pnpm test -- commands` inside `packages/analytics` and confirm the ten plain lines, the degraded cases and the zero exit (Reviewable).**
-  - *Claim:* a reviewer can run the package's command tests and observe a plain-mode case asserting ten lines by node title, two degraded cases still showing all ten, and a never-bootstrapped case asserting a zero exit.
+- **O6 — Run `pnpm test -- commands` inside `packages/analytics` and confirm the twelve plain lines, the degraded cases and the zero exit (Reviewable).**
+  - *Claim:* a reviewer can run the package's command tests and observe a plain-mode case asserting twelve lines by node title, two degraded cases still showing all twelve, and a never-bootstrapped case asserting a zero exit.
   - *Evidence to collect:* run `pnpm test -- commands` inside `packages/analytics`; read the three named cases and their assertions.
   - *Status:* ☐ unverified
 
@@ -59,7 +59,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `packages/cli/src/commands.ts:301` `status(ctx)` for the site → expect the same lines as before this task in both interactive and plain modes, since the plugin's status is a separate implementation : ☐ (PRESERVED / REGRESSION)
-- `packages/analytics/src/nodes.ts` `read()` on each of the twelve nodes, called by this command with an empty scoped state → expect `false` and no throw from every node, the contract tasks 48–52 established : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/nodes.ts` `read()` on each of the twelve nodes, called by this command with an empty scoped state → expect `false` and no throw from every node, the contract tasks 48–51 and 53 established : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

@@ -39,8 +39,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O4 — Laziness, the untyped-cast ban, and the changeset.**
-  - *Claim:* built-in commands never trigger discovery, the plugin context is a plain typed assignment, and a changeset records the new surface.
-  - *Evidence to collect:* run `pnpm --filter blogwright test -- cli` › the laziness case — expect one test running `deploy`, `status` and `bootstrap` and asserting the `ModuleLoader` fake recorded zero `resolve` and zero `load` calls; grep `packages/cli/src/cli.ts` for `as PluginContext` and `as unknown as` — expect no matches; list `.changeset/*.md` and confirm a new entry describes the dispatch surface and its semver impact.
+  - *Claim:* built-in commands never trigger discovery, the plugin context is built by a named adaptation function with no cast, and a changeset records the new surface.
+  - *Evidence to collect:* run `pnpm --filter blogwright test -- cli` › the laziness case — expect one test running `deploy`, `status` and `bootstrap` and asserting the `ModuleLoader` fake recorded zero `resolve` and zero `load` calls; grep `packages/cli/src/cli.ts` and `packages/cli/src/plugin-commands.ts` for `as PluginContext` and `as unknown as` — expect no matches; read `toPluginContext` and confirm it supplies exactly `pluginConfig`, `siteState` and `record` on top of the `OpsContext` and rewrites nothing the host already carries; list `.changeset/*.md` and confirm a new entry describes the dispatch surface and its semver impact.
   - *Checks:* resolve the discovery call site in `packages/cli/src/cli.ts` — confirm it sits after the `KNOWN_COMMANDS` membership test at `:117`, not before the built-in switch.
   - *Status:* ☐ unverified
 

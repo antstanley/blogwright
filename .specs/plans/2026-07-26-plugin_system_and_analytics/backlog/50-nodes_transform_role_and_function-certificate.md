@@ -10,21 +10,21 @@
 
 ## Definition
 
-DONE(Task 50) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 50) ≡ every obligation O1…O7 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
-- **P1 — Goal.** `analytics-transform-role` and `analytics-transform-function` exist in `packages/analytics/src/nodes.ts` — a least-privilege execution role and a function whose code is keyed by task 43's source hash, so identical source never redeploys the function.
-- **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
+- **P1 — Goal.** `analytics-salt-secret`, `analytics-transform-role` and `analytics-transform-function` exist in `packages/analytics/src/nodes.ts` — a long-lived salt secret, a least-privilege execution role declaring a dependency on it because its policy names its ARN, and a function whose code is keyed by task 43's source hash, so identical source never redeploys the function.
+- **P2 — Obligations.** The task is done iff O1…O7 all hold. One Oi per definition-of-done item, in DoD order; O7 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the site's IAM nodes (`packages/cli/src/nodes.ts:151` `buildRoleNode` and `:219` `execRoleNode`), the `.oxlintrc.json` restricted-import overrides, or task 43's hash and derived zip key, which this task consumes and must not restate.
 
 ## Obligations
 
-- **O1 — Role trust and least-privilege policy.**
-  - *Claim:* the role is created with the Lambda trust shape at `packages/cli/src/nodes.ts:106-115`, restated with a comment saying why it is not imported, and its inline policy is scoped to the function's own log group with no wildcard `Resource`.
-  - *Evidence to collect:* read the trust document and the policy helper in `packages/analytics/src/nodes.ts`; run `pnpm test -- nodes` in `packages/analytics` and confirm the policy test parses the captured document and asserts every statement's `Resource` is a concrete ARN, failing if any is `*`.
-  - *Checks:* resolve the role calls — confirm `ensureRole` (`packages/core/src/aws/iam.ts:45`) and `putRolePolicy` (`:84`) are reached through `ctx.clients.iam`, and that no CLI module is imported for the trust constant.
+- **O1 — Role trust, least-privilege policy, and the dependency that policy implies.**
+  - *Claim:* the role is created with the Lambda trust shape at `packages/cli/src/nodes.ts:106-115`, restated with a comment saying why it is not imported; its inline policy is scoped to the function's own log group with no wildcard `Resource`; and it declares `dependsOn: ['analytics-salt-secret']`, the node whose recorded ARN that policy interpolates.
+  - *Evidence to collect:* read the trust document, the policy helper and the role's `dependsOn` array in `packages/analytics/src/nodes.ts`; run `pnpm test -- nodes` in `packages/analytics` and confirm the policy test parses the captured document and asserts every statement's `Resource` is a concrete ARN, failing if any is `*`, and that one case asserts the declared dependency id.
+  - *Checks:* resolve the role calls — confirm `ensureRole` (`packages/core/src/aws/iam.ts:45`) and `putRolePolicy` (`:84`) are reached through `ctx.clients.iam`, and that no CLI module is imported for the trust constant. Cross-check the declared set against every ARN the policy interpolates: `topoSort` drains zero-indegree nodes alphabetically (`packages/cli/src/graph.ts:34-37`), so an undeclared dependency reconciles the role first and grants on `undefined` — a wrong permission, not an error.
   - *Status:* ☐ unverified
 
 - **O2 — Function code keyed by the source hash, with named limits.**
@@ -38,18 +38,24 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* run `pnpm test -- nodes` in `packages/analytics`; confirm cases exist for an absent function read, a create recording the ARN, a delete with the function already gone, and a delete with the role already gone — the last two asserting no throw and the remaining call still issued.
   - *Status:* ☐ unverified
 
-- **O4 — Zip bytes cross the FileSystem port.**
+- **O4 — The salt secret is created inside the us-east-1 pin.**
+  - *Claim:* `analytics-salt-secret` goes through the `SecretsManagerClient` task 38's bundle builds over `ctx.clients.signingUsEast1`, never through `ctx.clients.secrets`, so the secret and the transform Lambda that reads it are in the same region as the ARN the role grants on.
+  - *Evidence to collect:* run `grep -rn "ctx.clients.secrets" packages/analytics/src/` and expect no output; run `pnpm test -- nodes` in `packages/analytics` and read the case that sets `config.region` to something other than `us-east-1`, confirming the recorded request's credential scope contains `/us-east-1/secretsmanager/` and that the `secretsmanager:GetSecretValue` Resource ARN in the role's policy carries `us-east-1`.
+  - *Checks:* resolve where the node's secrets client comes from — `createAnalyticsClients(ctx)` (task 38), not `ctx.clients`. A green suite with the primary-region client is possible whenever the fixture's region already *is* `us-east-1`, so read the fixture's region before trusting the assertion.
+  - *Status:* ☐ unverified
+
+- **O5 — Zip bytes cross the FileSystem port.**
   - *Claim:* the bundle is read through `ctx.ports.fs`, no domain module in the package imports `node:fs`, and no analytics path joined the lint override list.
   - *Evidence to collect:* run `grep -rn "node:fs\|from 'fs'" packages/analytics/src/` and expect no output; run `pnpm lint` and expect it clean; read `.oxlintrc.json`'s `no-restricted-imports` override list and confirm no `packages/analytics/src/` entry was added.
   - *Checks:* resolve the byte read in the function node — confirm it is `ctx.ports.fs.readBytes` from the `PluginContext`, the same seam `packages/cli/src/agent-package.ts:35-36` uses, not a direct Node call.
   - *Status:* ☐ unverified
 
-- **O5 — Meets the repo definition of done.**
+- **O6 — Meets the repo definition of done.**
   - *Claim:* tests written with the change pass, the lint/format/dead-code gates are clean, and limits are named constants or validated config fields.
   - *Evidence to collect:* run `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` from the repo root — expect all clean; confirm a changeset exists (`.changeset/*.md`) if the change is user-facing.
   - *Status:* ☐ unverified
 
-- **O6 — Run `pnpm test -- nodes` and `pnpm lint`, and confirm the policy assertion, the empty update log and the untouched lint config (Reviewable).**
+- **O7 — Run `pnpm test -- nodes` and `pnpm lint`, and confirm the policy assertion, the empty update log and the untouched lint config (Reviewable).**
   - *Claim:* a reviewer can run the package's node tests and the linter and observe a policy test asserting on parsed `Resource` values, an unchanged-hash case asserting an empty update-call log, and no analytics entry in `.oxlintrc.json`.
   - *Evidence to collect:* run `pnpm test -- nodes` inside `packages/analytics` and `pnpm lint` from the repo root; read the policy test's assertion and the unchanged-hash case; `git diff .oxlintrc.json` (or `jj diff .oxlintrc.json`) and expect no change.
   - *Status:* ☐ unverified

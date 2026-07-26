@@ -1,4 +1,4 @@
-# Task 52 — Remove the pds branch from the site's OIDC policy
+# Task 59 — Remove the pds branch from the site's OIDC policy
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [59-cli_drop_pds_from_site_graph-certificate.md](59-cli_drop_pds_from_site_graph-certificate.md)
 
@@ -6,7 +6,7 @@
 **Depends on:** 23, 29
 **Produces:** the CLI's resource graph carries no pds knowledge — no `config.pds` branch, no `blogwright-pds` import in `nodes.ts` — with the grant now owned entirely by the plugin's own node
 
-**Pointers:** `packages/cli/src/nodes.ts:906-928` (the `if (ctx.config.pds)` block to delete), `packages/cli/src/nodes.ts:863` (`oidcRolePolicyStatements`, the exported function under test), `packages/cli/src/nodes.ts:823` (the doc comment mentioning "read access to the PDS credentials secret", which must lose that clause), `packages/cli/src/nodes.test.ts:194-211` (the ARN assertion that moves to the pds package at task 23), `packages/pds/src/nodes.ts` (task 23 — where the grant now lives)
+**Pointers:** `packages/cli/src/nodes.ts:913-927` (the `if (ctx.config.pds)` block to delete, with the secret ARN at `:925`), `packages/cli/src/nodes.ts:863` (`oidcRolePolicyStatements`, the exported function under test), `packages/cli/src/nodes.ts:823` (the doc comment mentioning "read access to the PDS credentials secret", which must lose that clause), `packages/cli/src/nodes.test.ts:194-211` (the ARN assertion that moves to the pds package at task 23), `packages/pds/src/nodes.ts` (task 23 — where the grant now lives)
 
 ## Steps
 

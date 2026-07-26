@@ -24,7 +24,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 - **O1 — Three chained nodes, incremental recording, and the pinned client.**
   - *Claim:* `analytics-table-bucket`, `analytics-namespace` and `analytics-table` implement `read`/`create`/`delete`, chain bucket → namespace → table through `dependsOn`, record each identifier into the plugin's scoped state as its resource is created, and reach AWS only through the plugin's own `createAnalyticsClients(ctx)` bundle (task 38) — never through `ctx.clients`, which carries only core's services, which signs against `us-east-1` whatever `config.region` says.
   - *Evidence to collect:* read the three node factories in `packages/analytics/src/nodes.ts` for their `id`, `dependsOn` and the position of the state write inside `create` (before any secondary call, as at `packages/cli/src/nodes.ts:54-56`); run `pnpm test -- nodes` in `packages/analytics` and confirm the region test builds the context with a non-`us-east-1` `config.region` and asserts `/us-east-1/s3tables/` in the recorded `authorization` header.
-  - *Checks:* resolve every AWS call in the three nodes — confirm each goes through `clients.s3tables` from the `PluginContext`, and that no `fetch`, no vendor SDK and no second client construction appears in `packages/analytics/src/nodes.ts`.
+  - *Checks:* resolve every AWS call in the three nodes — confirm each goes through the `s3tables` client from `createAnalyticsClients(ctx)` (task 38) and not through `ctx.clients`, which carries only core's services, and that no `fetch`, no vendor SDK and no second client construction appears in `packages/analytics/src/nodes.ts`.
   - *Status:* ☐ unverified
 
 - **O2 — The table is built from the schema module.**

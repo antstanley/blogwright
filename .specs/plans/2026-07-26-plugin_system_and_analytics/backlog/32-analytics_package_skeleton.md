@@ -1,4 +1,4 @@
-# Task 33 — Scaffold the blogwright-analytics workspace package
+# Task 32 — Scaffold the blogwright-analytics workspace package
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [32-analytics_package_skeleton-certificate.md](32-analytics_package_skeleton-certificate.md)
 

@@ -1,4 +1,4 @@
-# Task 57 — The loopback dashboard server and the analytics dashboard command
+# Task 56 — The loopback dashboard server and the analytics dashboard command
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [56-dashboard_server_and_command-certificate.md](56-dashboard_server_and_command-certificate.md)
 

@@ -29,7 +29,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 - **O2 — Unknown keys survive, malformed unknown keys do not throw, and `pds` round-trips.**
   - *Claim:* an `analytics` block parses through with the key present and byte-equal; a malformed such block parses without throwing; a `pds` block comes back exactly as written, including the absence of `secretName`.
   - *Evidence to collect:* run `pnpm test -- config` in `packages/core` and record the three new case names and results; confirm the byte-equality assertion compares the parsed value against the literal written into the JSONC source, not against a hand-built object.
-  - *Checks:* resolve where the unknown key survives — confirm it is the spread at `packages/core/src/config.ts:253`, and that no new allowlist or key filter was introduced alongside the removal.
+  - *Checks:* resolve where the unknown key survives — confirm it is the spread at `packages/core/src/config.ts:255`, and that no new allowlist or key filter was introduced alongside the removal.
   - *Status:* ☐ unverified
 
 - **O3 — Coverage moved rather than disappeared.**
