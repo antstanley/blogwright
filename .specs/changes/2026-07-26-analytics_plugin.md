@@ -37,7 +37,7 @@ the calls involved.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package, ten resource nodes, four AWS service clients, and delivery-configuration parameters on `LogsClient` |
+| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package, eleven resource nodes, four AWS service clients, and delivery-configuration parameters on `LogsClient` |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` port joins the ports table |
 
@@ -111,7 +111,12 @@ and, for SPI confidence, on
 > 1. maps each CloudFront field name to its column name;
 > 2. derives `event_time` from `timestamp(ms)` and the partition day from it;
 > 3. replaces the viewer IP with `visitor_key`, a SHA-256 hash of the IP, the
->    user agent, and a salt that rotates daily — the raw IP is never written;
+>    user agent, and a **secret** salt that rotates daily — the raw IP is never
+>    written. The salt is random and held in Secrets Manager, not derived from
+>    the date: IPv4 is a 2^32 space, so a hash whose salt an attacker can compute
+>    is reversible by brute force in seconds, and the pseudonymisation would be
+>    decorative. The function reads the salt at cold start and caches it for the
+>    life of the execution environment;
 > 4. sets `is_bot` from a user-agent match, so bot traffic is flagged in place
 >    rather than discarded;
 > 5. drops records the schema cannot accept, emitting them to the Firehose error
@@ -137,7 +142,7 @@ and, for SPI confidence, on
 
 ### Analytics pipeline → Resource nodes (Add)
 
-> The plugin contributes ten nodes, reconciled by the same engine as the site's:
+> The plugin contributes eleven nodes, reconciled by the same engine as the site's:
 >
 > | Node | Resource |
 > |---|---|
@@ -145,7 +150,8 @@ and, for SPI confidence, on
 > | `analytics-namespace` | Table namespace (`CreateNamespace`) |
 > | `analytics-table` | The `page_views` table (`CreateTable`) |
 > | `analytics-catalog-integration` | The Glue `s3tablescatalog` federation Firehose reads the table through |
-> | `analytics-transform-role` | Execution role for the transform Lambda |
+> | `analytics-salt-secret` | Secrets Manager secret holding the `visitor_key` salt |
+> | `analytics-transform-role` | Execution role for the transform Lambda, including `secretsmanager:GetSecretValue` on that secret alone |
 > | `analytics-transform-function` | The record-transform Lambda |
 > | `analytics-firehose-role` | Firehose delivery role (Glue, S3 Tables, Lambda invoke, error prefix) |
 > | `analytics-firehose-stream` | The delivery stream with its Iceberg destination |
@@ -220,6 +226,9 @@ and, for SPI confidence, on
 > - `table` — table name; defaults to `page_views`.
 > - `bots` — `flag` (default) or `filter`: whether bot traffic is excluded from
 >   dashboard queries by default. Records are always stored either way.
+> - `saltSecretName` — Secrets Manager secret holding the `visitor_key` salt;
+>   defaults to `<siteName>/analytics-salt`. Mirrors how `pds.secretName` names
+>   its secret.
 > - `dashboard.port` — local port; defaults to `4317`.
 >
 > A config carrying an `analytics` block when the plugin is not installed is
@@ -241,6 +250,11 @@ and, for SPI confidence, on
         "namespace": { "type": "string", "pattern": "^[a-z0-9_]+$" },
         "table": { "type": "string", "pattern": "^[a-z0-9_]+$" },
         "bots": { "enum": ["flag", "filter"], "default": "flag" },
+        "saltSecretName": {
+          "type": "string",
+          "pattern": "^[\\w/+=.@-]+$",
+          "description": "Defaults to `<siteName>/analytics-salt`."
+        },
         "dashboard": {
           "type": "object",
           "additionalProperties": false,
@@ -276,7 +290,7 @@ and, for SPI confidence, on
         "request_id": { "type": "string" },
         "visitor_key": {
           "type": "string",
-          "description": "SHA-256 of viewer IP + user agent + a daily-rotating salt. The raw IP is never stored."
+          "description": "SHA-256 of viewer IP + user agent + a daily-rotating secret salt held in Secrets Manager. The raw IP is never stored, and the salt is not derivable from the row."
         },
         "is_bot": { "type": "boolean" }
       }
@@ -309,18 +323,18 @@ Stage 1 — core clients (no plugin code yet)
      (:54).
 
 Stage 2 — the transform Lambda
-  5. packages/analytics/transform/ — the handler plus a rolldown config,
+  5. packages/analytics/src/transform/ — the handler plus a rolldown config,
      mirroring packages/build-agent (rolldown.config.ts, a source-hash
      manifest). The hash keys the uploaded zip so identical source never
      redeploys the function.
-  6. Unit-test the mapping, the visitor_key derivation (fixed salt in, known
+  6. Unit-test the mapping, the visitor_key derivation (injected salt in, known
      digest out), the bot match, and the drop path — this is the one place a
      silent mistake corrupts the whole dataset.
 
 Stage 3 — the plugin and its graph
   7. packages/analytics/src/ — plugin.ts (the Plugin export), config.ts,
      schema.ts (the page_views DDL and the CloudFront field selection),
-     nodes.ts (the ten nodes).
+     nodes.ts (the eleven nodes).
   8. Node ordering: table-bucket → namespace → table → catalog-integration;
      transform-role → transform-function; firehose-role →
      firehose-stream (depends on table + catalog-integration +
@@ -396,6 +410,14 @@ rather than create when it already exists.
   digest of IP and user agent.** The transform is the only component that ever
   sees the raw address, which makes unique-visitor counts possible without
   retaining personal data or setting a cookie.
+- *The salt is a secret, not the date.* **Random, held in Secrets Manager,
+  rotated daily.** Settled 2026-07-26. A date-derived salt is computable by
+  anyone holding the table, and IPv4 is a 2^32 space — brute-forcing every row
+  back to its source address is seconds of GPU time, so the hash would provide
+  no protection at all while appearing to. The cost is one more node, one
+  `secretsmanager:GetSecretValue` grant scoped to that secret, and a
+  `saltSecretName` config field. `SecretsManagerClient` already exists in core,
+  so no new client is needed.
 - *Flag bots, do not drop them.* **`is_bot` is a column; filtering is a query
   default.** A dropped record cannot be recovered when the bot heuristic turns
   out to be wrong, and it will be wrong.
@@ -432,7 +454,7 @@ rather than create when it already exists.
   plumbing orphaned — the same failure mode
   [`nodes.ts:764`](../../packages/cli/src/nodes.ts) already documents. The
   general form of this question is open in the plugin-system change spec.
-- Does the transform Lambda's daily salt need to be stable across a redeploy
-  (stored in Secrets Manager) or is a value derived from the date sufficient?
-  A derived salt makes `visitor_key` reproducible by anyone with the algorithm;
-  a stored one makes it opaque but adds a secret to manage.
+- Rotating the salt daily means `visitor_key` is not comparable across a day
+  boundary, so a "unique visitors this month" figure is really the sum of daily
+  uniques. Is that the intended semantic, or should the salt rotate less often
+  (trading a longer correlation window for cross-day counts)?

@@ -188,7 +188,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 16 · plugin lifecycle verbs | 02, 04, 10, 15 | build, contract | `<plugin> bootstrap\|status\|destroy` reconcile the plugin's nodes against its own scoped state key |
 | 17 · plugin list | 08, 09, 10 | build | `blogwright plugin list` reports namespaces, versions, config keys and load failures |
 | 18 · plugin add and remove | 06, 17 | build | `blogwright plugin add analytics` installs `blogwright-analytics` pinned to the running CLI's version |
-| 19 · plugin config validation | 08, 10 | build, contract | a plugin validates its own config block; a block for an uninstalled plugin stays inert |
+| 19 · plugin config validation | 03, 08, 10 | build, contract | a plugin validates its own config block; a block for an uninstalled plugin stays inert |
 | 20 · plugin system docs and closure | 05, 06, 11, 14, 16, 18, 19 | review | the plugin surface is documented, changeset-covered, and its change spec is merged |
 | 21 · pds config ownership | — | — | `blogwright-pds` validates the `pds` block and derives `<siteName>/atproto` with core's messages unchanged |
 | 22 · pds resolved secretName | 21 | build | `requirePdsConfig` returns a resolved `secretName` and the default has exactly one home |
@@ -219,10 +219,10 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 47 · analytics Plugin export and init | 03, 16, 44 | build, contract | `blogwright-analytics` is discoverable and `analytics init` returns its config block |
 | 48 · table bucket, namespace, table nodes | 02, 37, 39, 44 | build, data | the Iceberg table is created from the shared column set, pinned to us-east-1 |
 | 49 · catalog integration node | 48 | build | the account-scoped federation is adopted rather than created, and no teardown deletes it |
-| 50 · transform role and function nodes | 02, 37, 43 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
+| 50 · transform role and function nodes | 02, 37, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants |
 | 52 · log destination and delivery nodes | 36, 51 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
-| 53 · analytics graph and lifecycle | 16, 47, 52 | build, contract | `analytics bootstrap\|destroy` reconcile ten nodes against `state/<env>.analytics.json` |
+| 53 · analytics graph and lifecycle | 16, 47, 50, 52 | build, contract | `analytics bootstrap\|destroy` reconcile eleven nodes against `state/<env>.analytics.json` |
 | 54 · analytics status | 45, 53 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
 | 55 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
 | 56 · dashboard app build | 55 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
@@ -404,6 +404,29 @@ truthful once the work it describes has landed.
 
 ---
 
+## Decisions settled after the review
+
+Two of the review's findings were not defects but unmade decisions the plan had
+silently resolved. Both were settled 2026-07-26 and the tasks now carry them.
+
+- *The `visitor_key` salt is a secret, not the date.* **Random, held in Secrets
+  Manager, rotated daily.** A date-derived salt is computable by anyone holding
+  the table, and IPv4 is a 2^32 space — brute-forcing every row back to its
+  source address is seconds of GPU time, so the hash would have provided no
+  protection while appearing to. Cost: an eleventh node
+  (`analytics-salt-secret`), a `secretsmanager:GetSecretValue` grant scoped to
+  that secret in task 50, a `saltSecretName` config field in task 44, and a
+  cold-start read in task 42. `SecretsManagerClient` already exists in core, so
+  no new client. Tasks 41, 42, 44, 50 and 53 were updated together.
+- *`blogwright-analytics` joins the fixed changeset group.* **It versions in
+  lockstep with the CLI.** Task 18 pins `plugin add` to install
+  `blogwright-analytics@<cli version>`; the group at `.changeset/config.json:5`
+  did not include the package, so that version would never have existed on the
+  registry and the plan's headline install path would have failed silently.
+  Task 38 now adds it to the group.
+
+---
+
 ## Verification history
 
 **2026-07-26 — adversarial review, two independent passes.** One pass attacked
@@ -434,7 +457,7 @@ precondition of task 29.
 The 13 important and 10 minor findings are not yet applied. The important ones
 worth settling before work starts are: task 19 contradicting itself on where
 plugin config validation runs (`createContext` would make discovery non-lazy);
-`packages/analytics/transform/` sitting outside the package's `tsconfig` include,
+`packages/analytics/src/transform/` sitting outside the package's `tsconfig` include,
 so `pnpm typecheck` would not cover the load-bearing transform; and
 `blogwright plugin list` being placed after `createContext`, which would require
 config and AWS credentials to list plugins.

@@ -23,7 +23,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — Pinned digest and daily rotation.**
   - *Claim:* `visitorKey` is a SHA-256 digest over IP, user agent and salt, locked by a pinned-vector test with a literal expected digest, and rotation assertions show same-day stability and next-day difference.
-  - *Evidence to collect:* read `packages/analytics/transform/visitor-key.test.ts` and confirm the expected digest is a literal hex string in the test file, not recomputed from the same function under test; run `pnpm test -- visitor-key` in `packages/analytics` and confirm the pinned test and both rotation assertions pass; confirm the digest input separator makes `("1.2.3", "4")` and `("1.2", "34")` distinct.
+  - *Evidence to collect:* read `packages/analytics/src/transform/visitor-key.test.ts` and confirm the expected digest is a literal hex string in the test file, not recomputed from the same function under test; run `pnpm test -- visitor-key` in `packages/analytics` and confirm the pinned test and both rotation assertions pass; confirm the digest input separator makes `("1.2.3", "4")` and `("1.2", "34")` distinct.
   - *Checks:* resolve `createHash` inside `visitor-key.ts` — confirm it is `node:crypto`'s (permitted; `node:crypto` is not in the restricted list at `.oxlintrc.json:53-69`) and not a re-implementation.
   - *Status:* ☐ unverified
 
@@ -34,7 +34,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O3 — The salt decision is settled and injected.**
   - *Claim:* the module records whether the daily salt is stored (Secrets Manager) or derived from the date, the code implements that answer, the salt is a parameter derived from an injected day, and a test passes two different days without stubbing time.
-  - *Evidence to collect:* read the decision note in the doc comment of `packages/analytics/transform/visitor-key.ts` and confirm it states the answer and the consequence (changing it after rows exist breaks unique-visitor counts across the boundary); run `grep -rn "Date.now()\|new Date()\|vi.setSystemTime\|vi.useFakeTimers" packages/analytics/transform/` — expect no output; confirm the salt-derivation function's only input is a day value.
+  - *Evidence to collect:* read the decision note in the doc comment of `packages/analytics/src/transform/visitor-key.ts` and confirm it states the answer and the consequence (changing it after rows exist breaks unique-visitor counts across the boundary); run `grep -rn "Date.now()\|new Date()\|vi.setSystemTime\|vi.useFakeTimers" packages/analytics/src/transform/` — expect no output; confirm the salt-derivation function's only input is a day value.
   - *Status:* ☐ unverified
 
 - **O4 — Bots are flagged, never dropped, and absent user agents still produce a row.**
@@ -49,14 +49,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O6 — Reviewable: the pinned digest is literal and the IP search test is load-bearing (Reviewable).**
   - *Claim:* a reviewer can run `pnpm test -- visitor-key bots map-record` inside `packages/analytics` and observe the pinned digest as a literal in the test file, and can make the whole-row IP search test fail by mapping the viewer-IP field back to a column.
-  - *Evidence to collect:* run `pnpm test -- visitor-key bots map-record` from `packages/analytics` and capture the output; open `packages/analytics/transform/visitor-key.test.ts` and read the literal digest; add a viewer-IP entry to `FIELD_TO_COLUMN` in `packages/analytics/src/schema.ts`, re-run, capture the failure, then restore the file and re-run to confirm green.
+  - *Evidence to collect:* run `pnpm test -- visitor-key bots map-record` from `packages/analytics` and capture the output; open `packages/analytics/src/transform/visitor-key.test.ts` and read the literal digest; add a viewer-IP entry to `FIELD_TO_COLUMN` in `packages/analytics/src/schema.ts`, re-run, capture the failure, then restore the file and re-run to confirm green.
   - *Status:* ☐ unverified
 
 ## Regression check
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `packages/analytics/transform/map-record.ts` `mapRecord` is called by task 40's fixture tests with a complete record → expect the task 40 assertions (UTC `event_time`/`day`, numeric columns, drop path with named field) to still pass unchanged : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/transform/map-record.ts` `mapRecord` is called by task 40's fixture tests with a complete record → expect the task 40 assertions (UTC `event_time`/`day`, numeric columns, drop path with named field) to still pass unchanged : ☐ (PRESERVED / REGRESSION)
 - `packages/analytics/src/schema.ts` `DERIVED_COLUMNS` is read by task 39's totality test → expect `visitor_key` and `is_bot` still listed as derived and the totality test still green : ☐ (PRESERVED / REGRESSION)
 
 ## Residue

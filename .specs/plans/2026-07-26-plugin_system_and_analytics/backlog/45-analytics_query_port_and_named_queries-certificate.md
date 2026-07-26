@@ -39,7 +39,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O4 — A fixture-backed fake, and no DuckDB in the suite.**
   - *Claim:* a fixture-backed fake `AnalyticsQuery` ships beside the port, every consumer test substitutes at the port, and no test in the package starts DuckDB.
-  - *Evidence to collect:* read the fake and confirm it implements the same `run(name, params)` signature and returns fixture rows; run `grep -rn "duckdb" packages/analytics/src/*.test.ts packages/analytics/transform/*.test.ts` — expect no output; run `grep -rn "vi.mock" packages/analytics/` — expect no output, since substitution happens at the port.
+  - *Evidence to collect:* read the fake and confirm it implements the same `run(name, params)` signature and returns fixture rows; run `grep -rn "duckdb" packages/analytics/src/*.test.ts packages/analytics/src/transform/*.test.ts` — expect no output; run `grep -rn "vi.mock" packages/analytics/` — expect no output, since substitution happens at the port.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**

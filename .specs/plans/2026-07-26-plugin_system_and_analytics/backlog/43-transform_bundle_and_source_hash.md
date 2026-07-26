@@ -9,9 +9,9 @@
 
 ## Steps
 
-- [ ] Write `packages/analytics/transform/rolldown.config.ts` following `packages/build-agent/rolldown.config.ts`: the handler as input, `platform: 'node'`, `format: 'esm'`, `codeSplitting: false`, output to a single file, plus a second entry for the manifest writer.
+- [ ] Write `packages/analytics/src/transform/rolldown.config.ts` following `packages/build-agent/rolldown.config.ts`: the handler as input, `platform: 'node'`, `format: 'esm'`, `codeSplitting: false`, output to a single file, plus a second entry for the manifest writer.
 - [ ] Write `transformSourceHash(dir)` in `packages/analytics/src/transform-hash.ts` over the transform's *source* — the `transform/` and `src/` trees excluding `*.test.ts` — plus `rolldown.config.ts`, `tsconfig.json`, `package.json` and the workspace lockfile, sorted by label with a codepoint comparison, digested with the label/NUL framing `agentSourceHash` uses.
-- [ ] Write `packages/analytics/transform/write-manifest.ts` stamping the hash into a manifest file beside the bundle at build time, following `packages/build-agent/src/write-manifest.ts`, so the plugin reads the hash at runtime without access to the source tree.
+- [ ] Write `packages/analytics/src/transform/write-manifest.ts` stamping the hash into a manifest file beside the bundle at build time, following `packages/build-agent/src/write-manifest.ts`, so the plugin reads the hash at runtime without access to the source tree.
 - [ ] Add the manifest writer's path to the `no-restricted-imports` override list at `.oxlintrc.json:71-84` with the same reason the build-agent entry carries — it is a build-time edge component that writes a file, not a domain module.
 - [ ] Rewrite the package `build` script to `rolldown -c -f transform/rolldown.config.ts && node <bundled write-manifest> && tsc -p tsconfig.json` (or the equivalent ordering), so a clean checkout produces both the bundle and the manifest.
 - [ ] Export the zip key derived from the hash from `packages/analytics/src/transform-hash.ts`, so task 50's function node consumes one derivation rather than restating the key format.
@@ -24,4 +24,4 @@
 - [ ] The hash is stamped into a manifest at build time (the `write-manifest.ts` precedent) so the plugin reads it at runtime without access to the source tree.
 - [ ] The zip key derived from the hash is exported for the function node (task 50) to consume, so identical source provably maps to an identical key, and the key format is written in exactly one module.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm --filter blogwright-analytics build` twice from a clean checkout; confirm the manifest hash is identical across both runs, then change one byte in `packages/analytics/transform/map-record.ts`, rebuild, and confirm the hash and the derived zip key both change.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics build` twice from a clean checkout; confirm the manifest hash is identical across both runs, then change one byte in `packages/analytics/src/transform/map-record.ts`, rebuild, and confirm the hash and the derived zip key both change.

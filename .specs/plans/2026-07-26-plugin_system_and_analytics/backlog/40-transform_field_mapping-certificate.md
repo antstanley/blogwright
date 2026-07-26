@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `mapRecord` in `packages/analytics/transform/map-record.ts` turns one CloudFront access-log record into a `page_views` row or a droppable result naming the missing field, deriving `event_time` and `day` in UTC, covered by day-rollover boundary tests.
+- **P1 — Goal.** `mapRecord` in `packages/analytics/src/transform/map-record.ts` turns one CloudFront access-log record into a `page_views` row or a droppable result naming the missing field, deriving `event_time` and `day` in UTC, covered by day-rollover boundary tests.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `packages/analytics/src/schema.ts` (task 39) — the column set, the field selection and the mapping table stay the single source, and this task must not fork them; and must not break the package's existing gates after widening the `vitest.config.ts` include glob and the `lint` script to cover `transform/`.
 
@@ -23,13 +23,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — Mapping has exactly one home.**
   - *Claim:* `mapRecord` reads `FIELD_TO_COLUMN` from `schema.ts` and spells no CloudFront field name and no column name a second time.
-  - *Evidence to collect:* run `grep -rn "cs(Referer)\|timestamp(ms)" packages/analytics/` — expect matches only in `packages/analytics/src/schema.ts` and in test fixtures, never in `map-record.ts` outside the derived-field helpers; read `packages/analytics/transform/map-record.ts` and confirm the row is built by iterating the imported mapping, not by a literal object with column keys.
+  - *Evidence to collect:* run `grep -rn "cs(Referer)\|timestamp(ms)" packages/analytics/` — expect matches only in `packages/analytics/src/schema.ts` and in test fixtures, never in `map-record.ts` outside the derived-field helpers; read `packages/analytics/src/transform/map-record.ts` and confirm the row is built by iterating the imported mapping, not by a literal object with column keys.
   - *Checks:* resolve the mapping identifier used inside `mapRecord` — confirm it is the import from `../src/schema.js`, not a locally redeclared constant of the same name.
   - *Status:* ☐ unverified
 
 - **O2 — UTC derivation and the midnight boundary.**
   - *Claim:* `event_time` is derived from `timestamp(ms)` and `day` from `event_time` in UTC; tests use fixed inputs and fully spelled expected outputs and read no wall clock; boundary tests at `23:59:59.999` and `00:00:00.000` UTC prove the partition value.
-  - *Evidence to collect:* run `pnpm test -- map-record` in `packages/analytics` and confirm the two boundary cases pass with `day` values differing by one calendar day; run `grep -n "Date.now()\|new Date()" packages/analytics/transform/` — expect no output in test bodies or in `map-record.ts`; read the two boundary fixtures and confirm both timestamps are literal numbers.
+  - *Evidence to collect:* run `pnpm test -- map-record` in `packages/analytics` and confirm the two boundary cases pass with `day` values differing by one calendar day; run `grep -n "Date.now()\|new Date()" packages/analytics/src/transform/` — expect no output in test bodies or in `map-record.ts`; read the two boundary fixtures and confirm both timestamps are literal numbers.
   - *Status:* ☐ unverified
 
 - **O3 — Numeric columns are numbers, and a non-numeric value drops.**
@@ -49,7 +49,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O6 — Reviewable: the midnight-boundary cases and the drop reasons (Reviewable).**
   - *Claim:* a reviewer can run `pnpm test -- map-record` inside `packages/analytics` and observe that the two midnight-boundary cases produce different `day` values one millisecond apart and that every drop case names its missing field.
-  - *Evidence to collect:* run `pnpm test -- map-record` from `packages/analytics` and capture the full test-name list; read the two boundary test names and their expected `day` literals in `packages/analytics/transform/map-record.test.ts` and confirm they differ; read each drop-case assertion and confirm the expected reason names the field.
+  - *Evidence to collect:* run `pnpm test -- map-record` from `packages/analytics` and capture the full test-name list; read the two boundary test names and their expected `day` literals in `packages/analytics/src/transform/map-record.test.ts` and confirm they differ; read each drop-case assertion and confirm the expected reason names the field.
   - *Status:* ☐ unverified
 
 ## Regression check

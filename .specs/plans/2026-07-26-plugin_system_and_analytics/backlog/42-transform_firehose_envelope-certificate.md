@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `packages/analytics/transform/handler.ts` decodes each Firehose record from base64, maps it through `mapRecord`, and returns `Ok` with the re-encoded row or `ProcessingFailed`, per record, with `recordId` echoed unchanged and no AWS SDK or network call anywhere in it.
+- **P1 — Goal.** `packages/analytics/src/transform/handler.ts` decodes each Firehose record from base64, maps it through `mapRecord`, and returns `Ok` with the re-encoded row or `ProcessingFailed`, per record, with `recordId` echoed unchanged and no AWS SDK or network call anywhere in it.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `mapRecord` (task 40) or the `visitor_key`/`is_bot` derivation (task 41): the handler forwards their decisions and must not re-implement the mapping, the drop rule, or the salt derivation.
 
@@ -34,7 +34,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O3 — No AWS SDK, no network, no module mocking.**
   - *Claim:* the handler imports no AWS SDK and performs no network call, and its tests need neither cloud access nor `vi.mock`.
-  - *Evidence to collect:* run `grep -rn "@aws-sdk\|fetch(\|vi.mock\|vi.stubGlobal" packages/analytics/transform/` — expect no output; read the import list of `packages/analytics/transform/handler.ts` and confirm the Firehose envelope types are repo-owned declarations, not imported from `@types/aws-lambda`; confirm `packages/analytics/package.json` gained no dependency for this task.
+  - *Evidence to collect:* run `grep -rn "@aws-sdk\|fetch(\|vi.mock\|vi.stubGlobal" packages/analytics/src/transform/` — expect no output; read the import list of `packages/analytics/src/transform/handler.ts` and confirm the Firehose envelope types are repo-owned declarations, not imported from `@types/aws-lambda`; confirm `packages/analytics/package.json` gained no dependency for this task.
   - *Status:* ☐ unverified
 
 - **O4 — Invalid JSON and an empty batch are handled without throwing.**
@@ -49,14 +49,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O6 — Reviewable: the mixed-batch response shape (Reviewable).**
   - *Claim:* a reviewer can run `pnpm test -- handler` inside `packages/analytics` and observe a mixed-batch expectation with exactly one `ProcessingFailed` entry, the rest `Ok`, and the request's `recordId` values in the same order.
-  - *Evidence to collect:* run `pnpm test -- handler` from `packages/analytics` and capture the output; open `packages/analytics/transform/handler.test.ts`, read the mixed-batch fixture and its expected response, and confirm the id order and the single failure by inspection.
+  - *Evidence to collect:* run `pnpm test -- handler` from `packages/analytics` and capture the output; open `packages/analytics/src/transform/handler.test.ts`, read the mixed-batch fixture and its expected response, and confirm the id order and the single failure by inspection.
   - *Status:* ☐ unverified
 
 ## Regression check
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `packages/analytics/transform/map-record.ts` `mapRecord` is called by the handler for each decoded payload → expect task 40's and task 41's suites to still pass unchanged, and the handler to add no second mapping path : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/transform/map-record.ts` `mapRecord` is called by the handler for each decoded payload → expect task 40's and task 41's suites to still pass unchanged, and the handler to add no second mapping path : ☐ (PRESERVED / REGRESSION)
 - `packages/analytics/vitest.config.ts` `include` (widened at task 40) collects `transform/**/*.test.ts` → expect the new handler suite to be collected alongside the existing transform suites : ☐ (PRESERVED / REGRESSION)
 
 ## Residue

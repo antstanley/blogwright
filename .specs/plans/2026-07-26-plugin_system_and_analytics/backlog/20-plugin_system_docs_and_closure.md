@@ -2,13 +2,14 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [20-plugin_system_docs_and_closure-certificate.md](20-plugin_system_docs_and_closure-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §Merge plan](../../../changes/2026-07-26-cli_plugin_system.md) (all five steps) and §Ports → `ModuleLoader` and §Ports → `PackageManager` (the two rows the ports table gains)
+**Implements:** [2026-07-26-cli_plugin_system.md §Merge plan](../../../changes/2026-07-26-cli_plugin_system.md) (steps 2, 4 and 5; step 1's canonical-page fallback is deliberately deferred — see this task's decision note) and §Ports → `ModuleLoader` and §Ports → `PackageManager` (the two rows the ports table gains)
 **Depends on:** 05, 06, 11, 14, 16, 18, 19
 **Produces:** consumer docs for `blogwright plugin add|list|remove` and `blogwright <plugin> <action>`, the two new ports recorded in DEVELOPMENT.md's ports table, a changeset for the whole user-facing surface, and the change spec merged with its unanswered questions carried forward
 **Pointers:** `README.md:40-56` (the Commands block that gains the plugin lines), `DEVELOPMENT.md:72-81` (§Hexagonal architecture's ports table), `DEVELOPMENT.md:356-366` (the lint-enforcement Decisions bullet listing the adapter exceptions), `.specs/changes/2026-07-26-cli_plugin_system.md:3` (the `Status:` header line to flip), `.specs/changes/2026-07-26-cli_plugin_system.md:291-302` (the merge plan), `.specs/changes/2026-07-26-cli_plugin_system.md:351-367` (the open questions to triage), `.specs/README.md:19-34` (the pending list), `.specs/README.md:35-43` (the merged list)
 
 ## Steps
 
+- [ ] Record why merge-plan step 1 is not executed: it says to apply the Proposed-changes blocks to a canonical page and, if none exists, to record the SPI as a NEW canonical page and index it. No canonical spec set exists, so that fallback is live rather than conditional — but the spec's own decision keeps the SPI internal and undocumented until it has carried two features through a release cycle, and publishing a canonical SPI page now would contradict it. Write the deferral and its owner into this task's decision note and into plan.md's open questions; do not silently skip the step.
 - [ ] Add the plugin commands to `README.md`'s Commands block (`README.md:40-56`) beside the existing `preview` and `pds` lines, and add a short paragraph stating that the plugin SPI is internal and unversioned so no third party should write against it yet.
 - [ ] Add the `ModuleLoader` and `PackageManager` rows to the ports table at `DEVELOPMENT.md:72-81`, each naming the port file, the real adapter and the test substitute, in the same column shape as the `Vcs` and `PingBuilder` rows.
 - [ ] Write the changeset covering the user-facing surface this spec adds — the `plugin` namespace, generic plugin dispatch, the plugin lifecycle verbs, and the help output's Plugins section — with the semver impact stated.

@@ -11,12 +11,14 @@
 
 - [ ] Extend discovery's result so a load failure is a first-class value carrying the package name and the reason from `validatePlugin`, rather than an exception that aborts the whole listing.
 - [ ] Read each discovered package's own `package.json` through `ctx.ports.fs.readText` at the directory `ports.loader.resolve` returned, and take `version` from it — never a hardcoded map, never a registry call.
-- [ ] Add the `plugin` namespace to `cli.ts` beside the built-in switch and register its `list` action in `plugin-commands.ts`, with `plugin` in `KNOWN_COMMANDS` (`cli.ts:66`) so it can never be claimed by a plugin.
+- [ ] Dispatch the `plugin` namespace BEFORE `createContext` — beside the `init` (`cli.ts:107`) and `preview` (`cli.ts:111`) branches, not in the switch at `:142` — and hand it only the ports it needs (`fs`, `loader`, `packages`). `createContext` runs at `cli.ts:134` and does a config load plus `sts.getAccountId()`, so dispatching `plugin` after it would make `blogwright plugin list` and `plugin add` fail with `no config found for environment …` on an unconfigured repo — and `plugin add` is precisely what an operator runs before the repo is configured. Keep `plugin` in `KNOWN_COMMANDS` (`cli.ts:66`) so no plugin can claim it.
 - [ ] Render rows in two shapes as `history` does (`commands.ts:258-272`): an aligned table when `ctx.ports.terminal.isInteractive`, and stable column-per-line output otherwise, with an explicit marker (not a blank cell) for a plugin that owns no `configKey`.
 - [ ] Handle the empty and unknown-input cases: no plugins prints a line naming `blogwright plugin add` and exits 0; `blogwright plugin` with no action or an unknown one prints the namespace's actions and exits 1.
 - [ ] Write `packages/cli/src/plugin-commands.test.ts` cases with fake plugin packages in the in-memory `FileSystem` and a fake `ModuleLoader`, including one healthy and one broken plugin in the same run.
 
 ## Definition of done
+
+- [ ] `blogwright plugin list` works on a repo with NO `config/<env>.jsonc` and no AWS credentials, asserted by a test that never constructs a context — the empty-state line naming `blogwright plugin add` is otherwise unreachable in exactly the situation it exists for.
 
 - [ ] `blogwright plugin list` prints one row per installed plugin with its namespace, package name, version and `configKey` — or a clear marker when it owns none — pinned by an output test in both interactive and `--plain` modes, consistent with the existing `history`/`status` output contract for CI and agents.
 - [ ] Versions are read from each plugin package's own `package.json` through `ctx.ports.fs`, never from a hardcoded map and never over the network — a grep of `packages/cli/src/plugin-commands.ts` for `fetch` and for any version literal returns nothing, and no test needs a network.

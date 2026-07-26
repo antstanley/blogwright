@@ -9,6 +9,8 @@
 
 ## Steps
 
+- [ ] Delete the static `pds` block from the `USAGE` string (`packages/cli/src/cli.ts:33-47`) in THIS task, not in task 29. The manifest field added here makes `blogwright-pds` discoverable, so task 11's dynamic help section starts rendering pds immediately; leaving the static block until 29 would list every pds action twice in `blogwright --help` for the whole span 26→29. That is a user-visible change inside a migration whose spec forbids one. Removing it here keeps help correct at every commit, because the dynamic section replaces it in the same step that creates it.
+
 - [ ] Add `"blogwright": { "plugin": "pds" }` to `packages/pds/package.json`, changing nothing else — `name`, `version`, `files`, `exports`, `scripts`, `dependencies` and `engines` all stay as they are.
 - [ ] Extend `packages/cli/src/plugins.test.ts` with a discovery case whose fake consuming repo `package.json` lists only `blogwright` as a dependency, and assert `blogwright-pds` is discovered through the CLI's own bundle rather than the consumer's dependency list.
 - [ ] Add the `blogwright plugin list` assertion covering the `pds` row: namespace, package version, and the `pds` config key.

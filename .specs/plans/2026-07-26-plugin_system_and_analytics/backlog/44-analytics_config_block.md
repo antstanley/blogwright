@@ -9,6 +9,7 @@
 
 ## Steps
 
+- [ ] Carry `saltSecretName` in `AnalyticsConfig`, defaulting to `<siteName>/analytics-salt` and validated against the same character class `pds.secretName` uses (`^[\w/+=.@-]+$`). The salt decision settled 2026-07-26 on a Secrets Manager secret; task 50's node reads this field for the secret's name.
 - [ ] Settle the table-bucket open question — one table bucket per environment, or one bucket with a namespace per environment — and record the decision in the module doc comment: the proposed default `<siteName>-analytics` carries no environment, so two environments would otherwise target the same bucket.
 - [ ] Declare `AnalyticsConfig` in `packages/analytics/src/config.ts` matching the spec's `$defs.AnalyticsConfig`: `tableBucket`, `namespace`, `table`, `bots` as `'flag' | 'filter'`, and `dashboard.port`, every optional field expressed as `?: T | undefined` under `exactOptionalPropertyTypes`.
 - [ ] Declare the defaults and limits as named module constants — the `namespace` default `web`, the `table` default `page_views`, the `bots` default `flag`, the dashboard port default `4317`, the bucket-name pattern and length bounds, and the port bounds — with the dashboard port default exported as the single constant the dashboard server (task 55) also reads.

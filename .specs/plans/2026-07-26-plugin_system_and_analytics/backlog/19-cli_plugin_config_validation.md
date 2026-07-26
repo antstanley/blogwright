@@ -9,9 +9,9 @@
 
 ## Steps
 
-- [ ] Choose the validation scope — every discovered plugin, or only the plugin being dispatched — write the choice and its reason into the module comment of `packages/cli/src/plugins.ts`, and keep it consistent with the spec's laziness rule that built-in commands discover nothing.
-- [ ] Add `validatePluginConfig(plugins, config)` in `plugins.ts`: for each plugin declaring both `configKey` and `validateConfig`, call it with `config[configKey]` when that key is present, and skip it when absent — never pass `undefined` into a plugin, per DEVELOPMENT.md's no-null rule.
-- [ ] Call it from `createContext` immediately after `loadConfig` (`context.ts:120-124`), before `deriveNames`, so an invalid plugin block fails before any AWS call is made.
+- [ ] Validate ONLY the plugin being dispatched, in the dispatch path — not in `createContext`. Record the choice and its reason in the module comment of `packages/cli/src/plugins.ts`. `createContext` (`packages/cli/src/context.ts:110-124`) is the path every built-in command takes and accepts no plugin list, so validating there would run discovery on `deploy`/`status`/`bootstrap` — breaking task 10's laziness test and this task's own DoD — and there is no seam through which the dispatched plugin alone could be reached.
+- [ ] Add `validatePluginConfig(plugin, config)` in `plugins.ts` taking ONE plugin: when it declares both `configKey` and `validateConfig`, call the validator with `pluginBlock(config, configKey)` (task 27) if that key is present, and skip it when absent — never pass `undefined` into a plugin, per DEVELOPMENT.md's no-null rule.
+- [ ] Call it from `runPlugin` (task 10) immediately after the context is built and before the plugin's `run`, so an invalid block fails before the command does any work. Built-in commands never reach it.
 - [ ] Wrap a plugin's thrown error so the plugin's own message survives verbatim with a prefix naming the plugin, and let it exit non-zero through the existing `bin.ts` error path.
 - [ ] Add the duplicate-`configKey` rejection beside task 09's duplicate-namespace check, with an error naming both packages and the shared key.
 - [ ] Extend `packages/cli/src/context.test.ts` with fake plugins only — block present, block absent, block for an uninstalled plugin, a failing validator, and two plugins claiming one key — plus an assertion that a built-in command loads no plugin modules.

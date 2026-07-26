@@ -15,14 +15,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `buildAnalyticsNodes(ctx)` returns the spec's ten nodes, wired to the plugin's `nodes(ctx)` and reconciled by the CLI's engine against `state/<env>.analytics.json`, with the site's `state/<env>.json` and the site's node set provably untouched.
+- **P1 — Goal.** `buildAnalyticsNodes(ctx)` returns the spec's eleven nodes, wired to the plugin's `nodes(ctx)` and reconciled by the CLI's engine against `state/<env>.analytics.json`, with the site's `state/<env>.json` and the site's node set provably untouched.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `packages/cli/src/nodes.ts:1053` `buildNodes` or the site's `bootstrap`/`destroy` (`packages/cli/src/commands.ts:44,54`), task 16's generic verbs and their precedence rule, or task 47's command table, which this task wires `nodes(ctx)` into without editing.
 
 ## Obligations
 
 - **O1 — Ten nodes in the spec's order, with a well-formed graph.**
-  - *Claim:* `buildAnalyticsNodes(ctx)` returns exactly the spec's ten nodes and is wired to `nodes(ctx)`; the dependency edges match the stated ordering; no `dependsOn` names an unknown node; the edges contain no cycle.
+  - *Claim:* `buildAnalyticsNodes(ctx)` returns exactly the spec's eleven nodes and is wired to `nodes(ctx)`; the dependency edges match the stated ordering; no `dependsOn` names an unknown node; the edges contain no cycle.
   - *Evidence to collect:* read `buildAnalyticsNodes` in `packages/analytics/src/nodes.ts` and the `nodes(ctx)` member in `packages/analytics/src/plugin.ts`; run `pnpm test -- commands` in `packages/analytics` and confirm the ordering test names all ten ids explicitly and asserts each edge of the four chains the spec states.
   - *Checks:* pass the node set through `packages/cli/src/graph.ts:18` `topoSort` in the CLI-side test and confirm neither the unknown-dependency error at `:29` nor the cycle error at `:53` is raised.
   - *Status:* ☐ unverified

@@ -23,7 +23,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — Single-file ESM bundle from a clean checkout.**
   - *Claim:* rolldown bundles the transform to one ESM file with `node:` builtins external, produced by the package's `build` script, reproducible from a clean checkout.
-  - *Evidence to collect:* read `packages/analytics/transform/rolldown.config.ts` and confirm `platform: 'node'`, `format: 'esm'` and `codeSplitting: false` against `packages/build-agent/rolldown.config.ts`; run `pnpm --filter blogwright-analytics build` after removing the package's build output and confirm exactly one bundle file is emitted; run `grep -n "^import .*from 'node:" <bundle>` and confirm `node:` imports remain external rather than inlined.
+  - *Evidence to collect:* read `packages/analytics/src/transform/rolldown.config.ts` and confirm `platform: 'node'`, `format: 'esm'` and `codeSplitting: false` against `packages/build-agent/rolldown.config.ts`; run `pnpm --filter blogwright-analytics build` after removing the package's build output and confirm exactly one bundle file is emitted; run `grep -n "^import .*from 'node:" <bundle>` and confirm `node:` imports remain external rather than inlined.
   - *Status:* ☐ unverified
 
 - **O2 — Source-hash inputs and stability.**
@@ -48,8 +48,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O6 — Reviewable: two builds agree, a changed byte disagrees (Reviewable).**
-  - *Claim:* a reviewer can run `pnpm --filter blogwright-analytics build` twice from a clean checkout and observe an identical manifest hash, then change one byte in `packages/analytics/transform/map-record.ts`, rebuild, and observe both the hash and the derived zip key change.
-  - *Evidence to collect:* run the build twice, capturing the manifest contents after each; edit one byte of `packages/analytics/transform/map-record.ts` (a comment character suffices), rebuild, capture the manifest again, and confirm the hash differs from the first two; restore the file and rebuild to confirm the original hash returns.
+  - *Claim:* a reviewer can run `pnpm --filter blogwright-analytics build` twice from a clean checkout and observe an identical manifest hash, then change one byte in `packages/analytics/src/transform/map-record.ts`, rebuild, and observe both the hash and the derived zip key change.
+  - *Evidence to collect:* run the build twice, capturing the manifest contents after each; edit one byte of `packages/analytics/src/transform/map-record.ts` (a comment character suffices), rebuild, capture the manifest again, and confirm the hash differs from the first two; restore the file and rebuild to confirm the original hash returns.
   - *Status:* ☐ unverified
 
 ## Regression check

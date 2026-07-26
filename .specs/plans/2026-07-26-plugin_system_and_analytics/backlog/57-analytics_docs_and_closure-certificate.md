@@ -29,13 +29,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O2 — The package README and the in-code documentation.**
   - *Claim:* `packages/analytics/README.md` documents install, the five actions, the us-east-1 pinning and the privacy contract, and every public export carries a doc comment while every module opens with an ownership comment.
-  - *Evidence to collect:* read `packages/analytics/README.md` and confirm it names `blogwright plugin add analytics`, all five actions (`init`, `bootstrap`, `status`, `dashboard`, `destroy --yes`), the us-east-1 pinning with its CloudFront reason, and the two privacy statements (the raw viewer IP is never stored; `cs(Cookie)` and `x-forwarded-for` are never selected); read the exports of `packages/analytics/src/index.ts` and confirm each has a doc comment, and read the first line of every module under `packages/analytics/src/` and `packages/analytics/transform/` for the ownership comment.
+  - *Evidence to collect:* read `packages/analytics/README.md` and confirm it names `blogwright plugin add analytics`, all five actions (`init`, `bootstrap`, `status`, `dashboard`, `destroy --yes`), the us-east-1 pinning with its CloudFront reason, and the two privacy statements (the raw viewer IP is never stored; `cs(Cookie)` and `x-forwarded-for` are never selected); read the exports of `packages/analytics/src/index.ts` and confirm each has a doc comment, and read the first line of every module under `packages/analytics/src/` and `packages/analytics/src/transform/` for the ownership comment.
   - *Checks:* resolve the privacy claim against the code — confirm `packages/analytics/src/schema.ts`'s field selection (task 39) contains neither `cs(Cookie)` nor `x-forwarded-for`, and that no column in the row the transform emits holds the raw IP, so the README documents the behaviour rather than an intention.
   - *Status:* ☐ unverified
 
 - **O3 — The four open questions and no bare TODO.**
   - *Claim:* backfill, table record expiration, one bucket per environment and salt stability are each resolved in the change description or recorded as out of scope with an owner, and no bare `// TODO` exists in the new code.
-  - *Evidence to collect:* read the change description and confirm four entries, with the bucket-per-environment entry pointing at `packages/analytics/src/config.ts` (task 44) and the salt-stability entry at `packages/analytics/transform/visitor-key.ts` (task 41); run `grep -rn "TODO" packages/analytics/` — expect either no output or every match carrying an owner and a tracking reference, per `DEVELOPMENT.md:251`.
+  - *Evidence to collect:* read the change description and confirm four entries, with the bucket-per-environment entry pointing at `packages/analytics/src/config.ts` (task 44) and the salt-stability entry at `packages/analytics/src/transform/visitor-key.ts` (task 41); run `grep -rn "TODO" packages/analytics/` — expect either no output or every match carrying an owner and a tracking reference, per `DEVELOPMENT.md:251`.
   - *Status:* ☐ unverified
 
 - **O4 — The changeset and the executed merge plan.**
