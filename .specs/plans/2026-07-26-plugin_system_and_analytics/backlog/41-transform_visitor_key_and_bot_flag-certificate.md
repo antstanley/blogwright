@@ -15,15 +15,15 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `visitorKey(ip, userAgent, salt)` and the bot matcher are wired into `mapRecord` so the produced row carries a defined `visitor_key` and `is_bot`, no field of the row holds the raw viewer IP, and the salt-stability open question is answered in the code.
+- **P1 — Goal.** `dailySalt(secret, day)`, `visitorKey(ip, userAgent, salt)` and the bot matcher are wired into `mapRecord` so the produced row carries a defined `visitor_key` and `is_bot`, no field of the row holds the raw viewer IP, and the settled salt decision (one stored secret, per-day salt derived) is recorded in the code.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break task 40's `mapRecord` contract: the drop path, the UTC `event_time`/`day` derivation and the numeric coercions stay as tested; and must not break task 39's `schema.ts` totality — `visitor_key` and `is_bot` remain listed in `DERIVED_COLUMNS`, and the viewer-IP field remains selected but unmapped to any column.
 
 ## Obligations
 
-- **O1 — Pinned digest and daily rotation.**
-  - *Claim:* `visitorKey` is a SHA-256 digest over IP, user agent and salt, locked by a pinned-vector test with a literal expected digest, and rotation assertions show same-day stability and next-day difference.
-  - *Evidence to collect:* read `packages/analytics/src/transform/visitor-key.test.ts` and confirm the expected digest is a literal hex string in the test file, not recomputed from the same function under test; run `pnpm test -- visitor-key` in `packages/analytics` and confirm the pinned test and both rotation assertions pass; confirm the digest input separator makes `("1.2.3", "4")` and `("1.2", "34")` distinct.
+- **O1 — Pinned digests and daily turnover.**
+  - *Claim:* `dailySalt` is `HMAC-SHA256(secret, day)` and `visitorKey` is a SHA-256 digest over IP, user agent and salt, each locked by a pinned-vector test with a literal expected digest, and turnover assertions show same-day stability and next-day difference.
+  - *Evidence to collect:* read `packages/analytics/src/transform/visitor-key.test.ts` and confirm both expected digests are literal hex strings in the test file, not recomputed from the functions under test; run `pnpm test -- visitor-key` in `packages/analytics` and confirm both pinned tests and both turnover assertions pass; confirm the digest input separator makes `("1.2.3", "4")` and `("1.2", "34")` distinct.
   - *Checks:* resolve `createHash` inside `visitor-key.ts` — confirm it is `node:crypto`'s (permitted; `node:crypto` is not in the restricted list at `.oxlintrc.json:53-69`) and not a re-implementation.
   - *Status:* ☐ unverified
 
@@ -32,9 +32,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* read the assertion in the transform tests and confirm it iterates `Object.values(row)` (or equivalent) and asserts the fixture IP is absent from all of them — an assertion naming only one column does not satisfy this obligation; run `pnpm test -- map-record` and confirm it passes; then temporarily map the viewer-IP field to a column in `packages/analytics/src/schema.ts` and confirm this test fails, and restore.
   - *Status:* ☐ unverified
 
-- **O3 — The salt decision is settled and injected.**
-  - *Claim:* the module records whether the daily salt is stored (Secrets Manager) or derived from the date, the code implements that answer, the salt is a parameter derived from an injected day, and a test passes two different days without stubbing time.
-  - *Evidence to collect:* read the decision note in the doc comment of `packages/analytics/src/transform/visitor-key.ts` and confirm it states the answer and the consequence (changing it after rows exist breaks unique-visitor counts across the boundary); run `grep -rn "Date.now()\|new Date()\|vi.setSystemTime\|vi.useFakeTimers" packages/analytics/src/transform/` — expect no output; confirm the salt-derivation function's only input is a day value.
+- **O3 — The salt is derived from a stored secret, and injected.**
+  - *Claim:* the module records the settled decision — one long-lived secret in Secrets Manager, per-day salt derived as `HMAC-SHA256(secret, day)`, no Secrets Manager rotation — and the code implements it: both functions are pure, take secret/day/inputs as arguments, read no secret and no clock, and a test passes two different days without stubbing time.
+  - *Evidence to collect:* read the decision note in the doc comment of `packages/analytics/src/transform/visitor-key.ts` and confirm it states both reasons (a date-only salt is brute-forceable across 2^32 IPv4 addresses; managed rotation would add a rotation Lambda, a schedule and a second role for no gain over deriving) and the consequence (replacing the stored secret after rows exist breaks unique-visitor comparison across the boundary); run `grep -rn "Date.now()\|new Date()\|vi.setSystemTime\|vi.useFakeTimers\|SecretsManager\|process.env" packages/analytics/src/transform/visitor-key.ts` — expect no output; confirm `dailySalt` takes exactly a secret and a day.
   - *Status:* ☐ unverified
 
 - **O4 — Bots are flagged, never dropped, and absent user agents still produce a row.**

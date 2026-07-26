@@ -63,7 +63,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-The inline-zip decision rests on Lambda requiring a same-region code bucket while the site's bucket lives in `config.region`; the validator should confirm the comment states that reason and that the size guard is a named constant with a message naming the measured size. Whether the transform's log group is created by the node or left to Lambda's implicit creation is outside the DoD — if the policy scopes to a log group the node does not create, note it. The daily-salt open question in the spec is a transform concern (tasks 41–42), not this node's.
+The inline-zip decision rests on Lambda requiring a same-region code bucket while the site's bucket lives in `config.region`; the validator should confirm the comment states that reason and that the size guard is a named constant with a message naming the measured size. Whether the transform's log group is created by the node or left to Lambda's implicit creation is outside the DoD — if the policy scopes to a log group the node does not create, note it. The salt question is settled, not open: one long-lived secret, per-day salt derived in the transform. This task owns the `analytics-salt-secret` node and the grant; the derivation is tasks 41–42. The validator should confirm the node creates the secret only when absent and never rewrites an existing value (regeneration silently breaks `visitor_key` comparison across the boundary), that NO Secrets Manager rotation is configured on it, that the role's `secretsmanager:GetSecretValue` names that secret's ARN alone with no `*`, and that the secret's name reaches the function as an environment variable.
 
 ## Conclusion
 

@@ -111,12 +111,16 @@ and, for SPI confidence, on
 > 1. maps each CloudFront field name to its column name;
 > 2. derives `event_time` from `timestamp(ms)` and the partition day from it;
 > 3. replaces the viewer IP with `visitor_key`, a SHA-256 hash of the IP, the
->    user agent, and a **secret** salt that rotates daily — the raw IP is never
->    written. The salt is random and held in Secrets Manager, not derived from
->    the date: IPv4 is a 2^32 space, so a hash whose salt an attacker can compute
->    is reversible by brute force in seconds, and the pseudonymisation would be
->    decorative. The function reads the salt at cold start and caches it for the
->    life of the execution environment;
+>    user agent, and a **secret** daily salt — the raw IP is never written. The
+>    daily salt is derived, not stored: one long-lived random secret lives in
+>    Secrets Manager and the per-day value is `HMAC-SHA256(secret, day)`. That
+>    gives daily rotation with no rotation infrastructure — no rotation Lambda,
+>    no schedule, no second resource — and the secret itself is created once and
+>    never rewritten. Deriving from the date alone would not do: IPv4 is a 2^32
+>    space, so a salt an attacker can compute makes the digest brute-forceable
+>    in seconds and the pseudonymisation decorative. The function reads the
+>    secret once at cold start and caches it for the life of the execution
+>    environment;
 > 4. sets `is_bot` from a user-agent match, so bot traffic is flagged in place
 >    rather than discarded;
 > 5. drops records the schema cannot accept, emitting them to the Firehose error
@@ -290,7 +294,7 @@ and, for SPI confidence, on
         "request_id": { "type": "string" },
         "visitor_key": {
           "type": "string",
-          "description": "SHA-256 of viewer IP + user agent + a daily-rotating secret salt held in Secrets Manager. The raw IP is never stored, and the salt is not derivable from the row."
+          "description": "SHA-256 of viewer IP + user agent + HMAC-SHA256(root secret, day). The root secret lives in Secrets Manager; the raw IP is never stored and the salt is not derivable from the row."
         },
         "is_bot": { "type": "boolean" }
       }
@@ -410,14 +414,21 @@ rather than create when it already exists.
   digest of IP and user agent.** The transform is the only component that ever
   sees the raw address, which makes unique-visitor counts possible without
   retaining personal data or setting a cookie.
-- *The salt is a secret, not the date.* **Random, held in Secrets Manager,
-  rotated daily.** Settled 2026-07-26. A date-derived salt is computable by
-  anyone holding the table, and IPv4 is a 2^32 space — brute-forcing every row
-  back to its source address is seconds of GPU time, so the hash would provide
-  no protection at all while appearing to. The cost is one more node, one
-  `secretsmanager:GetSecretValue` grant scoped to that secret, and a
-  `saltSecretName` config field. `SecretsManagerClient` already exists in core,
-  so no new client is needed.
+- *The salt is a secret, not the date.* **One long-lived random secret in
+  Secrets Manager; the daily salt is `HMAC-SHA256(secret, day)`.** Settled
+  2026-07-26. A date-derived salt is computable by anyone holding the table, and
+  IPv4 is a 2^32 space — brute-forcing every row back to its source address is
+  seconds of GPU time, so the hash would provide no protection at all while
+  appearing to.
+- *The stored secret is never rotated; only the derived salt turns over.*
+  **Deriving beats Secrets Manager rotation here.** Managed rotation would mean
+  a rotation Lambda, a schedule, and a second execution role — more moving parts
+  than the thing they protect. Deriving per-day values from one immutable secret
+  gives the same daily turnover for a flat $0.40/month with nothing to operate.
+  Total cost: one secret, one `secretsmanager:GetSecretValue` grant scoped to
+  it, and a `saltSecretName` config field. `SecretsManagerClient` already exists
+  in core, so no new client. (SSM Parameter Store's `SecureString` would be free,
+  but it would cost a hand-rolled `ssm` client — a bad trade against $4.80/year.)
 - *Flag bots, do not drop them.* **`is_bot` is a column; filtering is a query
   default.** A dropped record cannot be recovered when the bot heuristic turns
   out to be wrong, and it will be wrong.

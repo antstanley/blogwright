@@ -9,7 +9,8 @@
 
 ## Steps
 
-- [ ] Read the `visitor_key` salt from Secrets Manager once at cold start and cache it for the life of the execution environment, passing it into `visitorKey(ip, userAgent, salt)` (task 41) per record. The secret's name arrives as an environment variable set by task 50's function node. A failed salt read fails the whole batch rather than falling back to an unsalted or date-derived digest — a silent fallback would write unprotected data that looks protected.
+- [ ] Read the long-lived root secret from Secrets Manager ONCE at cold start and cache it for the life of the execution environment; derive the per-record salt with `dailySalt(secret, record.day)` (task 41) rather than re-reading anything. The secret's name arrives as an environment variable set by task 50's function node. Caching matters for cost as well as latency: reading per invocation would be roughly 43,000 `GetSecretValue` calls a month at a 60-second Firehose buffer, more than half the price of the secret itself for no benefit.
+- [ ] A failed secret read fails the whole batch — never fall back to an unsalted or date-only digest. A silent fallback would write unprotected data that looks protected, which is worse than writing nothing.
 - [ ] Declare the Firehose transform envelope types in `handler.ts` — the request's `records` array of `{ recordId, data }` and the response's `records` array of `{ recordId, result, data? }` with `result` in `'Ok' | 'ProcessingFailed'` — as repo-owned types, so no AWS SDK or `@types/aws-lambda` dependency enters the package.
 - [ ] Write the handler as a small function over the batch that maps each record independently: decode `data` from base64, parse the JSON payload, call `mapRecord`, and build the per-record response.
 - [ ] Return `Ok` with the row re-encoded to base64 for records `mapRecord` accepts, and `ProcessingFailed` for the droppable ones, so Firehose routes them to the error prefix instead of failing the batch.

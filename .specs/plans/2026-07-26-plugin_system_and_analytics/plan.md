@@ -409,15 +409,22 @@ truthful once the work it describes has landed.
 Two of the review's findings were not defects but unmade decisions the plan had
 silently resolved. Both were settled 2026-07-26 and the tasks now carry them.
 
-- *The `visitor_key` salt is a secret, not the date.* **Random, held in Secrets
-  Manager, rotated daily.** A date-derived salt is computable by anyone holding
-  the table, and IPv4 is a 2^32 space — brute-forcing every row back to its
-  source address is seconds of GPU time, so the hash would have provided no
-  protection while appearing to. Cost: an eleventh node
-  (`analytics-salt-secret`), a `secretsmanager:GetSecretValue` grant scoped to
-  that secret in task 50, a `saltSecretName` config field in task 44, and a
-  cold-start read in task 42. `SecretsManagerClient` already exists in core, so
-  no new client. Tasks 41, 42, 44, 50 and 53 were updated together.
+- *The `visitor_key` salt is a secret, not the date — and it is derived, not
+  rotated.* **One long-lived random secret in Secrets Manager; the daily salt is
+  `HMAC-SHA256(secret, day)`.** A date-derived salt is computable by anyone
+  holding the table, and IPv4 is a 2^32 space — brute-forcing every row back to
+  its source address is seconds of GPU time, so the hash would have provided no
+  protection while appearing to. Deriving the per-day value from one immutable
+  secret gives the same daily turnover with no rotation Lambda, no schedule and
+  no second role — the managed-rotation alternative would have been more moving
+  parts than the thing they protect. Cost: a flat $0.40/month per environment
+  (Secrets Manager storage; the cached cold-start read makes API calls
+  negligible), an eleventh node (`analytics-salt-secret`), a
+  `secretsmanager:GetSecretValue` grant scoped to that secret in task 50, a
+  `saltSecretName` config field in task 44, and the cold-start read in task 42.
+  `SecretsManagerClient` already exists in core, so no new client — SSM
+  Parameter Store would be free but would cost a hand-rolled `ssm` client, a bad
+  trade against $4.80/year. Tasks 41, 42, 44, 50 and 53 were updated together.
 - *`blogwright-analytics` joins the fixed changeset group.* **It versions in
   lockstep with the CLI.** Task 18 pins `plugin add` to install
   `blogwright-analytics@<cli version>`; the group at `.changeset/config.json:5`
