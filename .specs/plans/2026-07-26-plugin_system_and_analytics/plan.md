@@ -225,7 +225,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants |
 | 52 · shared delivery-source guards | 37 | build, contract | the site's log-delivery node never deletes a source it shares, and its retry scopes to its own delivery |
 | 53 · log destination and delivery nodes | 37, 51, 52 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
-| 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile eleven nodes against `state/<env>.analytics.json` |
+| 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile twelve nodes against `state/<env>.analytics.json` |
 | 55 · analytics status | 45, 54 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
 | 56 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
 | 57 · dashboard app build | 56 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |

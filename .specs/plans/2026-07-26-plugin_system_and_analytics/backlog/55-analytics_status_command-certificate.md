@@ -15,14 +15,14 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `analytics status` lists the eleven nodes present or missing against `state/<env>.analytics.json` in the same pretty/plain split as the site's `status`, and appends the Firehose stream's delivery health and the table's row count, degrading each to a warning when its read fails.
+- **P1 — Goal.** `analytics status` lists the twelve nodes present or missing against `state/<env>.analytics.json` in the same pretty/plain split as the site's `status`, and appends the Firehose stream's delivery health and the table's row count, degrading each to a warning when its read fails.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the site's `status` (`packages/cli/src/commands.ts:301-329`) or task 15's extracted read loop, task 54's node set and its scoped state store, or task 45's port contract — no DuckDB may start anywhere in the package's test suite.
 
 ## Obligations
 
 - **O1 — Ten nodes listed against scoped state, in both output modes.**
-  - *Claim:* the command reports each of the eleven nodes present or missing against `state/<env>.analytics.json`, with a tree when interactive and one stable line per node when not.
+  - *Claim:* the command reports each of the twelve nodes present or missing against `state/<env>.analytics.json`, with a tree when interactive and one stable line per node when not.
   - *Evidence to collect:* read `status` in `packages/analytics/src/commands.ts`; run `pnpm test -- commands` in `packages/analytics` and confirm the plain-mode case uses a non-interactive terminal and asserts ten lines by node title, and that an interactive case exercises the tree branch.
   - *Checks:* resolve the state the presence check reads — confirm it is the plugin's scoped store, not the site's `state/<env>.json`.
   - *Status:* ☐ unverified
@@ -59,7 +59,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 For each module the task touched, the validator traces one downstream caller:
 
 - `packages/cli/src/commands.ts:301` `status(ctx)` for the site → expect the same lines as before this task in both interactive and plain modes, since the plugin's status is a separate implementation : ☐ (PRESERVED / REGRESSION)
-- `packages/analytics/src/nodes.ts` `read()` on each of the eleven nodes, called by this command with an empty scoped state → expect `false` and no throw from every node, the contract tasks 48–52 established : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/nodes.ts` `read()` on each of the twelve nodes, called by this command with an empty scoped state → expect `false` and no throw from every node, the contract tasks 48–52 established : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

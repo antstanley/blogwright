@@ -37,7 +37,7 @@ the calls involved.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying eleven resource nodes and four plugin-owned AWS service clients; the only core change is delivery-configuration parameters on the existing `LogsClient` |
+| *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients; the only core change is delivery-configuration parameters on the existing `LogsClient` |
 | *(none — no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` port joins the ports table |
@@ -176,7 +176,7 @@ and, for SPI confidence, on
 
 ### Analytics pipeline → Resource nodes (Add)
 
-> The plugin contributes eleven nodes, reconciled by the same engine as the site's:
+> The plugin contributes twelve nodes, reconciled by the same engine as the site's:
 >
 > | Node | Resource |
 > |---|---|
@@ -187,8 +187,9 @@ and, for SPI confidence, on
 > | `analytics-salt-secret` | Secrets Manager secret holding the `visitor_key` salt |
 > | `analytics-transform-role` | Execution role for the transform Lambda, including `secretsmanager:GetSecretValue` on that secret alone |
 > | `analytics-transform-function` | The record-transform Lambda |
-> | `analytics-firehose-role` | Firehose delivery role (Glue, S3 Tables, Lambda invoke, error prefix) |
-> | `analytics-firehose-stream` | The delivery stream with its Iceberg destination |
+> | `analytics-error-bucket` | S3 bucket in us-east-1 for Firehose's failed-record output |
+> | `analytics-firehose-role` | Firehose delivery role (Glue, S3 Tables, Lambda invoke, error bucket) |
+> | `analytics-firehose-stream` | The delivery stream with its Iceberg destination, created with `AppendOnly: true` |
 > | `analytics-log-destination` | CloudWatch delivery destination pointing at the stream |
 > | `analytics-log-delivery` | The delivery joining the site's source to that destination |
 >
@@ -393,7 +394,7 @@ Stage 2 — the transform Lambda
 Stage 3 — the plugin and its graph
   7. packages/analytics/src/ — plugin.ts (the Plugin export), config.ts,
      schema.ts (the page_views DDL and the CloudFront field selection),
-     nodes.ts (the eleven nodes).
+     nodes.ts (the twelve nodes).
   8. Node ordering: table-bucket → namespace → table → catalog-integration;
      transform-role → transform-function; firehose-role →
      firehose-stream (depends on table + catalog-integration +
@@ -443,10 +444,21 @@ rather than create when it already exists.
   `deliveriesForSource` ([`logs.ts:139`](../../packages/core/src/aws/logs.ts))
   already returns a list; the site's existing CloudWatch delivery is expected to
   survive the addition untouched, and a test asserts it.
-- Firehose's error/backup prefix may live in the site's existing environment
-  bucket. That bucket is in `config.region` while the stream is in `us-east-1`,
-  so error records cross a region boundary. Failed records are expected to be
-  rare enough that the transfer cost is immaterial.
+- The Firehose error bucket is created by the plugin in `us-east-1`, not reused
+  from the site's environment bucket. `S3DestinationConfiguration.BucketARN`
+  matches `arn:.*:s3:::[\w\.\-]{1,255}` — an S3 ARN carries no region, so the
+  API can neither express nor reject a cross-region bucket, and Firehose's
+  cross-region documentation covers only HTTP endpoint destinations. Rather than
+  rest the pipeline on an undocumented behaviour, the plugin owns a bucket in
+  its own region.
+- Creating the namespace and table through the S3 Tables control-plane API is a
+  supported Firehose source, verified 2026-07-26: AWS's own S3 Tables + Firehose
+  walkthrough uses `aws s3tables create-namespace` and `aws s3tables create-table`
+  and then configures the stream against them. Firehose's "only tables created
+  through Iceberg's GlueCatalog API" limitation applies to plain Iceberg-on-S3
+  tables registered in Glue, not to S3 Tables reached through the
+  `s3tablescatalog` federation. Resource links, required until 2025-07-31, are
+  no longer needed.
 - S3 Tables is available in `us-east-1` and its Iceberg tables are readable by
   DuckDB's `ENDPOINT_TYPE 'S3_TABLES'` attach, which requires `s3tables`
   permissions but no Lake Formation grant. The Glue federation is needed for
@@ -484,6 +496,16 @@ rather than create when it already exists.
   it, and a `saltSecretName` config field. `SecretsManagerClient` already exists
   in core, so no new client. (SSM Parameter Store's `SecureString` would be free,
   but it would cost a hand-rolled `ssm` client — a bad trade against $4.80/year.)
+- *The error bucket is the plugin's own, in us-east-1.* **Not the site's
+  environment bucket.** Two reasons beyond the undocumented cross-region
+  behaviour: a schema mismatch sends *every* affected record there (see the
+  Firehose behaviour quoted above), so it is a normal path rather than a rare
+  one; and it is the only resource that would otherwise sit outside the
+  region-pinning decision.
+- *The stream is created `AppendOnly`.* **`page_views` is insert-only by
+  design.** Firehose scales throughput automatically for append-only Iceberg
+  streams; the flag is settable only at `CreateDeliveryStream`, so it has to be
+  right the first time.
 - *Flag bots, do not drop them.* **`is_bot` is a column; filtering is a query
   default.** A dropped record cannot be recovered when the bot heuristic turns
   out to be wrong, and it will be wrong.
