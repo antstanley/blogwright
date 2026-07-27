@@ -28,7 +28,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O2 — Command table matches task 16's precedence.**
-  - *Claim:* the declared action set is exactly what task 16's precedence leaves to the plugin (under the recommended resolution `init`, `status`, `dashboard`, and neither `bootstrap` nor `destroy`), collides with no generic verb the CLI owns, and every `summary` is non-empty, one help line long, and names `--yes` for any destructive action.
+  - *Claim:* the declared action set is exactly what task 16's precedence leaves to the plugin (`status` and `dashboard`; neither `bootstrap`, `destroy`, nor `init` — `init` is supplied only as the contributor, and a plugin declaring both an `init` command and an `init(io)` contributor is rejected at discovery), collides with no generic verb the CLI owns, and every `summary` is non-empty, one help line long, and names `--yes` for any destructive action.
   - *Evidence to collect:* read the precedence paragraph in `packages/cli/src/plugin-commands.ts`'s module comment; read the `commands` table in `packages/analytics/src/plugin.ts`; run `pnpm test -- plugin` in `packages/analytics` and confirm one test enumerates the declared actions against an explicit list of the CLI's reserved and generic verbs (not a sampled subset) and asserts an empty intersection, and one test asserts every `summary` is non-empty.
   - *Checks:* if the table declares any destructive action, confirm its summary contains `--yes` and matches the option documented at `packages/cli/src/cli.ts:61`.
   - *Status:* ☐ unverified
@@ -63,7 +63,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-The `status` and `dashboard` entries point at `packages/analytics/src/commands.ts` functions whose bodies land at tasks 55 and 55; until then they raise an error naming their task, and the validator should confirm the message names the task rather than reading as a bare TODO. If task 16 decided a precedence other than the recommended one, O2's expected action set changes with it — read `plugin-commands.ts`'s module comment first and judge the table against what is recorded there, not against the wording in this certificate. Whether the analytics package ships a changeset here or at task 58 is a closure decision; note which was chosen.
+The `status` and `dashboard` entries point at `packages/analytics/src/commands.ts` functions whose bodies land at tasks 55 and 56; until then they raise an error naming their task, and the validator should confirm the message names the task rather than reading as a bare TODO. If task 16 decided a precedence other than the recommended one, O2's expected action set changes with it — read `plugin-commands.ts`'s module comment first and judge the table against what is recorded there, not against the wording in this certificate. Whether the analytics package ships a changeset here or at task 58 is a closure decision; note which was chosen.
 
 ## Conclusion
 

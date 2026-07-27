@@ -386,8 +386,8 @@ still lists all six actions, each with one line, and the longer `pds login` and
 
 Nothing on disk changes: `config/<env>.jsonc` needs no migration, every command
 keeps its name and its arguments, and `blogwright pds sync` keeps working with
-no install step. Four things do change for an operator, and the release notes
-carry all four.
+no install step. Five things do change for an operator, and the release notes
+carry all five.
 
 1. **`blogwright pds bootstrap` must be run once per stack**, and it is the only
    step that is not optional. Contributing a resource node is what lets the
@@ -407,6 +407,16 @@ carry all four.
    the site's bucket cannot orphan a plugin's resources.
 4. **The `pds` help section is shorter**, one line per action, as §Dispatch
    describes.
+5. **A malformed `pds` block no longer fails the built-in commands.** Today
+   core's `validateConfig` rejects it during config parsing, so a blank `name`
+   or an `http://` handle resolver fails every command. After the migration the
+   block is validated at dispatch, only for the plugin being dispatched, so
+   `bootstrap`, `deploy` and `status` accept a config core would have rejected
+   — `blogwright pds <action>` still rejects it, with core's original messages.
+   `deploy`'s post-deploy sync checks the block's presence, not its validity,
+   and its failure path was already a non-fatal warning. The block still fails
+   loudly at the first command that actually uses it; what an operator loses
+   is the early rejection on commands that never touch the PDS.
 
 ---
 
@@ -442,8 +452,12 @@ carry all four.
 - No consumer imports `blogwright-pds` directly for anything but the `/rkey`
   subpath. The named exports stay in place regardless, so this holds either way.
 - Existing `config/<env>.jsonc` files with a `pds` block need no migration —
-  the block's shape, defaults, and validation outcomes are identical, only
-  their implementation location moves.
+  the block's shape and defaults are identical, and validation outcomes are
+  identical on every `blogwright pds <action>` path. They are **not** identical
+  on the built-in commands: validation now runs at dispatch, only for the
+  plugin being dispatched, so `bootstrap`, `deploy` and `status` no longer
+  reject a malformed block — the fifth item in
+  [§Upgrading a deployed stack](#upgrading-a-deployed-stack).
 
 **Decisions**
 

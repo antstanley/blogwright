@@ -1,6 +1,6 @@
 # Task 23 — pds attaches its own named inline policy to the site's deploy role
 
-**Plan:** [plan.md](../plan.md) · **Certificate:** [23-cli_pds_secret_arn_default-certificate.md](23-cli_pds_secret_arn_default-certificate.md)
+**Plan:** [plan.md](../plan.md) · **Certificate:** [23-pds_inline_policy_node-certificate.md](23-pds_inline_policy_node-certificate.md)
 
 **Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Its own IAM policy node (Add)](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) and [2026-07-26-cli_plugin_system.md §Plugin SPI → A plugin owns its own topography (Add)](../../../changes/2026-07-26-cli_plugin_system.md)
 **Depends on:** 22

@@ -1,6 +1,6 @@
 # Done Certificate — Task 23: pds attaches its own named inline policy to the site's deploy role
 
-**Task:** [23-cli_pds_secret_arn_default.md](23-cli_pds_secret_arn_default.md) · **Plan:** [plan.md](../plan.md)
+**Task:** [23-pds_inline_policy_node.md](23-pds_inline_policy_node.md) · **Plan:** [plan.md](../plan.md)
 **State:** Authored 2026-07-26 — unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
 > This certificate is a verification protocol for Task 23. A validating agent discharges it:
@@ -42,7 +42,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Claim:* `deriveNames` returns `githubRole` as `<env>-<siteName>-gh`, `githubOidcRoleNode` reads it rather than deriving it at `packages/cli/src/nodes.ts:826`, and the derived value is unchanged so no existing role is renamed.
   - *Evidence to collect:* read `Names` (`packages/core/src/config.ts:333-345`) and `deriveNames` (`:360-372`); run `pnpm test -- config` in `packages/core` and confirm a case pins the derived value; run `grep -n 'prefix}-gh' packages/cli/src/nodes.ts` and expect no output.
   - *Checks:* resolve what the plugin's node passes to `putRolePolicy` — confirm it is `ctx.names.githubRole` and not a second derivation, since the whole point is that a derived AWS name has exactly one owner (DEVELOPMENT.md §Limits and bounds).
-  - *Status:* ☐ unverified
+  - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O5 — Absent config, absent githubRepo and un-bootstrapped site behave as specified.**
   - *Claim:* the node is skipped (not failed) when `config.pds` is absent or `config.githubRepo` is unset — the latter because the site graph only adds `githubOidcRoleNode` when `githubRepo` is set (`packages/cli/src/nodes.ts:1082`), so a site without CI deploys has no role to attach to and is nonetheless fully bootstrapped — and fails with a message naming `blogwright bootstrap` when `githubRepo` is set but the role is absent from `siteState`.
   - *Evidence to collect:* run the three negative-space tests; read their assertions.

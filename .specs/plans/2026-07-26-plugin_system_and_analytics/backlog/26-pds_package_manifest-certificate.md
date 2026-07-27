@@ -17,7 +17,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **P1 — Goal.** `blogwright-pds` is discoverable as the `pds` plugin from a consuming repo depending only on `blogwright`, with `blogwright plugin list` reporting it, while `blogwright pds <action>` still runs through the hardcoded branch so nothing user-visible moves yet.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the published `blogwright-pds` export map (`packages/pds/package.json:8-17`), the `blogwright/rkey` re-export (`packages/cli/src/rkey.ts:7`), or the current `runPds` dispatch (`packages/cli/src/cli.ts:114-116`).
+- **P3 — Invariants.** Must not break the published `blogwright-pds` export map (`packages/pds/package.json:9-18`), the `blogwright/rkey` re-export (`packages/cli/src/rkey.ts:7`), or the current `runPds` dispatch (`packages/cli/src/cli.ts:114-116`).
 
 ## Obligations
 

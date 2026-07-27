@@ -70,7 +70,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 No existing callers in scope — `validatePlugin` gains its first caller in task 08, and `Plugin` its first implementor in task 25. The only shared surface is `packages/core/src/plugin.ts` itself: confirm `PluginContext` (task 01) and `ResourceNode` (task 02) still compile and are still exported after the additions.
 
 - `packages/cli/src/context.test.ts` assigns `createTestContext()` to a `PluginContext` binding → expect it still compiles and passes after the module grows : ☐ (PRESERVED / REGRESSION)
-- `packages/cli/src/graph.ts:18` annotates `topoSort` with `ResourceNode<OpsContext>` → expect it still resolves through `blogwright-core` : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/graph.ts:18` `topoSort<Ctx>(nodes: ResourceNode<Ctx>[])` (task 02's generic engine) → expect `ResourceNode` still resolving through `blogwright-core` : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

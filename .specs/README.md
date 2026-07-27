@@ -15,7 +15,9 @@ spec set is created here later, that page moves to `development-guidelines.md`.
   `blogwright-core` with discovery and generic dispatch in the CLI, the migration of
   `blogwright-pds` onto it with no config-file change, and a `blogwright-analytics`
   plugin delivering CloudFront logs to an Iceberg table with a local dashboard;
-  59 tasks, eight milestones.
+  60 tasks, eight milestones, plus a compiled type-claim gate
+  ([type-claims/](plans/2026-07-26-plugin_system_and_analytics/type-claims/README.md))
+  that pins the corpus's compiler claims against the repo's real types.
 
 ## Change specs
 
@@ -32,7 +34,7 @@ Pending — three linked proposals, to land in this order:
 2. [Migrate blogwright-pds onto the plugin system](changes/2026-07-26-migrate_pds_to_plugin_system.md)
    (proposed 2026-07-26) — pds becomes a plugin architecturally while staying a
    default dependency; validates the SPI against a second consumer. No config
-   file changes; four operator-visible ones, listed in its §Upgrading a deployed
+   file changes; five operator-visible ones, listed in its §Upgrading a deployed
    stack.
 3. [Analytics plugin — CloudFront logs to Iceberg, with a local dashboard](changes/2026-07-26-analytics_plugin.md)
    (proposed 2026-07-26) — a second CloudFront log delivery into Firehose, a

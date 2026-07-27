@@ -2,7 +2,7 @@
 
 **Status:** Draft · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin — CloudFront logs to Iceberg](../../changes/2026-07-26-analytics_plugin.md)
 
-Land three linked change specs as one dependency-ordered graph of 59 tasks: an
+Land three linked change specs as one dependency-ordered graph of 60 tasks: an
 internal plugin SPI in `blogwright-core` with discovery and generic dispatch in
 the CLI, the migration of `blogwright-pds` onto that SPI with no config-file
 change and a short, listed set of operator-visible ones, and a new
@@ -63,6 +63,15 @@ key.
   (`packages/cli/src/init.ts:42`); and the build-agent's rolldown bundle plus
   source-hash manifest (`packages/build-agent/rolldown.config.ts`), the
   precedent the transform bundle follows.
+- **Type-claim gate.** [`type-claims/`](type-claims/README.md) (owned by
+  task 00) transcribes the proposed SPI types with per-declaration spec
+  citations and compiles 29 claims — positives as plain code, quoted
+  diagnostics under `@ts-expect-error` — against the real `OpsContext`,
+  `OpsConfig`, `OpsState`, `AwsClients` and `PdsContext` imported from
+  `packages/`. `node type-claims/check.mjs` runs it; when a spec changes a
+  proposed type, the transcription changes with it and whatever breaks names
+  the task that needs updating. It lives outside `packages/` so knip, oxlint
+  and the build never see it, and it is deliberately not wired into CI.
 - **Definition of done.** [DEVELOPMENT.md §Definition of done](../../../DEVELOPMENT.md),
   inherited by every task: behaviour covered by tests written with the change
   (positive and negative space), small single-purpose functions, no duplicated
@@ -78,6 +87,7 @@ key.
 
 ```mermaid
 graph TD
+  00["00 · type-claim gate (no edges — plan infrastructure)"]
   01["01 · plugin context in core"] --> 02["02 · ResourceNode moves to core"]
   01 --> 03["03 · Plugin contract and validator"]
   01 --> 24["24 · PdsContext narrows PluginContext"]
@@ -114,6 +124,7 @@ graph TD
   11 --> 20
   12["12 · JSONC config-block splice"] --> 13
   13 --> 14["14 · init wizard plugin blocks"]
+  13 --> 47
   14 --> 20
   15 --> 16
   16 --> 20
@@ -191,6 +202,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 
 | Task | Depends on | Edge kind | Produces (reviewable artifact) |
 |---|---|---|---|
+| 00 · type-claim gate | — | — | [`type-claims/`](type-claims/README.md) compiles the corpus's type-level claims against the repo's real types; `check.mjs` exits non-zero naming any claim that breaks |
 | 01 · plugin context in core | — | — | `PluginContext` exists in core and a CLI test fails the build the moment one of its members stops being suppliable — thirteen from an `OpsContext`, three from the dispatch boundary |
 | 02 · ResourceNode moves to core | 1 | build | a node typed only against core's `PluginContext` compiles as a `ResourceNode`; `nodes.ts` changed only its imports |
 | 03 · Plugin contract and validator | 1, 2 | build, contract | `validatePlugin` turns an imported module into a typed `Plugin` or raises naming the offending package |
@@ -237,7 +249,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 44 · analytics config block | 32 | build, contract | an empty `analytics` block validates and produces every default |
 | 45 · AnalyticsQuery port and named queries | 44 | build, contract | the named query set is parameterised and readable through a fixture-backed fake |
 | 46 · DuckDB query adapter | 45 | build | the port runs against the S3 Tables catalog read-only with credentials passed in explicitly |
-| 47 · analytics Plugin export and init | 3, 16, 44 | build, contract | `blogwright-analytics` is discoverable and `analytics init` returns its config block |
+| 47 · analytics Plugin export and init | 3, 13, 16, 44 | build, contract | `blogwright-analytics` is discoverable and `analytics init` returns its config block — its end-to-end init test needs task 13's generic splice path |
 | 48 · table bucket, namespace, table nodes | 2, 38, 39, 44 | build, data | the Iceberg table is created from the shared column set, pinned to us-east-1 |
 | 49 · catalog integration node | 48 | build | the account-scoped federation is adopted rather than created, and no teardown deletes it |
 | 50 · transform role and function nodes | 2, 38, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
@@ -255,7 +267,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 
 ## Implementation order and milestones
 
-**Order:** `01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59` —
+**Order:** `00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59` —
 task 01 leads because every plugin task is reviewed through it: the analytics
 graph is written against `PluginContext` eight tasks before it exercises the
 type, so a missing field would be discovered in M7 rather than in M1. Task 07 is
@@ -263,8 +275,10 @@ sequenced ahead of all dispatch work although neither spec asks for it — seven
 later tasks (10, 11, 13, 16, 17, 18, 29) have definitions of done that cannot be
 discharged without a `main()` seam, and both source decompositions assumed
 `cli.test.ts` already existed. The order departs from a dependency-only sort
-twice: tasks 21-30 (pds) precede tasks 31-58 (analytics) even though the two
-streams share no edge, because the pds migration is what validates the SPI
+twice: tasks 21-30 (pds) precede tasks 31-58 (analytics) even though the
+analytics stream needs nothing from the pds stream until its closure task (the
+one edge between them is 30→58, the closure ordering the first review added),
+because the pds migration is what validates the SPI
 against a second consumer before analytics is written against it, and task 23
 precedes task 27 by a real edge rather than by convenience: 23 is what makes the
 grant reachable from the plugin, and it lands `githubRole` on `deriveNames` in
@@ -300,7 +314,7 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
 
 | Milestone | Tasks | Demonstrable when complete | Review gate |
 |---|---|---|---|
-| M1 — plugin SPI in core | 01, 02, 03, 04 | core declares `Plugin`, `PluginCommand`, `PluginContext`, `PluginManifest`, `validatePlugin` and `ResourceNode`, and `StateStore` takes a plugin scope | every command's behaviour, every derived AWS resource name and `state/<env>.json` are byte-identical; nothing dispatches through the SPI yet |
+| M1 — plugin SPI in core | 00, 01, 02, 03, 04 | core declares `Plugin`, `PluginCommand`, `PluginContext`, `PluginManifest`, `validatePlugin` and `ResourceNode`, and `StateStore` takes a plugin scope; task 00's type-claim gate passes and its transcriptions of the landed types are replaced by real imports | every command's behaviour, every derived AWS resource name and `state/<env>.json` are byte-identical; nothing dispatches through the SPI yet |
 | M2 — CLI plugin surface | 05, 06, 07, 08, 09, 10, 11 | `blogwright <plugin> <action>` routes to an installed plugin's command and `blogwright --help` reflects what is actually installed | dispatch asserted in `cli.test.ts` with no cloud access; a test proves built-in commands load no plugin module |
 | M3 — plugin commands | 12, 13, 14, 15, 16, 17, 18, 19, 20 | `blogwright plugin add\|list\|remove`, `<plugin> init`, and the generic `bootstrap\|status\|destroy` verbs all work against a plugin's scoped store, and `blogwright destroy` refuses while one exists | the plugin system releases on its own with pds still on its hardcoded branch; the plugin-system change spec is documented and changeset-covered, its `Status:` flip deferred to task 58 with the transport seam |
 | M4 — pds migration | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | all six pds actions reach the same functions with the same arguments through generic dispatch; `runPds`, the pds import and the static pds USAGE block are gone, and the pds plugin owns a `blogwright-pds` inline policy on the deploy role | `cli.ts` greps clean for `pds`; the post-deploy sync still fires; the deploy role's secret ARN never resolves to `secret:undefined-*` on any commit; tasks 27 and 28 ship in the same release; the release notes name `blogwright pds bootstrap` |
@@ -337,10 +351,12 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   later release, by which time the grant an upgraded stack depends on is the
   plugin's. Tasks 27 and 28 must ship in the same release — 27 removes core's
   pds validation and 28 pins what replaces it — so do not cut between them. The
-  release notes also carry the other three operator-visible changes the pds
+  release notes also carry the other four operator-visible changes the pds
   spec's §Upgrading a deployed stack lists: the three new `pds` lifecycle verbs,
-  `blogwright destroy` refusing while `state/<env>.pds.json` exists, and the
-  shorter help section.
+  `blogwright destroy` refusing while `state/<env>.pds.json` exists, the
+  shorter help section, and the built-in commands no longer rejecting a
+  malformed `pds` block — the dispatch-scoped validation task 19 settled,
+  whose consequence task 28 pins with tests.
 - *After task 38.* `blogwright-core` has an open transport seam, `signingUsEast1`
   on `AwsClients` and configurable log deliveries, all behaviour-neutral for
   existing calls, and `packages/analytics` builds its four service clients over
@@ -378,7 +394,7 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   in M4 that a pds command keeps working with no install step rests on it, as
   does the static `syncAfterDeploy` import in `packages/cli/src/commands.ts`.
   M4 is not otherwise invisible to an operator: the pds spec's §Upgrading a
-  deployed stack lists four changes, one of which — running
+  deployed stack lists five changes, one of which — running
   `blogwright pds bootstrap` once per stack — is required rather than
   incidental.
 - `PdsContext`'s structural-satisfaction trick generalises to the *narrow*
@@ -396,8 +412,10 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   re-pointed at the scoped store, so the boundary builds six members and only
   three of them fail the build if it does not.
 - Existing `config/<env>.jsonc` files need no migration: the `pds` block's
-  shape, defaults and validation outcomes are identical after M4; only the
-  location of the implementation moves.
+  shape and defaults are identical after M4, and validation outcomes are
+  identical on every `blogwright pds <action>` path. Built-in commands no
+  longer reject a malformed block — task 19's dispatch-scoped validation,
+  listed as the pds spec's §Upgrading item 5 and pinned by task 28's tests.
 - The site is bootstrapped before `analytics bootstrap` runs, and one CloudFront
   delivery source carries several deliveries, so the analytics delivery is
   additive to the site's existing CloudWatch one.
@@ -436,8 +454,19 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   discovers. `blogwright init` (task 14) needs it for a third — the wizard asks
   each discovered plugin's questions and writes their blocks into the one file
   it produces. Task 11 records all three in a module comment; task 10 pins the
-  laziness against `deploy`, `status` and `bootstrap`, which is the whole of the
-  set that pays nothing.
+  laziness against `deploy`, `status` and `bootstrap` — exemplars of the set
+  that pays nothing, not the whole of it: `rollback`, `delete`, `destroy`,
+  `history`, `logs` and `preview` also run without discovery, exactly as the
+  spec's "every other built-in command pays nothing" phrasing has it.
+- *Config validation is dispatch-scoped.* **Only the dispatched plugin's block
+  is validated, in the dispatch path — task 19 settled it and records the
+  reason in a module comment.** Validating in `createContext` would run
+  discovery on every built-in command, breaking the laziness rule the
+  Decision above protects, and no seam exists there through which the
+  dispatched plugin alone could be reached. The operator-visible consequence —
+  built-in commands no longer reject a malformed `pds` block — is the pds
+  spec's §Upgrading a deployed stack item 5, and task 28 pins it with tests
+  in the same release that removes core's validation.
 - *Declared commands win over generic actions.* **A plugin that declares
   `init` keeps it (task 13).** The action name is claimed in two opposite senses
   across the specs — pds's `init` creates the publication record, analytics's
@@ -498,10 +527,6 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   installed plugin to the running CLI's own version, and that is the whole
   compatibility mechanism. Should the SPI declare a version a plugin states it
   was built against? (Blocks nothing before 18; carried forward at 20.)
-- *Config validation scope.* Does the CLI validate every discovered plugin's
-  config block, or only the block of the plugin being dispatched? Task 19
-  chooses and records it; task 28 has to reason about the choice when core stops
-  validating the `pds` block.
 - *Plugin teardown on removal.* Should `blogwright plugin remove` offer to run
   the plugin's `destroy` first, or is naming the verb enough? (Blocks nothing;
   carried forward at 20. The sibling question — what `blogwright destroy` does
@@ -708,3 +733,27 @@ ordering was doing work it could not do, on the only edge where nothing would
 have said so. Two claims that argued about commits (this one, and the
 additive-first Decision) were both wrong for the same underlying reason: the
 repository's history is not the unit anything here is actually observed in.
+
+**2026-07-27 — seventh review, certificate-based, every compiler claim
+executed against this repo's tsc 6.0.3.** One blocking, five important, five
+minor; the factual, type-level and AWS claims otherwise verified essentially
+clean. The defects clustered exactly where predicted — pre-remediation beliefs
+surviving in files adjacent to earlier fixes:
+
+| Finding | Root cause | Repaired in |
+|---|---|---|
+| Task 02's `ResourceNode<Ctx extends PluginContext>` cannot compile (`TS2344` — `OpsContext` fails the constraint), and its contravariance rationale inverted the truth | task 02 still encoded the pre-third-review belief that `OpsContext` satisfies `PluginContext` | task 02 (unconstrained `Ctx`, the engine's structural minimum per the spec) and cert 02 |
+| The engine's structural constraint had no owning task — cert 02 handed the widening to task 16, which never touches the signatures | the requirement fell between two tasks that each thought the other owned it | task 02 owns the genericization at relocation, matching the spec; cert 02's residue rewritten |
+| Task 51's stream `dependsOn` omitted `analytics-firehose-role`, contradicting the spec's chain and task 54's edge test | the fifth review added the role's own edges but not the stream's role edge | task 51 step and DoD, cert 51 O2 |
+| Cert 47 O2 demanded an `init` command the corpus rejects at discovery | stale "recommended resolution" wording from before the precedence rule | cert 47 O2 |
+| The pds spec claimed "validation outcomes are identical" while the settled plan diverges on every built-in command | the Assumption predated task 19's dispatch-scoped decision | pds spec §Assumptions (qualified) and §Upgrading a deployed stack (item 5); tasks 28, 30 and both certificates; `.specs/README.md`; the Assumption and cut-line here |
+| Task 28 kept its pre-decision two-branch scaffolding; task 58's pointer and DoD still said it empties the pending list; three places overstated "exactly three" discovery-free built-ins; task 19's Implements misquoted the spec toward the rejected design; task 23's filename was superseded-revision residue; the 13→47 edge was missing; assorted anchor drift | the one-place-fixed/echoes-stale pattern | tasks 28, 58, 11, 19, 23 (renamed `23-pds_inline_policy_node.md`), 47, 01, 26, this file's table and mermaid graph, and the affected certificates; `.specs/README.md` anchors dropped for a file the plan keeps editing |
+
+The blocking finding is the one to remember, because it is the corpus's
+recurring failure mode made exact: a remediation changed a proposed type's
+shape and a dependent task kept asserting the old truth, discovered two rounds
+late by a 400k-token review. It is mechanically checkable, so it is now
+mechanical — task 00's [type-claim gate](type-claims/README.md) compiles all
+29 of the corpus's type-level claims against the repo's real types on every
+run, and reintroducing this very defect makes it fail in seconds, naming the
+claim.

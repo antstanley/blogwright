@@ -1,0 +1,12 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "typeRoots": ["../../../../packages/cli/node_modules/@types"],
+    "paths": {
+      "blogwright-core": ["../../../../packages/core/src/index.ts"]
+    }
+  },
+  "include": ["transcriptions.ts", "claims.ts"]
+}
