@@ -16,7 +16,7 @@ During the 2026-07-22 bootstrap of the blogwright docs environments, the
 CloudFront distribution node created its distribution, recorded `id`/`arn`/
 `domainName` in the in-memory state, and then threw on the follow-up
 `TagResource` call (a separate client bug, since fixed). `applyGraph` saves
-state only after a node completes ([`graph.ts:73`](../../packages/cli/src/graph.ts)),
+state only after a node completes ([`graph.ts:73`](../../../packages/cli/src/graph.ts)),
 so the distribution existed in AWS but not in `state/<env>.json`.
 
 The consequences compounded: `destroy` could not delete the ACM certificate
