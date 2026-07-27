@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** The CLI's resource graph carries no pds knowledge — no `config.pds` branch, no secret-name interpolation, and no inline `<siteName>/atproto` default — with the grant owned entirely by the plugin's node from task 23, and the pds change spec merged now that its last `Proposed changes` block has landed.
+- **P1 — Goal.** The CLI's resource graph carries no pds knowledge — no `config.pds` branch, no secret-name interpolation, and no inline `<siteName>/atproto` default — with the grant owned entirely by the plugin's node from task 23, and the pds spec's `Status:` flip deferred once more to task 60, which lands its true last outstanding block (§`bootstrap` warns while plugin state exists).
 - **P2 — Obligations.** The task is done iff O1…O8 all hold. One Oi per definition-of-done item, in DoD order; O8 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the rest of the OIDC policy document, the post-deploy pds sync, or `blogwright-pds` remaining a non-optional CLI dependency. Must not land before task 23, and must not ship in the same *release* as task 30.
 
@@ -47,10 +47,10 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* confirm a published release contains task 30's changeset and its `blogwright pds bootstrap` upgrade note; read this task's change description for the statement.
   - *Checks:* this is the whole of what "additive-first" means on a deployed stack. The plugin's policy reaches a real role only when an operator runs `blogwright pds bootstrap`; ordering the two commits proves nothing, and shipping both in one release means every stack whose operator deploys before reading the notes loses the grant. If task 30 is unreleased, this task is blocked, not merely early.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
-- **O6 — The pds change spec is merged.**
-  - *Claim:* the spec's `Status:` is `Merged` with a `Merged:` date, the file lives at `.specs/changes/merged/2026-07-26-migrate_pds_to_plugin_system.md`, every relative link inside it resolves at the new depth, and `.specs/README.md`'s pending list is empty.
-  - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged`; read the moved file's header and its Open questions; resolve every relative link in it; read `.specs/README.md`.
-  - *Checks:* this is the flip task 30 deferred, because §The site graph drops its pds branch had not landed there — the same split task 20 makes with task 58. By this point both companion specs are already in `merged/`, so the sibling links resolve as siblings rather than needing a `../`.
+- **O6 — The pds change spec is correctly NOT merged, with the deferral recorded.**
+  - *Claim:* the spec's `Status:` still reads `Proposed`, the file still lives at `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md`, its entry is still in `.specs/README.md`'s pending list, and the change description records the deferral naming task 60 — which lands §`bootstrap` warns while plugin state exists, the spec's last outstanding block.
+  - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged` and confirm the file has NOT moved; read its header line; read `.specs/README.md`'s pending list; read the change description for the deferral and the reason.
+  - *Checks:* a flipped `Status:` here is a defect, not an overachievement — merging a spec with an outstanding `Proposed changes` block is the same finding that split tasks 20/58 and 30/59. If the file has moved, mark UNSATISFIED and name the outstanding block.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O7 — Repo definition of done.**
   - *Claim:* the change meets DEVELOPMENT.md's definition of done (see plan.md baseline).
@@ -58,9 +58,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* all five gates pass.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O8 — Reviewable.**
-  - *Claim:* the reviewer can confirm the removal, the preserved grant and the merged spec directly.
-  - *Evidence to collect:* run `pnpm test -- nodes` and `pnpm knip`; run `grep -nE "pds|atproto" packages/cli/src/nodes.ts`; read `.specs/README.md`.
-  - *Checks:* the with-pds context yields no secretsmanager statement, the grep is empty, and every link in `.specs/README.md` resolves with nothing left pending.
+  - *Claim:* the reviewer can confirm the removal, the preserved grant and the recorded deferral directly.
+  - *Evidence to collect:* run `pnpm test -- nodes` and `pnpm knip`; run `grep -nE "pds|atproto" packages/cli/src/nodes.ts`; read the pds spec's header and the change description; read `.specs/README.md`.
+  - *Checks:* the with-pds context yields no secretsmanager statement, the grep is empty, the pds spec still reads `Status: Proposed` with the deferral naming task 60, and every link in `.specs/README.md` resolves.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 
 ## Regression checks

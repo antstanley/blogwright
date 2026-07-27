@@ -40,7 +40,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O4 — The vendor dependency is confined and used.**
   - *Claim:* `@duckdb/node-api` is a dependency of `blogwright-analytics` only, and `pnpm knip` reports it used.
-  - *Evidence to collect:* run `grep -rn "@duckdb" packages/*/package.json` — expect exactly one match, in `packages/analytics/package.json`; run `grep -rn "@duckdb" packages/analytics/src/` — expect matches only in `adapters/duckdb-query.ts`; run `pnpm knip` from the repo root and confirm it reports neither an unused nor an undeclared dependency for the package.
+  - *Evidence to collect:* run `grep -rn "@duckdb" packages/*/package.json` — expect exactly one match, in `packages/analytics/package.json`; run `grep -rn "@duckdb" packages/analytics/src/` — expect matches only in `adapters/duckdb-query.ts` (only under `adapters/` once task 61 adds `duckdb-ingest.ts` beside it); run `pnpm knip` from the repo root and confirm it reports neither an unused nor an undeclared dependency for the package.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -49,7 +49,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O6 — Reviewable: literal credentials in the secret statement, vendor import in one file (Reviewable).**
-  - *Claim:* a reviewer can run `pnpm test -- duckdb-query` inside `packages/analytics` and observe the credential test asserting the literal `staticCredentials` access key and session token in the secret statement, and confirm `grep -rn "@duckdb" packages/analytics/src/` matches only `adapters/duckdb-query.ts`.
+  - *Claim:* a reviewer can run `pnpm test -- duckdb-query` inside `packages/analytics` and observe the credential test asserting the literal `staticCredentials` access key and session token in the secret statement, and confirm `grep -rn "@duckdb" packages/analytics/src/` matches only `adapters/duckdb-query.ts` (only files under `adapters/` once task 61 adds `duckdb-ingest.ts` beside it).
   - *Evidence to collect:* run `pnpm test -- duckdb-query` from `packages/analytics` and capture the output; open `packages/analytics/src/adapters/duckdb-query.test.ts` and read the literal credential values in both the fixture and the assertion; run the grep and capture its single-file result.
   - *Status:* ☐ unverified
 

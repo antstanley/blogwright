@@ -39,9 +39,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* a flipped header here is a REGRESSION, not an over-delivery — `SendOptions.service` does not yet accept a plugin-supplied descriptor and `AwsClients` has no `signingUsEast1` at this point in the order, so a `Merged` spec would document work that does not exist.
   - *Status:* ☐ unverified
 
-- **O4 — Unanswered questions and the precedence decision carried forward.**
-  - *Claim:* the four open questions and task 16's lifecycle-verb precedence decision are recorded in writing, not dropped.
-  - *Evidence to collect:* for each of the four — SPI version declaration, `destroy` versus live plugin resources, whether `plugin remove` should offer teardown, whether `preview` becomes a plugin — locate the sentence that carries it forward and record where it landed (the merged spec, DEVELOPMENT.md §Assumptions and open questions, or the plan's Open questions); locate the recorded precedence decision and confirm it matches the module comment in `packages/cli/src/plugin-commands.ts`.
+- **O4 — Open questions carried forward, settled ones restated with their owners.**
+  - *Claim:* the spec's two remaining open questions and the decisions that closed the others are recorded in writing, not dropped.
+  - *Evidence to collect:* for each of the two still open — SPI version declaration, whether `preview` becomes a plugin — locate the sentence that carries it forward and record where it landed (the merged spec, DEVELOPMENT.md §Assumptions and open questions, or the plan's Open questions); for the settled ones, locate the restatements: the lifecycle-verb precedence and the `blogwright destroy` refusal (task 16, matching the module comment in `packages/cli/src/plugin-commands.ts`), and `plugin remove`'s ask-first decision (settled 2026-07-27, task 18, matching the spec's Decision — ask with No as the default, refuse where the session cannot ask).
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -60,7 +60,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 - `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md` §Motivation links to `2026-07-26-cli_plugin_system.md` as a sibling → expect the link untouched and still resolving, because the file has not moved : ☐ (PRESERVED / REGRESSION)
 - `.specs/changes/2026-07-26-analytics_plugin.md` links to the plugin-system spec → expect the same : ☐ (PRESERVED / REGRESSION)
-- Task 58's merge step, which inherits this deferral → expect it to name both specs and to gate the plugin-system flip on tasks 31 and 38 : ☐ (PRESERVED / REGRESSION)
+- Task 58's merge step, which inherits this deferral → expect it to gate the plugin-system flip on tasks 31 and 38, with the analytics spec's own flip deferred to task 61 and the pds spec's to task 60 : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 

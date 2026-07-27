@@ -1,6 +1,6 @@
 # Change: Analytics plugin — CloudFront logs to Iceberg, with a local dashboard
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes and dashboard) + packages/core (delivery-configuration parameters on the existing `LogsClient`) + packages/cli (two guards on the shared log-delivery node)
+**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes, dashboard and a one-shot backfill action) + packages/core (delivery-configuration parameters on the existing `LogsClient`) + packages/cli (two guards on the shared log-delivery node)
 
 A new plugin, `blogwright-analytics`, adds traffic analytics to a blogwright
 site. It taps the CloudFront access logs blogwright already delivers, routes
@@ -40,7 +40,7 @@ the calls involved.
 | *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
 | *(none — no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build; the pnpm row's "workspace of four packages" becomes five |
-| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` port joins the ports table |
+| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` and `AnalyticsIngest` ports join the ports table |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Assumptions | The four-package-split assumption names `blogwright-analytics` as the second instance of its own feature-package exception |
 
 Depends on [`2026-07-26-cli_plugin_system.md`](2026-07-26-cli_plugin_system.md)
@@ -55,14 +55,20 @@ and, for SPI confidence, on
 
 > `blogwright-analytics` declares the manifest field
 > `{ "blogwright": { "plugin": "analytics" } }` and claims the `analytics`
-> namespace. It **declares two commands** and contributes an `init`; the other
-> two actions are the CLI's generic lifecycle verbs, under the precedence rule
-> the plugin SPI states in §CLI → Plugin lifecycle:
+> namespace. It **declares three commands** and contributes an `init`; the
+> remaining two actions are the CLI's generic lifecycle verbs, under the
+> precedence rule the plugin SPI states in §CLI → Plugin lifecycle:
 >
 > - `analytics status` — **declared**, because it does strictly more than the
 >   generic verb: the plugin's nodes against its scoped state, plus the Firehose
 >   stream's delivery health and the table's current row count.
 > - `analytics dashboard` — **declared**; starts the local dashboard server.
+> - `analytics backfill` — **declared**, optional, and run by hand: a one-shot
+>   pull of history that predates the Firehose delivery, from the site's
+>   CloudWatch log group into the table (§Backfill of historical logs). It is
+>   never part of the steady-state pipeline, and it is idempotent, so running
+>   it again cannot double-count. Declaring it is legal under the precedence
+>   rule: only `bootstrap` and `destroy` are reserved to the generic verbs.
 > - `analytics init` — supplied as the plugin's `init` contributor, **not** as a
 >   declared command, so the generic action renders and splices the config
 >   block. A plugin that declares an `init` command owns the write itself; this
@@ -227,6 +233,48 @@ and, for SPI confidence, on
 > selected for the analytics delivery because the transform needs it to derive
 > `visitor_key`, and is discarded there.
 
+### Analytics pipeline → Backfill of historical logs (Add)
+
+> `analytics backfill` is a declared, optional, one-shot action — run by hand
+> when an operator wants history that predates the Firehose delivery — and is
+> explicitly not part of the steady-state pipeline, which stays the push path
+> §Shape draws.
+>
+> What it reads is the CloudWatch log group the site's existing delivery
+> already writes — `names.cloudfrontLogGroup`, created in us-east-1 by the
+> site graph and bounded by `retention.cloudfrontDays` — through core's
+> existing `LogsClient.filterEvents`
+> ([`logs.ts:71`](../../packages/core/src/aws/logs.ts)) over
+> `ctx.clients.logsUsEast1`: no new client and no new core operation. Each
+> event runs through the same field mapping, `visitor_key` derivation and drop
+> rules as the transform Lambda — a historical day's salt is derivable because
+> the per-day salt is `HMAC-SHA256(secret, day)` and the stored secret never
+> changes — so one CloudFront record produces the identical row whichever path
+> carried it. Rows are written through the DuckDB dependency the dashboard
+> already ships, behind a write port of its own: `AnalyticsIngest`
+> (`insertDay(day, rows)`), declared beside `AnalyticsQuery`, implemented by
+> the same DuckDB adapter and substituted in tests, so the vendor stays at the
+> boundary for writes exactly as §Ports → `AnalyticsQuery` keeps it for reads.
+> The dashboard's own attach stays read-only.
+>
+> It must not double-insert rows the Firehose path already wrote, and the
+> guarantee is by construction rather than by de-duplication. The
+> `analytics-log-delivery` node records, in the plugin's scoped state, the UTC
+> day it first created its delivery — written once and never advanced, so the
+> bound can only be conservative. Backfill inserts only whole days strictly
+> before that day: Firehose received nothing before its delivery existed, so
+> the two paths' row sets are disjoint. Within that range each day is one
+> transactional insert, and a day that already holds rows is skipped, so
+> re-running the command is a no-op and a crashed run resumes cleanly. The
+> boundary day itself is never backfilled — up to one day of history at the
+> seam is the stated precision limit, accepted rather than patched with a
+> row-level de-duplication pass.
+>
+> The command fails with an actionable message naming
+> `blogwright analytics bootstrap` when the plugin's scoped state carries no
+> delivery record, and reports the day range it inserted and the days it
+> skipped.
+
 ### Analytics pipeline → Resource nodes (Add)
 
 > The plugin contributes twelve nodes, reconciled by the same engine as the site's:
@@ -303,8 +351,13 @@ and, for SPI confidence, on
 > catalog through DuckDB in read-only mode and answers a **fixed set of named,
 > parameterised queries** — never SQL supplied by the client. The named set
 > covers views over time, top paths, referrers, countries, status codes, cache
-> hit ratio, and unique visitors by `visitor_key`. Each query takes a date range
-> and a bot-inclusion flag.
+> hit ratio, and unique visitors by `visitor_key` — reported as daily uniques
+> and, over a range, as their sum, never as a distinct count across days: the
+> salt rotates daily (§Record transformation), so `visitor_key` does not
+> correlate across a day boundary, and the named set exposes no query that
+> implies a cross-day unique count it cannot compute. A "unique visitors this
+> month" figure is the sum of daily uniques and is labelled as such. Each query
+> takes a date range and a bot-inclusion flag.
 
 ### Analytics dashboard → Credentials (Add)
 
@@ -499,6 +552,15 @@ Stage 4 — the dashboard
      adapter), adapters/duckdb-query.ts (the AnalyticsQuery adapter).
  13. Add the SvelteKit build to the package's build script; docs/ is the
      existing precedent for a non-tsc build in this workspace.
+
+Stage 5 — the backfill (optional action)
+ 14. packages/analytics/src/backfill.ts plus adapters/duckdb-ingest.ts (the
+     AnalyticsIngest adapter beside the AnalyticsQuery one). The command body
+     fills the stub the plugin export declares; the delivery node records the
+     creation-day bound it reads. Tests are the load-bearing part: the
+     identical-row property (one fixture event through the Firehose envelope
+     and through backfill yields deep-equal rows), the whole-days-only bound,
+     the occupied-day skip, and the re-run no-op.
 ```
 
 Risks worth naming before starting: the Firehose-to-Iceberg field mapping is
@@ -567,6 +629,9 @@ rather than create when it already exists.
   provision; and DuckDB's iceberg extension is documented as preview, so the
   attach syntax may move. The `AnalyticsQuery` port is what contains both: the
   named queries and the dashboard depend on the port, not on DuckDB.
+  `analytics backfill` leans on the same preview surface in the write
+  direction (§Backfill of historical logs), and the `AnalyticsIngest` port
+  contains that the same way.
 - Log volume for a blog is small enough that batched Firehose delivery produces
   files large enough not to make S3 Tables compaction the dominant cost.
 
@@ -577,6 +642,20 @@ rather than create when it already exists.
   inserting into Iceberg — needs one new client instead of four and no Lambda,
   but only ingests when an operator runs a command, and puts a native dependency
   on the ingestion path. Continuity was the requirement.
+- *`analytics backfill` is a declared, optional action.* **A hand-run, one-shot
+  pull of pre-Firehose history — not a second steady-state ingestion path.**
+  Settled 2026-07-27. The objection the open question recorded — that backfill
+  re-introduces the DuckDB ingestion path the Firehose decision avoided — is
+  weaker than it looks: the package already depends on DuckDB for the
+  dashboard's `AnalyticsQuery` adapter, so a one-shot backfill reuses a
+  dependency that is present rather than adding one, and what the Firehose
+  decision actually protects — continuous ingestion with no operator in the
+  loop — is untouched, because backfill runs once and stops. It reads the
+  CloudWatch log group the site's existing delivery writes, maps records
+  through the same code the transform Lambda runs so both paths produce
+  identical rows, and is idempotent by construction (§Backfill of historical
+  logs): only whole days strictly before the recorded start of the Firehose
+  delivery, one transactional insert per day, occupied days skipped.
 - *A transform Lambda, because there is no alternative.* **Firehose matches
   JSON keys to column names exactly and drops the rest silently.** CloudFront
   emits `cs(Referer)` and `timestamp(ms)`; Iceberg columns must be lowercase
@@ -603,6 +682,16 @@ rather than create when it already exists.
   so the secret lands inside the region pin with the Lambda that reads it.
   (SSM Parameter Store's `SecureString` would be free,
   but it would cost a hand-rolled `ssm` client — a bad trade against $4.80/year.)
+- *Daily salt rotation stands.* **The per-day salt turns over at every UTC day
+  boundary, and the consequence is accepted: `visitor_key` is not comparable
+  across days.** Settled 2026-07-27. A "unique visitors this month" figure is
+  therefore the sum of daily uniques — an over-count whenever the same visitor
+  returns on different days — and the dashboard's named queries state that
+  semantic rather than implying a distinct count they cannot compute (§Local
+  server). The short window is the point, not a cost: one day bounds what
+  anyone holding the table and a brute-forced day of salt could ever
+  correlate, and trading that bound for cross-day counts would spend the
+  pseudonymisation on a nicer-looking metric.
 - *The error bucket is the plugin's own, in us-east-1.* **Not the site's
   environment bucket.** Two reasons beyond the undocumented cross-region
   behaviour: a schema mismatch sends *every* affected record there (see the
@@ -648,17 +737,21 @@ rather than create when it already exists.
 
 **Open questions**
 
-- Historical logs already in the CloudWatch log group are not backfilled. Is a
-  `analytics backfill` command wanted, and does it justify a second, DuckDB-based
-  ingestion path that the Firehose decision otherwise avoids?
-- Should the table carry a record-expiration configuration (the S3 Tables API
-  supports one) so old rows age out, or is retention a manual concern? The
-  site's `retention.cloudfrontDays` governs only the CloudWatch copy.
+- Should old rows age out at all — and if so, the plugin must delete them
+  itself, because S3 Tables offers no row-retention knob for a table you
+  create. `PutTableRecordExpirationConfiguration` exists but applies only to
+  AWS-managed tables (S3 Storage Lens, Amazon SageMaker Catalog): AWS
+  documents "record expiration options aren't available for S3 tables that
+  you create" (verified 2026-07-27). `PutTableMaintenanceConfiguration`, the
+  per-table configuration that does apply to a table you create, governs
+  snapshot expiry and file compaction — storage reclamation, not row
+  retention. Row expiry is therefore partition-level deletes the plugin
+  issues on its own schedule, and the design makes them cheap to shape: the
+  table is append-only and partitioned by `day`, so deleting whole `day`
+  partitions older than a cutoff is the natural form if aging out is wanted
+  at all. The site's `retention.cloudfrontDays` governs only the CloudWatch
+  copy.
 - The Glue catalog integration is account-and-region scoped while everything
   else the plugin owns is per-environment. Two environments therefore share it,
   and its node adopts rather than creates. Is adopt-and-never-delete the right
   contract, or should the last environment to be torn down remove it?
-- Rotating the salt daily means `visitor_key` is not comparable across a day
-  boundary, so a "unique visitors this month" figure is really the sum of daily
-  uniques. Is that the intended semantic, or should the salt rotate less often
-  (trading a longer correlation window for cross-day counts)?

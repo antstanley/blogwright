@@ -27,10 +27,10 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* resolve the output-format argument — confirm it reaches `putDeliveryDestination`'s task 37 option (`packages/core/src/aws/logs.ts:106-112`) and not a hand-built request body.
   - *Status:* ☐ unverified
 
-- **O2 — Delivery joins the site's source; absence fails with an actionable message.**
-  - *Claim:* the delivery is created against the site's delivery source with `schema.ts`'s record-field selection, `putDeliverySource` is never called, the source name and distribution ARN are read through `ctx.names` and `ctx.siteState`, and an absent source or distribution ARN fails before any AWS call with a message naming `blogwright bootstrap`.
-  - *Evidence to collect:* read the delivery node's body for its source-name and distribution-ARN reads and the guard preceding the first call; run `grep -n "StateStore\|putDeliverySource" packages/analytics/src/nodes.ts` and expect no hit; run `pnpm test -- nodes` in `packages/analytics` and confirm the negative-space case asserts both the message text and that the recorded call list is empty.
-  - *Checks:* resolve the record-field argument — confirm it is `CLOUDFRONT_RECORD_FIELDS` from `packages/analytics/src/schema.ts` (task 39), not a list restated in `nodes.ts`.
+- **O2 — Delivery joins the site's source; absence fails with an actionable message; the creation day is recorded once.**
+  - *Claim:* the delivery is created against the site's delivery source with `schema.ts`'s record-field selection, `putDeliverySource` is never called, the source name and distribution ARN are read through `ctx.names` and `ctx.siteState`, an absent source or distribution ARN fails before any AWS call with a message naming `blogwright bootstrap`, and the node records `createdDay` — the UTC day the delivery was first created — written once and never advanced.
+  - *Evidence to collect:* read the delivery node's body for its source-name and distribution-ARN reads and the guard preceding the first call; run `grep -n "StateStore\|putDeliverySource" packages/analytics/src/nodes.ts` and expect no hit; run `pnpm test -- nodes` in `packages/analytics` and confirm the negative-space case asserts both the message text and that the recorded call list is empty; read the `createdDay` recording and the test asserting a second reconcile and a Conflict retry leave the recorded day unchanged.
+  - *Checks:* resolve the record-field argument — confirm it is `CLOUDFRONT_RECORD_FIELDS` from `packages/analytics/src/schema.ts` (task 39), not a list restated in `nodes.ts`. The `createdDay` write-once direction matters: a bound that moves later admits double-inserts in task 61's backfill, so an implementation that overwrites it on re-create is UNSATISFIED even though every other assertion passes.
   - *Status:* ☐ unverified
 
 - **O3 — The site's CloudWatch delivery survives.**

@@ -15,9 +15,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** The migration ships with a changeset stating its semver impact and carrying the spec's five operator-visible changes, `DEVELOPMENT.md` records the `blogwright.plugin` manifest as the feature-package mechanism, and the change spec's `Status:` flip is deliberately deferred to task 59 with its one outstanding block.
+- **P1 — Goal.** The migration ships with a changeset stating its semver impact and carrying the spec's five operator-visible changes, `DEVELOPMENT.md` records the `blogwright.plugin` manifest as the feature-package mechanism, and the change spec's `Status:` flip is deliberately deferred to task 60, its two outstanding blocks landing at tasks 59 and 60.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the release pipeline's changeset consumption (`.changeset/config.json`), the link targets in `.specs/README.md`, or `DEVELOPMENT.md`'s existing §Hexagonal architecture content beyond the one paragraph being amended. Must not move or flip the pds change spec: task 59 does that.
+- **P3 — Invariants.** Must not break the release pipeline's changeset consumption (`.changeset/config.json`), the link targets in `.specs/README.md`, or `DEVELOPMENT.md`'s existing §Hexagonal architecture content beyond the one paragraph being amended. Must not move or flip the pds change spec: task 60 does that.
 
 ## Obligations
 
@@ -38,9 +38,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O4 — Merge-plan bookkeeping is correctly incomplete, and the open questions survive.**
-  - *Claim:* merge-plan step 3 is done; steps 4 and 5 are NOT — the spec's `Status:` still reads `Proposed`, the file is still at `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md`, and `.specs/README.md` still lists it as pending — with the deferral to task 59 recorded in the change description and the three unanswered questions (an `afterDeploy` hook, `OpsConfig` holding plugin blocks as an opaque map, shorter pds aliases) recorded so task 59's move carries them forward.
+  - *Claim:* merge-plan step 3 is done; steps 4 and 5 are NOT — the spec's `Status:` still reads `Proposed`, the file is still at `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md`, and `.specs/README.md` still lists it as pending — with the deferral to task 60 recorded in the change description and the three unanswered questions (an `afterDeploy` hook, `OpsConfig` holding plugin blocks as an opaque map, shorter pds aliases) recorded so task 60's move carries them forward.
   - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged` and confirm the file has NOT moved; read its header line and confirm `Status: Proposed`; read `.specs/README.md` and confirm the entry is present; read the change description for the deferral and the reason.
-  - *Checks:* a flipped `Status:` here is a defect, not an overachievement. §`blogwright-cli` → The site graph drops its pds branch has not landed — task 59 lands it, a release later — and merging a spec with an outstanding `Proposed changes` block is exactly the finding that split task 20 from task 58. If the file has moved, mark UNSATISFIED and name the block.
+  - *Checks:* a flipped `Status:` here is a defect, not an overachievement. Two of the spec's blocks have not landed — §The site graph drops its pds branch (task 59, a release later) and §`bootstrap` warns while plugin state exists (task 60) — and merging a spec with an outstanding `Proposed changes` block is exactly the finding that split task 20 from task 58. If the file has moved, mark UNSATISFIED and name the block.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -57,7 +57,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `.specs/README.md`'s pending list links `changes/2026-07-26-migrate_pds_to_plugin_system.md` → expect the entry still present and still resolving, since the move belongs to task 59 : ☐ (PRESERVED / REGRESSION)
+- `.specs/README.md`'s pending list links `changes/2026-07-26-migrate_pds_to_plugin_system.md` → expect the entry still present and still resolving, since the move belongs to task 60 : ☐ (PRESERVED / REGRESSION)
 - `.specs/changes/2026-07-26-cli_plugin_system.md` §Affected spec pages and `2026-07-26-analytics_plugin.md` reference the migration spec by relative path → expect those links untouched and still resolving, since nothing moves in this task : ☐ (PRESERVED / REGRESSION)
 - `DEVELOPMENT.md` §Error handling table and §Assumptions reference `blogwright-pds` as a feature package → expect both still consistent with the amended paragraph : ☐ (PRESERVED / REGRESSION)
 

@@ -1,6 +1,6 @@
 # Change: Migrate blogwright-pds onto the plugin system
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/pds (plugin export, config ownership, one IAM node) + packages/cli (dispatch, site-graph pds removal) + packages/core (config)
+**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/pds (plugin export, config ownership, one IAM node) + packages/cli (dispatch, site-graph pds removal, a bootstrap warning) + packages/core (config)
 
 `blogwright-pds` becomes a plugin: it declares a manifest field, exports a
 `Plugin`, owns and validates its `pds` config key, contributes the one resource
@@ -52,7 +52,7 @@ where they belong.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for CLI dispatch or the pds feature yet)* | `pds` dispatch moves from hardcoded to plugin-provided; `pds` config validation moves from core into the plugin |
+| *(none — no canonical page for CLI dispatch or the pds feature yet)* | `pds` dispatch moves from hardcoded to plugin-provided; `pds` config validation moves from core into the plugin; `blogwright bootstrap` warns while a plugin's scoped state exists |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | The "features live in their own packages" note gains the plugin manifest as the mechanism |
 
 Depends on [`2026-07-26-cli_plugin_system.md`](2026-07-26-cli_plugin_system.md);
@@ -216,6 +216,35 @@ this change cannot land before it.
 > already the plugin's. [§Upgrading a deployed stack](#upgrading-a-deployed-stack)
 > states the operator's side of that contract.
 
+### `blogwright-cli` → `bootstrap` warns while plugin state exists (Add)
+
+> After a successful reconcile, `blogwright bootstrap` lists the site bucket's
+> `state/` prefix — the same read the `blogwright destroy` refusal already
+> performs (plugin-system spec §State → Scoped state stores) — and prints one
+> warning per scoped key `state/<env>.<plugin>.json` core does not own: the
+> site verb reconciled none of that plugin's resources, so whatever this run
+> changed under the plugin's attachments may have left them stale, and
+> `blogwright <plugin> bootstrap` is what re-reconciles them. The deploy role
+> is the worked case: `applyOidcRole` rewrites the whole `<env>-deploy`
+> document on every bootstrap
+> ([`nodes.ts:840-842,962`](../../packages/cli/src/nodes.ts)), and once §The
+> site graph drops its pds branch lands, the pds grant survives only as the
+> plugin's own named policy — so the warning puts the re-run instruction on
+> the operator's terminal at the exact command whose rewrite makes it matter.
+>
+> The check reads key names and nothing else: no discovery runs, no plugin
+> module loads, and the plugin name in the suggested verb comes from the key
+> itself, so `bootstrap` keeps its discovery-free path and the site graph
+> gains no plugin knowledge. It costs one `listObjects` call on the `state/`
+> prefix. It is a warning, not a refusal — bootstrap's exit code is unchanged,
+> and in a `--plain` or non-interactive session the same lines go through
+> `logger.warn` with nothing prompting. A stack that never ran a plugin's
+> bootstrap holds no scoped key and sees no warning: the check cannot invent
+> knowledge core does not have, which is why
+> [§Upgrading a deployed stack](#upgrading-a-deployed-stack) still carries the
+> first `blogwright pds bootstrap` in the release notes and the post-deploy
+> sync's non-fatal warning remains the signal for that stack.
+
 ### `blogwright-core` → Config (Modify)
 
 > Core stops validating and defaulting the `pds` block. `mergeConfig` no longer
@@ -373,6 +402,12 @@ puts on `pluginConfig`.
    emits a policy document identical to the statement the site graph produces
    today.
 10. Run `pnpm knip` — the removed core-side pds knowledge may orphan imports.
+11. packages/cli/src/commands.ts — after the site graph reconciles in
+    `bootstrap`, list the bucket's `state/` prefix (the same read the destroy
+    guard performs) and warn once per scoped `state/<env>.<plugin>.json`,
+    naming `blogwright <plugin> bootstrap`. Reuse the destroy guard's
+    listing-and-parsing helper so the key matcher has one home; no discovery,
+    no plugin import. Ship no later than the release that carries step 7.
 ```
 
 Behaviour is verified by the existing pds tests plus a dispatch test. The
@@ -397,7 +432,14 @@ carry all five.
    that release, the next `blogwright bootstrap` rewrites `<env>-deploy`
    without it. A stack that never ran `pds bootstrap` loses the grant at that
    point, and the post-deploy sync starts warning — non-fatally, so a deploy
-   still succeeds, and the next `pds bootstrap` heals it.
+   still succeeds, and the next `pds bootstrap` heals it. From the release
+   that removes the site's statement, the instruction also prints in the
+   terminal: every `blogwright bootstrap` run while `state/<env>.pds.json`
+   exists warns that the plugin's resources may be stale and names
+   `blogwright pds bootstrap` (§`bootstrap` warns while plugin state exists) —
+   so a stack that ran the verb once is reminded at the exact command that
+   rewrites the role, and only a stack that never ran it still depends on
+   these notes.
 2. **`blogwright pds bootstrap|status|destroy` exist**, where before there were
    no pds lifecycle verbs. They come from the SPI, not from this spec: a plugin
    that contributes nodes owns its own lifecycle verbs.
@@ -473,6 +515,21 @@ carry all five.
   ordering the two *releases* gives the instruction a vehicle and the operator a
   window. Doing both in one release would be a real outage for every stack whose
   operator upgraded and deployed before reading the notes.
+- *The bootstrap warning reads state keys — not config, and not the plugin
+  registry.* **`blogwright bootstrap` warns for every scoped
+  `state/<env>.<plugin>.json` in the site bucket, naming that plugin's own
+  bootstrap verb; the other two shapes considered were rejected.** Settled
+  2026-07-27. A check keyed on `config.pds` inside the site graph
+  reintroduces the topography leak this migration exists to remove; a check
+  generic over discovered plugins costs `bootstrap` its discovery-free path,
+  which the plugin SPI states as a rule and pins with a test. Reading the
+  `state/` prefix needs neither: it is the same read the destroy refusal
+  already performs, and the plugin name in the warning comes from the key. It
+  makes [§Upgrading a deployed stack](#upgrading-a-deployed-stack)'s first
+  item self-healing rather than documentary — the re-run instruction prints
+  at the exact command that rewrites the deploy role — at the stated limit
+  that a stack with no scoped key gets no warning, because core has nothing
+  to read there.
 - *pds ships by default; it becomes a plugin architecturally, not
   distributionally.* **No install step, and no config file to migrate.** The
   point of migrating is to validate the SPI against a second consumer, not to
@@ -510,17 +567,6 @@ carry all five.
 
 **Open questions**
 
-- Should `blogwright bootstrap` warn when a plugin's config block is present but
-  its scoped state object is not — the symmetric partner of the `blogwright
-  destroy` refusal, and the one thing that would make §Upgrading a deployed
-  stack's first item self-healing rather than documentary? Two shapes were
-  considered and neither is free. Keying the check on `config.pds` inside
-  `githubOidcRoleNode` puts plugin topography back in the site graph, which is
-  the leak this whole change removes. Making it generic over discovered plugins
-  costs `bootstrap` its discovery-free path, which the plugin SPI states as a
-  rule and pins with a test. A third shape — reading the site bucket's `state/`
-  prefix for keys core does not own, as the destroy guard already does — needs
-  no discovery and no plugin knowledge, and is the one worth pricing first.
 - Should the SPI gain an `afterDeploy` hook once a second consumer wants one,
   and does that consumer exist? If analytics ever adds a backfill triggered by
   deploys, this stops being hypothetical.

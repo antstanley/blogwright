@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `blogwright plugin add <name>` and `blogwright plugin remove <name>` install and uninstall plugin packages in the consuming repo through the `PackageManager` port, resolving short names to `blogwright-*` and pinning the installed version to the running CLI's own.
+- **P1 — Goal.** `blogwright plugin add <name>` and `blogwright plugin remove <name>` install and uninstall plugin packages in the consuming repo through the `PackageManager` port, resolving short names to `blogwright-*` and pinning the installed version to the running CLI's own — with `remove` asking whether the plugin's teardown should run first (settled 2026-07-27), and refusing in sessions that cannot ask.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break `blogwright plugin list` (task 17), the port wiring at `packages/cli/src/context.ts:111-116`, or the ban on `node:child_process` outside adapters enforced by `.oxlintrc.json`.
 
@@ -39,9 +39,10 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Checks:* trace how "already installed" is determined — confirm it reads the consuming repo's `package.json` through `ctx.ports.fs`, not by asking the package manager.
   - *Status:* ☐ unverified
 
-- **O4 — `remove` states what it did not do, and refuses when nothing is installed.**
-  - *Claim:* `remove` calls the port, then says configuration and provisioned resources are untouched and names `blogwright <name> destroy`; removing an uninstalled plugin reports that and exits non-zero without shelling out.
-  - *Evidence to collect:* run `pnpm test -- plugin-commands`; read the pinned `remove` output test and confirm the asserted lines contain both the "untouched" statement and the literal teardown verb with the plugin's name interpolated; read the not-installed test and confirm the exit code is non-zero and the recording fake's call list is empty.
+- **O4 — `remove` asks before it forecloses, and refuses when it cannot ask or nothing is installed.**
+  - *Claim:* with a node-contributing plugin and an interactive terminal, a scripted "y" runs the plugin's generic destroy before the port's `remove` and a scripted "n" (or bare Enter — No is the default) removes without it, stating that configuration and provisioned resources are untouched and naming `blogwright <name> destroy`; a non-interactive or `--plain` session with nodes and no `--yes` refuses with a message naming both ways forward, exits non-zero, and calls neither the destroy path nor the port; `--yes` removes without asking; removing an uninstalled plugin reports that and exits non-zero without shelling out; a plugin without nodes, or whose load fails, is removed directly.
+  - *Evidence to collect:* run `pnpm test -- plugin-commands`; read the yes case and confirm the recorded call order shows the destroy path before the package-manager call; read the no case and the pinned output — the "untouched" statement and the literal teardown verb with the plugin's name interpolated; read the non-interactive refusal case and confirm the message names both `blogwright <name> destroy --yes` and `--yes`, the exit code is non-zero, and both fakes' call lists are empty; read the not-installed test (non-zero, fake recorded nothing) and the no-nodes/load-failure cases (removed directly).
+  - *Checks:* trace how the plugin is loaded — a single resolve-and-load through `ports.loader` of the one package being removed, not a discovery pass; and confirm the interactive question goes through the `confirm` helper (`packages/cli/src/logger.ts:34`) with `defaultYes: false`, guarded by an `isInteractive` check that refuses rather than letting `confirm` silently answer No in CI.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -63,7 +64,7 @@ For each module the task touched, the validator traces one downstream caller:
 
 ## Residue
 
-Notes for the validator, not obligations: the pinned-version strategy is the only compatibility mechanism in v1 — nothing declares or checks an SPI version, so a version-skewed plugin fails at `validatePlugin` at best and mid-command at worst; that gap is carried forward as an open question at task 20. Also outside the DoD: what `add` should do when the repo's package manager cannot be detected, and whether `add` should offer to run the plugin's `init` afterwards.
+Notes for the validator, not obligations: the pinned-version strategy is the only compatibility mechanism in v1 — nothing declares or checks an SPI version, so a version-skewed plugin fails at `validatePlugin` at best and mid-command at worst; that gap is carried forward as an open question at task 20. Also outside the DoD: what `add` should do when the repo's package manager cannot be detected, and whether `add` should offer to run the plugin's `init` afterwards. The teardown-on-yes runs for the one environment the invocation resolves; scoped state in other environments is deliberately untouched and remains protected by task 16's `blogwright destroy` refusal — confirm the pinned output does not claim otherwise.
 
 ## Conclusion
 

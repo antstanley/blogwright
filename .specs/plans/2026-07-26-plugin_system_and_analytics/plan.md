@@ -2,7 +2,7 @@
 
 **Status:** Draft · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin — CloudFront logs to Iceberg](../../changes/2026-07-26-analytics_plugin.md)
 
-Land three linked change specs as one dependency-ordered graph of 60 tasks: an
+Land three linked change specs as one dependency-ordered graph of 62 tasks: an
 internal plugin SPI in `blogwright-core` with discovery and generic dispatch in
 the CLI, the migration of `blogwright-pds` onto that SPI with no config-file
 change and a short, listed set of operator-visible ones, and a new
@@ -196,6 +196,13 @@ graph TD
   55 --> 58
   56 --> 57["57 · dashboard app build"]
   57 --> 58
+  16 --> 60["60 · bootstrap warns about plugin state"]
+  59 --> 60
+  41 --> 61["61 · analytics backfill"]
+  46 --> 61
+  47 --> 61
+  53 --> 61
+  58 --> 61
 ```
 
 The dependency table is the source of truth; the Mermaid graph visualizes it.
@@ -232,7 +239,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 27 · core config drops pds | 19, 23, 26 | build, contract | core's config holds no pds domain knowledge, an unknown top-level block round-trips untouched, and the site's secret ARN still resolves to `<siteName>/atproto` from an inline default task 59 removes |
 | 28 · pds config validation timing | 25, 26, 27 | build, review | the outcome of a malformed `pds` block on built-in commands is pinned by tests, not assumed |
 | 29 · remove runPds dispatch | 10, 26 | build, review | `cli.ts` mentions pds nowhere and all six pds actions run through generic dispatch |
-| 30 · pds migration closure | 28, 29 | review | the migration ships with its changeset and its release notes, and the pds spec's `Status:` flip is deferred to task 59 with its last outstanding block |
+| 30 · pds migration closure | 28, 29 | review | the migration ships with its changeset and its release notes, and the pds spec's `Status:` flip is deferred to task 60, its two outstanding blocks landing at tasks 59 and 60 |
 | 31 · open the transport seam | — | — | `resolveEndpoint`/`SendOptions` accept a plugin-supplied service descriptor; core's `SIGNING_NAMES` stays closed |
 | 32 · analytics package skeleton | — | — | `packages/analytics` builds, tests and lints under the workspace's five gates |
 | 33 · S3TablesClient | 31, 32 | build | table buckets, namespaces and tables are created, read and deleted over the shared signer |
@@ -255,19 +262,21 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 50 · transform role and function nodes | 2, 38, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants, its error bucket, and a role declaring every node whose ARN it grants on |
 | 52 · shared delivery-source guards | 37 | build, contract | `deliveriesForSource` carries each delivery's destination ARN, so the site's log-delivery node never deletes a source it shares and its retry scopes to its own delivery |
-| 53 · log destination and delivery nodes | 37, 51, 52 | build, data | CloudFront logs reach Firehose and the site's existing CloudWatch delivery survives |
+| 53 · log destination and delivery nodes | 37, 51, 52 | build, data | CloudFront logs reach Firehose, the site's existing CloudWatch delivery survives, and the delivery's creation day is recorded once in scoped state — the backfill bound task 61 reads |
 | 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile twelve nodes against `state/<env>.analytics.json` |
 | 55 · analytics status | 45, 54 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
 | 56 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
 | 57 · dashboard app build | 56 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
-| 58 · analytics docs and closure | 20, 30, 55, 57 | review | the analytics plugin is documented and changeset-covered, and the analytics and plugin-system specs are merged; the pds spec is the one entry left pending, named as task 59's |
-| 59 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge, the grant lives only in the plugin, and the pds change spec is merged |
+| 58 · analytics docs and closure | 20, 30, 55, 57 | review | the analytics plugin is documented and changeset-covered, and the plugin-system spec is merged; the pds and analytics specs stay pending, named as tasks 60's and 61's |
+| 59 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge and the grant lives only in the plugin; the pds spec's `Status:` flip is deferred once more, to task 60, which lands its true last block |
+| 60 · bootstrap warns about plugin state | 16, 59 | build, contract | `blogwright bootstrap` warns after reconciling for every `state/<env>.<plugin>.json` in the site bucket, naming that plugin's bootstrap verb, with no discovery and no plugin knowledge — and the pds change spec is merged |
+| 61 · analytics backfill | 41, 46, 47, 53, 58 | build, data | `analytics backfill` fills whole pre-Firehose days from the site's CloudWatch log group with rows identical to the Firehose path's, idempotently — and the analytics change spec is merged |
 
 ---
 
 ## Implementation order and milestones
 
-**Order:** `00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59` —
+**Order:** `00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61` —
 task 01 leads because every plugin task is reviewed through it: the analytics
 graph is written against `PluginContext` eight tasks before it exercises the
 type, so a missing field would be discovered in M7 rather than in M1. Task 07 is
@@ -293,7 +302,7 @@ with nothing failing to compile.
 Milestones M5 and M6 depend on nothing in the plugin-system or pds
 streams and may be worked concurrently from day one (tasks 31, 32 and 37 are
 fully independent; 33–36 wait only on the transport seam at 31 and the package
-skeleton at 32), while tasks 20, 30, 58 and 59 are last in their streams
+skeleton at 32), while tasks 20, 30 and 58–61 close their streams
 by construction: each executes part of a change spec's merge plan, which is only
 truthful once the work it describes has landed. That constraint binds task 20
 harder than its own stream: one block of the plugin-system spec — §Plugin SPI →
@@ -305,10 +314,20 @@ one milestone down: it removes the site graph's pds branch, and the pds spec
 requires that removal to ship a release later than the plugin's own policy node,
 because the grant only reaches a real role when an operator runs
 `blogwright pds bootstrap` and the release notes carrying that instruction need
-a release to travel in. Task 30 therefore documents the migration and defers the
-pds spec's `Status:` flip to task 59, exactly as task 20 defers the
-plugin-system spec's flip to task 58 — a spec is not merged while one of its
-`Proposed changes` blocks is outstanding.
+a release to travel in. Task 30 therefore documents the migration and defers
+the pds spec's `Status:` flip past task 59 to task 60 — the decisions settled
+2026-07-27 gave the pds spec a further block, §`bootstrap` warns while plugin
+state exists, and task 60 is what lands it — exactly as task 20 defers the
+plugin-system spec's flip to task 58, and task 58 in turn defers the analytics
+spec's to task 61, which lands its §Backfill of historical logs block. One
+rule drives all four deferrals: a spec is not merged while one of its
+`Proposed changes` blocks is outstanding. Tasks 60 and 61 sit at the end
+because no dependency edge may point forward — 60 needs task 16's scoped-key
+listing and task 59's landed block before it can flip, 61 needs the transform
+(41), the DuckDB adapter (46), the declared command table (47), the recorded
+delivery-creation day (53) and task 58's documentation pass — and each ships
+inside an existing release constraint: 60 no later than the release carrying
+task 59, whose role rewrite is what its warning backs.
 
 **Milestones:**
 
@@ -321,7 +340,7 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
 | M5 — the transport seam and the plugin's clients | 31, 32, 33, 34, 35, 36, 37, 38 | `packages/analytics` builds; core's transport accepts a plugin-supplied service descriptor and `LogsClient` deliveries take an output format, record fields and a delimiter; the plugin builds `s3tables`, `firehose`, `glue` and `lambda` over the shared signer, pinned to us-east-1 | every existing AWS request is byte-identical, `microvms` still signs against the primary region, and core gains no service key — only `signingUsEast1` on `AwsClients` |
 | M6 — analytics foundations | 39, 40, 41, 42, 43, 44, 45, 46 | the schema, the transform's mapping, `visitor_key`, the bot flag, the per-record drop path, the config block and the query layer are all covered by tests | the package is inert — not published, not a CLI dependency, no manifest field; no test starts DuckDB |
 | M7 — analytics graph | 47, 48, 49, 50, 51, 52, 53, 54, 55 | `blogwright analytics bootstrap` provisions the twelve-node pipeline and `analytics status` reports it; CloudFront logs land in the Iceberg table | the site's CloudWatch delivery survives; `blogwright bootstrap` does not provision any of it and `blogwright destroy` refuses while `state/<env>.analytics.json` exists |
-| M8 — analytics dashboard, and the site graph's last plugin branch | 56, 57, 58, 59 | `blogwright analytics dashboard` serves the prebuilt SvelteKit app over a fixed named-query set from 127.0.0.1, and `packages/cli/src/nodes.ts` carries no pds knowledge | no route accepts SQL; five gates green with the app tree present; `nodes.ts` greps clean for `pds`; all three change specs merged, the pds spec at task 59 rather than task 30 |
+| M8 — analytics dashboard, the site graph's last plugin branch, and the three closures | 56, 57, 58, 59, 60, 61 | `blogwright analytics dashboard` serves the prebuilt SvelteKit app over a fixed named-query set from 127.0.0.1, `packages/cli/src/nodes.ts` carries no pds knowledge, `blogwright bootstrap` warns while a plugin's scoped state exists, and `analytics backfill` pulls pre-Firehose history idempotently | no route accepts SQL; five gates green with the app tree present; `nodes.ts` greps clean for `pds`; all three change specs merged — the plugin-system spec at task 58, the pds spec at task 60, the analytics spec at task 61 |
 
 **Cut lines:** points at which the work can stop and what has shipped there.
 
@@ -370,14 +389,19 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   everything above it.
 - *After task 55.* `blogwright plugin add analytics` then `analytics bootstrap`
   and `analytics status` provision and report the pipeline, and CloudFront logs
-  land in the Iceberg table. Shippable provided the `dashboard` action is
-  dropped from task 47's command table or reports that it is not yet available;
-  the transform, graph and status paths are complete without it.
-- *After tasks 58 and 59.* The site graph carries no plugin topography, and all
-  three change specs are merged — the analytics and plugin-system specs at task
-  58, the pds spec at task 59, which is the task that lands its last outstanding
-  block. `.specs/README.md`'s pending list is empty only after 59, so 58 leaves
-  one entry standing and says which.
+  land in the Iceberg table. Shippable provided the `dashboard` and `backfill`
+  actions are dropped from task 47's command table or report that they are not
+  yet available; the transform, graph and status paths are complete without
+  them.
+- *After tasks 58 through 61.* Task 58 documents the analytics surface and
+  merges the plugin-system spec; task 59 removes the site graph's pds branch;
+  task 60 lands the bootstrap warning and merges the pds spec; task 61 lands
+  `analytics backfill` and merges the analytics spec. Between 58 and 61 there
+  is one hard seam: 59 must ship a release after 30 (the additive-first rule),
+  and 60 ships no later than 59's release, because its warning is what backs
+  that release's role rewrite. `.specs/README.md`'s pending list is empty only
+  after 61, so 58 leaves two entries standing — the pds spec named as task
+  60's and the analytics spec as task 61's — and says which.
 
 ---
 
@@ -527,13 +551,15 @@ plugin-system spec's flip to task 58 — a spec is not merged while one of its
   installed plugin to the running CLI's own version, and that is the whole
   compatibility mechanism. Should the SPI declare a version a plugin states it
   was built against? (Blocks nothing before 18; carried forward at 20.)
-- *Plugin teardown on removal.* Should `blogwright plugin remove` offer to run
-  the plugin's `destroy` first, or is naming the verb enough? (Blocks nothing;
-  carried forward at 20. The sibling question — what `blogwright destroy` does
-  about live plugin resources — is settled: it refuses, at task 16.)
-- *Analytics scope left open by its spec.* Backfill of historical CloudFront
-  logs and record expiration on the Iceberg table are unresolved; task 58
-  records each as resolved or out of scope with an owner.
+- *Analytics scope left open by its spec.* Record expiration on the Iceberg
+  table is unresolved — and, since 2026-07-27, correctly stated: S3 Tables
+  offers no record expiration for tables you create (the API is scoped to
+  AWS-managed tables), so aging rows out would be whole-`day`-partition
+  deletes the plugin issues itself. Task 58 records it as resolved or out of
+  scope with an owner. (Backfill, once the other half of this bullet, was
+  settled 2026-07-27 as the declared optional `analytics backfill` action —
+  task 61. Plugin teardown on removal, once a bullet of its own, was settled
+  the same day: `plugin remove` asks, at task 18.)
 
 ---
 
@@ -603,6 +629,48 @@ this principle and for every future plugin.
 Consequence worth noting: pds gains resource nodes, which it did not have. It is
 still the differently-shaped consumer — one node against analytics' twelve — but
 it no longer exercises the no-nodes path.
+
+---
+
+## Decisions settled 2026-07-27
+
+Five open questions across the three specs were settled by the repo owner (one
+of them a factual correction rather than a decision). Each is recorded as a
+Decision in its spec; the plan's reflection is listed per item.
+
+- *`plugin remove` asks about teardown.* Settled in the plugin-system spec
+  (§CLI → `blogwright plugin` and its new Decision): the command asks through
+  `Terminal.question` with No as the default, because removal forecloses the
+  generic `destroy` verb; a non-interactive or `--plain` session is refused
+  with an actionable message rather than defaulted, and `--yes` is the
+  scripted answer. Task 18 owns it; no new task.
+- *`blogwright bootstrap` warns while a plugin's scoped state exists.* Settled
+  in the pds spec (§`bootstrap` warns while plugin state exists and its
+  Decision): the third shape — reading the site bucket's `state/` prefix for
+  keys core does not own, exactly as the destroy refusal does — because a
+  `config.pds`-keyed check reintroduces the topography leak and a
+  discovery-based check breaks the pinned discovery-laziness rule. New task
+  60, which also lands the pds spec's deferred `Status:` flip.
+- *Daily salt rotation stands.* Settled in the analytics spec (Decision
+  *Daily salt rotation stands*): `visitor_key` never correlates across days,
+  a monthly unique figure is the sum of daily uniques, and §Local server's
+  named-query set states that semantic. Task 45's query set carries it; no
+  new task.
+- *`analytics backfill` is a declared, optional action.* Settled in the
+  analytics spec (§Backfill of historical logs and its Decision): a one-shot,
+  hand-run pull of pre-Firehose history from the site's CloudWatch log group,
+  reusing the DuckDB dependency the dashboard already carries, idempotent by
+  construction. New task 61 (the body, behind the stub task 47 declares),
+  which also lands the analytics spec's deferred `Status:` flip; task 53
+  additionally records the delivery-creation day the idempotency bound reads.
+- *Record expiration — corrected, still open.* Not a decision: the analytics
+  spec's open question claimed the S3 Tables API supports per-table record
+  expiration, and it does not for tables you create
+  (`PutTableRecordExpirationConfiguration` is scoped to AWS-managed tables;
+  `PutTableMaintenanceConfiguration` governs snapshots and compaction only —
+  verified against AWS's record-expiration and maintenance pages
+  2026-07-27). The question stays open in corrected form: row expiry would be
+  whole-`day`-partition deletes the plugin issues itself.
 
 ---
 

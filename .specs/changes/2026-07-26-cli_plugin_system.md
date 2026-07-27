@@ -443,9 +443,26 @@ plugin that ships outside the CLI). Both depend on this change.
 >   as a literal package name. The version installed matches the running CLI's
 >   own version, so the two never drift. Installing an already-installed plugin
 >   reports that and exits 0.
-> - `blogwright plugin remove <name>` — uninstalls the package. Configuration
->   and provisioned resources are untouched; the command says so and names the
->   plugin's teardown verb.
+> - `blogwright plugin remove <name>` — uninstalls the package, asking first
+>   whether the plugin's teardown should run. Removal forecloses its own
+>   remedy — the generic `blogwright <name> destroy --yes` resolves only while
+>   the package is installed — so the command loads the one plugin it is about
+>   to remove (a single resolve-and-load through the `ModuleLoader` port, not
+>   discovery, so §Plugin discovery's laziness rule is untouched) and, when
+>   that plugin contributes nodes, asks through `Terminal.question` with No as
+>   the default. Yes runs the plugin's generic `destroy` for the environment
+>   the invocation resolves — the usual positional/`--env` rule; scoped state
+>   in other environments is untouched, and `blogwright destroy`'s refusal
+>   keeps protecting it — and then uninstalls. No uninstalls and prints that
+>   configuration and provisioned resources are untouched, naming the teardown
+>   verb. In a non-interactive or `--plain` session the question cannot be
+>   asked and the command refuses with an actionable message — run
+>   `blogwright <name> destroy --yes` first, or re-run with `--yes` to remove
+>   while keeping the resources — and `--yes` skips the question the same way
+>   in an interactive one. A plugin that contributes no nodes has no teardown
+>   to ask about and is removed directly, as is one whose module fails to
+>   load — a broken plugin cannot run its teardown either way, and the
+>   untouched-notice still prints.
 
 ### CLI → Plugin dispatch (Add)
 
@@ -736,6 +753,19 @@ migration follows, then analytics.
 - *`plugin add`/`list`/`remove`, not bare `plugin <name>`.* **Explicit verbs.**
   Bare `blogwright plugin analytics` reads ambiguously between installing and
   invoking, and leaves nowhere to put `list`.
+- *`plugin remove` asks about teardown; a session that cannot ask is refused,
+  not defaulted.* **The question is load-bearing because removal forecloses
+  its own remedy: the plugin's generic `destroy` verb exists only while the
+  package is installed.** Settled 2026-07-27. Naming the verb in the output —
+  the previous shape — tells the operator what they can no longer run. The
+  house `confirm` helper answers with its default when no TTY is attached
+  ([`logger.ts:34-40`](../../packages/cli/src/logger.ts)), which is right
+  where one answer is safe; here neither is — teardown is destructive, and
+  skipping it strands AWS resources behind a reinstall the output would have
+  to explain — so the non-interactive path follows `init`'s refusal pattern
+  ([`init.ts:78`](../../packages/cli/src/init.ts)) with a message naming both
+  ways forward, and `--yes` is the scripted "remove, keep the resources"
+  answer.
 - *The SPI is internal.* **Undocumented and unversioned until it has carried
   two features through a release cycle.** A plugin API is a public contract
   that cannot be changed casually once third parties write against it; at 0.3.x
@@ -785,8 +815,6 @@ migration follows, then analytics.
   `blogwright.spi` integer in the manifest is the obvious answer; it is not
   specified here because the SPI is internal and both consumers version in
   lockstep with the CLI.
-- Should `plugin remove` offer to run the plugin's teardown verb first, or is
-  naming it in the output enough?
 - Does `preview` eventually become a plugin? It is the one remaining built-in
   namespace shaped like one, but it shares the site's resource graph and
   context in ways a plugin deliberately cannot.

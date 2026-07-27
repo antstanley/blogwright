@@ -58,8 +58,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `packages/cli/src/cli.ts` (task 10's plugin fall-through) dispatches `blogwright analytics status` against the plugin whose table now carries a fifth action → expect task 55's status output, unchanged : ☐ (PRESERVED / REGRESSION)
-- `packages/analytics/src/plugin.ts` default export passes core's `validatePlugin` at the discovery boundary with the `dashboard` entry present → expect validation to pass and all five actions to be listed : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/cli.ts` (task 10's plugin fall-through) dispatches `blogwright analytics status` against the plugin whose `dashboard` entry now has a body → expect task 55's status output, unchanged : ☐ (PRESERVED / REGRESSION)
+- `packages/analytics/src/plugin.ts` default export passes core's `validatePlugin` at the discovery boundary with the `dashboard` entry present → expect validation to pass and all six actions to be listed (the three declared — `status`, `dashboard`, `backfill` — plus the generic `bootstrap`, `destroy` and `init`) : ☐ (PRESERVED / REGRESSION)
 - `packages/analytics/src/queries.ts` is imported by `server.ts` for its lookup → expect `pnpm test -- queries` to still pass and `queries.ts` to import no `node:http` : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
