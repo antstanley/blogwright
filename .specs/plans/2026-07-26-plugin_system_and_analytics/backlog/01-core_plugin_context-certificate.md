@@ -23,7 +23,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — `PluginContext` names exactly the agreed sixteen members and nothing more.**
   - *Claim:* the interface declares `env`, `domain`, `preview`, `config`, `pluginConfig`, `names`, `accountId`, `clients`, `ports`, `tags`, `logger`, `store`, `state` (the plugin's own state), `siteState` (the read-only site view), `record()` and `save()` — and nothing else. `agentDir` and every CLI-private port are absent, and their absence is recorded in a doc comment as a rule, not a count.
-  - *Evidence to collect:* read the `PluginContext` declaration in `packages/core/src/plugin.ts` and enumerate its members — expect exactly sixteen; compare against `OpsContext` at `packages/cli/src/context.ts:25-51` and confirm `agentDir` (:40) appears in `OpsContext` only; read `packages/cli/src/ports.ts:25` and confirm `PluginContext.ports` is `PluginPorts` (`fs`, `terminal`) rather than the CLI's `Ports`, with a comment in `plugin.ts` naming `vcs`/`ping` (and tasks 05/06's `loader`/`packages`) as CLI-private types core cannot reference.
+  - *Evidence to collect:* read the `PluginContext` declaration in `packages/core/src/plugin.ts` and enumerate its members — expect exactly sixteen; compare against `OpsContext` at `packages/cli/src/context.ts:25-51` and confirm `agentDir` (:40) appears in `OpsContext` only; read `packages/cli/src/ports.ts:24` and confirm `PluginContext.ports` is `PluginPorts` (`fs`, `terminal`) rather than the CLI's `Ports`, with a comment in `plugin.ts` naming `vcs`/`ping` (and tasks 05/06's `loader`/`packages`) as CLI-private types core cannot reference.
   - *Status:* ☐ unverified
 
 - **O2 — The load-bearing fields are justified, and every export is documented.**

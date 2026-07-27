@@ -10,53 +10,65 @@
 
 ## Definition
 
-DONE(Task 59) ≡ every obligation O1…O6 below holds, each backed by the evidence the obligation
+DONE(Task 59) ≡ every obligation O1…O8 below holds, each backed by the evidence the obligation
 names (a file location, a test result, or an execution trace) — not by assertion.
 
 ## Premises
 
-- **P1 — Goal.** The CLI's resource graph carries no pds knowledge — no `config.pds` branch, no `blogwright-pds` import in `nodes.ts` — with the grant owned entirely by the plugin's node from task 23.
-- **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the rest of the OIDC policy document, the post-deploy pds sync, or `blogwright-pds` remaining a non-optional CLI dependency. Must not land before task 23.
+- **P1 — Goal.** The CLI's resource graph carries no pds knowledge — no `config.pds` branch, no secret-name interpolation, and no inline `<siteName>/atproto` default — with the grant owned entirely by the plugin's node from task 23, and the pds change spec merged now that its last `Proposed changes` block has landed.
+- **P2 — Obligations.** The task is done iff O1…O8 all hold. One Oi per definition-of-done item, in DoD order; O8 is the `Reviewable:` item.
+- **P3 — Invariants.** Must not break the rest of the OIDC policy document, the post-deploy pds sync, or `blogwright-pds` remaining a non-optional CLI dependency. Must not land before task 23, and must not ship in the same *release* as task 30.
 
 
 ## Obligations
 
 - **O1 — No pds statement for any input.**
-  - *Claim:* `oidcRolePolicyStatements` contains no `config.pds` reference and emits no `secretsmanager` statement even for a context that HAS a pds block.
+  - *Claim:* `oidcRolePolicyStatements` contains no `config.pds` reference, no `atproto` default and no `secretsmanager` statement even for a context that HAS a pds block.
   - *Evidence to collect:* read `packages/cli/src/nodes.ts:863-930`; run `pnpm test -- nodes`; read the new positive-looking test that passes a context with `config.pds` set.
   - *Checks:* the test must use a context WITH pds configured — a test with pds absent would pass whether or not the branch was removed and proves nothing.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O2 — No pds knowledge left in the site graph.**
-  - *Claim:* `grep -n "pds" packages/cli/src/nodes.ts` returns zero hits, closing the gap task 29's `cli.ts`-only gate left open.
+  - *Claim:* `grep -nE "pds|atproto" packages/cli/src/nodes.ts` returns zero hits, closing the gap task 29's `cli.ts`-only gate left open and retiring task 27's deliberate duplication.
   - *Evidence to collect:* run the grep; also confirm the doc comment at `:823` no longer claims the role grants access to the PDS secret.
-  - *Checks:* zero hits includes comments — a stale comment naming pds is a residue of the same coupling.
+  - *Checks:* zero hits includes comments — a stale comment naming pds is a residue of the same coupling — and includes `atproto`, because task 27's inline default is the other half of what this task removes.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O3 — The grant is preserved end to end.**
   - *Claim:* with the pds plugin bootstrapped, the site role carries a `blogwright-pds` inline policy whose document matches what the site used to emit.
-  - *Evidence to collect:* read task 23's assertion; confirm this task deleted the duplicate expectation at `packages/cli/src/nodes.test.ts:194-211` rather than leaving coverage in two places.
+  - *Evidence to collect:* read task 23's assertion; confirm this task deleted the duplicate expectation at `packages/cli/src/nodes.test.ts:194-208`, and task 27's `undefined`-guard case beside it, rather than leaving coverage in two places.
   - *Checks:* if task 23 is not complete, this task must not land — the ordering is what prevents an access gap.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
-- **O4 — knip clean and the upgrade note written.**
-  - *Claim:* the `blogwright-pds` import is gone from `nodes.ts`, `pnpm knip` passes, and a changeset records the upgrade note.
-  - *Evidence to collect:* run `pnpm knip`; read the changeset.
-  - *Checks:* the changeset states that an operator who upgrades and never runs `blogwright pds bootstrap` keeps the old inline policy until they do.
+- **O4 — knip clean and the upgrade note written, with the right mechanism.**
+  - *Claim:* `pnpm knip` passes and a changeset records the upgrade note.
+  - *Evidence to collect:* run `pnpm knip`; run `grep -c blogwright-pds packages/cli/src/nodes.ts` and expect `0`; read the changeset.
+  - *Checks:* there is no `blogwright-pds` import in `nodes.ts` to remove, and there never was — the grant moved by the plugin contributing its own node, not by the CLI importing the plugin. A change description claiming to have removed one has done something else; investigate before accepting. The changeset must state the mechanism correctly: the old grant is a *statement inside* the `<env>-deploy` inline policy, and `applyOidcRole` replaces that whole document on every `blogwright bootstrap` (`packages/cli/src/nodes.ts:840-842,962`), so it does NOT survive until the operator runs `blogwright pds bootstrap` — it survives until their next site bootstrap. A note asserting the former is wrong in the direction that costs an operator the grant.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
-- **O5 — Repo definition of done.**
+- **O5 — Ships in a later release than task 30.**
+  - *Claim:* the release carrying task 30 is out before this task lands, and the change description says so.
+  - *Evidence to collect:* confirm a published release contains task 30's changeset and its `blogwright pds bootstrap` upgrade note; read this task's change description for the statement.
+  - *Checks:* this is the whole of what "additive-first" means on a deployed stack. The plugin's policy reaches a real role only when an operator runs `blogwright pds bootstrap`; ordering the two commits proves nothing, and shipping both in one release means every stack whose operator deploys before reading the notes loses the grant. If task 30 is unreleased, this task is blocked, not merely early.
+  - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
+- **O6 — The pds change spec is merged.**
+  - *Claim:* the spec's `Status:` is `Merged` with a `Merged:` date, the file lives at `.specs/changes/merged/2026-07-26-migrate_pds_to_plugin_system.md`, every relative link inside it resolves at the new depth, and `.specs/README.md`'s pending list is empty.
+  - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged`; read the moved file's header and its Open questions; resolve every relative link in it; read `.specs/README.md`.
+  - *Checks:* this is the flip task 30 deferred, because §The site graph drops its pds branch had not landed there — the same split task 20 makes with task 58. By this point both companion specs are already in `merged/`, so the sibling links resolve as siblings rather than needing a `../`.
+  - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
+- **O7 — Repo definition of done.**
   - *Claim:* the change meets DEVELOPMENT.md's definition of done (see plan.md baseline).
   - *Evidence to collect:* run `pnpm build && pnpm test && pnpm lint && pnpm exec oxfmt --check . && pnpm knip`.
   - *Checks:* all five gates pass.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
-- **O6 — Reviewable.**
-  - *Claim:* the reviewer can confirm the removal and the preserved grant directly.
-  - *Evidence to collect:* run `pnpm test -- nodes` and `pnpm knip`; run `grep pds packages/cli/src/nodes.ts`.
-  - *Checks:* the with-pds context yields no secretsmanager statement and the grep is empty.
+- **O8 — Reviewable.**
+  - *Claim:* the reviewer can confirm the removal, the preserved grant and the merged spec directly.
+  - *Evidence to collect:* run `pnpm test -- nodes` and `pnpm knip`; run `grep -nE "pds|atproto" packages/cli/src/nodes.ts`; read `.specs/README.md`.
+  - *Checks:* the with-pds context yields no secretsmanager statement, the grep is empty, and every link in `.specs/README.md` resolves with nothing left pending.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 
 ## Regression checks
 
 - Every non-pds statement in the OIDC policy (s3, lambda MicroVM actions, logs, iam:PassRole, cloudfront:CreateInvalidation) is unchanged → expect the remaining `nodes.test.ts` OIDC assertions to pass untouched : ☐ (PRESERVED / REGRESSION)
 - `blogwright deploy` for a production env with a pds block still runs the post-deploy sync (`packages/cli/src/commands.ts:2,97`) : ☐ (PRESERVED / REGRESSION)
+- On a stack whose operator ran `blogwright pds bootstrap` in the previous release, the next `blogwright bootstrap` after this one rewrites `<env>-deploy` without the secretsmanager statement while the `blogwright-pds` inline policy stands → expect `pds sync` to keep reading and rotating the OAuth secret : ☐ (PRESERVED / REGRESSION)
+- On a stack whose operator did NOT, the same bootstrap leaves no grant → expect the post-deploy sync to warn without failing the deploy (`packages/pds/src/commands.ts:220-221`) and `blogwright pds bootstrap` to heal it : ☐ (PRESERVED / REGRESSION)
 - `packages/cli/package.json:28` still lists `blogwright-pds` as a non-optional dependency (the static `syncAfterDeploy` import depends on it) : ☐ (PRESERVED / REGRESSION)
 
 

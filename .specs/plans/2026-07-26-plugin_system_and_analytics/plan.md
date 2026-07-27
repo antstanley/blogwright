@@ -4,9 +4,10 @@
 
 Land three linked change specs as one dependency-ordered graph of 59 tasks: an
 internal plugin SPI in `blogwright-core` with discovery and generic dispatch in
-the CLI, the migration of `blogwright-pds` onto that SPI with no user-visible
-change, and a new `blogwright-analytics` plugin that routes CloudFront access
-logs through Firehose into an Iceberg table and serves a local dashboard over
+the CLI, the migration of `blogwright-pds` onto that SPI with no config-file
+change and a short, listed set of operator-visible ones, and a new
+`blogwright-analytics` plugin that routes CloudFront access logs through
+Firehose into an Iceberg table and serves a local dashboard over
 it. The decomposition leads with the enabler every plugin task is reviewed
 through — `PluginContext` in core (task 01) — because the analytics graph is
 written against that type eight tasks before it is exercised, so a missing field
@@ -216,10 +217,10 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 24 · PdsContext narrows PluginContext | 1 | contract | `PdsContext` is expressed in core's SPI vocabulary and duplicates no core shape |
 | 25 · pds Plugin export | 3, 21, 23, 24 | build, contract | `blogwright-pds` default-exports a `Plugin` declaring the six existing pds actions and the `nodes(ctx)` contributor task 23's node hangs off |
 | 26 · pds package manifest | 8, 25 | build | discovery finds `blogwright-pds` from a consuming repo that depends only on `blogwright` |
-| 27 · core config drops pds | 19, 23, 26 | build, contract | core's config holds no pds domain knowledge and an unknown top-level block round-trips untouched |
+| 27 · core config drops pds | 19, 23, 26 | build, contract | core's config holds no pds domain knowledge, an unknown top-level block round-trips untouched, and the site's secret ARN still resolves to `<siteName>/atproto` from an inline default task 59 removes |
 | 28 · pds config validation timing | 25, 26, 27 | build, review | the outcome of a malformed `pds` block on built-in commands is pinned by tests, not assumed |
 | 29 · remove runPds dispatch | 10, 26 | build, review | `cli.ts` mentions pds nowhere and all six pds actions run through generic dispatch |
-| 30 · pds migration closure | 28, 29 | review | the migration ships with its changeset and its change spec is merged |
+| 30 · pds migration closure | 28, 29 | review | the migration ships with its changeset and its release notes, and the pds spec's `Status:` flip is deferred to task 59 with its last outstanding block |
 | 31 · open the transport seam | — | — | `resolveEndpoint`/`SendOptions` accept a plugin-supplied service descriptor; core's `SIGNING_NAMES` stays closed |
 | 32 · analytics package skeleton | — | — | `packages/analytics` builds, tests and lints under the workspace's five gates |
 | 33 · S3TablesClient | 31, 32 | build | table buckets, namespaces and tables are created, read and deleted over the shared signer |
@@ -247,8 +248,8 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 55 · analytics status | 45, 54 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
 | 56 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
 | 57 · dashboard app build | 56 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
-| 58 · analytics docs and closure | 20, 30, 55, 57 | review | the analytics plugin is documented, changeset-covered, and its change spec is merged |
-| 59 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge; the grant lives only in the plugin |
+| 58 · analytics docs and closure | 20, 30, 55, 57 | review | the analytics plugin is documented and changeset-covered, and the analytics and plugin-system specs are merged; the pds spec is the one entry left pending, named as task 59's |
+| 59 · drop pds from the site graph | 23, 29 | build, contract | `packages/cli/src/nodes.ts` carries no pds knowledge, the grant lives only in the plugin, and the pds change spec is merged |
 
 ---
 
@@ -265,23 +266,35 @@ discharged without a `main()` seam, and both source decompositions assumed
 twice: tasks 21-30 (pds) precede tasks 31-58 (analytics) even though the two
 streams share no edge, because the pds migration is what validates the SPI
 against a second consumer before analytics is written against it, and task 23
-precedes task 27 by a real edge rather than by convenience, because removing
-core's `secretName` default first would grant the GitHub OIDC deploy role
-`secret:undefined-*` — a wrong permission, not a crash, that no existing test
-catches. Milestones M5 and M6 depend on nothing in the plugin-system or pds
+precedes task 27 by a real edge rather than by convenience: 23 is what makes the
+grant reachable from the plugin, and it lands `githubRole` on `deriveNames` in
+the same `packages/core/src/config.ts` that 27 then strips of pds knowledge.
+That edge is not by itself what keeps the deploy role's ARN correct — task 27
+carries its own guard for that, an inline `<siteName>/atproto` default at
+`packages/cli/src/nodes.ts:925` that task 59 deletes with the branch around it —
+because the site's statement outlives task 27 and interpolating an undefined
+`secretName` into it is `secret:undefined-*` written silently into a live role,
+with nothing failing to compile.
+
+Milestones M5 and M6 depend on nothing in the plugin-system or pds
 streams and may be worked concurrently from day one (tasks 31, 32 and 37 are
 fully independent; 33–36 wait only on the transport seam at 31 and the package
-skeleton at 32), while tasks 20, 30 and 58 are last in their streams
-by construction: each executes a change spec's merge plan, which is only
+skeleton at 32), while tasks 20, 30, 58 and 59 are last in their streams
+by construction: each executes part of a change spec's merge plan, which is only
 truthful once the work it describes has landed. That constraint binds task 20
 harder than its own stream: one block of the plugin-system spec — §Plugin SPI →
 Plugin-supplied AWS services, the transport seam and `signingUsEast1` — lands at
 tasks 31 and 38 in M5, so task 20 executes the spec's documentation steps and
 task 58, which depends on 20 and transitively on 38, performs the `Status:` flip
-and the move. Task 59 trails task 30 rather
-than closing M4: it removes the site graph's pds branch only after task 23 has
-attached the plugin's own policy, so no commit leaves a CI deploy without the
-grant.
+and the move. Task 59 closes M8 rather than M4, and for the same kind of reason
+one milestone down: it removes the site graph's pds branch, and the pds spec
+requires that removal to ship a release later than the plugin's own policy node,
+because the grant only reaches a real role when an operator runs
+`blogwright pds bootstrap` and the release notes carrying that instruction need
+a release to travel in. Task 30 therefore documents the migration and defers the
+pds spec's `Status:` flip to task 59, exactly as task 20 defers the
+plugin-system spec's flip to task 58 — a spec is not merged while one of its
+`Proposed changes` blocks is outstanding.
 
 **Milestones:**
 
@@ -290,11 +303,11 @@ grant.
 | M1 — plugin SPI in core | 01, 02, 03, 04 | core declares `Plugin`, `PluginCommand`, `PluginContext`, `PluginManifest`, `validatePlugin` and `ResourceNode`, and `StateStore` takes a plugin scope | every command's behaviour, every derived AWS resource name and `state/<env>.json` are byte-identical; nothing dispatches through the SPI yet |
 | M2 — CLI plugin surface | 05, 06, 07, 08, 09, 10, 11 | `blogwright <plugin> <action>` routes to an installed plugin's command and `blogwright --help` reflects what is actually installed | dispatch asserted in `cli.test.ts` with no cloud access; a test proves built-in commands load no plugin module |
 | M3 — plugin commands | 12, 13, 14, 15, 16, 17, 18, 19, 20 | `blogwright plugin add\|list\|remove`, `<plugin> init`, and the generic `bootstrap\|status\|destroy` verbs all work against a plugin's scoped store, and `blogwright destroy` refuses while one exists | the plugin system releases on its own with pds still on its hardcoded branch; the plugin-system change spec is documented and changeset-covered, its `Status:` flip deferred to task 58 with the transport seam |
-| M4 — pds migration | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 59 | all six pds actions reach the same functions with the same arguments through generic dispatch; `runPds`, the pds import and the static pds USAGE block are gone, and the site graph carries no pds branch | `cli.ts` and `nodes.ts` grep clean for `pds`; the post-deploy sync still fires; tasks 27 and 28 ship in the same release, and 59 lands only after 23 |
+| M4 — pds migration | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | all six pds actions reach the same functions with the same arguments through generic dispatch; `runPds`, the pds import and the static pds USAGE block are gone, and the pds plugin owns a `blogwright-pds` inline policy on the deploy role | `cli.ts` greps clean for `pds`; the post-deploy sync still fires; the deploy role's secret ARN never resolves to `secret:undefined-*` on any commit; tasks 27 and 28 ship in the same release; the release notes name `blogwright pds bootstrap` |
 | M5 — the transport seam and the plugin's clients | 31, 32, 33, 34, 35, 36, 37, 38 | `packages/analytics` builds; core's transport accepts a plugin-supplied service descriptor and `LogsClient` deliveries take an output format, record fields and a delimiter; the plugin builds `s3tables`, `firehose`, `glue` and `lambda` over the shared signer, pinned to us-east-1 | every existing AWS request is byte-identical, `microvms` still signs against the primary region, and core gains no service key — only `signingUsEast1` on `AwsClients` |
 | M6 — analytics foundations | 39, 40, 41, 42, 43, 44, 45, 46 | the schema, the transform's mapping, `visitor_key`, the bot flag, the per-record drop path, the config block and the query layer are all covered by tests | the package is inert — not published, not a CLI dependency, no manifest field; no test starts DuckDB |
 | M7 — analytics graph | 47, 48, 49, 50, 51, 52, 53, 54, 55 | `blogwright analytics bootstrap` provisions the twelve-node pipeline and `analytics status` reports it; CloudFront logs land in the Iceberg table | the site's CloudWatch delivery survives; `blogwright bootstrap` does not provision any of it and `blogwright destroy` refuses while `state/<env>.analytics.json` exists |
-| M8 — analytics dashboard | 56, 57, 58 | `blogwright analytics dashboard` serves the prebuilt SvelteKit app over a fixed named-query set from 127.0.0.1 | no route accepts SQL; five gates green with the app tree present; all three change specs merged |
+| M8 — analytics dashboard, and the site graph's last plugin branch | 56, 57, 58, 59 | `blogwright analytics dashboard` serves the prebuilt SvelteKit app over a fixed named-query set from 127.0.0.1, and `packages/cli/src/nodes.ts` carries no pds knowledge | no route accepts SQL; five gates green with the app tree present; `nodes.ts` greps clean for `pds`; all three change specs merged, the pds spec at task 59 rather than task 30 |
 
 **Cut lines:** points at which the work can stop and what has shipped there.
 
@@ -314,13 +327,20 @@ grant.
   a plugin can dispatch, own config, contribute nodes and reach every AWS
   service core already enumerates, but not one it does not. That is why the
   spec's `Status:` flip waits for task 58.
-- *After task 30.* pds is a plugin with no user-visible change, and the SPI has
-  been validated by a second consumer of genuinely different shape. Releasable
-  with task 59 outstanding: the site's own statement and the plugin's named
-  inline policy are separately named and coexist, which is the point of the
-  additive-first ordering. Tasks 27 and 28 must ship in the same release — 27
-  removes core's pds validation and 28 pins what replaces it — so do not cut
-  between them.
+- *After task 30.* pds is a plugin, the SPI has been validated by a second
+  consumer of genuinely different shape, and no config file on disk needs
+  touching. Releasable — and this is the release task 59 waits for, not merely
+  a point at which stopping is tolerable. The site's own statement and the
+  plugin's named inline policy are separate IAM objects and coexist on the role,
+  so this release is where an operator runs `blogwright pds bootstrap`, which is
+  what the release notes must say; task 59 removes the site's statement in a
+  later release, by which time the grant an upgraded stack depends on is the
+  plugin's. Tasks 27 and 28 must ship in the same release — 27 removes core's
+  pds validation and 28 pins what replaces it — so do not cut between them. The
+  release notes also carry the other three operator-visible changes the pds
+  spec's §Upgrading a deployed stack lists: the three new `pds` lifecycle verbs,
+  `blogwright destroy` refusing while `state/<env>.pds.json` exists, and the
+  shorter help section.
 - *After task 38.* `blogwright-core` has an open transport seam, `signingUsEast1`
   on `AwsClients` and configurable log deliveries, all behaviour-neutral for
   existing calls, and `packages/analytics` builds its four service clients over
@@ -337,8 +357,11 @@ grant.
   land in the Iceberg table. Shippable provided the `dashboard` action is
   dropped from task 47's command table or reports that it is not yet available;
   the transform, graph and status paths are complete without it.
-- *After tasks 58 and 59.* All three change specs merged, `.specs/README.md`'s
-  pending list empty, and the site graph carries no plugin topography.
+- *After tasks 58 and 59.* The site graph carries no plugin topography, and all
+  three change specs are merged — the analytics and plugin-system specs at task
+  58, the pds spec at task 59, which is the task that lands its last outstanding
+  block. `.specs/README.md`'s pending list is empty only after 59, so 58 leaves
+  one entry standing and says which.
 
 ---
 
@@ -351,9 +374,13 @@ grant.
   that repo's dependency tree is trusted — installing a package runs its install
   scripts, so a second opt-in step in config would add ceremony without adding a
   boundary.
-- `blogwright-pds` stays a non-optional dependency of `blogwright`. Every
-  "nothing changes for users" claim in M4 rests on it, as does the static
-  `syncAfterDeploy` import in `packages/cli/src/commands.ts`.
+- `blogwright-pds` stays a non-optional dependency of `blogwright`. Every claim
+  in M4 that a pds command keeps working with no install step rests on it, as
+  does the static `syncAfterDeploy` import in `packages/cli/src/commands.ts`.
+  M4 is not otherwise invisible to an operator: the pds spec's §Upgrading a
+  deployed stack lists four changes, one of which — running
+  `blogwright pds bootstrap` once per stack — is required rather than
+  incidental.
 - `PdsContext`'s structural-satisfaction trick generalises to the *narrow*
   slice a feature package needs — the fields the host already carries. It has
   held since the 2026-07-11 package extraction and is verified at compile time,
@@ -363,7 +390,11 @@ grant.
   `OpsContext` is not assignable to a `PluginContext` and never will be. Task 01
   gates the composition instead — an `OpsContext` plus exactly those three — and
   task 10 writes that composition as a named function at the dispatch boundary,
-  which task 16 completes with the plugin's scoped store.
+  which task 16 completes with the plugin's scoped store. Those three are what
+  the compiler insists on, not the whole of what the boundary builds: `state`,
+  `store` and `save()` typecheck straight off an `OpsContext` and must still be
+  re-pointed at the scoped store, so the boundary builds six members and only
+  three of them fail the build if it does not.
 - Existing `config/<env>.jsonc` files need no migration: the `pds` block's
   shape, defaults and validation outcomes are identical after M4; only the
   location of the implementation moves.
@@ -436,11 +467,30 @@ grant.
   flipping the header there would claim work that has not landed. Task 58
   already depends on 20 and transitively on 38, and already closes the other two
   specs' paperwork.
-- *Ordering protects a permission grant.* **Task 23 lands before task 27.**
+- *A permission grant is protected by a local default, not by ordering.*
+  **Task 27 applies `<siteName>/atproto` inline at
+  `packages/cli/src/nodes.ts:925`; task 59 deletes it with the branch.**
   `oidcRolePolicyStatements` interpolates `config.pds.secretName` into an IAM
-  Resource ARN; removing core's default first would produce
-  `secret:undefined-*` on the bootstrap path, which the existing test does not
-  catch.
+  Resource ARN and outlives task 27 by a release. Ordering alone cannot fix
+  that — task 23 does not touch `:925`, and a `string | undefined` in a template
+  literal compiles — so every `blogwright bootstrap` between 27 and 59 would
+  write `secret:undefined-*` into a live deploy role. The alternative was to
+  bind 27 and 59 into one release, which still leaves tasks 28 and 29 sitting
+  between them by real edges and so still leaves `main` un-releasable for two
+  commits, against DEVELOPMENT.md §Version control. One duplicated expression
+  with a named owner that deletes it is the cheaper trade, and DEVELOPMENT.md
+  prefers a little duplication where the abstraction would be wrong: the honest
+  abstraction is `resolvePdsSecretName`, and importing it into `nodes.ts` is the
+  plugin coupling this whole move removes.
+- *Additive-first is a release ordering, not a commit ordering.* **Task 59 ships
+  a release after task 30.** `applyOidcRole` rewrites the `<env>-deploy` inline
+  policy wholesale on every `blogwright bootstrap`
+  (`packages/cli/src/nodes.ts:840-842,962`), and the plugin's separately-named
+  policy appears only when an operator runs `blogwright pds bootstrap` — which
+  `blogwright bootstrap` deliberately does not do. So on a deployed stack the
+  two grants never coexist by virtue of commit order alone; they coexist because
+  the release that introduces the plugin's node tells the operator to run that
+  verb, and the release that removes the site's statement comes later.
 
 **Open questions**
 
@@ -499,19 +549,24 @@ Settled 2026-07-26, after the review surfaced MIN-5. **Neither `blogwright-core`
 nor the CLI's site graph carries resource topography for any plugin.** Two
 violations existed and both are now planned out:
 
-- The site's OIDC role policy branched on `ctx.config.pds`
-  (`packages/cli/src/nodes.ts:913`) and interpolated that plugin's secret name
-  into the ARN at `:925`. pds now attaches its own
+- The site's OIDC role policy branches on `ctx.config.pds`
+  (`packages/cli/src/nodes.ts:913`) and interpolates that plugin's secret name
+  into the ARN at `:925`. pds instead attaches its own
   **named inline policy** to the site's role (task 23) and the site drops its
   branch (task 59). `IamClient` already has `putRolePolicy`/`listRolePolicies`/
   `deleteRolePolicy`, so no client work. The two tasks are sequenced
-  additive-first, so no commit leaves a CI deploy without the grant. The role's
+  additive-first *across releases*, because the plugin's policy reaches a real
+  role only when an operator runs `blogwright pds bootstrap`; between them the
+  site's statement stands, with task 27's inline default keeping its ARN
+  correct. The role's
   name joins `deriveNames` as `githubRole` in the same move, so the plugin reads
   the derivation rather than repeating the CLI-private one at `nodes.ts:826`.
-- Four AWS clients existed in core solely for the analytics plugin. They move
-  into `blogwright-analytics` (tasks 33–36, assembled at 38), built over the
-  `SigningClient` already on the plugin's context. `pnpm knip` corroborates: core
-  would export four clients nothing in core or the CLI consumes.
+- An earlier draft of the plugin-system spec put the analytics pipeline's four
+  AWS clients in core. They are instead created in `blogwright-analytics`
+  (tasks 33–36, assembled at 38), built over the `SigningClient` on the plugin's
+  context; core has never carried them, so there is nothing to relocate and
+  tasks 33–36 create rather than move. `pnpm knip` is why the draft was wrong:
+  core would export four clients nothing in core or the CLI consumes.
 
 This was only possible after opening the transport. `ServiceKey` is
 `keyof typeof SIGNING_NAMES` and `SendOptions.service` is typed to it, so a
@@ -624,3 +679,32 @@ The delivery finding is the one to remember: the guard was specified in terms of
 a discrimination no port on the CLI's side could make, and DEVELOPMENT.md
 forbids the shortcut — the CLI never issues a raw AWS call — so the obligation
 was undischargeable rather than merely unwritten.
+
+**2026-07-27 — sixth review, two independent passes.** One blocking, four
+important, nine minor. Both passes independently reached the same conclusion
+about the pds grant move, from opposite directions, which is why it is the entry
+that reshaped the milestone table:
+
+| Finding | Root cause | Repaired in |
+|---|---|---|
+| A release window in which `blogwright bootstrap` writes `secret:undefined-*` into the deploy role | task 27 widens `secretName` while `nodes.ts:925` still interpolates it, and `${string \| undefined}` is not a type error | pds spec §`blogwright-core` → Config and notes 6-7; task 27 (the inline default), task 59 (its deletion), the Decision and the M4 gate above |
+| "No commit leaves a CI deploy without the grant" argued about commits; the operative event is a deployed `blogwright bootstrap` | `applyOidcRole` replaces the whole `<env>-deploy` document, and only `blogwright pds bootstrap` creates the plugin's | pds spec §The site graph drops its pds branch, its additive-first Decision, and its new §Upgrading a deployed stack; tasks 30, 59 and both certificates |
+| The migration claimed "nothing changes for users" after gaining a resource node | the summary predated §Its own IAM policy node, which buys pds three lifecycle verbs and the destroy refusal | pds spec summary and §Upgrading a deployed stack; task 30's changeset; `.specs/README.md` |
+| `save()` was specified as host surface that passes through | it typechecks off an `OpsContext` while closing over the site's store, so only the plan's task 16 caught it | plugin spec §The two state surfaces and its `PdsContext` Assumption; pds spec §Context; tasks 10 and 24 |
+| Task 30 merged the pds spec while one of its `Proposed changes` blocks was outstanding | the same defect the fourth review fixed for task 20, one milestone down | task 30 (documents), task 59 (flips), tasks 58's pending list, M4 and M8 above |
+| Stale residue from a superseded revision of task 23 — a "rewired ARN" no task rewires and a `blogwright-pds` import `nodes.ts` has never had | task 23 was rewritten to the inline-policy design; 27, 59 and two rationale sentences were not | tasks 27 and 59 and their certificates; the ordering paragraph above |
+| The region pin was stated absolutely while two node families use core's pre-built clients | `IamClient` was never enumerated, and IAM is global | analytics spec §Region pinning and §Its own service clients; task 38's certificate |
+| "A plugin cannot construct a us-east-1 client at all" | `SigningClient` and `createCredentialProvider` are public core exports; what is unreachable is the host's resolved credentials, endpoint override and injected transport | plugin spec §Plugin-supplied AWS services and notes 5; analytics Stage 1 step 2; task 38 |
+| "A plugin that declares an `init` command is responsible for writing its config block" — which pds's `init` does not do | the rule was written as an obligation where only the rejection is enforceable | plugin spec §`<plugin> init` and §Plugin lifecycle; tasks 13 and 47 |
+| `packages/analytics` silently falsifies two "four packages" statements in DEVELOPMENT.md | the affected-pages table predated the fifth package | analytics spec §Affected spec pages and §Merge plan; task 58 and its certificate |
+| Anchor drift: `ports.ts:25`, `ports.ts:9`, `graph.ts:34-37`, `nodes.test.ts:194-211`, `canonicalHost`'s default branch | the constructs moved under the anchors | plugin spec, analytics spec, tasks 01, 23, 27, 50, 51, 59 and four certificates |
+
+The blocking finding is the one to remember, and it is a type-system lesson
+rather than a sequencing one: every other coupling in this migration fails to
+compile when it breaks, which is why the plan could reason about ordering at
+all. `${ctx.config.pds.secretName}` is the one that does not — a widened field
+in a template literal produces the string `undefined` and a green build — so
+ordering was doing work it could not do, on the only edge where nothing would
+have said so. Two claims that argued about commits (this one, and the
+additive-first Decision) were both wrong for the same underlying reason: the
+repository's history is not the unit anything here is actually observed in.

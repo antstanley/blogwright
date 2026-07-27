@@ -35,7 +35,8 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O3 — A declared `init` command wins over the generic action.**
   - *Claim:* dispatch consults the plugin's own `commands` before the generic `init` action, in both directions, so pds's record-creating `init` is never replaced by a config writer.
-  - *Evidence to collect:* run `pnpm test -- plugin-commands` and locate the two tests: one fake plugin declaring an `init` command (assert its `run` was called and no file was written) and one carrying only an `init` contributor (assert the file was written); read the precedence comment in `packages/cli/src/plugin-commands.ts` and confirm it names pds as the reason.
+  - *Evidence to collect:* run `pnpm test -- plugin-commands` and locate the three tests: one fake plugin declaring an `init` command (assert its `run` was called and no file was written), one carrying only an `init` contributor (assert the file was written), and one declaring both (assert discovery rejects it, naming the plugin); read the precedence comment in `packages/cli/src/plugin-commands.ts` and confirm it names pds as the reason.
+  - *Checks:* precedence is the whole rule for a declared `init` — pds's writes no config block at all (`packages/pds/src/commands.ts:118` creates the publication record and the two site files), so an implementation or a test that requires a declared `init` command to write config has read the rule backwards. Only the both-declared combination is rejected, and only because the contributor's questions would then be asked nowhere.
   - *Checks:* trace the dispatch path for the argv `['pds', 'init']` shape through task 10's table — confirm the declared command is matched before the generic action is even constructed.
   - *Status:* ☐ unverified
 

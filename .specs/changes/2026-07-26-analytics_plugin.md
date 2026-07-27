@@ -39,8 +39,9 @@ the calls involved.
 |---|---|
 | *(none — no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
 | *(none — no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
-| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build |
+| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build; the pnpm row's "workspace of four packages" becomes five |
 | [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` port joins the ports table |
+| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Assumptions | The four-package-split assumption names `blogwright-analytics` as the second instance of its own feature-package exception |
 
 Depends on [`2026-07-26-cli_plugin_system.md`](2026-07-26-cli_plugin_system.md)
 and, for SPI confidence, on
@@ -149,15 +150,28 @@ and, for SPI confidence, on
 > deriving it silently, because it is the one place its resources diverge from
 > the site's.
 >
-> The pin is enforced at one place: the plugin builds every client it uses over
-> `ctx.clients.signingUsEast1`, never over a client core pre-built for the
-> site's region. The salt secret is where that matters and would otherwise be
-> missed — `ctx.clients.secrets` is constructed over the primary-region signer
+> The pin is enforced at one place: every **regional** client the plugin uses is
+> built over `ctx.clients.signingUsEast1`, never over a client core pre-built
+> for the site's region. The salt secret is where that matters and would
+> otherwise be missed — `ctx.clients.secrets` is constructed over the
+> primary-region signer
 > ([`clients.ts:68`](../../packages/core/src/clients.ts)), so reusing it would
 > put the secret in `config.region` while the transform Lambda that reads it and
 > the role ARN that grants `secretsmanager:GetSecretValue` on it are both
 > `us-east-1`. The plugin constructs its own `SecretsManagerClient` over
 > `signingUsEast1` instead.
+>
+> Two of core's pre-built clients are used as they are, and both are already
+> us-east-1 by construction, so neither weakens the rule. `ctx.clients.iam`
+> serves the two IAM roles: IAM is in `GLOBAL_SERVICES`, so it signs us-east-1
+> whatever the site's region is and `canonicalHost` returns `iam.amazonaws.com`
+> ([`endpoint.ts:36,43,65-66`](../../packages/core/src/aws/endpoint.ts)) — and a
+> role is a global resource, so "created in us-east-1" is not a property it has.
+> `ctx.clients.logsUsEast1` serves the delivery nodes and is pinned to us-east-1
+> in core for the same CloudFront quirk this pipeline inherits
+> ([`clients.ts:28-33`](../../packages/core/src/clients.ts)). Building either
+> over `signingUsEast1` would change nothing on the wire and would duplicate a
+> client that already exists.
 
 ### Analytics pipeline → Record transformation (Add)
 
@@ -265,8 +279,13 @@ and, for SPI confidence, on
 > `signingUsEast1`, which is why that signer is on the context. Reusing
 > `ctx.clients.s3` or `ctx.clients.secrets` would put those two resources in
 > `config.region`, outside the region pin every other node obeys.
-> `LogsClient` is the exception that stays in core, because the site graph owns
-> it — see the next block.
+>
+> Two of core's clients are taken from `ctx.clients` unchanged, and §Region
+> pinning says why neither breaks the pin. `IamClient` builds the transform and
+> Firehose roles: IAM is global, so `ctx.clients.iam` already signs us-east-1.
+> `LogsClient` builds the delivery destination and delivery, and stays in core
+> because the site graph owns it — `ctx.clients.logsUsEast1` is core's own
+> us-east-1 instance of it, see the next block.
 
 ### `blogwright-core` → `LogsClient` delivery configuration (Modify)
 
@@ -409,9 +428,10 @@ Stage 1 — the core seams (no plugin service client lands in core)
   1. packages/core/src/aws/endpoint.ts — resolveEndpoint and SendOptions.service
      accept a { service, signingName, global? } descriptor as well as a
      ServiceKey. SIGNING_NAMES gains NO keys: s3tables, firehose, glue and
-     lambda are the plugin's, supplied as descriptors. canonicalHost's default
-     branch (:63) already returns <service>.<region>.amazonaws.com and its
-     branches do not move, though its parameter widens to `string`; four other
+     lambda are the plugin's, supplied as descriptors. canonicalHost (:63) keeps
+     every branch it has, and its default (:75-76) already returns
+     <service>.<region>.amazonaws.com, though its parameter widens to
+     `string`; four other
      sites key off `service` and read the resolved value through one helper:
      GLOBAL_SERVICES (endpoint.ts:36, a Set<ServiceKey>),
      SIGNING_NAMES[opts.service] (signer.ts:124, the signing name),
@@ -421,9 +441,11 @@ Stage 1 — the core seams (no plugin service client lands in core)
      [object Object]). Owned by the plugin-system change spec; listed here
      because this is its first consumer.
   2. packages/core/src/clients.ts:21,42 — expose signingUsEast1 alongside
-     signing. The us-east-1 SigningClient is a local const at :54 today, so a
-     plugin cannot build a us-east-1 client without it — and every analytics
-     service is us-east-1. Owned by the plugin-system change spec; listed here
+     signing. The us-east-1 SigningClient is a local const at :54 today, so
+     without it a plugin cannot build a us-east-1 client that shares the host's
+     credential provider, endpoint override and injected transport
+     (signer.ts:85-86 keeps the last two private) — and every analytics service
+     is us-east-1. Owned by the plugin-system change spec; listed here
      because this is its first consumer.
   3. packages/core/src/aws/logs.ts:106 — putDeliveryDestination takes an
      optional outputFormat; :114 createDelivery takes optional recordFields
@@ -463,7 +485,7 @@ Stage 3 — the plugin and its graph
      transform-function (its S3 Tables and lambda:InvokeFunction grants),
      and firehose-stream also on table, catalog-integration and
      transform-function. topoSort drains zero-indegree nodes alphabetically
-     (cli/src/graph.ts:34-37), so a role that declares dependsOn: [] is
+     (cli/src/graph.ts:35-38), so a role that declares dependsOn: [] is
      reconciled before its grants' targets and writes an undefined ARN into
      the policy — a wrong permission, never an error.
  10. logDeliveryNode (packages/cli/src/nodes.ts:713) is the model for the
@@ -493,9 +515,17 @@ rather than create when it already exists.
 2. Fold `AnalyticsConfig` and `PageView` into the canonical schema.
 3. Add Vite/SvelteKit to the toolchain table and `AnalyticsQuery` to the ports
    table in [DEVELOPMENT.md](../../DEVELOPMENT.md).
-4. Flip this file's **Status:** to `Merged`, add **Merged:** date, move to
+4. Correct the two places [DEVELOPMENT.md](../../DEVELOPMENT.md) counts the
+   workspace: the pnpm toolchain row's "workspace of four packages under
+   `packages/`", and the Assumption that "the four-package split (core / cli /
+   pds / build-agent) is stable". `packages/analytics` is picked up by
+   `pnpm-workspace.yaml`'s `packages/*` glob with no edit, so nothing fails —
+   both statements simply go quietly stale. The Assumption's own exception is
+   what admits the package; it gains `blogwright-analytics` beside
+   `blogwright-pds` as the second worked instance.
+5. Flip this file's **Status:** to `Merged`, add **Merged:** date, move to
    `.specs/changes/merged/`.
-5. Update `.specs/README.md` (remove from pending change specs).
+6. Update `.specs/README.md` (remove from pending change specs).
 
 ---
 

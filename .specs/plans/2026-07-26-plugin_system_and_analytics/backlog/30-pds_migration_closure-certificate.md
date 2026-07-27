@@ -15,9 +15,9 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** The migration ships with a changeset stating its semver impact, `DEVELOPMENT.md` records the `blogwright.plugin` manifest as the feature-package mechanism, and the change spec is merged with its unanswered questions carried forward.
+- **P1 — Goal.** The migration ships with a changeset stating its semver impact and carrying the spec's four operator-visible changes, `DEVELOPMENT.md` records the `blogwright.plugin` manifest as the feature-package mechanism, and the change spec's `Status:` flip is deliberately deferred to task 59 with its one outstanding block.
 - **P2 — Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 — Invariants.** Must not break the release pipeline's changeset consumption (`.changeset/config.json`), the link targets in `.specs/README.md`, or `DEVELOPMENT.md`'s existing §Hexagonal architecture content beyond the one paragraph being amended.
+- **P3 — Invariants.** Must not break the release pipeline's changeset consumption (`.changeset/config.json`), the link targets in `.specs/README.md`, or `DEVELOPMENT.md`'s existing §Hexagonal architecture content beyond the one paragraph being amended. Must not move or flip the pds change spec: task 59 does that.
 
 ## Obligations
 
@@ -31,15 +31,16 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Evidence to collect:* read `DEVELOPMENT.md` §Hexagonal architecture and capture the amended paragraph; read `packages/pds/src/context.ts` and confirm the sentence "satisfied structurally by the CLI's `OpsContext`" still describes the type as written.
   - *Status:* ☐ unverified
 
-- **O3 — Every divergence is stated, not implied.**
-  - *Claim:* whatever task 28 decided and whatever help text task 29 reshaped is named in the changeset, because the spec's headline is "no user-visible change".
-  - *Evidence to collect:* read task 28's recorded decision (commit description, spec Open questions, or its own changeset) and task 29's commit description listing lost help guidance; confirm each appears in this task's changeset body; if neither task produced a divergence, confirm the changeset says so explicitly rather than being silent.
+- **O3 — The four operator-visible changes are stated, and every divergence with them.**
+  - *Claim:* the changeset carries the spec's §Upgrading a deployed stack list in full — `blogwright pds bootstrap` first and marked required, the three new `pds` lifecycle verbs, `blogwright destroy` refusing while `state/<env>.pds.json` exists, and the shorter help section — plus whatever task 28 decided and whatever help text task 29 reshaped.
+  - *Evidence to collect:* read the changeset body and check off all four items; read task 28's recorded decision (commit description, spec Open questions, or its own changeset) and task 29's commit description listing lost help guidance; confirm each appears; if neither task produced a further divergence, confirm the changeset says so explicitly rather than being silent.
+  - *Checks:* the first item is the load-bearing one, and it is easy to soften into a suggestion. This is the release the instruction travels in: task 59 removes the site's own grant in a later one, and a stack that never ran the verb loses it at its next `blogwright bootstrap` after that release, because `applyOidcRole` rewrites the whole `<env>-deploy` document (`packages/cli/src/nodes.ts:840-842,962`). A changeset that omits it, or files it under "nice to have", is UNSATISFIED.
   - *Status:* ☐ unverified
 
-- **O4 — Merge-plan bookkeeping is complete and the open questions survive.**
-  - *Claim:* the spec's `Status:` is `Merged` with a `Merged:` date, the file lives at `.specs/changes/merged/2026-07-26-migrate_pds_to_plugin_system.md`, `.specs/README.md`'s pending list no longer lists it, and the three unanswered questions (an `afterDeploy` hook, `OpsConfig` holding plugin blocks as an opaque map, shorter pds aliases) are carried forward.
-  - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged` and confirm the file moved; read the moved file's header line and its Open questions section; read `.specs/README.md` and confirm the pending list is renumbered with no dangling link.
-  - *Checks:* resolve every relative link in the moved file — `../../packages/...` and `../../DEVELOPMENT.md` gain a directory level under `merged/`, and the two sibling links to `2026-07-26-cli_plugin_system.md` must have become `../2026-07-26-cli_plugin_system.md`, since that spec is still in `.specs/changes/` at this point (task 20 defers its flip to task 58). Confirm each resolves rather than silently rotting.
+- **O4 — Merge-plan bookkeeping is correctly incomplete, and the open questions survive.**
+  - *Claim:* merge-plan step 3 is done; steps 4 and 5 are NOT — the spec's `Status:` still reads `Proposed`, the file is still at `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md`, and `.specs/README.md` still lists it as pending — with the deferral to task 59 recorded in the change description and the three unanswered questions (an `afterDeploy` hook, `OpsConfig` holding plugin blocks as an opaque map, shorter pds aliases) recorded so task 59's move carries them forward.
+  - *Evidence to collect:* run `ls .specs/changes .specs/changes/merged` and confirm the file has NOT moved; read its header line and confirm `Status: Proposed`; read `.specs/README.md` and confirm the entry is present; read the change description for the deferral and the reason.
+  - *Checks:* a flipped `Status:` here is a defect, not an overachievement. §`blogwright-cli` → The site graph drops its pds branch has not landed — task 59 lands it, a release later — and merging a spec with an outstanding `Proposed changes` block is exactly the finding that split task 20 from task 58. If the file has moved, mark UNSATISFIED and name the block.
   - *Status:* ☐ unverified
 
 - **O5 — Meets the repo definition of done.**
@@ -48,7 +49,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
   - *Status:* ☐ unverified
 
 - **O6 — Reviewable: `pnpm changeset status` plus the two documents (Reviewable).**
-  - *Claim:* a reviewer can run `pnpm changeset status` and `pnpm test` from the repo root and read `DEVELOPMENT.md:100-103` and `.specs/README.md`, seeing three packages with bumps, the manifest field named, and no pending entry pointing at a moved file.
+  - *Claim:* a reviewer can run `pnpm changeset status` and `pnpm test` from the repo root and read `DEVELOPMENT.md:100-103` and `.specs/README.md`, seeing three packages with bumps, the manifest field named, `blogwright pds bootstrap` as the changeset's first upgrade step, and the pds spec still listed as pending with `Status: Proposed`.
   - *Evidence to collect:* run both commands and capture the output; capture the amended `DEVELOPMENT.md` paragraph and the updated `.specs/README.md` pending list.
   - *Status:* ☐ unverified
 
@@ -56,13 +57,13 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `.specs/README.md:26-29` linked `changes/2026-07-26-migrate_pds_to_plugin_system.md` → expect the entry removed from the pending list and the remaining two renumbered, with no broken link left behind : ☐ (PRESERVED / REGRESSION)
-- `.specs/changes/2026-07-26-cli_plugin_system.md` §Affected spec pages and `2026-07-26-analytics_plugin.md` reference the migration spec by relative path → expect those links updated or still resolving after the move : ☐ (PRESERVED / REGRESSION)
+- `.specs/README.md:26-29` links `changes/2026-07-26-migrate_pds_to_plugin_system.md` → expect the entry still present and still resolving, since the move belongs to task 59 : ☐ (PRESERVED / REGRESSION)
+- `.specs/changes/2026-07-26-cli_plugin_system.md` §Affected spec pages and `2026-07-26-analytics_plugin.md` reference the migration spec by relative path → expect those links untouched and still resolving, since nothing moves in this task : ☐ (PRESERVED / REGRESSION)
 - `DEVELOPMENT.md` §Error handling table and §Assumptions reference `blogwright-pds` as a feature package → expect both still consistent with the amended paragraph : ☐ (PRESERVED / REGRESSION)
 
 ## Residue
 
-The migration's own spec claims "no user-visible change", so the changeset is where that claim is
+The migration's own spec lists four operator-visible changes, so the changeset is where that list is
 either confirmed or qualified — O3 is the obligation that keeps the two honest, and it is the one
 most readily discharged by assertion rather than evidence. The carried-forward questions are not
 idle: whether the SPI gains an `afterDeploy` hook decides whether `packages/cli/src/commands.ts:2`'s

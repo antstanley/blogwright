@@ -19,7 +19,7 @@
 ## Definition of done
 
 - [ ] Tests pin the outcome of loading a config whose `pds` block has a blank `name`, and one whose `handleResolver` is `http://…`, on a built-in command path (`createContext`/`loadConfig`, as `bootstrap` reaches it) — not only on `blogwright pds <action>`.
-- [ ] If the resolution is eager validation, plugin-owned config keys are validated wherever config is loaded and the cost is bounded — a test shows `deploy`/`status` pay no full plugin load when no plugin is installed; if the resolution is to accept the divergence, it is written into the change spec's Open questions and into the changeset, because it contradicts the spec's claim that the migration produces no user-visible change.
+- [ ] If the resolution is eager validation, plugin-owned config keys are validated wherever config is loaded and the cost is bounded — a test shows `deploy`/`status` pay no full plugin load when no plugin is installed; if the resolution is to accept the divergence, it is written into the change spec's Open questions and into the changeset, because it is a user-visible change the spec's §Upgrading a deployed stack does not list.
 - [ ] No config file that is valid today becomes invalid, and none that is invalid today is silently accepted, without that outcome being asserted by a test and named in the commit description.
 - [ ] Error messages for a rejected `pds` block are unchanged from the strings core raises today — `config.pds.name is required` and `config.pds.handleResolver must be https, got "…"` — asserted on the message, not on the fact of throwing.
 - [ ] Meets the repo definition of done (see plan.md baseline).

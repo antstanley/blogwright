@@ -15,7 +15,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Premises
 
-- **P1 — Goal.** `blogwright-pds` contributes one `ResourceNode` attaching a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret — additive, so it coexists with the site's existing statement until task 59 removes it.
+- **P1 — Goal.** `blogwright-pds` contributes one `ResourceNode` attaching a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret — a separately-named IAM object, so it coexists with the site's existing statement rather than replacing it, until task 59 removes that statement a release later.
 - **P2 — Obligations.** The task is done iff O1…O7 all hold. One Oi per definition-of-done item, in DoD order; O7 is the `Reviewable:` item.
 - **P3 — Invariants.** Must not break the site's own OIDC policy document (`packages/cli/src/nodes.ts:863`), the six pds commands, or the pinned rkey vectors. The only permitted edit under `packages/cli/` is `githubOidcRoleNode` reading `ctx.names.githubRole` at `packages/cli/src/nodes.ts:826`.
 
@@ -24,7 +24,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 - **O1 — The node exists and its policy is byte-identical to today's.**
   - *Claim:* `blogwright-pds` exports one resource node attaching a `blogwright-pds`-named inline policy to the site's OIDC role, and its document matches the statement `oidcRolePolicyStatements` produces today. The node is not yet reachable from the CLI — task 25 declares the `nodes(ctx)` member that returns it — so this obligation is discharged against the node's own tests.
-  - *Evidence to collect:* read `packages/pds/src/nodes.ts`; run `pnpm --filter blogwright-pds test -- nodes`; diff the emitted policy document field by field against `packages/cli/src/nodes.ts:913-927` and the expectation at `packages/cli/src/nodes.test.ts:194-211`.
+  - *Evidence to collect:* read `packages/pds/src/nodes.ts`; run `pnpm --filter blogwright-pds test -- nodes`; diff the emitted policy document field by field against `packages/cli/src/nodes.ts:913-927` and the expectation at `packages/cli/src/nodes.test.ts:194-208`.
   - *Checks:* the three actions are exactly `secretsmanager:GetSecretValue`, `PutSecretValue`, `CreateSecret`; the Resource is `arn:aws:secretsmanager:<region>:<account>:secret:<name>-*` with the name from task 21's resolver, not from `config.pds.secretName` directly.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 - **O2 — Additive only — the site's own policy is never touched.**
@@ -35,7 +35,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 - **O3 — The site's Secrets Manager statement is untouched by this task.**
   - *Claim:* `packages/cli/src/nodes.ts:913-927` is unchanged; the only edit to that file is `githubOidcRoleNode` reading `ctx.names.githubRole` at `:826`. The site's statement stays until task 59.
   - *Evidence to collect:* run `jj diff packages/cli/src/nodes.ts` and read every hunk — expect exactly one, at the role-name derivation.
-  - *Checks:* if the `if (ctx.config.pds)` statement changed, the additive-first ordering has been broken and the migration has a window where CI deploys lose the grant; mark UNSATISFIED.
+  - *Checks:* if the `if (ctx.config.pds)` statement changed, the additive-first ordering has been broken and every deployed stack loses the grant at its next `blogwright bootstrap` — `applyOidcRole` rewrites the whole `<env>-deploy` document (`packages/cli/src/nodes.ts:840-842,962`), so the statement is not merely stale, it is gone; mark UNSATISFIED.
   - *Status:* ☐ SATISFIED / ☐ UNSATISFIED   <!-- validator sets -->
 
 - **O4 — The deploy role's name has one home.**
@@ -61,7 +61,7 @@ names (a file location, a test result, or an execution trace) — not by asserti
 
 ## Regression checks
 
-- `oidcRolePolicyStatements` (`packages/cli/src/nodes.ts:863`) still emits its pds statement at this task → expect the existing assertion at `packages/cli/src/nodes.test.ts:194-211` to still pass : ☐ (PRESERVED / REGRESSION)
+- `oidcRolePolicyStatements` (`packages/cli/src/nodes.ts:863`) still emits its pds statement at this task → expect the existing assertion at `packages/cli/src/nodes.test.ts:194-208` to still pass : ☐ (PRESERVED / REGRESSION)
 - The six pds commands (`packages/pds/src/commands.ts`) are unaffected by the new node module → expect `pnpm --filter blogwright-pds test` green : ☐ (PRESERVED / REGRESSION)
 - Pinned rkey vectors (`packages/pds/src/rkey.test.ts`) unchanged : ☐ (PRESERVED / REGRESSION)
 

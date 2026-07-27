@@ -127,7 +127,7 @@ plugin that ships outside the CLI). Both depend on this change.
 >
 > `ports` is a core-declared `PluginPorts` of `fs` and `terminal` — the two
 > ports core owns. Everything else on the CLI's `Ports`
-> ([`ports.ts:25`](../../packages/cli/src/ports.ts)) stays CLI-side: `vcs` and
+> ([`ports.ts:24`](../../packages/cli/src/ports.ts)) stays CLI-side: `vcs` and
 > `ping` are declared in the CLI and DEVELOPMENT.md §Hexagonal architecture
 > names them as the ports only the CLI uses, and the `loader` and `packages`
 > ports this change adds join them — a `PluginContext` declared in core cannot
@@ -188,10 +188,26 @@ plugin that ships outside the CLI). Both depend on this change.
 >   (`state/<env>.json`). A plugin reads it to find resources the site owns; the
 >   analytics log-delivery node reads the distribution ARN through it. The type
 >   is readonly, so a plugin cannot write the site's state at all.
-> - `state` and `store` — the plugin's **own** `OpsState`
+> - `state`, `store` and `save()` — the plugin's **own** `OpsState`
 >   (`{ version, env, updatedAt, resources }`) loaded from the scoped
->   `StateStore` (`state/<env>.<plugin>.json`) it persists through. This is the
->   only state a plugin may write.
+>   `StateStore` (`state/<env>.<plugin>.json`) it persists through, and the
+>   persist call that closes over both. This is the only state a plugin may
+>   write.
+>
+> `save()` belongs in that second bullet, not among the members that pass
+> through from the host. The CLI's own is
+> `async () => { await store.save(state); }`
+> ([`context.ts:153-155`](../../packages/cli/src/context.ts)) — it closes over
+> the *site's* store and the *site's* state object — and it is the only way the
+> engine ever persists anything (`applyGraph` calls `ctx.save()` after every
+> node, [`graph.ts:84`](../../packages/cli/src/graph.ts)). A boundary that
+> passed the host's `save()` through would record every plugin node's outputs
+> into the plugin's in-memory `state.resources` and then write
+> `state/<env>.json`, leaving `state/<env>.<plugin>.json` empty; the plugin's
+> next `destroy` would load nothing, read `false` from every node, and orphan
+> every resource — the exact failure the scoped store exists to prevent. It is
+> the trap in this block because it is the one member that typechecks either
+> way.
 >
 > `state` is the site's own state *type*, not a bare outputs map, because the
 > engine reaches through it: `destroyGraph` does
@@ -239,12 +255,19 @@ plugin that ships outside the CLI). Both depend on this change.
 > services core itself uses.
 >
 > `AwsClients` gains `signingUsEast1` alongside `signing`. A `SigningClient`'s
-> region is fixed at construction ([`signer.ts:83`](../../packages/core/src/aws/signer.ts)),
+> region is fixed at construction ([`signer.ts:83,89`](../../packages/core/src/aws/signer.ts)),
 > and the us-east-1 signer `createClients` already builds is a local `const`
 > ([`clients.ts:54`](../../packages/core/src/clients.ts)) reachable only through
-> the pre-built `acm`/`cloudfront`/`route53`/`logsUsEast1` clients. Without
-> exposing it a plugin cannot construct a us-east-1 client at all — which the
-> analytics pipeline requires for every one of its services.
+> the pre-built `acm`/`cloudfront`/`route53`/`logsUsEast1` clients. A plugin can
+> of course `new SigningClient({ region: 'us-east-1', … })` — the class and
+> `createCredentialProvider` are both public exports of core — but not one that
+> shares the host's: `credentials` and `transport` are `private readonly`
+> ([`signer.ts:85-86`](../../packages/core/src/aws/signer.ts)), so a hand-built
+> signer re-resolves credentials, drops the CLI's `--endpoint` override, and
+> takes the real `fetchTransport` no matter what a test injected. Exposing the
+> one the host already built is what keeps a plugin inside the transport-level
+> substitution DEVELOPMENT.md §Testing rests on — and the analytics pipeline
+> needs us-east-1 for every one of its services.
 >
 > Without this seam a plugin cannot reach a new service at all: `ServiceKey` is
 > `keyof typeof SIGNING_NAMES` ([`endpoint.ts:33`](../../packages/core/src/aws/endpoint.ts))
@@ -473,13 +496,17 @@ plugin that ships outside the CLI). Both depend on this change.
 >
 > A plugin's own declared commands take precedence over the generic action, so a
 > plugin that already has an `init` of its own keeps it — `blogwright pds init`
-> creates the publication record today and must keep doing so. The consequence
-> is a rule the SPI enforces: a plugin either declares an `init` command, in
-> which case that command is responsible for writing its config block, or it
-> declares none and the generic action handles it. Declaring an `init` command
-> *and* relying on the generic action to write the block is rejected at
-> discovery, because the resulting command would ask the questions and discard
-> the answers.
+> creates the publication record today ([`commands.ts:118`](../../packages/pds/src/commands.ts))
+> and must keep doing so. The rule the SPI enforces is stated as the rejection,
+> because that is the only half of it a boundary check can decide: **a plugin
+> may not declare both an `init` command and an `init?(io)` contributor.**
+> Declaring both is rejected at discovery, because the generic action would
+> never run and the contributor would ask its questions nowhere. Everything else
+> follows from precedence rather than from a rule: a plugin that declares an
+> `init` command owns whatever `blogwright <plugin> init` does — writing a
+> config block if it wants one written, and nothing of the sort if, like pds, it
+> has other work — and the generic action applies only where no `init` command
+> is declared.
 
 ### CLI → Plugin lifecycle (Add)
 
@@ -505,9 +532,9 @@ plugin that ships outside the CLI). Both depend on this change.
 >   lives on the plugin's own nodes and a plugin may have more to report than
 >   node presence.
 > - `init` is generic unless the plugin declares its own, under the rule
->   §`blogwright <plugin> init` states: a plugin that declares `init` owns the
->   config write, and a plugin that declares `init` *and* relies on the generic
->   action is rejected.
+>   §`blogwright <plugin> init` states: a plugin that declares an `init` command
+>   owns whatever that action does, and a plugin that declares an `init` command
+>   *and* an `init?(io)` contributor is rejected.
 >
 > Precedence is stated once, here, and applies to every generic action the CLI
 > contributes.
@@ -606,10 +633,12 @@ without indexing a type that has no index signature.
    `string`; its branches and outputs are unchanged. In the same step
    packages/core/src/clients.ts:21,42 exposes `signingUsEast1` alongside
    `signing`: the us-east-1 SigningClient is a local const at :54, and a
-   SigningClient's region is fixed at construction (signer.ts:83), so without it
-   a plugin cannot build a us-east-1 client at all. (The analytics plugin is its
+   SigningClient's region is fixed at construction (signer.ts:83,89), so without
+   it a plugin cannot build a us-east-1 client that shares the host's credential
+   provider, endpoint override and injected transport — `credentials` and
+   `transport` are private (signer.ts:85-86). (The analytics plugin is its
    first consumer and lists both in its own notes.)
-6. packages/cli/src/ports.ts:25 — add `loader: ModuleLoader` and
+6. packages/cli/src/ports.ts:24 — add `loader: ModuleLoader` and
    `packages: PackageManager` to Ports; define both interfaces there.
    New adapters: adapters/node-module-loader.ts (createRequire + import),
    adapters/process-package-manager.ts (lockfile detect + spawn), modelled on
@@ -669,9 +698,14 @@ migration follows, then analytics.
   slice a feature package needs — the fields the host already carries. It has
   worked since the 2026-07-11 package extraction and is verified at compile
   time. It does not extend to the full `PluginContext`: `pluginConfig`,
-  `siteState` and `record()` have no counterpart on `OpsContext` and come from
-  the dispatch boundary, which is why §The two state surfaces specifies an
-  adaptation function rather than an assignment.
+  `siteState` and `record()` have no counterpart on `OpsContext` at all, so the
+  assignment is `TS2739` naming exactly those three, which is why §The two state
+  surfaces specifies an adaptation function rather than an assignment. Those
+  three are what the *compiler* catches, not what the boundary builds: `state`,
+  `store` and `save()` do have counterparts on `OpsContext` and must still be
+  re-pointed at the plugin's scoped store, so the boundary builds six members
+  and the type system only insists on three. An adaptation written to the
+  diagnostic rather than to §The two state surfaces compiles and is wrong.
 
 **Decisions**
 
@@ -714,13 +748,15 @@ migration follows, then analytics.
   bad assumptions before anything is frozen.
 - *A plugin's topography lives entirely in the plugin.* **Core and the site
   graph carry nothing plugin-specific — not a config branch, not a service
-  client.** Two concrete consequences were found while planning: the site's
-  OIDC role policy branched on `ctx.config.pds`
-  ([`nodes.ts:913`](../../packages/cli/src/nodes.ts)) and interpolated that
-  plugin's secret name into an ARN at `nodes.ts:925`, and four AWS clients
-  existed in core solely for the analytics plugin. Both move to their plugins.
-  `pnpm knip` corroborates the second: core would export four clients nothing in
-  core or the CLI consumes.
+  client.** Two concrete consequences were found while planning. One is in the
+  code today: the site's OIDC role policy branches on `ctx.config.pds`
+  ([`nodes.ts:913`](../../packages/cli/src/nodes.ts)) and interpolates that
+  plugin's secret name into an ARN at `nodes.ts:925`; it moves into the pds
+  plugin. The other was in an earlier draft of this change, which put the
+  analytics pipeline's four AWS clients in core; they are instead created in
+  `blogwright-analytics` over the transport seam below, and core gains no
+  service it does not use itself. `pnpm knip` is why the draft was wrong: core
+  would have exported four clients nothing in core or the CLI consumes.
 - *Plugins own their lifecycle, not the site graph.* **Separate node set,
   separate state key, separate verbs.** Folding plugin nodes into `buildNodes`
   ([`nodes.ts:1053`](../../packages/cli/src/nodes.ts)) would mean
