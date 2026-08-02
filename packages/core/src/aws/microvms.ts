@@ -119,7 +119,7 @@ function normalizeImage(res: ImageResponse): MicrovmImage {
 }
 
 export class MicrovmsClient {
-  constructor(private readonly client: SigningClient) {}
+  constructor(private readonly client: SigningClient) { }
 
   private async call<T>(
     method: string,
@@ -151,12 +151,12 @@ export class MicrovmsClient {
       ...(input.environmentVariables ? { environmentVariables: input.environmentVariables } : {}),
       ...(input.hooks
         ? {
-            hooks: {
-              port: input.hooks.port,
-              microvmHooks: { run: 'ENABLED', runTimeoutInSeconds: 60 },
-              microvmImageHooks: { ready: 'ENABLED', readyTimeoutInSeconds: 120 },
-            },
-          }
+          hooks: {
+            port: input.hooks.port,
+            microvmHooks: { run: 'ENABLED', runTimeoutInSeconds: 60 },
+            microvmImageHooks: { ready: 'ENABLED', readyTimeoutInSeconds: 120 },
+          },
+        }
         : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),
@@ -169,7 +169,7 @@ export class MicrovmsClient {
   }
 
   async updateImage(id: string, input: CreateImageInput): Promise<MicrovmImage> {
-    // A PUT is idempotent on the image itself, so no clientToken is needed — and reusing one
+    // A PUT is idempotent on the image itself, so no clientToken is needed - and reusing one
     // across separate update attempts triggers "clientToken used with different parameters".
     const { clientToken, ...body } = this.imageBody(input) as Record<string, unknown>;
     void clientToken;
@@ -224,7 +224,7 @@ export class MicrovmsClient {
    *
    * `maxResults` is always sent: the ListMicrovms operation defines it as a defaulted
    * query parameter, and the service normalizes a missing default into the request before
-   * validating the SigV4 signature — so omitting it produces an intermittent
+   * validating the SigV4 signature - so omitting it produces an intermittent
    * SignatureDoesNotMatch that GetMicrovm/DeleteMicrovm (no query params) never hit.
    */
   async listMicrovms(

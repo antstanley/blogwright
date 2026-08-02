@@ -27,12 +27,12 @@ export class StateStore {
     private readonly s3: S3Client,
     private readonly bucket: string,
     private readonly env: string,
-  ) {}
+  ) { }
 
   async load(): Promise<OpsState> {
     // getObjectText returns undefined only when the object/bucket does not exist (a fresh
-    // environment). A present-but-corrupt document must NOT be silently treated as empty —
-    // that would cause duplicate-resource creation — so let a parse error surface.
+    // environment). A present-but-corrupt document must NOT be silently treated as empty -
+    // that would cause duplicate-resource creation - so let a parse error surface.
     const text = await this.s3.getObjectText(this.bucket, stateKey(this.env));
     // Strictly undefined: a present-but-empty (zero-byte) state object is
     // corruption, not a fresh environment, and must hit the guard below.
@@ -41,7 +41,7 @@ export class StateStore {
       return JSON.parse(text) as OpsState;
     } catch (err) {
       throw new Error(
-        `state/${this.env}.json in s3://${this.bucket} is not valid JSON — refusing to proceed with empty state`,
+        `state/${this.env}.json in s3://${this.bucket} is not valid JSON - refusing to proceed with empty state`,
         { cause: err },
       );
     }

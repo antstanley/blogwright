@@ -1,7 +1,7 @@
 /**
  * Build step: copy the built build-agent artifacts (Dockerfile, bundled server,
  * source-hash manifest) into this package's agent/ directory so the published
- * CLI is self-contained — at runtime it never reaches into sibling packages.
+ * CLI is self-contained - at runtime it never reaches into sibling packages.
  */
 import { cp, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

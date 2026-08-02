@@ -66,7 +66,7 @@ describe('syncDocuments', () => {
 
     const second = await syncDocuments(repo, POSTS, PUB_URI);
     expect(second).toEqual({ created: [], updated: [], unchanged: 2, orphans: [] });
-    expect(repo.writes).toHaveLength(2); // idempotent — no further writes
+    expect(repo.writes).toHaveLength(2); // idempotent - no further writes
   });
 
   it('updates only the record whose fields drifted', async () => {

@@ -12,7 +12,7 @@ import type { PdsContext } from './context.js';
 import { postPath, tidFromPath } from './rkey.js';
 import { rkeyFromUri, type PdsClient, type PdsRecord } from './xrpc.js';
 
-/** The client surface the sync needs — structural, so tests can stub it. */
+/** The client surface the sync needs - structural, so tests can stub it. */
 export type PdsRepo = Pick<PdsClient, 'listRecords' | 'getRecord' | 'putRecord'>;
 
 /**
@@ -49,7 +49,7 @@ export interface SyncSummary {
 
 export function requirePdsConfig(ctx: PdsContext): PdsConfig {
   if (!ctx.config.pds) {
-    throw new Error('config has no "pds" section — add it to config/production.jsonc');
+    throw new Error('config has no "pds" section - add it to config/production.jsonc');
   }
   return ctx.config.pds;
 }
@@ -89,7 +89,7 @@ export async function readWellKnownUri(
 
 /**
  * The publication record as config + domain describe it. `siteUrl` must have
- * no trailing slash — standard.site appends the document `path`, which already
+ * no trailing slash - standard.site appends the document `path`, which already
  * starts with one.
  */
 export function publicationRecord(pds: PdsConfig, siteUrl: string): Record<string, unknown> {
@@ -138,7 +138,7 @@ export async function syncPublication(
     return 'unchanged';
   }
   // Preserve preferences the owner set out-of-band (e.g. showInDiscover off in
-  // a standard.site client) — a config-driven update must not clobber them.
+  // a standard.site client) - a config-driven update must not clobber them.
   const next =
     existing && existing.value.preferences !== undefined
       ? { ...desired, preferences: existing.value.preferences }
@@ -205,13 +205,13 @@ export async function syncPds(
   const atprotoJson = ctx.config.paths.atprotoJson;
   const site = await readAtprotoSiteConfig(ctx.ports.fs, repoRoot, ctx.config);
   if (!site) {
-    throw new Error(`${atprotoJson} is not initialised — run \`blogwright pds init\` first`);
+    throw new Error(`${atprotoJson} is not initialised - run \`blogwright pds init\` first`);
   }
   const wellKnown = await readWellKnownUri(ctx.ports.fs, repoRoot, ctx.config);
   if (wellKnown !== site.publicationUri) {
     throw new Error(
       `${wellKnownPath(ctx.config)} (${wellKnown ?? 'missing'}) does not match ${atprotoJson} ` +
-        `(${site.publicationUri}) — re-run \`blogwright pds init\``,
+      `(${site.publicationUri}) - re-run \`blogwright pds init\``,
     );
   }
   if (!ctx.domain) throw new Error('pds sync requires a configured domain');

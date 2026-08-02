@@ -144,7 +144,7 @@ export class SigningClient {
 
     // Retry transient failures with backoff. For idempotent methods, retry on network
     // errors and 5xx/429. For non-idempotent POSTs, retry ONLY on network errors (the
-    // request never reached the server) — never on a 5xx, which may mean the mutation
+    // request never reached the server) - never on a 5xx, which may mean the mutation
     // was applied and a retry would double-execute (e.g. launch a second MicroVM).
     const idempotent = ['GET', 'HEAD', 'PUT', 'DELETE'].includes(opts.method);
     const retryable = idempotent ? isRetryable : (err: unknown) => err instanceof TypeError;
@@ -158,7 +158,7 @@ export class SigningClient {
         });
         // Anything outside 2xx is a failure. 3xx matters: S3's region-mismatch
         // PermanentRedirect is a 301 with no Location header, which fetch
-        // returns as final — treating it as success would report writes as
+        // returns as final - treating it as success would report writes as
         // stored and listings as empty against the wrong endpoint.
         if (response.statusCode >= 300) throw parseError(opts.service, response);
         return response;

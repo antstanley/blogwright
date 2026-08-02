@@ -1,5 +1,5 @@
 /*
- * Pure presentation helpers: data in, lines out — the caller writes them.
+ * Pure presentation helpers: data in, lines out - the caller writes them.
  * Every renderer takes a `pretty` flag; the plain form is stable, line-oriented
  * output for CI systems and agents, the pretty form is for humans on a TTY.
  */

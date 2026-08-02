@@ -25,9 +25,9 @@ import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
 
 /** One line per invalidation outcome, shared by the summary card and logs. */
 function describeInvalidation(inv: { mode: 'none' | 'paths' | 'all'; count: number }): string {
-  if (inv.mode === 'none') return 'nothing changed — skipped';
+  if (inv.mode === 'none') return 'nothing changed - skipped';
   if (inv.mode === 'paths') return `${inv.count} changed path${inv.count === 1 ? '' : 's'}`;
-  return inv.count > 0 ? `everything (/*) — ${inv.count} paths over cap` : 'everything (/*)';
+  return inv.count > 0 ? `everything (/*) - ${inv.count} paths over cap` : 'everything (/*)';
 }
 
 /**
@@ -93,7 +93,7 @@ export async function deploy(ctx: OpsContext, opts: { refresh?: boolean } = {}):
     ...(opts.refresh ? { refresh: true } : {}),
   });
   const invalidation = await invalidateChanged(ctx, hash);
-  // Production content changed — mirror it to the PDS (non-fatal; see syncAfterDeploy).
+  // Production content changed - mirror it to the PDS (non-fatal; see syncAfterDeploy).
   await syncAfterDeploy(ctx);
 
   const url = siteBaseUrl(ctx);
@@ -131,11 +131,11 @@ export async function rollback(
   });
   await invalidateChanged(ctx, hash);
   // A rollback changes production content too, but the PDS mirrors the *working tree*
-  // content, which a rollback does not restore — so only warn about the divergence.
+  // content, which a rollback does not restore - so only warn about the divergence.
   if (ctx.env === 'production' && ctx.config.pds) {
     ctx.logger.warn(
       'rollback does not sync the PDS (records mirror the current repo content); ' +
-        'check out the rolled-back revision and run `blogwright pds sync` if needed',
+      'check out the rolled-back revision and run `blogwright pds sync` if needed',
     );
   }
   ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
@@ -197,7 +197,7 @@ export async function previewDeploy(
   return url;
 }
 
-/** Remove one PR's preview (delete its prefix). No invalidation — previews aren't cached. */
+/** Remove one PR's preview (delete its prefix). No invalidation - previews aren't cached. */
 export async function previewDestroy(ctx: OpsContext, id: string): Promise<void> {
   assertPreviewId(id);
   const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, `previews/${id}/`);
@@ -279,7 +279,7 @@ export async function logs(ctx: OpsContext, hash: string): Promise<void> {
   try {
     manifest = text ? (JSON.parse(text) as DeployManifest) : undefined;
   } catch {
-    ctx.logger.warn(`manifest for ${hash} is unreadable — showing the unfiltered log window`);
+    ctx.logger.warn(`manifest for ${hash} is unreadable - showing the unfiltered log window`);
   }
   // Filter to the build's time window (± a minute) from the manifest.
   const startTime = manifest ? Date.parse(manifest.startedAt) - 60_000 : undefined;

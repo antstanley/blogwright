@@ -26,7 +26,7 @@ export interface AwsClients {
   iam: IamClient;
   logs: LogsClient;
   /**
-   * Logs client pinned to us-east-1 for CloudFront vended log delivery —
+   * Logs client pinned to us-east-1 for CloudFront vended log delivery -
    * PutDeliverySource with the CloudFront LogType exists only there, the same
    * global-service quirk as CloudFront's ACM certificates.
    */

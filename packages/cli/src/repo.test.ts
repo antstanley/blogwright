@@ -1,6 +1,6 @@
 /**
  * Unit tests for the zip pipeline over a fake Vcs and the in-memory
- * FileSystem — no git binary and no disk. The process adapter has its own
+ * FileSystem - no git binary and no disk. The process adapter has its own
  * integration tests in adapters/process-vcs.test.ts.
  */
 

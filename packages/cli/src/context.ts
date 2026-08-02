@@ -33,8 +33,8 @@ export interface OpsContext {
   clients: AwsClients;
   ports: Ports;
   /**
-   * Directory holding the build-agent artifacts — Dockerfile, bundled server.js,
-   * and agent-manifest.json — copied into this package by its build
+   * Directory holding the build-agent artifacts - Dockerfile, bundled server.js,
+   * and agent-manifest.json - copied into this package by its build
    * (scripts/copy-agent.mjs). Resolved at the composition root; tests inject one.
    */
   agentDir: string;
@@ -52,7 +52,7 @@ export interface OpsContext {
 
 /**
  * The `app` tag value, by precedence: the explicit `config.app`, else the
- * site's domain, else the repo directory name — always something a human can
+ * site's domain, else the repo directory name - always something a human can
  * trace back to the project from a billing or resource listing.
  */
 export function deriveAppTag(
@@ -86,9 +86,9 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
   const candidates = source.configPath
     ? [source.configPath]
     : [
-        resolve(source.root, `config/${source.env}.jsonc`),
-        resolve(source.root, 'ops.config.jsonc'),
-      ];
+      resolve(source.root, `config/${source.env}.jsonc`),
+      resolve(source.root, 'ops.config.jsonc'),
+    ];
   for (const path of candidates) {
     try {
       return parseConfig(await fs.readText(path));
@@ -97,14 +97,14 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
     }
   }
   throw new Error(
-    `no config found for environment "${source.env}" — looked for ${candidates.join(', ')}`,
+    `no config found for environment "${source.env}" - looked for ${candidates.join(', ')}`,
   );
 }
 
 /**
  * Build the runtime context: load config, resolve the account id, derive names, create
  * clients, and load topology state from S3. The state bucket name is deterministic, which
- * resolves the bootstrap chicken-and-egg. This is the composition root — the only place
+ * resolves the bootstrap chicken-and-egg. This is the composition root - the only place
  * real adapters are constructed and wired.
  */
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {

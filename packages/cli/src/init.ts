@@ -1,5 +1,5 @@
 /*
- * `blogwright init` — the first-run wizard. Asks the four questions a new site
+ * `blogwright init` - the first-run wizard. Asks the four questions a new site
  * needs, writes a commented config/production.jsonc, and prints the path to a
  * live site. Runs before any context exists (there is no config to load yet),
  * so it takes its ports directly.
@@ -36,7 +36,7 @@ async function ask(terminal: Terminal, logger: Logger, q: Question): Promise<str
     }
     return answer;
   }
-  throw new Error(`no valid answer after ${MAX_ATTEMPTS} attempts — giving up`);
+  throw new Error(`no valid answer after ${MAX_ATTEMPTS} attempts - giving up`);
 }
 
 function renderConfig(opts: {
@@ -49,7 +49,7 @@ function renderConfig(opts: {
     { prop: `"region": "${opts.region}"` },
     {
       prop: `"siteName": "${opts.siteName}"`,
-      comment: 'stable slug in every AWS resource name — never change it',
+      comment: 'stable slug in every AWS resource name - never change it',
     },
   ];
   if (opts.domain) entries.push({ prop: `"domain": "${opts.domain}"` });
@@ -63,7 +63,7 @@ function renderConfig(opts: {
     const comma = i < entries.length - 1 ? ',' : '';
     return `  ${e.prop}${comma}${e.comment ? ` // ${e.comment}` : ''}`;
   });
-  return ['// config/production.jsonc — created by `blogwright init`', '{', ...body, '}', ''].join(
+  return ['// config/production.jsonc - created by `blogwright init`', '{', ...body, '}', ''].join(
     '\n',
   );
 }
@@ -78,18 +78,18 @@ export async function initSite(
   if (!terminal.isInteractive) {
     logger.error(
       'init is an interactive wizard; in CI or plain mode create config/production.jsonc ' +
-        'by hand instead (see README — only "region" and "siteName" are required)',
+      'by hand instead (see README - only "region" and "siteName" are required)',
     );
     return 1;
   }
   const repoRoot = root ?? (await findRepoRoot(fs).catch(() => process.cwd()));
   const configPath = `${repoRoot}/config/production.jsonc`;
   if (await fs.exists(configPath)) {
-    logger.error(`${configPath} already exists — edit it directly, or pass --config elsewhere`);
+    logger.error(`${configPath} already exists - edit it directly, or pass --config elsewhere`);
     return 1;
   }
 
-  logger.info(colors.bold('Welcome to blogwright — four questions and you are live.'));
+  logger.info(colors.bold('Welcome to blogwright - four questions and you are live.'));
   const siteName = await ask(terminal, logger, {
     prompt: 'site name (lowercase slug, names every AWS resource)',
     required: true,

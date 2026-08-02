@@ -91,7 +91,7 @@ export interface OpsConfig {
   /** Extra path prefixes excluded from the source zip (on top of .gitignore). */
   sourceIgnore: string[];
   /**
-   * Paths zipped into the deploy source even when gitignored — for artifacts a
+   * Paths zipped into the deploy source even when gitignored - for artifacts a
    * pre-deploy step builds outside the MicroVM (a wasm bundle, generated
    * assets). Each entry must exist and be non-empty at deploy time, so a
    * forgotten pre-build fails fast instead of shipping a broken site.
@@ -247,7 +247,7 @@ export function parseConfig(text: string): OpsConfig {
 export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
   if (!raw.siteName) {
     throw new Error(
-      'config.siteName is required — a stable lowercase slug used in every derived AWS resource name',
+      'config.siteName is required - a stable lowercase slug used in every derived AWS resource name',
     );
   }
   const cfg: OpsConfig = {

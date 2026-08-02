@@ -7,7 +7,7 @@ export interface PostMeta {
   /**
    * Content-collection id: frontmatter `slug` when set, else the file path
    * under the content dir minus its `.md`/`.mdx` extension and any trailing
-   * `/index` segment — matching the id Astro's glob loader produces.
+   * `/index` segment - matching the id Astro's glob loader produces.
    */
   slug: string;
   title: string;
@@ -22,7 +22,7 @@ const REQUIRED_FIELDS = ['title', 'description', 'pubDate'] as const;
 /**
  * Parse the flat frontmatter subset used by src/content.config.ts: scalar
  * `key: value` lines where value is a bare token, a quoted string, a date, or a
- * boolean. Deliberately not a YAML parser — the schema is flat by construction.
+ * boolean. Deliberately not a YAML parser - the schema is flat by construction.
  */
 export function parseFrontmatter(source: string, file: string): Record<string, string> {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -48,7 +48,7 @@ export function parseFrontmatter(source: string, file: string): Record<string, s
  * Enumerate publishable posts from the content collection, mirroring the Astro
  * glob-loader ids: `.md`/`.mdx` files, a frontmatter `slug` wins outright, a
  * trailing `/index` segment is dropped, drafts excluded. (Astro additionally
- * github-slugifies unusual path segments — keep file names lowercase-kebab, as
+ * github-slugifies unusual path segments - keep file names lowercase-kebab, as
  * the rkey derived here must match the id the site builds its link tags from.)
  */
 export async function listPublishablePosts(

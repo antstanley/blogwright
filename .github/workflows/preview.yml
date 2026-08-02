@@ -6,7 +6,7 @@ name: PR preview
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    # Only docs changes get a preview — CLI-only PRs skip the MicroVM build.
+    # Only docs changes get a preview - CLI-only PRs skip the MicroVM build.
     # Paths are evaluated against the PR's full changed-file set, so the
     # close-time destroy fires for exactly the PRs that deployed.
     paths:
@@ -46,7 +46,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build the blogwright CLI
-        # The CLI and its workspace dependencies only — the docs site itself is
+        # The CLI and its workspace dependencies only - the docs site itself is
         # built inside the MicroVM, not on this runner.
         run: pnpm --filter blogwright... build
       - uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1

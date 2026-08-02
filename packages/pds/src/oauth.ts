@@ -1,5 +1,5 @@
 /**
- * atproto OAuth (confidential client) for standard.site publishing — the only
+ * atproto OAuth (confidential client) for standard.site publishing - the only
  * module that touches @atproto/oauth-client-node. The blog itself is the OAuth
  * client: its metadata + JWKS are static files on the site (client-metadata.ts),
  * the private key and session live in the Secrets Manager secret (secret.ts),
@@ -33,7 +33,7 @@ function requireDomain(ctx: PdsContext): string {
 function requireClientKey(secret: PdsSecret, pds: PdsConfig): Jwk {
   if (!secret.clientKey) {
     throw new Error(
-      `secret "${pds.secretName}" has no OAuth client key — run \`blogwright pds keygen\``,
+      `secret "${pds.secretName}" has no OAuth client key - run \`blogwright pds keygen\``,
     );
   }
   return secret.clientKey;
@@ -60,7 +60,7 @@ async function buildClient(ctx: PdsContext, clientKey: Jwk): Promise<NodeOAuthCl
     // state, and syncs can run concurrently (overlapping CI deploys). Providing
     // a lock tells the library it holds the only instance, which disables its
     // invalid_grant recovery (re-read the store and adopt a concurrently
-    // rotated session) and instead deletes the session — destroying the valid
+    // rotated session) and instead deletes the session - destroying the valid
     // token a parallel sync just persisted. A process-local lock cannot
     // serialize cross-process refreshes, so lock-less with recovery is correct.
   });
@@ -108,7 +108,7 @@ export async function publicClientJwk(clientKey: Jwk): Promise<Record<string, un
 
 /**
  * Check that the deployed /oauth/ documents match what this CLI would send the
- * authorization server. Run before login/init — a stale or missing deployment
+ * authorization server. Run before login/init - a stale or missing deployment
  * would otherwise fail deep inside the OAuth flow.
  */
 export async function verifyClientAssets(
@@ -127,25 +127,25 @@ export async function verifyClientAssets(
     const res = await fetchImpl(url);
     if (!res.ok) {
       throw new Error(
-        `${url} is not deployed (HTTP ${res.status}) — commit public/oauth/* and release first`,
+        `${url} is not deployed (HTTP ${res.status}) - commit public/oauth/* and release first`,
       );
     }
     let deployed: unknown;
     try {
       deployed = await res.json();
     } catch {
-      throw new Error(`${url} is not valid JSON — re-run \`blogwright pds keygen\` and redeploy`);
+      throw new Error(`${url} is not valid JSON - re-run \`blogwright pds keygen\` and redeploy`);
     }
     if (!deepEqual(deployed, expected)) {
       throw new Error(
-        `${url} does not match the local client configuration — ` +
-          're-run `blogwright pds keygen`, commit public/oauth/*, and release before logging in',
+        `${url} does not match the local client configuration - ` +
+        're-run `blogwright pds keygen`, commit public/oauth/*, and release before logging in',
       );
     }
   }
 }
 
-/** The authorize/callback surface of NodeOAuthClient — injectable for tests. */
+/** The authorize/callback surface of NodeOAuthClient - injectable for tests. */
 interface OauthFlow {
   authorize(input: string): Promise<URL>;
   callback(params: URLSearchParams): Promise<{ session: { did: string } }>;
@@ -180,11 +180,11 @@ export async function login(ctx: PdsContext, identifier: string, deps: LoginDeps
   try {
     params = new URL(pasted.trim()).searchParams;
   } catch {
-    throw new Error('that was not a URL — paste the full callback address, query string and all');
+    throw new Error('that was not a URL - paste the full callback address, query string and all');
   }
   if (params.get('error')) {
     throw new Error(
-      `authorization failed: ${params.get('error')} — ${params.get('error_description') ?? ''}`,
+      `authorization failed: ${params.get('error')} - ${params.get('error_description') ?? ''}`,
     );
   }
   const { session } = await flow.callback(params);
@@ -198,7 +198,7 @@ function sessionExpired(err: unknown): boolean {
 }
 
 /**
- * Restore the stored OAuth session (transparently refreshing — the rotated
+ * Restore the stored OAuth session (transparently refreshing - the rotated
  * refresh token lands back in the secret) and wrap it as a PdsClient. The
  * session's fetchHandler adds DPoP + auth headers and handles nonce retries.
  */
@@ -208,7 +208,7 @@ export async function openPdsRepo(ctx: PdsContext): Promise<{ did: string; repo:
   const clientKey = requireClientKey(secret, pds);
   if (!secret.did || !secret.session) {
     throw new Error(
-      `secret "${pds.secretName}" has no OAuth session — run \`blogwright pds login\``,
+      `secret "${pds.secretName}" has no OAuth session - run \`blogwright pds login\``,
     );
   }
   const client = await buildClient(ctx, clientKey);
@@ -219,7 +219,7 @@ export async function openPdsRepo(ctx: PdsContext): Promise<{ did: string; repo:
     if (sessionExpired(err)) {
       throw new Error(
         'the stored OAuth session is no longer valid (refresh tokens expire after 180 idle ' +
-          'days, and rotation races invalidate them) — re-run `blogwright pds login`',
+        'days, and rotation races invalidate them) - re-run `blogwright pds login`',
         { cause: err },
       );
     }

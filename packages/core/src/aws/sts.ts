@@ -1,9 +1,9 @@
 import type { SigningClient } from './signer.js';
 import { textTag } from './xml.js';
 
-/** STS client — only GetCallerIdentity, used to derive the account id. */
+/** STS client - only GetCallerIdentity, used to derive the account id. */
 export class StsClient {
-  constructor(private readonly client: SigningClient) {}
+  constructor(private readonly client: SigningClient) { }
 
   async getAccountId(): Promise<string> {
     const res = await this.client.send({

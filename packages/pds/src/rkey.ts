@@ -26,7 +26,7 @@ export const tidFromPath = (path: string): string => {
     if (Number.isNaN(date.getTime())) {
       // A date-like digit pattern that is not a real date (e.g. a product
       // slug "sku-3456-78-90"). The reference implementation throws here, so
-      // no existing record can hold a date-derived TID for such a path —
+      // no existing record can hold a date-derived TID for such a path -
       // falling back to the whole-path hash cannot diverge from live rkeys.
       tid = hashBits(path, 63);
     } else {
@@ -74,7 +74,7 @@ const BASE32 = '234567abcdefghijklmnopqrstuvwxyz';
 // --- example-specific helpers (not vendored) ---
 
 /**
- * Canonical URL path for a blog post — the shape `src/pages/posts/index.astro` links
+ * Canonical URL path for a blog post - the shape `src/pages/posts/index.astro` links
  * (trailing slash). Rkeys derive from this string, so slugs must never change after
  * publication.
  */

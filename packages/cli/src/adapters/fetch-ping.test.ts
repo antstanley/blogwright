@@ -30,7 +30,7 @@ describe('createFetchPing', () => {
     expect(calls[0]?.init?.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it('resolves despite a rejecting fetch — the wake-up is best-effort', async () => {
+  it('resolves despite a rejecting fetch - the wake-up is best-effort', async () => {
     const ping = createFetchPing(async () => {
       throw new Error('socket hang up');
     });

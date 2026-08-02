@@ -69,7 +69,7 @@ describe('packageAndUploadAgent', () => {
 
     await expect(packageAndUploadAgent(ctx)).rejects.toThrow(
       `build-agent artifacts not found in ${TEST_AGENT_DIR}. ` +
-        'Run "pnpm --filter blogwright build" first.',
+      'Run "pnpm --filter blogwright build" first.',
     );
   });
 
@@ -85,7 +85,7 @@ describe('packageAndUploadAgent', () => {
     const { ctx } = contextWithArtifacts(JSON.stringify({}));
 
     await expect(packageAndUploadAgent(ctx)).rejects.toThrow(
-      `agent-manifest.json in ${TEST_AGENT_DIR} has no valid hash — rebuild the agent`,
+      `agent-manifest.json in ${TEST_AGENT_DIR} has no valid hash - rebuild the agent`,
     );
   });
 

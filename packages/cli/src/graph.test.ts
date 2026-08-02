@@ -98,7 +98,7 @@ describe('applyGraph / destroyGraph', () => {
       delete: async () => undefined,
     };
 
-    // The bucket's own failure surfaces — not the (inevitable) save failure after it.
+    // The bucket's own failure surfaces - not the (inevitable) save failure after it.
     await expect(applyGraph([failing], ctx)).rejects.toThrow(/CreateBucket denied/);
     expect(warnings.join('\n')).toContain('NoSuchBucket');
   });

@@ -2,7 +2,7 @@
  * Test-only PdsContext factory. Builds a real, fully-typed context over
  * in-memory adapters: file access hits a Map-backed FileSystem, and every
  * secrets-client method a test has not overridden fails fast at the transport.
- * Tests substitute behaviour here — at the ports — never by casting.
+ * Tests substitute behaviour here - at the ports - never by casting.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -34,13 +34,13 @@ export interface TestContextOverrides {
 
 const rejectAllTransport: Transport = async (req) => {
   throw new Error(
-    `unexpected AWS request in test: ${req.method} ${req.url} — override the client method on createTestContext`,
+    `unexpected AWS request in test: ${req.method} ${req.url} - override the client method on createTestContext`,
   );
 };
 
 /**
  * Layer test overrides over a real client so untouched methods still fail fast.
- * Overrides must be plain objects of methods (own properties) — a class
+ * Overrides must be plain objects of methods (own properties) - a class
  * instance's prototype methods would not be copied.
  */
 function testSecrets(
@@ -64,7 +64,7 @@ const silentTerminal: Terminal = {
   status: () => undefined,
   question: async (prompt) => {
     throw new Error(
-      `unexpected terminal prompt in test: ${prompt} — override ports.terminal on createTestContext`,
+      `unexpected terminal prompt in test: ${prompt} - override ports.terminal on createTestContext`,
     );
   },
 };

@@ -1,5 +1,5 @@
 /**
- * TRANSCRIPTIONS of the proposed plugin-SPI types — none of these exist in
+ * TRANSCRIPTIONS of the proposed plugin-SPI types - none of these exist in
  * `packages/` yet. Each declaration cites the spec section it is copied from;
  * when a spec changes a proposed type, this file changes with it and
  * `node check.mjs` re-derives which task files now assert a stale truth.
@@ -7,7 +7,7 @@
  * Real, existing types (`OpsContext`, `OpsConfig`, `OpsState`, `AwsClients`,
  * `PdsContext`, `StateStore`, `ResourceOutputs`, `ServiceKey`, `SendOptions`,
  * `Names`, `FileSystem`, `Terminal`, `SecretsManagerClient`) are imported
- * from `packages/` — they are ground truth, never transcribed. The tsconfig
+ * from `packages/` - they are ground truth, never transcribed. The tsconfig
  * maps `blogwright-core` onto `packages/core/src`, so nominal types such as
  * `StateStore` resolve to one declaration on every path.
  */
@@ -38,7 +38,7 @@ export interface PluginLogger {
 
 /**
  * 2026-07-26-cli_plugin_system.md §Plugin SPI → `PluginContext`: "`ports` is a
- * core-declared `PluginPorts` of `fs` and `terminal` — the two ports core owns."
+ * core-declared `PluginPorts` of `fs` and `terminal` - the two ports core owns."
  */
 export interface PluginPorts {
   fs: FileSystem;
@@ -59,9 +59,9 @@ export interface SiteState {
  * 2026-07-26-cli_plugin_system.md §Plugin SPI → `PluginContext`: "It names
  * exactly `env`, `domain`, `preview`, `config`, `pluginConfig`, `names`,
  * `accountId`, `clients`, `ports`, `tags`, `logger`, `store`, `state`,
- * `siteState`, `record(nodeId, outputs)` and `save()` — and nothing else.
+ * `siteState`, `record(nodeId, outputs)` and `save()` - and nothing else.
  * Every member is required except `tags`." Sixteen members; `state` is core's
- * own `OpsState` (§The two state surfaces — the engine does
+ * own `OpsState` (§The two state surfaces - the engine does
  * `delete ctx.state.resources[node.id]`). The default type argument is `never`,
  * matching the diagnostics the corpus quotes (`PluginContext<never>`).
  */
@@ -99,7 +99,7 @@ export interface PluginCommand<TConfig = never> {
 /**
  * 2026-07-26-cli_plugin_system.md §Resource graph → Vocabulary relocation
  * (and task 02): "It moves as `ResourceNode<Ctx>`, generic over the context
- * its methods receive." The parameter is deliberately UNCONSTRAINED — see
+ * its methods receive." The parameter is deliberately UNCONSTRAINED - see
  * claims C13/C14: `OpsContext` does not satisfy `PluginContext`, so an
  * `extends PluginContext` bound would make every CLI instantiation `TS2344`.
  */
@@ -115,7 +115,7 @@ export interface ResourceNode<Ctx = PluginContext> {
 
 /**
  * 2026-07-26-cli_plugin_system.md §Resource graph → Vocabulary relocation:
- * "the engine taking a structural constraint covering what it actually uses —
+ * "the engine taking a structural constraint covering what it actually uses -
  * `logger`, `save()`, and `state.resources`" (task 02 lands it in graph.ts).
  */
 export interface EngineContext {
@@ -137,7 +137,7 @@ export declare function applyGraphProposed<Ctx extends EngineContext>(
 /**
  * 2026-07-26-cli_plugin_system.md §Plugin SPI → The `Plugin` contract: name,
  * description, commands, `nodes?(ctx)`, `configKey?`,
- * `validateConfig?(raw: unknown): TConfig`, `init?(io)` — "a plugin declares
+ * `validateConfig?(raw: unknown): TConfig`, `init?(io)` - "a plugin declares
  * nothing else". `init`'s io/return shapes are task 13/47 detail the claims
  * here do not pin, so they stay `unknown`.
  */
@@ -177,8 +177,8 @@ export interface ProposedPdsConfig {
 
 /**
  * 2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Config
- * ownership: "a `ResolvedPdsConfig` — core's `PdsConfig` with `secretName`
- * narrowed to `string`" — what `requirePdsConfig` returns and what
+ * ownership: "a `ResolvedPdsConfig` - core's `PdsConfig` with `secretName`
+ * narrowed to `string`" - what `requirePdsConfig` returns and what
  * `validateConfig` puts on `pluginConfig`.
  */
 export type ResolvedPdsConfig = ProposedPdsConfig & { secretName: string };

@@ -1,7 +1,7 @@
 /**
  * Build step: stamp dist/agent-manifest.json with the reproducible source hash.
  * Runs after the rolldown bundle (cwd = the build-agent package root), so the
- * shipped artifact set — Dockerfile, server.js, manifest — is self-describing
+ * shipped artifact set - Dockerfile, server.js, manifest - is self-describing
  * and the CLI needs no access to the source trees.
  */
 import { writeFile } from 'node:fs/promises';

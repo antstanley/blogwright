@@ -1,7 +1,7 @@
 /**
  * The narrow slice of the host CLI's context this feature package depends on.
  * The CLI's OpsContext satisfies it structurally, so the dispatch boundary is
- * a plain assignment — this package never imports CLI types.
+ * a plain assignment - this package never imports CLI types.
  */
 
 import type { FileSystem, OpsConfig, SecretsManagerClient, Terminal } from 'blogwright-core';
@@ -21,7 +21,7 @@ export interface PdsPorts {
   terminal: Terminal;
 }
 
-/** Everything a pds command needs from its host — config, secrets, ports, logging. */
+/** Everything a pds command needs from its host - config, secrets, ports, logging. */
 export interface PdsContext {
   env: string;
   domain: string | undefined;

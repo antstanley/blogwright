@@ -53,7 +53,7 @@ function startBuild(payload: BuildPayload): void {
 
 /**
  * Poll s3://<bucket>/build/pending/ for jobs (the build trigger). Drains one unbuilt job
- * per tick — multiple targets (concurrent PR previews) each have their own key. The
+ * per tick - multiple targets (concurrent PR previews) each have their own key. The
  * MicroVM's ambient IMDS credentials are the build role, which holds the site-write perms.
  */
 let polling = false;

@@ -15,7 +15,7 @@ export interface TerminalStreams {
 export interface NodeTerminalOptions extends Partial<TerminalStreams> {
   /**
    * Force the minimal, machine-friendly presentation (`--plain`): the terminal
-   * reports non-interactive, so output is plain durable lines — no colour, no
+   * reports non-interactive, so output is plain durable lines - no colour, no
    * transient status, no prompts left hanging for automation.
    */
   plain?: boolean | undefined;
@@ -27,7 +27,7 @@ const CLEAR_LINE = '\r\u001B[2K';
 
 /**
  * Build the real Terminal adapter over the process's standard streams. TTY
- * state is read once, at construction — never at module load or per call.
+ * state is read once, at construction - never at module load or per call.
  * The transient status line exists only on an interactive TTY; `write`/`error`
  * clear it first so durable lines never interleave with a stale status.
  */

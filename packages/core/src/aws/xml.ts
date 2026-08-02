@@ -1,6 +1,6 @@
 /**
  * Minimal XML helpers for the handful of AWS REST-XML / query responses this CLI
- * reads (S3, STS, IAM, CloudFront). Not a general XML parser — it extracts tag
+ * reads (S3, STS, IAM, CloudFront). Not a general XML parser - it extracts tag
  * contents by name, which is sufficient for the flat response shapes we consume.
  */
 
@@ -47,7 +47,7 @@ export function textTag(xml: string, name: string): string | undefined {
 }
 
 /**
- * Like {@link textTag} but verbatim — no trimming. For values where whitespace
+ * Like {@link textTag} but verbatim - no trimming. For values where whitespace
  * is data, like S3 object keys (a trimmed key would target a different object).
  */
 export function rawTextTag(xml: string, name: string): string | undefined {

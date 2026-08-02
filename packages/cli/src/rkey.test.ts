@@ -4,7 +4,7 @@ import { documentUri, extractDate, postPath, tidFromPath } from './rkey.js';
 
 /**
  * The `blogwright/rkey` subpath is a published contract; since task 08 it is a
- * re-export of blogwright-pds. These tests pin the re-exported surface — the
+ * re-export of blogwright-pds. These tests pin the re-exported surface - the
  * exhaustive on-the-wire vectors live in packages/pds/src/rkey.test.ts.
  */
 describe('blogwright/rkey re-export', () => {

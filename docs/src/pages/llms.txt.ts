@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { getCollection } from 'astro:content';
 
-// https://llmstxt.org — a plain-text/markdown index that points LLMs at the
+// https://llmstxt.org - a plain-text/markdown index that points LLMs at the
 // machine-readable (Markdown) version of every docs page.
 
 // Mirrors the sidebar groups in astro.config.mjs; pages list in sidebar order.
@@ -20,13 +20,13 @@ export const GET: APIRoute = async ({ site }) => {
   lines.push('');
   lines.push(
     '> Full operations for a blog site on AWS: S3 + CloudFront hosting with builds ' +
-      'in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site ' +
-      '(AT Protocol) publishing. One CLI, no CloudFormation, no Terraform, no CDK.',
+    'in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site ' +
+    '(AT Protocol) publishing. One CLI, no CloudFormation, no Terraform, no CDK.',
   );
   lines.push('');
   lines.push(
     'Every documentation page is available as Markdown by appending `.md` to its ' +
-      `URL path (e.g. ${abs('/reference/cli.md')}).`,
+    `URL path (e.g. ${abs('/reference/cli.md')}).`,
   );
   lines.push('');
 

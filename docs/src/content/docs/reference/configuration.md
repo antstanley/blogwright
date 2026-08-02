@@ -1,15 +1,15 @@
 ---
 title: Configuration reference
-description: Every config key blogwright reads — types, defaults, validation rules, and what each one controls.
+description: Every config key blogwright reads - types, defaults, validation rules, and what each one controls.
 sidebar:
   order: 2
 ---
 
-blogwright reads one JSONC config file per environment. Only `siteName` is required — everything else has a default or is optional. This page lists every key in the schema: its type, default, validation rules, and what it controls.
+blogwright reads one JSONC config file per environment. Only `siteName` is required - everything else has a default or is optional. This page lists every key in the schema: its type, default, validation rules, and what it controls.
 
 ## Config files
 
-Config is loaded from `config/<env>.jsonc` at the repo root of the consuming site, falling back to `ops.config.jsonc`. Pass `--config <path>` to use an explicit file instead — it then becomes the only candidate. The repo root is found by walking up from the invocation directory to the nearest `.git` or `.jj`, so the CLI works from any subdirectory.
+Config is loaded from `config/<env>.jsonc` at the repo root of the consuming site, falling back to `ops.config.jsonc`. Pass `--config <path>` to use an explicit file instead - it then becomes the only candidate. The repo root is found by walking up from the invocation directory to the nearest `.git` or `.jj`, so the CLI works from any subdirectory.
 
 The environment defaults to `production`; pass another as the positional `[env]` or `--env` (see [Environments](/guides/environments/)). If no candidate file exists for the environment, the CLI errors and lists the paths it looked for.
 
@@ -21,15 +21,15 @@ The minimal config:
 // config/production.jsonc
 {
   "region": "us-east-1",
-  "siteName": "example", // required — the stable slug in every AWS resource name
+  "siteName": "example", // required - the stable slug in every AWS resource name
 }
 ```
 
-`blogwright init` writes this file for you interactively. Without a TTY, write it by hand — the two lines above are enough to bootstrap and deploy.
+`blogwright init` writes this file for you interactively. Without a TTY, write it by hand - the two lines above are enough to bootstrap and deploy.
 
 ### How overrides merge
 
-Your file is merged over the defaults. The nested objects `microvm` (including `microvm.idle`), `retention`, `seo`, and `paths` merge key-by-key, so you can override a single nested field and keep the rest of the defaults. Scalars and arrays replace their default outright — setting `sourceIgnore` replaces the default list, it does not extend it.
+Your file is merged over the defaults. The nested objects `microvm` (including `microvm.idle`), `retention`, `seo`, and `paths` merge key-by-key, so you can override a single nested field and keep the rest of the defaults. Scalars and arrays replace their default outright - setting `sourceIgnore` replaces the default list, it does not extend it.
 
 ## Core identity
 
@@ -37,7 +37,7 @@ Your file is merged over the defaults. The nested objects `microvm` (including `
 
 `string` · **required**
 
-Stable slug used in every derived AWS resource name. Must be lowercase alphanumeric/dashes (`^[a-z0-9-]+$`). The per-environment S3 bucket is named `<env>-<siteName>-<accountId>` and must fit S3's 63-character limit — the CLI rejects the combination otherwise, with a pointer to shorten the environment or site name.
+Stable slug used in every derived AWS resource name. Must be lowercase alphanumeric/dashes (`^[a-z0-9-]+$`). The per-environment S3 bucket is named `<env>-<siteName>-<accountId>` and must fit S3's 63-character limit - the CLI rejects the combination otherwise, with a pointer to shorten the environment or site name.
 
 :::caution
 Changing `siteName` renames every derived resource, which means a whole new stack. Pick it once and keep it.
@@ -53,13 +53,13 @@ Primary AWS region for S3, the builder MicroVM, and CloudWatch logs. ACM certifi
 
 `string` · optional · no default
 
-Custom domain for the site. May also be supplied per-invocation with `--domain`, which takes precedence over the config value. When set, bootstrap requests an ACM certificate and prints the validation CNAMEs — see [Custom domains](/guides/custom-domains/). When unset, the site is served from its CloudFront domain.
+Custom domain for the site. May also be supplied per-invocation with `--domain`, which takes precedence over the config value. When set, bootstrap requests an ACM certificate and prints the validation CNAMEs - see [Custom domains](/guides/custom-domains/). When unset, the site is served from its CloudFront domain.
 
 ### `app`
 
 `string` · optional · no default
 
-Value of the `app` tag applied to every AWS resource blogwright creates (alongside an `environment` tag). When unset it falls back to the `domain`, then to the repo directory name — always something a human can trace back to the project from a billing or resource listing. Site files get the same tags as S3 object tags.
+Value of the `app` tag applied to every AWS resource blogwright creates (alongside an `environment` tag). When unset it falls back to the `domain`, then to the repo directory name - always something a human can trace back to the project from a billing or resource listing. Site files get the same tags as S3 object tags.
 
 ### `githubRepo`
 
@@ -103,9 +103,9 @@ Maximum run duration of a builder MicroVM, in seconds. Must be between `1` and `
 
 Idle policy passed verbatim to each builder MicroVM launch:
 
-- **`autoResumeEnabled`** — `boolean`, default `false`. Whether the service may automatically resume a suspended MicroVM.
-- **`maxIdleDurationSeconds`** — `number`, default `300`. How long the MicroVM may sit idle.
-- **`suspendedDurationSeconds`** — `number`, default `120`. How long it stays suspended.
+- **`autoResumeEnabled`** - `boolean`, default `false`. Whether the service may automatically resume a suspended MicroVM.
+- **`maxIdleDurationSeconds`** - `number`, default `300`. How long the MicroVM may sit idle.
+- **`suspendedDurationSeconds`** - `number`, default `120`. How long it stays suspended.
 
 ## Log retention
 
@@ -131,13 +131,13 @@ Each deploy zips the repo (honoring `.gitignore`), builds it in the MicroVM, syn
 
 `string[]` · optional · default: `[".jj/", ".git/", "node_modules/", "dist/", ".astro/"]`
 
-Extra path prefixes excluded from the source zip, on top of what `.gitignore` already excludes. Setting this replaces the default list — include the defaults you still want.
+Extra path prefixes excluded from the source zip, on top of what `.gitignore` already excludes. Setting this replaces the default list - include the defaults you still want.
 
 ### `sourceInclude`
 
 `string[]` · optional · default: `[]`
 
-Paths zipped into the deploy source even when gitignored — for artifacts a pre-deploy step builds outside the MicroVM (a wasm bundle, generated assets). Each entry must exist and be non-empty at deploy time, so a forgotten pre-build fails fast instead of shipping a broken site. Entries must be repo-relative, with no leading `/` and no `..` segments.
+Paths zipped into the deploy source even when gitignored - for artifacts a pre-deploy step builds outside the MicroVM (a wasm bundle, generated assets). Each entry must exist and be non-empty at deploy time, so a forgotten pre-build fails fast instead of shipping a broken site. Entries must be repo-relative, with no leading `/` and no `..` segments.
 
 ```jsonc
 {
@@ -159,17 +159,17 @@ If a deploy changes more CloudFront paths than this, the CLI invalidates `/*` in
 
 `string` · optional · default: `"index.html"`
 
-The CloudFront distribution's default root object — the object served for requests to the bare origin root.
+The CloudFront distribution's default root object - the object served for requests to the bare origin root.
 
 ### `spa`
 
 `boolean` · optional · default: `false`
 
-Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown paths (client-side routing) instead of the 404 page. Applies to the main distribution at creation. Previews are unaffected — the shared preview distribution's error responses cannot be host-routed. See [Non-Astro sites](/guides/non-astro-sites/).
+Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown paths (client-side routing) instead of the 404 page. Applies to the main distribution at creation. Previews are unaffected - the shared preview distribution's error responses cannot be host-routed. See [Non-Astro sites](/guides/non-astro-sites/).
 
 ## SEO
 
-robots.txt and sitemap.xml policy, with environment-aware defaults: production is indexable with a sitemap; every other environment — including previews — blocks crawlers and skips the sitemap.
+robots.txt and sitemap.xml policy, with environment-aware defaults: production is indexable with a sitemap; every other environment - including previews - blocks crawlers and skips the sitemap.
 
 ### `seo.robots`
 
@@ -177,9 +177,9 @@ robots.txt and sitemap.xml policy, with environment-aware defaults: production i
 
 How the deploy pipeline writes `robots.txt` into the published site:
 
-- **`auto`** (default) — production gets an indexable `robots.txt` (`Allow: /`, plus a `Sitemap:` line when the sitemap is on); every other environment gets `Disallow: /`.
-- **`index`** / **`noindex`** — force either policy regardless of environment.
-- **`off`** — don't manage `robots.txt` at all; whatever the build produced is left alone.
+- **`auto`** (default) - production gets an indexable `robots.txt` (`Allow: /`, plus a `Sitemap:` line when the sitemap is on); every other environment gets `Disallow: /`.
+- **`index`** / **`noindex`** - force either policy regardless of environment.
+- **`off`** - don't manage `robots.txt` at all; whatever the build produced is left alone.
 
 Preview deploys always count as non-production for `auto`, even when the preview stack deploys from a production config.
 
@@ -193,7 +193,7 @@ Explicit `robots.txt` body, published verbatim in place of the generated one. Ig
 
 `"auto" | "on" | "off"` · optional · default: `"auto"`
 
-`sitemap.xml` generation, built from the site's HTML pages with absolute URLs. `auto` turns it on in production and off everywhere else; `on`/`off` force it. Requires a resolvable site origin — the custom domain, or the CloudFront domain otherwise.
+`sitemap.xml` generation, built from the site's HTML pages with absolute URLs. `auto` turns it on in production and off everywhere else; `on`/`off` force it. Requires a resolvable site origin - the custom domain, or the CloudFront domain otherwise.
 
 ## Site layout (`paths`)
 
@@ -211,7 +211,7 @@ Repo-relative paths describing the consuming site's layout. The defaults match a
 
 `string` · optional · default: `"."`
 
-Directory the MicroVM builds in — `pnpm install && pnpm build` run here. `"."` for an app at the repo root; `"web"` for a monorepo subdirectory. Must be repo-relative with no `..` segments.
+Directory the MicroVM builds in - `pnpm install && pnpm build` run here. `"."` for an app at the repo root; `"web"` for a monorepo subdirectory. Must be repo-relative with no `..` segments.
 
 ### `paths.dist`
 
@@ -223,7 +223,7 @@ Built output directory the MicroVM publishes, relative to the repo root (not to 
 
 `string` · optional · default: `"public"`
 
-The static-asset directory served at the site root (Astro's `public/`). The `pds` commands write the OAuth client documents and the standard.site well-known file at protocol-fixed locations under this directory — their URL paths are part of the OAuth client id and the standard.site spec, so only the directory root varies.
+The static-asset directory served at the site root (Astro's `public/`). The `pds` commands write the OAuth client documents and the standard.site well-known file at protocol-fixed locations under this directory - their URL paths are part of the OAuth client id and the standard.site spec, so only the directory root varies.
 
 ### `paths.content`
 
@@ -241,7 +241,7 @@ JSON file the site imports to render its document `<link>` tags, written by `pds
 
 `object` · optional · no default
 
-AT Protocol / standard.site publishing. When the section is absent, publishing is entirely inert. `{ "name": "My Blog" }` is enough to enable it — see [Publishing to standard.site](/guides/publishing-standard-site/).
+AT Protocol / standard.site publishing. When the section is absent, publishing is entirely inert. `{ "name": "My Blog" }` is enough to enable it - see [Publishing to standard.site](/guides/publishing-standard-site/).
 
 ```jsonc
 {
@@ -258,7 +258,7 @@ AT Protocol / standard.site publishing. When the section is absent, publishing i
 
 `string` · **required** (within `pds`)
 
-Publication display name — the `name` on the `site.standard.publication` record. Must be non-blank.
+Publication display name - the `name` on the `site.standard.publication` record. Must be non-blank.
 
 ### `pds.description`
 
@@ -270,7 +270,7 @@ Optional publication description.
 
 `string` · optional · default: `"https://public.api.bsky.app"`
 
-Resolver `pds login` uses to turn a handle into a DID. Must be an `https:` URL. Unused when logging in with a bare DID — the PDS endpoint itself is always discovered from the DID document during OAuth.
+Resolver `pds login` uses to turn a handle into a DID. Must be an `https:` URL. Unused when logging in with a bare DID - the PDS endpoint itself is always discovered from the DID document during OAuth.
 
 ### `pds.secretName`
 

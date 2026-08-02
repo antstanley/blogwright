@@ -1,7 +1,7 @@
 /**
  * Fetch adapter for the PingBuilder port: opens a connection to the builder
  * MicroVM's proxy endpoint to wake the resumed agent's event loop. Errors never
- * cross the port — the ping is best-effort by contract, and the agent's HTTP/1
+ * cross the port - the ping is best-effort by contract, and the agent's HTTP/1
  * server may not even parse the request.
  */
 
@@ -18,11 +18,11 @@ export function createFetchPing(fetchImpl: typeof fetch = fetch): PingBuilder {
         headers: { 'X-aws-proxy-auth': token, 'X-aws-proxy-port': '8080' },
         signal: AbortSignal.timeout(PING_TIMEOUT_MS),
       });
-      // Release the connection — an unread body pins an undici socket per
+      // Release the connection - an unread body pins an undici socket per
       // poll cycle until GC.
       await res.body?.cancel();
     } catch {
-      /* expected — the point is the wake-up, not the response */
+      /* expected - the point is the wake-up, not the response */
     }
   };
 }

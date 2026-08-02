@@ -8,7 +8,7 @@ import { createContext } from './context.js';
 import { initSite } from './init.js';
 import { createLogger, type Logger } from './logger.js';
 
-const USAGE = `blogwright — full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
+const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
 
 Usage:
   blogwright <command> [env] [options]
@@ -53,7 +53,7 @@ Options:
   --endpoint <url>  AWS endpoint override (e.g. http://localhost:4566 for floci)
   --id <preview>    Preview id for preview deploy/destroy (also accepted positionally)
   --plain           Minimal machine-friendly output (no colour, no live status,
-                    no prompts) — for CI systems and agents; also automatic when
+                    no prompts) - for CI systems and agents; also automatic when
                     output is piped. NO_COLOR disables colour only.
   --refresh         Re-upload every file on deploy, even unchanged ones, so
                     metadata fixes (content types, object tags) reach live
@@ -105,7 +105,7 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
     return values.help || command ? 0 : 1;
   }
   if (command === 'init') {
-    // Runs before any context exists — there is no config to load yet.
+    // Runs before any context exists - there is no config to load yet.
     return initSite(createNodeFileSystem(), terminal, logger);
   }
   if (command === 'preview') {
@@ -190,7 +190,7 @@ async function runPds(
   terminal: Terminal,
   logger: Logger,
 ): Promise<number> {
-  // `pds secret set production` — the secret sub-action shifts positionals by one.
+  // `pds secret set production` - the secret sub-action shifts positionals by one.
   const secret = positionals[1] === 'secret';
   const action = secret ? `secret ${positionals[2] ?? ''}`.trim() : positionals[1];
   const envPositional = positionals[secret ? 3 : 2];

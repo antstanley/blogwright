@@ -2,7 +2,7 @@
  * Test-only OpsContext factory. Builds a real, fully-typed context over
  * in-memory adapters: file access hits a Map-backed FileSystem, and every AWS
  * client method that a test has not overridden fails fast at the transport.
- * Tests substitute behaviour here — at the ports — never by casting.
+ * Tests substitute behaviour here - at the ports - never by casting.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -52,13 +52,13 @@ export interface TestContextOverrides {
 
 const rejectAllTransport: Transport = async (req) => {
   throw new Error(
-    `unexpected AWS request in test: ${req.method} ${req.url} — override the client method on createTestContext`,
+    `unexpected AWS request in test: ${req.method} ${req.url} - override the client method on createTestContext`,
   );
 };
 
 /**
  * Layer test overrides over a real client so untouched methods still fail fast.
- * Overrides must be plain objects of methods (own properties) — a class
+ * Overrides must be plain objects of methods (own properties) - a class
  * instance's prototype methods would not be copied.
  */
 function overrideClient<T extends object>(base: T, overrides: Partial<T> | undefined): T {
@@ -91,12 +91,12 @@ function testClients(region: string, overrides: ClientOverrides): AwsClients {
 const rejectAllVcs: Vcs = {
   revisionHash: async (cwd) => {
     throw new Error(
-      `unexpected VCS call in test: revisionHash(${cwd}) — override ports.vcs on createTestContext`,
+      `unexpected VCS call in test: revisionHash(${cwd}) - override ports.vcs on createTestContext`,
     );
   },
   listFiles: async (cwd) => {
     throw new Error(
-      `unexpected VCS call in test: listFiles(${cwd}) — override ports.vcs on createTestContext`,
+      `unexpected VCS call in test: listFiles(${cwd}) - override ports.vcs on createTestContext`,
     );
   },
 };
@@ -112,7 +112,7 @@ const silentTerminal: Terminal = {
   status: () => undefined,
   question: async (prompt) => {
     throw new Error(
-      `unexpected terminal prompt in test: ${prompt} — override ports.terminal on createTestContext`,
+      `unexpected terminal prompt in test: ${prompt} - override ports.terminal on createTestContext`,
     );
   },
 };
@@ -162,7 +162,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
   return {
     env,
     // Mirrors production resolution (context.ts): an explicit domain wins,
-    // else the config's — so a test setting config.domain builds the same
+    // else the config's - so a test setting config.domain builds the same
     // graph shape (certificate node, aliases) the real run would.
     domain: overrides.domain ?? config.domain,
     preview: overrides.preview ?? false,

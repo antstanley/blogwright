@@ -14,7 +14,7 @@ export type CredentialProvider = () => Promise<AwsCredentials>;
  *
  * When an endpoint override is in play (floci/localstack) and no real credentials
  * are configured, fall back to the emulator's dummy `test/test` pair so signing
- * still succeeds — floci does not validate signatures.
+ * still succeeds - floci does not validate signatures.
  */
 export function createCredentialProvider(opts: {
   override?: boolean | undefined;

@@ -93,7 +93,7 @@ export async function destroyGraph(nodes: ResourceNode[], ctx: OpsContext): Prom
     await node.delete(ctx);
     delete ctx.state.resources[node.id];
     // The state lives in the bucket that is itself being deleted, so persisting it may
-    // fail (NoSuchBucket) once the bucket node is gone — never let that abort teardown.
+    // fail (NoSuchBucket) once the bucket node is gone - never let that abort teardown.
     await ctx.save().catch(() => undefined);
     ctx.logger.ok(`deleted ${node.title}`);
   }

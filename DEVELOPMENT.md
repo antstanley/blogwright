@@ -2,7 +2,7 @@
 
 **Status: Canonical · Date: 2026-07-11 · Owner: Ant Stanley · Scope: Repo-wide**
 
-The rules of the road for everyone — humans and AI agents — writing code in this
+The rules of the road for everyone - humans and AI agents - writing code in this
 repository. Covers the toolchain, the pervasive coding style (Clean Code), error
 handling and boundaries, limits, version control (jujutsu), TypeScript conventions,
 repository hygiene, agent-specific emphases, and the definition of done.
@@ -26,7 +26,7 @@ CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `pnpm test`
 and every pull request. There are no local pre-commit or pre-push hooks; CI is
 the enforcement gate.
 
-## Clean Code — the pervasive style
+## Clean Code - the pervasive style
 
 This project adopts **Clean Code** as its pervasive coding style. This is the default,
 not a recommendation. Deviations require a written reason in the change description.
@@ -40,30 +40,30 @@ Load-bearing principles:
 - **Meaningful names.** Intention-revealing, pronounceable, searchable. The name states
   what a thing is or does; no encodings, no abbreviations that need a key.
 - **Small functions that do one thing.** A function operates at a single level of
-  abstraction. Few parameters (prefer 0–2; avoid boolean flag arguments — they signal a
+  abstraction. Few parameters (prefer 0–2; avoid boolean flag arguments - they signal a
   function doing two things). No hidden side effects; separate commands from queries.
 - **Single responsibility.** A module has one reason to change. High cohesion, low
   coupling. The package boundaries encode this: `blogwright-core` owns transport,
   config, state, and shared ports; the CLI owns the graph, commands, and dispatch;
   `blogwright-pds` owns standard.site (PDS) publishing; the build-agent owns the
   in-MicroVM build server.
-- **No duplication (DRY).** Duplicated logic has one home — tempered by judgment:
+- **No duplication (DRY).** Duplicated logic has one home - tempered by judgment:
   prefer a little duplication over the wrong abstraction.
 - **Self-documenting code; comments are a last resort.** A comment is often a failure
   to express something in code. Good comments explain *why* or warn of consequences
   (see the rkey warning below); they never paraphrase the code, and commented-out code
   is deleted.
 
-## Hexagonal architecture — ports and adapters
+## Hexagonal architecture - ports and adapters
 
-This project adopts **hexagonal architecture** (ports and adapters). Domain logic —
-the graph engine, deploy orchestration, PDS reconciliation, config and naming — never
+This project adopts **hexagonal architecture** (ports and adapters). Domain logic -
+the graph engine, deploy orchestration, PDS reconciliation, config and naming - never
 touches the outside world directly. Every side effect crosses a **port**: a small,
 repo-owned interface defined next to the domain code that needs it. **Adapters**
 implement ports against real infrastructure and live at the edge; the **composition
 root** (`context.ts` / `bin.ts`) is the only place adapters are constructed and wired.
 
-The rule, stated once: **a domain module imports ports and other domain modules —
+The rule, stated once: **a domain module imports ports and other domain modules -
 never `node:fs`, `node:child_process`, `fetch`, or a vendor SDK.** Only adapters and
 the composition root may.
 
@@ -83,7 +83,7 @@ Existing ports are the model for new ones:
 Conventions:
 
 - **Ports are minimal.** A port exposes the operations the domain needs, in domain
-  vocabulary — not a re-export of the underlying API's surface. (`Transport` is one
+  vocabulary - not a re-export of the underlying API's surface. (`Transport` is one
   function, not an HTTP client.)
 - **Function-typed ports are preferred** where one operation suffices; interfaces
   where the operations cohere (a store, a VCS).
@@ -97,8 +97,8 @@ Conventions:
   never imports an adapter. `blogwright-core` hosts ports shared across packages
   (transport, filesystem, terminal) and their adapters; a package hosts privately
   the ports only it uses (the CLI's VCS and builder-ping ports).
-- **Features live in their own packages.** A coherent feature with its own domain —
-  the standard.site integration in `blogwright-pds` is the model — is its own
+- **Features live in their own packages.** A coherent feature with its own domain -
+  the standard.site integration in `blogwright-pds` is the model - is its own
   workspace package depending on `blogwright-core`, consumed by the CLI through a
   narrow surface (`PdsContext`, satisfied structurally by the CLI's `OpsContext`). The CLI owns dispatch and wiring, not feature logic.
 
@@ -111,7 +111,7 @@ translate the failure into the repo's own vocabulary at that line.
 
 | Boundary                      | What to validate                       | How |
 | ----------------------------- | -------------------------------------- | --- |
-| Config file → CLI             | Shape, required fields, value ranges   | `parseConfig` / `mergeConfig` / `validateConfig` in `blogwright-core` — the parsed JSONC never escapes unvalidated |
+| Config file → CLI             | Shape, required fields, value ranges   | `parseConfig` / `mergeConfig` / `validateConfig` in `blogwright-core` - the parsed JSONC never escapes unvalidated |
 | AWS API → core                | Status, body shape                     | Per-service clients in `blogwright-core` over the SigV4 transport; the CLI never issues a raw AWS call |
 | PDS / OAuth → pds package     | Token responses, record shapes         | `blogwright-pds` owns the atproto surface; nothing outside it touches OAuth state |
 | S3 state read                 | Round-trip integrity                   | The state store re-parses `state/<env>.json` on read and fails typed on mismatch |
@@ -119,10 +119,10 @@ translate the failure into the repo's own vocabulary at that line.
 
 ### Error handling in TypeScript
 
-- Throw `Error` with enough **context** to locate the cause — the operation that
+- Throw `Error` with enough **context** to locate the cause - the operation that
   failed, the offending value, and what would fix it (the config validators are the
   model: `config.siteName must be lowercase alphanumeric/dashes, got "…"`). Never log
-  a secret in that context — `pds secret status` shows metadata, never values.
+  a secret in that context - `pds secret status` shows metadata, never values.
 - **Never return or accept `null`/`undefined` for a domain value.** Return an empty
   collection, or make absence explicit in the type (`domain?: string | undefined`
   under `exactOptionalPropertyTypes`).
@@ -136,16 +136,16 @@ translate the failure into the repo's own vocabulary at that line.
 
 - Signal failure with exceptions, not error codes a caller may forget to check.
 - Throw early with context; catch only where the failure can be handled or reported.
-  Deliberate non-fatal paths are the exception and are logged as warnings — the
+  Deliberate non-fatal paths are the exception and are logged as warnings - the
   post-deploy PDS sync is the model (a failed sync warns; the next deploy heals).
 - Every catch handles or re-raises with more information; errors are never swallowed.
 
 ### Make intent explicit
 
-- Prefer types that make an invalid value hard to construct — union types over free
+- Prefer types that make an invalid value hard to construct - union types over free
   strings (`RobotsMode`, `'auto' | 'on' | 'off'`), required fields over defaults that
   guess (`siteName` has no default because a wrong guess names real AWS resources).
-- When behaviour is hard to read, the fix is a better name or a smaller function — not
+- When behaviour is hard to read, the fix is a better name or a smaller function - not
   a comment.
 - Match exhaustively over unions; `noFallthroughCasesInSwitch` is on, and the
   unexpected case raises rather than falling through.
@@ -153,8 +153,8 @@ translate the failure into the repo's own vocabulary at that line.
 ## Limits and bounds
 
 Magic numbers are replaced with **named constants or config fields** that state their
-meaning. Any genuine limit — MicroVM memory and duration, log retention, invalidation
-path counts — is a named config field with its default in `DEFAULT_CONFIG` and its
+meaning. Any genuine limit - MicroVM memory and duration, log retention, invalidation
+path counts - is a named config field with its default in `DEFAULT_CONFIG` and its
 range enforced in `validateConfig`, not a literal at the call site. Derived-name
 limits that come from AWS (the S3 63-character bucket-name cap) are checked where the
 name is derived, with an error that says how to fix it.
@@ -174,14 +174,14 @@ name is derived, with an error that says how to fix it.
 ### jujutsu workflow
 
 - **`jj` is the sole version-control front end.** Do not run `git commit` / `git add` /
-  `git status` against the working copy — the repo is colocated, and the index /
+  `git status` against the working copy - the repo is colocated, and the index /
   working-copy mismatch is exactly what jj removes.
 - **Describe before pushing.** `jj describe` sets the *why*.
 - **Feature work happens on named bookmarks** (`jj bookmark create feat/x`); pull
   requests are pushed with `jj git push`.
 - **Resolve conflicts in jj** (`jj resolve`), not by editing plain-text markers.
-- **Destructive `jj` operations need explicit confirmation** — `jj abandon`,
-  `jj op restore`, force-fetches, bookmark deletion — even when they look like the
+- **Destructive `jj` operations need explicit confirmation** - `jj abandon`,
+  `jj op restore`, force-fetches, bookmark deletion - even when they look like the
   cleanest path.
 - The `.jj/` directory is local; it is not committed.
 
@@ -201,15 +201,15 @@ name is derived, with an error that says how to fix it.
   validates the result or a comment justifies them.
 - **Strict compiler settings are load-bearing:** `strict`,
   `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`,
-  `verbatimModuleSyntax` — all inherited from `tsconfig.base.json`; packages do not
+  `verbatimModuleSyntax` - all inherited from `tsconfig.base.json`; packages do not
   weaken them.
 - **Domain types are imported from `blogwright-core`** (`OpsConfig`, `Names`, the
   client interfaces), never hand-redefined in the CLI or build-agent.
 - **Functions are small and single-purpose,** operating at one level of abstraction;
   when a second level appears, extract a named helper.
-- **Prefer 0–2 parameters; no boolean flag arguments** — a flag means the function
+- **Prefer 0–2 parameters; no boolean flag arguments** - a flag means the function
   does two things, so split it.
-- **Separate commands from queries** — a function either changes state or returns a
+- **Separate commands from queries** - a function either changes state or returns a
   value, not both.
 - **Comments explain *why*.** Doc comments on exported symbols state constraints and
   units (see `config.ts`); no comment paraphrases the code.
@@ -233,7 +233,7 @@ name is derived, with an error that says how to fix it.
   mock-covered.
 - **Positive and negative space.** Every happy-path test is paired with a test that
   the adjacent bad input is rejected (the config validator tests are the model).
-- **Test the validity boundary** — one below a limit, at the limit, one above.
+- **Test the validity boundary** - one below a limit, at the limit, one above.
 - **Pinned vectors are contracts.** `packages/pds/src/rkey.test.ts` pins rkey/TID
   vectors that are on-the-wire identity: they must never change for an existing post
   path. Changing a pinned vector is a breaking protocol change, not a test fix.
@@ -258,12 +258,12 @@ name is derived, with an error that says how to fix it.
   session context and is excluded via `.git/info/exclude`. Never commit secrets: PDS
   keys and OAuth sessions live only in Secrets Manager, and AWS credentials come from
   the ambient provider chain.
-- **Build artifacts are gitignored, never committed** — `dist/` everywhere, and
+- **Build artifacts are gitignored, never committed** - `dist/` everywhere, and
   `packages/cli/agent/` (the copied build-agent bundle, produced by
   `scripts/copy-agent.mjs` and shipped only in the npm tarball).
 - **Reproducibility is deliberate.** The build-agent manifest hashes the agent's
   *source*, not the built bundle, so image keys do not vary by platform. Do not
-  change hashing inputs casually — a changed hash forces a builder-image rebuild for
+  change hashing inputs casually - a changed hash forces a builder-image rebuild for
   every consumer.
 - **`blogwright-build-agent` stays `private: true`.** It ships inside the CLI
   package; it is never published on its own.
@@ -288,11 +288,11 @@ Where agents most often slip in this repo:
 7. **Express intent in names, not comments.** Do not add a comment that restates the
    code; if a comment is needed to explain *what*, rename instead.
 8. **Tests are first-class.** A change ships with tests written alongside it;
-   "compiles" is not "works" — run `pnpm build && pnpm test && pnpm lint && pnpm knip`
+   "compiles" is not "works" - run `pnpm build && pnpm test && pnpm lint && pnpm knip`
    and report the actual output. Point tests at agent artifacts through
    `createTestContext` (an injected `agentDir` plus the in-memory `FileSystem`);
    do not weaken the runtime `../agent` resolution.
-9. **No duplication.** Before adding logic, check whether it already has a home —
+9. **No duplication.** Before adding logic, check whether it already has a home -
    especially in `blogwright-core`, whose clients and config own their surfaces.
    **Stay inside the architecture:** a new side effect goes through a port
    (see [Hexagonal architecture](#hexagonal-architecture--ports-and-adapters));
@@ -314,7 +314,7 @@ A change is done when:
 - New external interactions (network, disk, process, terminal) go through a port;
   no direct Node API or vendor-SDK calls were added to domain modules.
 - `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip`
-  all pass locally — the same gates CI runs (CI adds `pnpm typecheck`).
+  all pass locally - the same gates CI runs (CI adds `pnpm typecheck`).
 - A user-facing change ships with a changeset (`pnpm changeset`) describing its
   semver impact; internal-only changes (docs, tests, refactors) do not need one.
 - Pinned rkey vectors and derived AWS resource names are unchanged for existing
@@ -333,9 +333,9 @@ A change is done when:
 
 **Decisions**
 
-- *Style.* **Clean Code.** The codebase already practices it — exceptions with
+- *Style.* **Clean Code.** The codebase already practices it - exceptions with
   contextual messages throughout, no assertion discipline, vitest (153 tests) as the
-  correctness net — so the guidelines codify the existing style rather than impose a
+  correctness net - so the guidelines codify the existing style rather than impose a
   migration.
 - *Placement.* **Repo root, not `.specs/`.** The repo has no spec set; a single
   root-level `DEVELOPMENT.md` was chosen for visibility. If a `.specs/` set is created
@@ -347,20 +347,20 @@ A change is done when:
   in `.github/workflows/ci.yml` is the enforcement point, and contributors run the
   same four commands locally before pushing.
 - *Architecture.* **Hexagonal (ports and adapters), adopted 2026-07-11.** The repo
-  already practiced it at its two network seams (`Transport`, `XrpcTransport`) —
-  transport-level mocking is why the test suite needs no cloud — so the adoption
+  already practiced it at its two network seams (`Transport`, `XrpcTransport`) -
+  transport-level mocking is why the test suite needs no cloud - so the adoption
   generalizes an existing strength rather than importing a foreign structure. Hexagonal
   here means port discipline inside packages first; once a feature's side effects sat
   behind ports, the standard.site integration was extracted into `blogwright-pds`
   (2026-07-11) per the feature-package convention above.
 - *Hexagonal enforcement.* **A lint rule, not convention, active 2026-07-11.**
   `no-restricted-imports` in the root `.oxlintrc.json` errors on `node:fs`,
-  `node:fs/promises`, `node:child_process`, and `node:readline`(`/promises`) —
-  with and without the `node:` prefix — everywhere except the adapter directories
+  `node:fs/promises`, `node:child_process`, and `node:readline`(`/promises`) -
+  with and without the `node:` prefix - everywhere except the adapter directories
   (`packages/core/src/adapters/`, `packages/cli/src/adapters/`), the CLI
   composition root (`bin.ts`, `context.ts`), the tmp-dir test helpers
   (`cli/src/test-support.ts` and `pds/src/test-support.ts`, which back the
-  node-adapter integration tests), and `packages/build-agent` — the in-MicroVM build server is an edge component whose
+  node-adapter integration tests), and `packages/build-agent` - the in-MicroVM build server is an edge component whose
   whole job is spawning builds and writing artifacts. oxlint scopes the exception
   with config `overrides`; the glob paths resolve relative to the root config, so
   one rule covers every package even though `pnpm lint` runs per package.
@@ -368,12 +368,12 @@ A change is done when:
 **Open questions**
 
 - oxfmt is installed and configured (`.oxfmtrc.json`) but wired into no package
-  script and not run in CI — should a root `fmt`/`fmt:check` script be added and
+  script and not run in CI - should a root `fmt`/`fmt:check` script be added and
   enforced in CI?
 - Should a pre-push hook mirror the four CI gates locally, or is CI-only enforcement
   sufficient at this repo's size?
 - Commit subjects follow an imperative sentence-case convention, not Conventional
-  Commits — adopt Conventional Commits before the first external contribution, or
+  Commits - adopt Conventional Commits before the first external contribution, or
   keep the current convention?
 - Boundary validation is hand-rolled (`validateConfig`); if config surface keeps
   growing, is a schema validator (zod/valibot) worth the dependency?

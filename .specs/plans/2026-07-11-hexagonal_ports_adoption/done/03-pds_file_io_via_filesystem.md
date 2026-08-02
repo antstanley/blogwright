@@ -1,10 +1,10 @@
-# Task 03 — PDS file I/O via the FileSystem port
+# Task 03 - PDS file I/O via the FileSystem port
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture — ports and adapters](../../../../DEVELOPMENT.md) (the domain-module import rule applied to the `pds/` modules)
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (the domain-module import rule applied to the `pds/` modules)
 **Depends on:** 01
-**Produces:** all `pds` file access — content enumeration, atproto.json and well-known reads, keygen/init writes — goes through `ctx.ports.fs`
+**Produces:** all `pds` file access - content enumeration, atproto.json and well-known reads, keygen/init writes - goes through `ctx.ports.fs`
 **Pointers:** `packages/cli/src/pds/content.ts:51,58` (readdir/readFile), `packages/cli/src/pds/sync.ts:60,76` (config reads), `packages/cli/src/pds/commands.ts:59-60,151-155` (keygen/init writes)
 
 ## Steps

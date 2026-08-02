@@ -403,7 +403,7 @@ describe('distributionNode adoption', () => {
   it('rethrows the original conflict when no candidate CallerReference matches', async () => {
     const { ctx, node, tagged } = adoptCtx('staging-example-999999999999');
 
-    // A foreign distribution holding the alias is a real conflict — surface it.
+    // A foreign distribution holding the alias is a real conflict - surface it.
     await expect(node.create(ctx)).rejects.toThrow(/CNAMEAlreadyExists/);
     expect(ctx.state.resources['cloudfront-distribution']).toBeUndefined();
     expect(tagged).toEqual([]);

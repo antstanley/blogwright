@@ -2,10 +2,10 @@ name: Deploy docs
 
 # Deploy the docs site (docs/ workspace) to blogwright.iamstan.dev: docs-only
 # changes go live when they merge to main (path-filtered push), and every GitHub
-# release republishes the docs so they always track the released CLI — a no-op
+# release republishes the docs so they always track the released CLI - a no-op
 # when nothing changed, since the sync only uploads and invalidates files whose
 # content differs. PR previews deploy continuously (see preview.yml). The deploy
-# dogfoods the workspace's own CLI — packages/cli is built from source here, not
+# dogfoods the workspace's own CLI - packages/cli is built from source here, not
 # installed from npm.
 on:
   release:
@@ -41,7 +41,7 @@ jobs:
       name: production
       url: https://blogwright.iamstan.dev
     steps:
-      # A release event checks out the release's tag commit — that revision is what
+      # A release event checks out the release's tag commit - that revision is what
       # gets built and published.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -53,7 +53,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Build the blogwright CLI
-        # The CLI and its workspace dependencies only — the docs site itself is
+        # The CLI and its workspace dependencies only - the docs site itself is
         # built inside the MicroVM, not on this runner.
         run: pnpm --filter blogwright... build
       - uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1

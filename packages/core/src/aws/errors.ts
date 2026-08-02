@@ -12,7 +12,7 @@ export class AwsError extends Error {
     statusCode: number;
     requestId?: string | undefined;
   }) {
-    super(`${opts.service}: ${opts.code} — ${opts.message} (HTTP ${opts.statusCode})`);
+    super(`${opts.service}: ${opts.code} - ${opts.message} (HTTP ${opts.statusCode})`);
     this.name = 'AwsError';
     this.service = opts.service;
     this.code = opts.code;

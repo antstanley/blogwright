@@ -42,7 +42,7 @@ describe('microvmLogGroup', () => {
   });
 
   it('falls back to the derived name when state has nothing recorded', () => {
-    // A stack that predates state recording — the derived name is the only source.
+    // A stack that predates state recording - the derived name is the only source.
     expect(microvmLogGroup(ctxWith({}))).toBe('/aws/lambda/microvms/preview-example-builder');
   });
 });

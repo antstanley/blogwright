@@ -17,13 +17,13 @@ async function collectSource(
 }
 
 /**
- * A hash of the agent's *source* — the build-agent package plus the ops-core it bundles,
+ * A hash of the agent's *source* - the build-agent package plus the ops-core it bundles,
  * and their manifests. Used to key the image artifact and decide whether the builder image
  * needs rebuilding. Deliberately NOT a hash of the bundled `server.js`: that output varies
  * by build platform/toolchain (e.g. macOS vs the Linux CI runner), so hashing it caused
  * spurious cross-platform image rebuilds. Source bytes are identical everywhere, so this is
  * reproducible. It's a superset of what's actually tree-shaken into the bundle, so an
- * unrelated ops-core change can trigger a (harmless) rebuild — an acceptable trade for
+ * unrelated ops-core change can trigger a (harmless) rebuild - an acceptable trade for
  * never shipping a stale agent.
  *
  * Computed at bundle time (see write-manifest.ts) and shipped in dist/agent-manifest.json,
@@ -38,7 +38,7 @@ export async function agentSourceHash(dir: string): Promise<string> {
     { label: 'agent/Dockerfile', abs: join(dir, 'Dockerfile') },
     { label: 'agent/package.json', abs: join(dir, 'package.json') },
     // The bundler config, compiler settings, and lockfile all shape the emitted
-    // server.js — a dependency bump within range must produce a new hash, or a
+    // server.js - a dependency bump within range must produce a new hash, or a
     // changed agent ships under an unchanged image key and is never rebuilt.
     { label: 'agent/rolldown.config.ts', abs: join(dir, 'rolldown.config.ts') },
     { label: 'agent/tsconfig.json', abs: join(dir, 'tsconfig.json') },

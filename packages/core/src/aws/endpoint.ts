@@ -9,7 +9,7 @@
 export interface ResolvedEndpoint {
   protocol: 'http:' | 'https:';
   host: string;
-  /** Signing region — some services (iam, cloudfront) are global and sign as us-east-1. */
+  /** Signing region - some services (iam, cloudfront) are global and sign as us-east-1. */
   signingRegion: string;
   /** True when talking to an override origin (floci/localstack); forces S3 path-style. */
   override: boolean;

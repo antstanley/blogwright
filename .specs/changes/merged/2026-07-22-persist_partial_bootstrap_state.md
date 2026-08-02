@@ -6,7 +6,7 @@ State is only persisted after a node's `create()` returns, so a failure between 
 remote mutation and that save orphans the resource outside the state file. This
 change persists whatever outputs a node has recorded even when its `create()`
 throws, and requires nodes to record identity outputs immediately after the
-remote call that creates a resource — before any secondary mutation.
+remote call that creates a resource - before any secondary mutation.
 
 ---
 
@@ -33,14 +33,14 @@ node (source → destination → delivery) among them.
 
 ## Affected spec pages
 
-No canonical spec page covers the graph engine yet — the nearest documentation
+No canonical spec page covers the graph engine yet - the nearest documentation
 is DEVELOPMENT.md's architecture notes. This change spec stands alone; if a
 canonical `graph-engine` page exists by merge time, the blocks below fold into
 its Lifecycle section.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for the reconciler yet)* | Behavioral contract change to `applyGraph` and the node-authoring rules |
+| *(none - no canonical page for the reconciler yet)* | Behavioral contract change to `applyGraph` and the node-authoring rules |
 
 ---
 
@@ -69,16 +69,16 @@ its Lifecycle section.
 ## Implementation notes
 
 ```
-1. packages/cli/src/graph.ts:58-75 — wrap the create/update dispatch in
+1. packages/cli/src/graph.ts:58-75 - wrap the create/update dispatch in
    try/catch: on throw, await ctx.save().catch(warn) then rethrow. The
    post-success save at :73 stays.
 2. Audit multi-call create() implementations so identity outputs are recorded
    before secondary mutations:
-   - bucketNode (packages/cli/src/nodes.ts:34-56) — set output name after
+   - bucketNode (packages/cli/src/nodes.ts:34-56) - set output name after
      CreateBucket, before tagging/PAB.
-   - distributionNode (packages/cli/src/nodes.ts:567-604) — already correct
+   - distributionNode (packages/cli/src/nodes.ts:567-604) - already correct
      (outputs set at :593-596 before TagResource); keep as the pattern.
-   - logDeliveryNode (packages/cli/src/nodes.ts:646+) — record source/dest
+   - logDeliveryNode (packages/cli/src/nodes.ts:646+) - record source/dest
      ARNs as they are created.
 3. Tests (packages/cli/src/graph.test.ts / nodes.test.ts): a node whose
    create() sets an output then throws → state store contains the output after

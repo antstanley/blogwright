@@ -16,7 +16,7 @@ export interface Vcs {
 
 /**
  * Best-effort wake-up ping to a builder MicroVM's proxy endpoint. Implementations
- * never throw — the connection attempt, not the response, is the point.
+ * never throw - the connection attempt, not the response, is the point.
  */
 export type PingBuilder = (endpoint: string, token: string) => Promise<void>;
 

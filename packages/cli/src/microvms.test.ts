@@ -14,7 +14,7 @@ function vm(id: string, state: string, imageArn?: string): Microvm {
 
 function fakeCtx(
   vms: Microvm[],
-  terminate = vi.fn(async () => {}),
+  terminate = vi.fn(async () => { }),
   listImpl?: () => Promise<Microvm[]>,
 ): OpsContext {
   // env "preview" + site "example" derive the microvmImage name the ARN encodes
@@ -54,16 +54,16 @@ describe('runningStackMicrovms', () => {
 
 describe('clearRunningMicrovms', () => {
   it('proceeds without prompting when nothing is running', async () => {
-    const terminate = vi.fn(async () => {});
+    const terminate = vi.fn(async () => { });
     const ctx = fakeCtx([vm('x', 'TERMINATED', IMAGE_ARN)], terminate);
     expect(await clearRunningMicrovms(ctx)).toBe(true);
     expect(terminate).not.toHaveBeenCalled();
   });
 
   it('terminates running VMs and waits for them to clear (non-interactive default = yes)', async () => {
-    const terminate = vi.fn(async () => {});
+    const terminate = vi.fn(async () => { });
     // First listing (the guard) sees a running VM; subsequent listings (the wait loop)
-    // see it gone — so pollUntil resolves on its first probe without sleeping.
+    // see it gone - so pollUntil resolves on its first probe without sleeping.
     let calls = 0;
     const listImpl = async () => (calls++ === 0 ? [vm('a', 'RUNNING', IMAGE_ARN)] : []);
     const ctx = fakeCtx([], terminate, listImpl);
@@ -73,7 +73,7 @@ describe('clearRunningMicrovms', () => {
   });
 
   it('cancels the destroy when the operator declines the prompt', async () => {
-    const terminate = vi.fn(async () => {});
+    const terminate = vi.fn(async () => { });
     const ctx = fakeCtx([vm('a', 'RUNNING', IMAGE_ARN)], terminate);
     ctx.ports.terminal = createScriptedTerminal({ answers: ['n'] });
 

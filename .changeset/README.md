@@ -1,7 +1,7 @@
 # Changesets
 
 Every user-facing change ships with a changeset: run `pnpm changeset`, pick the
-affected packages and semver impact, and write a one-line summary — it becomes
+affected packages and semver impact, and write a one-line summary - it becomes
 the CHANGELOG entry. The three publishable packages are version-fixed, so any
 bump moves `blogwright`, `blogwright-core`, and `blogwright-pds` together.
 

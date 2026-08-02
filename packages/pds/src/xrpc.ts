@@ -1,4 +1,4 @@
-/** Minimal AT Protocol XRPC client — just the calls the standard.site sync needs. */
+/** Minimal AT Protocol XRPC client - just the calls the standard.site sync needs. */
 
 export interface PdsRecord {
   uri: string;
@@ -8,7 +8,7 @@ export interface PdsRecord {
 
 /**
  * Sends one XRPC request. `pathname` is relative to the account's PDS; auth
- * (OAuth DPoP headers, nonce retries) is the transport's job — in production
+ * (OAuth DPoP headers, nonce retries) is the transport's job - in production
  * this is the bound `fetchHandler` of an OAuthSession (see oauth.ts).
  */
 export type XrpcTransport = (pathname: string, init?: RequestInit) => Promise<Response>;
@@ -19,7 +19,7 @@ export class XrpcError extends Error {
   readonly statusCode: number;
 
   constructor(opts: { code: string; message: string; statusCode: number }) {
-    super(`pds: ${opts.code} — ${opts.message} (HTTP ${opts.statusCode})`);
+    super(`pds: ${opts.code} - ${opts.message} (HTTP ${opts.statusCode})`);
     this.name = 'XrpcError';
     this.code = opts.code;
     this.statusCode = opts.statusCode;
@@ -43,7 +43,7 @@ export class PdsClient {
   constructor(
     private readonly did: string,
     private readonly transport: XrpcTransport,
-  ) {}
+  ) { }
 
   private async call<T>(
     nsid: string,
@@ -61,7 +61,7 @@ export class PdsClient {
     try {
       parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     } catch {
-      /* non-JSON error body — fall through with the raw text as message */
+      /* non-JSON error body - fall through with the raw text as message */
     }
     if (!res.ok) {
       throw new XrpcError({
