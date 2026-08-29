@@ -20,6 +20,7 @@ export * from './aws/xml.js';
 export * from './clients.js';
 export * from './colors.js';
 export * from './config.js';
+export * from './plugin.js';
 export * from './ports.js';
 export * from './repo-root.js';
 export * from './state.js';

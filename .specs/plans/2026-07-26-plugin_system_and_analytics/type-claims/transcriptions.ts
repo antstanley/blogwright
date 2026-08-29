@@ -52,7 +52,13 @@ export interface PluginPorts {
  * `{ readonly resources: Readonly<Record<string, ResourceOutputs>> }`.
  */
 export interface SiteState {
-  readonly resources: Readonly<Record<string, ResourceOutputs>>;
+  // Readonly at BOTH levels. The shallow form this transcribed until 2026-08-29 let a
+  // plugin write `siteState.resources[id]['arn']`, and since the dispatch boundary hands
+  // the site's own `state.resources` through by reference, that write reaches the site's
+  // in-memory state and is persisted by the site's own save() - falsifying task 01's
+  // definition-of-done claim that a plugin can never write state/<env>.json. Claim C13
+  // exercises only the outer index signature, so the gate passed while this was wrong.
+  readonly resources: Readonly<Record<string, Readonly<ResourceOutputs>>>;
 }
 
 /**
