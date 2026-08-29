@@ -27,7 +27,7 @@ import {
 
 import type { OpsContext } from './context.js';
 import type { Logger } from './logger.js';
-import type { PingBuilder, Ports, Vcs } from './ports.js';
+import type { ModuleLoader, PingBuilder, Ports, Vcs } from './ports.js';
 
 type ServiceName = Exclude<keyof AwsClients, 'region'>;
 
@@ -101,6 +101,24 @@ const rejectAllVcs: Vcs = {
   },
 };
 
+const rejectAllLoader: ModuleLoader = {
+  resolve: async (specifier, fromDir) => {
+    throw new Error(
+      `unexpected module resolution in test: resolve(${specifier}, ${fromDir}) - override ports.loader on createTestContext`,
+    );
+  },
+  packageJsonPathFor: async (specifier, fromDir) => {
+    throw new Error(
+      `unexpected module resolution in test: packageJsonPathFor(${specifier}, ${fromDir}) - override ports.loader on createTestContext`,
+    );
+  },
+  load: async (path) => {
+    throw new Error(
+      `unexpected module load in test: load(${path}) - override ports.loader on createTestContext`,
+    );
+  },
+};
+
 /** Pings are best-effort fire-and-forget by contract; the default resolves silently. */
 const noopPing: PingBuilder = async () => undefined;
 
@@ -157,6 +175,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     vcs: overrides.ports?.vcs ?? rejectAllVcs,
     terminal: overrides.ports?.terminal ?? silentTerminal,
     ping: overrides.ports?.ping ?? noopPing,
+    loader: overrides.ports?.loader ?? rejectAllLoader,
   };
 
   return {

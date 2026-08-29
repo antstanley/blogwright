@@ -63,7 +63,9 @@
           { "name": "node:readline", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
           { "name": "node:readline/promises", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
           { "name": "readline", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
-          { "name": "readline/promises", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." }
+          { "name": "readline/promises", "message": "Domain modules prompt through the Terminal port (ctx.ports.terminal); only adapters read the terminal. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "node:module", "message": "Domain modules resolve and import plugin packages through the ModuleLoader port (ctx.ports.loader); only adapters/node-module-loader.ts touches node:module. See DEVELOPMENT.md §Hexagonal architecture." },
+          { "name": "module", "message": "Domain modules resolve and import plugin packages through the ModuleLoader port (ctx.ports.loader); only adapters/node-module-loader.ts touches node:module. See DEVELOPMENT.md §Hexagonal architecture." }
         ]
       }
     ]
