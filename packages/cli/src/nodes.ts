@@ -6,11 +6,13 @@ import {
   textTag,
   type CreateImageInput,
   type DistributionListItem,
+  type ResourceNode as CoreResourceNode,
 } from 'blogwright-core';
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
-import type { ResourceNode } from './graph.js';
+
+type ResourceNode = CoreResourceNode<OpsContext>;
 
 /** Lambda-managed MicroVM base image (Amazon Linux 2023) for the primary region. */
 function microvmBaseImageArn(region: string): string {

@@ -1,21 +1,32 @@
-import type { OpsContext } from './context.js';
+import type { ResourceNode, ResourceOutputs } from 'blogwright-core';
 
-/** A node in the infrastructure dependency graph. */
-export interface ResourceNode {
-  id: string;
-  dependsOn: string[];
-  /** Human label for logging. */
-  title: string;
-  /** Does the resource already exist? (Also hydrates outputs into ctx.state.) */
-  read(ctx: OpsContext): Promise<boolean>;
-  create(ctx: OpsContext): Promise<void>;
-  /** Reconcile an existing resource (optional). */
-  update?(ctx: OpsContext): Promise<void>;
-  delete(ctx: OpsContext): Promise<void>;
+/**
+ * The structural minimum the engine below (`topoSort`, `applyGraph`,
+ * `destroyGraph`) actually reads off a node's context: a logger it calls
+ * `step`/`ok`/`warn` on, a way to persist state, and the state's resources
+ * map (`destroyGraph` deletes an entry from it). Exported so a caller
+ * running this engine over a different context - `OpsContext` (`context.ts`)
+ * and core's `PluginContext` (`blogwright-core`) both do already - knows
+ * exactly what that context must supply, without this module depending on
+ * either one. Neither `OpsContext` nor `PluginContext` is named here on
+ * purpose: this is the structural minimum both happen to satisfy, not a
+ * fixed supertype of them (see the doc comment on core's `ResourceNode` for
+ * why no such supertype is worth naming).
+ */
+export interface GraphContext {
+  logger: {
+    step(msg: string): void;
+    ok(msg: string): void;
+    warn(msg: string): void;
+  };
+  state: {
+    resources: Record<string, ResourceOutputs>;
+  };
+  save(): Promise<void>;
 }
 
 /** Topologically order nodes so dependencies come before dependents (Kahn's algorithm). */
-export function topoSort(nodes: ResourceNode[]): ResourceNode[] {
+export function topoSort<Ctx>(nodes: ResourceNode<Ctx>[]): ResourceNode<Ctx>[] {
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const indegree = new Map<string, number>();
   const dependents = new Map<string, string[]>();
@@ -36,7 +47,7 @@ export function topoSort(nodes: ResourceNode[]): ResourceNode[] {
     .filter(([, d]) => d === 0)
     .map(([id]) => id)
     .sort();
-  const order: ResourceNode[] = [];
+  const order: ResourceNode<Ctx>[] = [];
   while (queue.length > 0) {
     const id = queue.shift()!;
     order.push(byId.get(id)!);
@@ -55,7 +66,10 @@ export function topoSort(nodes: ResourceNode[]): ResourceNode[] {
 }
 
 /** Reconcile the graph in dependency order (create missing, update existing). */
-export async function applyGraph(nodes: ResourceNode[], ctx: OpsContext): Promise<void> {
+export async function applyGraph<Ctx extends GraphContext>(
+  nodes: ResourceNode<Ctx>[],
+  ctx: Ctx,
+): Promise<void> {
   for (const node of topoSort(nodes)) {
     const exists = await node.read(ctx);
     try {
@@ -86,7 +100,10 @@ export async function applyGraph(nodes: ResourceNode[], ctx: OpsContext): Promis
 }
 
 /** Tear down the graph in reverse dependency order. */
-export async function destroyGraph(nodes: ResourceNode[], ctx: OpsContext): Promise<void> {
+export async function destroyGraph<Ctx extends GraphContext>(
+  nodes: ResourceNode<Ctx>[],
+  ctx: Ctx,
+): Promise<void> {
   const order = topoSort(nodes).reverse();
   for (const node of order) {
     ctx.logger.step(`delete ${node.title}`);

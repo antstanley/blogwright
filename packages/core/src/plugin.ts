@@ -157,3 +157,48 @@ export interface PluginContext<TConfig = never> {
    */
   save(): Promise<void>;
 }
+
+/**
+ * A node in the infrastructure dependency graph, generic over `Ctx` - the
+ * context its four methods receive. `Ctx` defaults to {@link PluginContext},
+ * so a plugin writes plain `ResourceNode` for a node typed against its own
+ * narrow context; the CLI instantiates `ResourceNode<OpsContext>`
+ * (`packages/cli/src/nodes.ts`) for its own, wider one.
+ *
+ * The parameter is deliberately **unconstrained** - there is no
+ * `Ctx extends PluginContext` here, and there cannot be. The CLI's
+ * `OpsContext` (`packages/cli/src/context.ts`) does not satisfy
+ * `PluginContext`: it lacks `pluginConfig`, `siteState` and `record` - the
+ * same three members task 01's `PluginContext composition` test
+ * (`packages/cli/src/context.test.ts`) names off the `TS2739` its own gate
+ * rests on. Under a `Ctx extends PluginContext` bound, every one of the
+ * CLI's fifteen `ResourceNode<OpsContext>` annotations (`nodes.ts`) would
+ * fail to compile with `TS2344`, because the argument fails the constraint.
+ * Nor is there a supertype of the two contexts worth naming as a bound -
+ * `OpsContext` carries CLI-private concerns (`agentDir`, the four-member
+ * `Ports`) that `PluginContext` must never see, and `PluginContext` carries
+ * `pluginConfig`/`siteState`/`record` that `OpsContext` has no use for.
+ * `ResourceNode<OpsContext>` and `ResourceNode<PluginContext>` are therefore
+ * two unrelated instantiations of the same generic type, with nothing
+ * converting between them.
+ *
+ * What lets one engine run both - `topoSort`, `applyGraph` and
+ * `destroyGraph` (`packages/cli/src/graph.ts`) - is that the engine's own
+ * generic constraint is not `PluginContext` either. It is the structural
+ * minimum the engine actually reads off a node's context (a logger, a way
+ * to persist state, and the state's resources map - `graph.ts`'s exported
+ * `GraphContext`), which both `OpsContext` and `PluginContext` satisfy
+ * structurally, without either one naming the other or this module.
+ */
+export interface ResourceNode<Ctx = PluginContext> {
+  id: string;
+  dependsOn: string[];
+  /** Human label for logging. */
+  title: string;
+  /** Does the resource already exist? (Also hydrates outputs into ctx.state.) */
+  read(ctx: Ctx): Promise<boolean>;
+  create(ctx: Ctx): Promise<void>;
+  /** Reconcile an existing resource (optional). */
+  update?(ctx: Ctx): Promise<void>;
+  delete(ctx: Ctx): Promise<void>;
+}

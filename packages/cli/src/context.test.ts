@@ -3,12 +3,13 @@ import {
   emptyState,
   type OpsState,
   type PluginContext,
+  type ResourceNode,
   type ResourceOutputs,
 } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { deriveAppTag, loadConfig } from './context.js';
-import { destroyGraph, type ResourceNode } from './graph.js';
+import { deriveAppTag, loadConfig, type OpsContext } from './context.js';
+import { destroyGraph } from './graph.js';
 import { createTestContext } from './test-support.js';
 
 const ROOT = '/repo';
@@ -157,7 +158,7 @@ describe('PluginContext composition', () => {
       record: scopedRecord(ops.state),
     };
 
-    const node: ResourceNode = {
+    const node: ResourceNode<OpsContext> = {
       id: 'queue',
       dependsOn: [],
       title: 'queue',
