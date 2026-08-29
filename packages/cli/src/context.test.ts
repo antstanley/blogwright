@@ -6,6 +6,7 @@ import {
   type ResourceNode,
   type ResourceOutputs,
 } from 'blogwright-core';
+import type { PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
 
 import { deriveAppTag, loadConfig, type OpsContext } from './context.js';
@@ -175,5 +176,26 @@ describe('PluginContext composition', () => {
     await destroyGraph([node], ops);
 
     expect(ctx.state.resources['queue']).toBeUndefined();
+  });
+});
+
+/**
+ * `PdsContext` (`packages/pds/src/context.ts`) is a `Pick` over
+ * `PluginContext<PdsConfig>` of the seven members the pds package actually
+ * uses, narrowed further so `clients` names only `secrets`. This is the
+ * explicit, compile-time proof that `OpsContext` still satisfies it by plain
+ * assignment - no cast, no `satisfies` escape hatch. Until task 29 that
+ * proof was implicit, carried by `cli.ts` passing an `OpsContext` straight
+ * to `pds.keygen`; this task deletes that call, so this assignment is what
+ * keeps a future widening of `PluginContext` (or of `OpsContext` narrowing
+ * away from it) failing `pnpm typecheck` here rather than surfacing as a
+ * runtime break at the pds dispatch boundary.
+ */
+describe('OpsContext satisfies PdsContext', () => {
+  it('assigns an OpsContext to a PdsContext-typed binding with no cast', () => {
+    const ops = createTestContext();
+    const pdsCtx: PdsContext = ops;
+    expect(pdsCtx.env).toBe(ops.env);
+    expect(pdsCtx.clients.secrets).toBe(ops.clients.secrets);
   });
 });
