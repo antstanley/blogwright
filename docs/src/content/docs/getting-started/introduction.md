@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-Publish and manage your blog, or any static site and single page app to AWS through a single CLI.
+Publish and manage your blog, or any static site and single page app, to AWS through a single CLI.
 
 Amazon Web Services (AWS) make fantastic primitives with rock solid reliability and performance. Trying to integrate with AWS can be painful, as their myriad of options, each with its own trade-offs can be overwhelming to even the most experienced of engineers. 
 
