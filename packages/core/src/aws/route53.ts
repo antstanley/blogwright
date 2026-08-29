@@ -19,7 +19,7 @@ export const CLOUDFRONT_ALIAS_ZONE_ID = 'Z2FDTNDATAQYW2';
 
 /** Route53 client (REST-XML). Global service, signed in us-east-1. */
 export class Route53Client {
-  constructor(private readonly client: SigningClient) { }
+  constructor(private readonly client: SigningClient) {}
 
   /** Find the hosted zone id for a domain (e.g. "preview.example.com"). */
   async hostedZoneId(dnsName: string): Promise<string | undefined> {
@@ -52,10 +52,10 @@ export class Route53Client {
       `<Type>${r.type}</Type>` +
       (r.aliasZoneId
         ? `<AliasTarget><HostedZoneId>${encodeEntities(r.aliasZoneId)}</HostedZoneId>` +
-        `<DNSName>${encodeEntities(r.value)}</DNSName>` +
-        `<EvaluateTargetHealth>false</EvaluateTargetHealth></AliasTarget>`
+          `<DNSName>${encodeEntities(r.value)}</DNSName>` +
+          `<EvaluateTargetHealth>false</EvaluateTargetHealth></AliasTarget>`
         : `<TTL>${r.ttl ?? 300}</TTL>` +
-        `<ResourceRecords><ResourceRecord><Value>${encodeEntities(r.value)}</Value></ResourceRecord></ResourceRecords>`) +
+          `<ResourceRecords><ResourceRecord><Value>${encodeEntities(r.value)}</Value></ResourceRecord></ResourceRecords>`) +
       `</ResourceRecordSet>` +
       `</Change></Changes></ChangeBatch>` +
       `</ChangeResourceRecordSetsRequest>`;

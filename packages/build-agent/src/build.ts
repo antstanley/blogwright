@@ -264,8 +264,8 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
         taggingDenied = true;
         log(
           'warning: this role cannot tag objects (s3:PutObjectTagging denied) - ' +
-          'uploading untagged. Run `blogwright bootstrap <env>` to grant it, then ' +
-          'redeploy with --refresh to tag the existing objects.',
+            'uploading untagged. Run `blogwright bootstrap <env>` to grant it, then ' +
+            'redeploy with --refresh to tag the existing objects.',
         );
       }
     }
@@ -452,7 +452,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
     // A silently wrong header is how the .webmanifest gap survived; say it out loud.
     log(
       `warning: no content type mapped for extension(s) ${[...unmapped].sort().join(', ')} - ` +
-      `serving them as ${DEFAULT_CONTENT_TYPE}`,
+        `serving them as ${DEFAULT_CONTENT_TYPE}`,
     );
   }
   for (const key of existing.keys()) {

@@ -78,7 +78,7 @@ export async function runMicrovmWithRetry(
       if (!isGatewayError(err) || delay === undefined) throw err;
       ctx.logger.warn(
         `MicroVM launch returned HTTP ${(err as AwsError).statusCode} - ` +
-        `retrying in ${Math.round(delay / 1000)}s (a just-updated builder image can lag)`,
+          `retrying in ${Math.round(delay / 1000)}s (a just-updated builder image can lag)`,
       );
       await sleep(delay);
     }
@@ -126,7 +126,7 @@ export async function pollBuild(
   let tick = 0;
 
   try {
-    for (; ;) {
+    for (;;) {
       terminal.status(
         `${spinnerFrame(tick++)} building ${hash} in MicroVM … ${formatDuration(Date.now() - startTime)}`,
       );
@@ -273,7 +273,7 @@ export async function runBuild(
     await ctx.clients.microvms.terminateMicrovm(run.microvmId).catch((err: unknown) => {
       ctx.logger.warn(
         `failed to terminate MicroVM ${run.microvmId} (it will expire on its own): ` +
-        (err instanceof Error ? err.message : String(err)),
+          (err instanceof Error ? err.message : String(err)),
       );
     });
     // Clear the job so a future MicroVM does not re-run it.

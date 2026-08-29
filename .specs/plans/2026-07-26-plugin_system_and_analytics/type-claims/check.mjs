@@ -70,8 +70,8 @@ const stats = claimStats();
 if (result.status === 0) {
   console.log(
     `PASS: ${stats.total} claims held ` +
-    `(${stats.expectClean} compiled positives, ${stats.expectError} pinned compile-errors) ` +
-    `against the repo's TypeScript.`,
+      `(${stats.expectClean} compiled positives, ${stats.expectError} pinned compile-errors) ` +
+      `against the repo's TypeScript.`,
   );
   process.exit(0);
 }
@@ -107,7 +107,7 @@ if (unparsed.trim() !== '') {
 }
 console.error(
   'Each broken claim names the spec section or task it pins - that document ' +
-  'now asserts a stale truth (or a transcription here is behind the spec). ' +
-  'Fix the document or the transcription, never the claim alone.',
+    'now asserts a stale truth (or a transcription here is behind the spec). ' +
+    'Fix the document or the transcription, never the claim alone.',
 );
 process.exit(1);

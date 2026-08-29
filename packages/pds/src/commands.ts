@@ -135,8 +135,8 @@ export async function init(
     // does not own, silently breaking standard.site verification.
     throw new Error(
       `${wellKnownPath(ctx.config)} points at ${existingUri}, which belongs to a different ` +
-      `account than ${did} - delete the file to create a fresh publication, or log in ` +
-      `with the owning account`,
+        `account than ${did} - delete the file to create a fresh publication, or log in ` +
+        `with the owning account`,
     );
   }
   let publicationUri: string;
@@ -184,14 +184,14 @@ export async function sync(
 function logSummary(ctx: PdsContext, s: SyncSummary): void {
   ctx.logger.ok(
     `publication ${s.publication}; documents: ${s.created.length} created, ` +
-    `${s.updated.length} updated, ${s.unchanged} unchanged`,
+      `${s.updated.length} updated, ${s.unchanged} unchanged`,
   );
   for (const slug of s.created) ctx.logger.info(`  created  ${slug}`);
   for (const slug of s.updated) ctx.logger.info(`  updated  ${slug}`);
   if (s.orphans.length > 0) {
     ctx.logger.warn(
       `${s.orphans.length} PDS record(s) have no local post (rkeys: ${s.orphans.join(', ')}) - ` +
-      'not deleted; remove them manually if intended',
+        'not deleted; remove them manually if intended',
     );
   }
 }

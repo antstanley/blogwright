@@ -628,12 +628,12 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
           ...(preview
             ? { cachePolicyId: CACHING_DISABLED }
             : {
-              customErrorResponses: [403, 404].map((errorCode) => ({
-                errorCode,
-                responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
-                responseCode: ctx.config.spa ? 200 : 404,
-              })),
-            }),
+                customErrorResponses: [403, 404].map((errorCode) => ({
+                  errorCode,
+                  responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
+                  responseCode: ctx.config.spa ? 200 : 404,
+                })),
+              }),
         });
       } catch (err) {
         // A crashed earlier bootstrap can leave a distribution in AWS that state never

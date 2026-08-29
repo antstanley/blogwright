@@ -139,7 +139,7 @@ export async function verifyClientAssets(
     if (!deepEqual(deployed, expected)) {
       throw new Error(
         `${url} does not match the local client configuration - ` +
-        're-run `blogwright pds keygen`, commit public/oauth/*, and release before logging in',
+          're-run `blogwright pds keygen`, commit public/oauth/*, and release before logging in',
       );
     }
   }
@@ -219,7 +219,7 @@ export async function openPdsRepo(ctx: PdsContext): Promise<{ did: string; repo:
     if (sessionExpired(err)) {
       throw new Error(
         'the stored OAuth session is no longer valid (refresh tokens expire after 180 idle ' +
-        'days, and rotation races invalidate them) - re-run `blogwright pds login`',
+          'days, and rotation races invalidate them) - re-run `blogwright pds login`',
         { cause: err },
       );
     }

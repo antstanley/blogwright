@@ -78,7 +78,7 @@ export async function initSite(
   if (!terminal.isInteractive) {
     logger.error(
       'init is an interactive wizard; in CI or plain mode create config/production.jsonc ' +
-      'by hand instead (see README - only "region" and "siteName" are required)',
+        'by hand instead (see README - only "region" and "siteName" are required)',
     );
     return 1;
   }

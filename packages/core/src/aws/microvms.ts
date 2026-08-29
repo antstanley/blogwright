@@ -119,7 +119,7 @@ function normalizeImage(res: ImageResponse): MicrovmImage {
 }
 
 export class MicrovmsClient {
-  constructor(private readonly client: SigningClient) { }
+  constructor(private readonly client: SigningClient) {}
 
   private async call<T>(
     method: string,
@@ -151,12 +151,12 @@ export class MicrovmsClient {
       ...(input.environmentVariables ? { environmentVariables: input.environmentVariables } : {}),
       ...(input.hooks
         ? {
-          hooks: {
-            port: input.hooks.port,
-            microvmHooks: { run: 'ENABLED', runTimeoutInSeconds: 60 },
-            microvmImageHooks: { ready: 'ENABLED', readyTimeoutInSeconds: 120 },
-          },
-        }
+            hooks: {
+              port: input.hooks.port,
+              microvmHooks: { run: 'ENABLED', runTimeoutInSeconds: 60 },
+              microvmImageHooks: { ready: 'ENABLED', readyTimeoutInSeconds: 120 },
+            },
+          }
         : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),

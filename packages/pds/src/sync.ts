@@ -211,7 +211,7 @@ export async function syncPds(
   if (wellKnown !== site.publicationUri) {
     throw new Error(
       `${wellKnownPath(ctx.config)} (${wellKnown ?? 'missing'}) does not match ${atprotoJson} ` +
-      `(${site.publicationUri}) - re-run \`blogwright pds init\``,
+        `(${site.publicationUri}) - re-run \`blogwright pds init\``,
     );
   }
   if (!ctx.domain) throw new Error('pds sync requires a configured domain');

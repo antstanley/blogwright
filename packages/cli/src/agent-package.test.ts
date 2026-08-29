@@ -69,7 +69,7 @@ describe('packageAndUploadAgent', () => {
 
     await expect(packageAndUploadAgent(ctx)).rejects.toThrow(
       `build-agent artifacts not found in ${TEST_AGENT_DIR}. ` +
-      'Run "pnpm --filter blogwright build" first.',
+        'Run "pnpm --filter blogwright build" first.',
     );
   });
 

@@ -53,7 +53,7 @@ export function parsePdsSecret(raw: string, secretName: string): PdsSecret {
   if (isLegacySecret(parsed)) {
     throw new Error(
       `secret "${secretName}" holds app-password credentials - app passwords are no longer ` +
-      'supported; run `blogwright pds keygen` then `blogwright pds login`',
+        'supported; run `blogwright pds keygen` then `blogwright pds login`',
     );
   }
   if (parsed.version !== 1) {

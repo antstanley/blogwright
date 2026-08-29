@@ -86,9 +86,9 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
   const candidates = source.configPath
     ? [source.configPath]
     : [
-      resolve(source.root, `config/${source.env}.jsonc`),
-      resolve(source.root, 'ops.config.jsonc'),
-    ];
+        resolve(source.root, `config/${source.env}.jsonc`),
+        resolve(source.root, 'ops.config.jsonc'),
+      ];
   for (const path of candidates) {
     try {
       return parseConfig(await fs.readText(path));

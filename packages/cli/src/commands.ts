@@ -135,7 +135,7 @@ export async function rollback(
   if (ctx.env === 'production' && ctx.config.pds) {
     ctx.logger.warn(
       'rollback does not sync the PDS (records mirror the current repo content); ' +
-      'check out the rolled-back revision and run `blogwright pds sync` if needed',
+        'check out the rolled-back revision and run `blogwright pds sync` if needed',
     );
   }
   ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);

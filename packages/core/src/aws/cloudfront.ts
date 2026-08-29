@@ -53,7 +53,7 @@ export interface CustomErrorResponse {
 
 /** CloudFront client (REST-XML). Global service, signed in us-east-1. */
 export class CloudFrontClient {
-  constructor(private readonly client: SigningClient) { }
+  constructor(private readonly client: SigningClient) {}
 
   async createOriginAccessControl(name: string): Promise<string> {
     const body =
@@ -396,16 +396,16 @@ function parseDistribution(xml: string, etag: string | undefined): DistributionS
 function aliasesBlock(aliases: string[]): string {
   return aliases.length > 0
     ? `<Aliases><Quantity>${aliases.length}</Quantity><Items>${aliases
-      .map((a) => `<CNAME>${encodeEntities(a)}</CNAME>`)
-      .join('')}</Items></Aliases>`
+        .map((a) => `<CNAME>${encodeEntities(a)}</CNAME>`)
+        .join('')}</Items></Aliases>`
     : `<Aliases><Quantity>0</Quantity></Aliases>`;
 }
 
 function viewerCertificateBlock(acmCertificateArn: string | undefined): string {
   return acmCertificateArn
     ? `<ViewerCertificate><ACMCertificateArn>${encodeEntities(
-      acmCertificateArn,
-    )}</ACMCertificateArn><SSLSupportMethod>sni-only</SSLSupportMethod><MinimumProtocolVersion>TLSv1.2_2021</MinimumProtocolVersion></ViewerCertificate>`
+        acmCertificateArn,
+      )}</ACMCertificateArn><SSLSupportMethod>sni-only</SSLSupportMethod><MinimumProtocolVersion>TLSv1.2_2021</MinimumProtocolVersion></ViewerCertificate>`
     : `<ViewerCertificate><CloudFrontDefaultCertificate>true</CloudFrontDefaultCertificate></ViewerCertificate>`;
 }
 

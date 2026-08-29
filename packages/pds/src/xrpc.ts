@@ -43,7 +43,7 @@ export class PdsClient {
   constructor(
     private readonly did: string,
     private readonly transport: XrpcTransport,
-  ) { }
+  ) {}
 
   private async call<T>(
     nsid: string,

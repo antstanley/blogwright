@@ -8,7 +8,7 @@ const VERSION = '2010-05-08';
 
 /** IAM client (query protocol) - roles with inline policies. */
 export class IamClient {
-  constructor(private readonly client: SigningClient) { }
+  constructor(private readonly client: SigningClient) {}
 
   private async call(params: Record<string, string | undefined>): Promise<string> {
     const res = await this.client.send({

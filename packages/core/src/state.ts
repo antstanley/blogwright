@@ -27,7 +27,7 @@ export class StateStore {
     private readonly s3: S3Client,
     private readonly bucket: string,
     private readonly env: string,
-  ) { }
+  ) {}
 
   async load(): Promise<OpsState> {
     // getObjectText returns undefined only when the object/bucket does not exist (a fresh
