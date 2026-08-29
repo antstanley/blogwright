@@ -25,4 +25,4 @@
 - [ ] Transport-mocked tests pin the `x-amz-target` and request body for each operation; no test reaches the network.
 - [ ] The client is exported from `packages/analytics/src/index.ts`, `packages/core` is untouched, and `pnpm knip` reports no unused export.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- firehose`; confirm each of the four operations pins its `x-amz-target` and body against a stub `Transport`, and that describe returns `undefined` rather than throwing on `ResourceNotFoundException`.
+- [ ] Reviewable: run `pnpm --filter blogwright-core exec vitest run firehose --reporter=verbose`; confirm each of the four operations pins its `x-amz-target` and body against a stub `Transport`, and that describe returns `undefined` rather than throwing on `ResourceNotFoundException`.

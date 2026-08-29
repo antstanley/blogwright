@@ -23,4 +23,4 @@
 - [ ] With plugins installed, one section per plugin is appended showing the plugin's `description` and one line per command from its `action` plus `summary` - tested over two fake plugins in a deterministic order.
 - [ ] A plugin that failed to load does not break `--help`: the remaining sections still render and the failure is surfaced without a stack trace (test).
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm --filter blogwright test -- cli`; confirm the no-plugins case still matches the byte-exact `USAGE` pin from task 07, that two fake plugins render in name order regardless of fixture order, and that a fake plugin whose module throws on load leaves the other plugin's section rendered.
+- [ ] Reviewable: run `pnpm --filter blogwright exec vitest run cli --reporter=verbose`; confirm the no-plugins case still matches the byte-exact `USAGE` pin from task 07, that two fake plugins render in name order regardless of fixture order, and that a fake plugin whose module throws on load leaves the other plugin's section rendered.

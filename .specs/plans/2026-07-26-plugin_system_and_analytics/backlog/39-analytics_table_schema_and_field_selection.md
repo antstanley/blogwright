@@ -23,4 +23,4 @@
 - [ ] A test asserts the mapping is complete in both directions: every selected CloudFront field maps to exactly one column, and every column is either mapped from a selected field or listed in `DERIVED_COLUMNS` (`event_time`, `day`, `visitor_key`, `is_bot`) - a column with neither source fails the test.
 - [ ] The module imports no Node builtin, no vendor SDK and no `fetch`; it is pure data plus pure functions, confirmed by reading its import list.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- schema` inside `packages/analytics`; delete one entry from `FIELD_TO_COLUMN` and confirm the totality test fails naming the orphaned column, then restore it.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run schema --reporter=verbose` inside `packages/analytics`; delete one entry from `FIELD_TO_COLUMN` and confirm the totality test fails naming the orphaned column, then restore it.

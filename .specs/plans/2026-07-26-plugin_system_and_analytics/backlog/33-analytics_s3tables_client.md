@@ -26,4 +26,4 @@
 - [ ] Tests drive a `Transport` stub through `SigningClient` (the `packages/core/src/aws/logs.test.ts` pattern) and pin the HTTP method, path and request body of every call; no test reaches the network.
 - [ ] The client is exported from `packages/analytics/src/index.ts`, `packages/core` is untouched, and `pnpm knip` reports no unused export.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- s3tables`; confirm all nine operations pin a method, a path and a request body against a stub `Transport`, and that no test constructs `fetchTransport` or calls `fetch`.
+- [ ] Reviewable: run `pnpm --filter blogwright-core exec vitest run s3tables --reporter=verbose`; confirm all nine operations pin a method, a path and a request body against a stub `Transport`, and that no test constructs `fetchTransport` or calls `fetch`.

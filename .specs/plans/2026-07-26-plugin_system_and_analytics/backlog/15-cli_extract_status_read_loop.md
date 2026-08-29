@@ -21,4 +21,4 @@
 - [ ] The read-failure path still degrades the same way - an `error` entry when interactive, a warning line when plain - with one test each, both asserting the exact message text.
 - [ ] No node implementation changed, no rendering code in `render.ts` changed and no state handling changed: `git diff --stat` (or `jj diff --stat`) lists only `packages/cli/src/commands.ts` and `packages/cli/src/commands.test.ts`.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- commands`; confirm the four characterization cases pass and that `readNodeStatus` is called with a node set passed in, so task 16 can hand it a plugin's nodes instead of `buildNodes(ctx)`.
+- [ ] Reviewable: run `pnpm --filter blogwright exec vitest run commands --reporter=verbose`; confirm the four characterization cases pass and that `readNodeStatus` is called with a node set passed in, so task 16 can hand it a plugin's nodes instead of `buildNodes(ctx)`.

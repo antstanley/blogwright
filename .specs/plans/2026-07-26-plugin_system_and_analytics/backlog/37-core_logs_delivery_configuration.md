@@ -23,4 +23,4 @@
 - [ ] A test asserts the options appear in the request body when supplied: `outputFormat` on `PutDeliveryDestination`, record fields and delimiter on `CreateDelivery`.
 - [ ] `createDelivery`'s existing already-exists swallow and the existing `LogsClient` tests at `packages/core/src/aws/logs.test.ts:18-66` pass unmodified.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- logs` and `pnpm test -- nodes`; confirm the pinned no-options bodies are exactly the two objects `packages/cli/src/nodes.ts:727,732` produce today and that the CLI's log-delivery node tests pass with no change to their client fakes.
+- [ ] Reviewable: run `pnpm --filter blogwright-core exec vitest run logs --reporter=verbose` and `pnpm --filter blogwright-core exec vitest run nodes --reporter=verbose`; confirm the pinned no-options bodies are exactly the two objects `packages/cli/src/nodes.ts:727,732` produce today and that the CLI's log-delivery node tests pass with no change to their client fakes.

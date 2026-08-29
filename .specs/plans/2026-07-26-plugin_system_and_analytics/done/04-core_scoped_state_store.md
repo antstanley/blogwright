@@ -25,4 +25,4 @@
 - [ ] `packages/cli/src/context.ts:134` and `packages/cli/src/test-support.ts:181` still construct unscoped stores unchanged, and no existing test in any package was edited.
 - [ ] The class doc comment states that scoping changes the key and not the bucket - both objects sit under the site's `state/` prefix, which `bucketNode.delete()` empties (`packages/cli/src/nodes.ts:66`) - and names task 16's `blogwright destroy` guard as what protects a plugin's record. This task adds no guard of its own: `StateStore` is a store, not a policy.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- state`; confirm the assertions pin the literal strings `state/test.json` and `state/test.analytics.json`, then run `grep -rn 'new StateStore' packages/cli/src` and confirm both call sites still pass exactly three arguments.
+- [ ] Reviewable: run `pnpm --filter blogwright-core exec vitest run state --reporter=verbose`; confirm the assertions pin the literal strings `state/test.json` and `state/test.analytics.json`, then run `grep -rn 'new StateStore' packages/cli/src` and confirm both call sites still pass exactly three arguments.

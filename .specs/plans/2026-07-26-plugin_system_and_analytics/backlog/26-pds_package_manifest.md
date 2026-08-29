@@ -24,4 +24,4 @@
 - [ ] `blogwright plugin list` reports `pds` with its namespace, version and the `pds` config key - asserted by a test, not by manual inspection.
 - [ ] `blogwright/rkey` still re-exports `blogwright-pds/rkey` (`packages/cli/src/rkey.test.ts` passes unchanged), and there is no behaviour change for `blogwright pds <action>` yet - the hardcoded branch at `packages/cli/src/cli.ts:114` still handles every action and the existing pds command paths are unaffected.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- plugins` and `pnpm test -- rkey` in `packages/cli`; confirm the bundled-discovery case passes, the `plugin list` row names `pds`, and the rkey vectors are untouched.
+- [ ] Reviewable: run `pnpm --filter blogwright exec vitest run plugins --reporter=verbose` and `pnpm --filter blogwright exec vitest run rkey --reporter=verbose` in `packages/cli`; confirm the bundled-discovery case passes, the `plugin list` row names `pds`, and the rkey vectors are untouched.

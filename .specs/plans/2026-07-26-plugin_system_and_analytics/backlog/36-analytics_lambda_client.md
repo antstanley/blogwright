@@ -25,4 +25,4 @@
 - [ ] `getFunction` returns `undefined` for an absent function and `deleteFunction` swallows not-found; both directions tested, with non-not-found errors rethrown with context.
 - [ ] The client is exported from `packages/analytics/src/index.ts`, `packages/core` is untouched, and `pnpm knip` reports no unused export.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- lambda` and `grep -rn "2025-09-09" packages/analytics/src/aws/lambda.ts packages/analytics/src/aws/lambda.test.ts`; confirm the suite is green, the grep matches only the test's negative assertion, and `packages/core/src/aws/microvms.ts` still owns every `/2025-09-09/` path.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run lambda --reporter=verbose` and `grep -rn "2025-09-09" packages/analytics/src/aws/lambda.ts packages/analytics/src/aws/lambda.test.ts`; confirm the suite is green, the grep matches only the test's negative assertion, and `packages/core/src/aws/microvms.ts` still owns every `/2025-09-09/` path.

@@ -23,4 +23,4 @@
 - [ ] The pinned `USAGE` assertion is byte-exact against the constant at `packages/cli/src/cli.ts:11-63` - it is the regression net for tasks 11 and 29.
 - [ ] No test spawns a process or reaches AWS, and the change is behaviour-neutral: no user-visible change and therefore no changeset.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm --filter blogwright test -- cli`; confirm the suite passes with no network or git access, then change one character inside the `USAGE` template literal at `packages/cli/src/cli.ts:11` and confirm the byte-exact pin fails.
+- [ ] Reviewable: run `pnpm --filter blogwright exec vitest run cli --reporter=verbose`; confirm the suite passes with no network or git access, then change one character inside the `USAGE` template literal at `packages/cli/src/cli.ts:11` and confirm the byte-exact pin fails.

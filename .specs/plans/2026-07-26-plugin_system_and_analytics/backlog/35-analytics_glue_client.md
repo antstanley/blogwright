@@ -24,4 +24,4 @@
 - [ ] Transport-mocked tests pin the `x-amz-target` and request body for both operations; non-not-found errors are rethrown with context, asserted by a case that feeds back a `ValidationException` and expects a rejection.
 - [ ] The client is exported from `packages/analytics/src/index.ts`, `packages/core` is untouched, and `pnpm knip` reports no unused export.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- glue`; confirm the suite covers present, absent, already-exists and non-not-found, and that the class body declares no third public method.
+- [ ] Reviewable: run `pnpm --filter blogwright-core exec vitest run glue --reporter=verbose`; confirm the suite covers present, absent, already-exists and non-not-found, and that the class body declares no third public method.

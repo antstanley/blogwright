@@ -22,4 +22,4 @@
 - [ ] Negative-space tests cover each rejection: blank/whitespace `name`, an `http://` resolver, a non-URL resolver, and a `secretName` containing a character outside `^[\w/+=.@-]+$`; positive tests cover the derived default and an explicit `secretName` overriding it.
 - [ ] No behaviour changes anywhere else: `mergeConfig` and `validateConfig` in `packages/core/src/config.ts` are byte-identical, the existing core config tests pass unmodified, and no changeset is written because nothing user-visible has moved yet.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- config` from the repo root; confirm the new `packages/pds/src/config.test.ts` cases pass, the existing `packages/core/src/config.test.ts` pds cases still pass, and `git diff packages/core` is empty.
+- [ ] Reviewable: run `pnpm --filter blogwright-pds exec vitest run config --reporter=verbose` from the repo root; confirm the new `packages/pds/src/config.test.ts` cases pass, the existing `packages/core/src/config.test.ts` pds cases still pass, and `git diff packages/core` is empty.

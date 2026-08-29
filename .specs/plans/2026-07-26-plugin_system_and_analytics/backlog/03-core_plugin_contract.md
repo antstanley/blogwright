@@ -29,4 +29,4 @@
 - [ ] `validatePlugin` returns a typed `Plugin` for a minimal valid module and raises for each of: no default export, a non-object default export, a missing or empty `name`, a `name` violating `PLUGIN_NAME_PATTERN`, a missing `description`, `commands` that is not an array, and a command missing `action` or `run` - one negative test each.
 - [ ] Every raised message names the offending package and says what would fix it, no message echoes the module's contents, and `validatePlugin` rejects before anything on the module is invoked - proven by a module whose `nodes()` throws when called validating cleanly.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- plugin`; confirm each of the seven negative tests asserts the package name in the expected message, and that `grep -n ': any' packages/core/src/plugin.ts` returns nothing.
+- [ ] Reviewable: run `pnpm --filter blogwright-core exec vitest run plugin --reporter=verbose`; confirm each of the seven negative tests asserts the package name in the expected message, and that `grep -n ': any' packages/core/src/plugin.ts` returns nothing.

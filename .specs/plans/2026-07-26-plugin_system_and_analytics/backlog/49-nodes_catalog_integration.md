@@ -22,4 +22,4 @@
 - [ ] A second-environment test asserts convergence: with the integration already present, `create` is never invoked, so two environments never fight over it and tearing one down never breaks the other.
 - [ ] The node's `title` and its create log line state that the integration is account-and-region scoped, so `analytics bootstrap` output shows it is shared rather than per-environment, and a comment on the node explains why `delete` is a no-op (shared account-scoped state) rather than paraphrasing the code.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- nodes` inside `packages/analytics`; confirm the destroy case asserts an empty Glue call log rather than an absent error, and read the node's `delete` body to confirm the comment states the consequence for the other environment.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run nodes --reporter=verbose` inside `packages/analytics`; confirm the destroy case asserts an empty Glue call log rather than an absent error, and read the node's `delete` body to confirm the comment states the consequence for the other environment.

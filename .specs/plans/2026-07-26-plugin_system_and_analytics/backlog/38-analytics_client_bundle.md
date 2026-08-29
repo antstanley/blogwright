@@ -28,4 +28,4 @@
 - [ ] `pnpm knip` reports no unused export and no unused dependency.
 - [ ] A changeset records the minor on `blogwright-core` for `signingUsEast1` plus the `LogsClient` parameters, or the change description states in writing that it is deferred to task 58.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- clients` in both `packages/analytics` and `packages/core`, then `pnpm knip`; confirm the plugin's recorded `authorization` headers show `us-east-1` for all six clients and core's show `eu-west-1` for `logs`/`s3`/`microvms`/`secrets`, and that `pnpm test -- nodes` still passes with no change to its client fakes.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run clients --reporter=verbose` in both `packages/analytics` and `packages/core`, then `pnpm knip`; confirm the plugin's recorded `authorization` headers show `us-east-1` for all six clients and core's show `eu-west-1` for `logs`/`s3`/`microvms`/`secrets`, and that `pnpm --filter blogwright-core exec vitest run nodes --reporter=verbose` still passes with no change to its client fakes.

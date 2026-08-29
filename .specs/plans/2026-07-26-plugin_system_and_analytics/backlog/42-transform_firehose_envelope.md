@@ -25,4 +25,4 @@
 - [ ] The handler imports no AWS SDK and performs no network call; its tests need no cloud access and no module mocking - `grep -rn "@aws-sdk\|fetch(\|vi.mock" packages/analytics/src/transform/` returns nothing.
 - [ ] Negative-space: a record whose payload is not valid JSON returns `ProcessingFailed` rather than throwing, and an empty batch returns an empty `records` array rather than throwing (both asserted).
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- handler` inside `packages/analytics`; confirm the mixed-batch test's expected response has one `ProcessingFailed` entry and the rest `Ok`, with the request's `recordId` values in the same order.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run handler --reporter=verbose` inside `packages/analytics`; confirm the mixed-batch test's expected response has one `ProcessingFailed` entry and the rest `Ok`, with the request's `recordId` values in the same order.

@@ -23,4 +23,4 @@
 - [ ] Negative-space: an unknown query name raises an error listing the available names, and an absent or inverted date range raises rather than silently defaulting (both asserted, with the message naming the offending value).
 - [ ] A fixture-backed fake `AnalyticsQuery` is provided and used by every consumer's tests; no test in the package starts DuckDB - `grep -rn "duckdb" packages/analytics/src/*.test.ts` returns nothing.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- queries` inside `packages/analytics`; add a query definition that interpolates a parameter into its SQL text and confirm the parameterisation test fails naming that query, then remove it.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run queries --reporter=verbose` inside `packages/analytics`; add a query definition that interpolates a parameter into its SQL text and confirm the parameterisation test fails naming that query, then remove it.

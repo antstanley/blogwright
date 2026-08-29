@@ -22,4 +22,4 @@
 - [ ] A plugin that contributes no block (declined, or carrying no `init`) adds nothing and leaves no stray comma, and a plugin whose `init` throws leaves the config file unwritten - the written file re-parses through `parseConfig`, and the throwing case asserts `fs.exists(configPath)` is false.
 - [ ] `initSite` still runs before any context exists and stays a domain module: the `ModuleLoader` it needs is constructed by the composition root (`cli.ts`), not inside `init.ts`, and `pnpm lint` reports no new restricted import there.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- init`; confirm the no-plugins vector is an exact string comparison against today's output and that the throwing-plugin test asserts nothing was written rather than asserting on a partial file.
+- [ ] Reviewable: run `pnpm --filter blogwright exec vitest run init --reporter=verbose`; confirm the no-plugins vector is an exact string comparison against today's output and that the throwing-plugin test asserts nothing was written rather than asserting on a partial file.

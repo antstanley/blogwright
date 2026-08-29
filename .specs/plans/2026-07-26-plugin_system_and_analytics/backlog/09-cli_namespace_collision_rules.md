@@ -22,4 +22,4 @@
 - [ ] `pds` is deliberately absent from the reserved set, the module comment records why, and a test documents it.
 - [ ] Built-in commands still win with no measurable change to their dispatch path, and the existing CLI tests pinned in task 07 pass unmodified.
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm --filter blogwright test -- plugins` and `pnpm --filter blogwright test -- cli`; confirm the reserved-set equality test fails when `status` is removed from `KNOWN_COMMANDS`, that a duplicate-name fixture fails identically with its two candidates in either order, and that the task-07 pins pass unmodified.
+- [ ] Reviewable: run `pnpm --filter blogwright exec vitest run plugins --reporter=verbose` and `pnpm --filter blogwright exec vitest run cli --reporter=verbose`; confirm the reserved-set equality test fails when `status` is removed from `KNOWN_COMMANDS`, that a duplicate-name fixture fails identically with its two candidates in either order, and that the task-07 pins pass unmodified.

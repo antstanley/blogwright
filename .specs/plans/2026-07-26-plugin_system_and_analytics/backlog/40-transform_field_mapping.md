@@ -23,4 +23,4 @@
 - [ ] `status`, `bytes_sent` and `time_taken` are emitted as numbers, not strings (asserted by `typeof` on each), and a non-numeric value for one of them takes the drop path rather than writing a wrong value.
 - [ ] Negative-space: a record missing any of `event_time`, `day`, `host`, `uri` or `status` is reported as droppable with a reason naming the missing field, and no partially populated row is returned (asserted by checking the result carries no row at all, not merely that one field is absent).
 - [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm test -- map-record` inside `packages/analytics`; confirm the two midnight-boundary cases produce different `day` values one millisecond apart and that every drop case names its missing field in the failure reason.
+- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run map-record --reporter=verbose` inside `packages/analytics`; confirm the two midnight-boundary cases produce different `day` values one millisecond apart and that every drop case names its missing field in the failure reason.
