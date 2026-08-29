@@ -77,8 +77,14 @@ key.
   (positive and negative space), small single-purpose functions, no duplicated
   logic, limits as named constants or validated config fields, errors raised with
   context and no `null` for a domain value, new external interactions behind ports,
-  and `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, `pnpm knip`
-  green locally. User-facing changes ship a changeset. Task files add only
+  and `pnpm build`, `pnpm typecheck`, `pnpm test`, `pnpm lint`,
+  `pnpm exec oxfmt --check .`, `pnpm knip` green locally - the same six
+  `.github/workflows/ci.yml:21-29` runs, in that order. `pnpm typecheck` was
+  missing from this list until 2026-08-29 and is not optional: vitest does not
+  typecheck, and each package's build tsconfig excludes its test files, so a
+  type error in a `*.test.ts` passes `build`, `test`, `lint`, `oxfmt` and `knip`
+  and reddens CI on the first push. Task 06 shipped exactly that and its gate
+  caught it. User-facing changes ship a changeset. Task files add only
   task-specific acceptance on top.
 
 ---
