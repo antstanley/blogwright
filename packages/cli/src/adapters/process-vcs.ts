@@ -1,7 +1,8 @@
 /**
- * Process adapter for the Vcs port: shells out to jj/git. The only module
- * outside the build-agent that may import node:child_process; failures are
- * translated with the command and directory before they cross the port.
+ * Process adapter for the Vcs port: shells out to jj/git. One of only two
+ * modules outside the build-agent that may import node:child_process (the
+ * other is process-package-manager.ts); failures are translated with the
+ * command and directory before they cross the port.
  */
 
 import { execFile } from 'node:child_process';

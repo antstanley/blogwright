@@ -27,7 +27,15 @@ import {
 
 import type { OpsContext } from './context.js';
 import type { Logger } from './logger.js';
-import type { ModuleLoader, PingBuilder, Ports, Vcs } from './ports.js';
+import type {
+  AddPackageOptions,
+  ModuleLoader,
+  PackageManager,
+  PackageManagerName,
+  PingBuilder,
+  Ports,
+  Vcs,
+} from './ports.js';
 
 type ServiceName = Exclude<keyof AwsClients, 'region'>;
 
@@ -119,6 +127,37 @@ const rejectAllLoader: ModuleLoader = {
   },
 };
 
+/**
+ * One recorded `add` or `remove` call on the value {@link createRecordingPackageManager}
+ * returns. Not exported: nothing outside this module names the type directly - a caller
+ * reads `.calls` off the inferred return type instead.
+ */
+type PackageManagerCall =
+  | { op: 'add'; spec: string; opts: AddPackageOptions | undefined }
+  | { op: 'remove'; name: string };
+
+/**
+ * Records every `add`/`remove` call and answers `detect` with `manager`,
+ * without touching disk or a process. The default `ports.packages` for
+ * {@link createTestContext}; importable directly for a test that needs to
+ * configure which manager `detect` reports and inspect what was requested.
+ */
+export function createRecordingPackageManager(
+  manager: PackageManagerName = 'pnpm',
+): PackageManager & { readonly calls: PackageManagerCall[] } {
+  const calls: PackageManagerCall[] = [];
+  return {
+    calls,
+    detect: async () => manager,
+    add: async (spec, opts) => {
+      calls.push({ op: 'add', spec, opts });
+    },
+    remove: async (name) => {
+      calls.push({ op: 'remove', name });
+    },
+  };
+}
+
 /** Pings are best-effort fire-and-forget by contract; the default resolves silently. */
 const noopPing: PingBuilder = async () => undefined;
 
@@ -176,6 +215,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     terminal: overrides.ports?.terminal ?? silentTerminal,
     ping: overrides.ports?.ping ?? noopPing,
     loader: overrides.ports?.loader ?? rejectAllLoader,
+    packages: overrides.ports?.packages ?? createRecordingPackageManager(),
   };
 
   return {

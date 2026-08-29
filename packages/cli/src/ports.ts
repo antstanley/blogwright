@@ -14,6 +14,35 @@ export interface Vcs {
   listFiles(cwd: string): Promise<string[]>;
 }
 
+/** Package managers `PackageManager.detect` can identify, from the lockfile each writes. */
+export type PackageManagerName = 'pnpm' | 'npm' | 'yarn' | 'bun';
+
+/**
+ * How to install a package, in the repo's own vocabulary - never a package
+ * manager's flag spelling (`--save-dev`, `-D`, ...).
+ */
+export interface AddPackageOptions {
+  /** Install into devDependencies rather than dependencies. */
+  dev?: boolean;
+  /** Pin the exact resolved version rather than a semver range. */
+  exact?: boolean;
+}
+
+/**
+ * Installing and removing packages in the consuming repo. The real adapter
+ * detects which manager governs the repo from its lockfile and shells out to
+ * it; `add`/`remove` resolve that repo and manager themselves, so callers
+ * never pass a directory.
+ */
+export interface PackageManager {
+  /** Identify which manager governs `repoRoot`, from the lockfile it wrote there. */
+  detect(repoRoot: string): Promise<PackageManagerName>;
+  /** Install `spec` (a package name, optionally `name@version`) into the repo. */
+  add(spec: string, opts?: AddPackageOptions): Promise<void>;
+  /** Uninstall the named package from the repo. */
+  remove(name: string): Promise<void>;
+}
+
 /**
  * Best-effort wake-up ping to a builder MicroVM's proxy endpoint. Implementations
  * never throw - the connection attempt, not the response, is the point.
@@ -67,4 +96,5 @@ export interface Ports {
   terminal: Terminal;
   ping: PingBuilder;
   loader: ModuleLoader;
+  packages: PackageManager;
 }

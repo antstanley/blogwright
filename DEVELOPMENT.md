@@ -80,6 +80,7 @@ Existing ports are the model for new ones:
 | `Vcs`                       | `cli/src/ports.ts`            | `createProcessVcs` (`cli/src/adapters/process-vcs.ts`) | fake `Vcs` via `createTestContext` `ports.vcs` overrides |
 | `PingBuilder`               | `cli/src/ports.ts`            | `createFetchPing` (`cli/src/adapters/fetch-ping.ts`) | no-op / recording ping via `createTestContext` `ports.ping` overrides |
 | `ModuleLoader`              | `cli/src/ports.ts`            | `createNodeModuleLoader` (`cli/src/adapters/node-module-loader.ts`) | fail-fast fake via `createTestContext` `ports.loader` overrides |
+| `PackageManager`            | `cli/src/ports.ts`            | `createProcessPackageManager` (`cli/src/adapters/process-package-manager.ts`) | `createRecordingPackageManager` via `createTestContext` `ports.packages` overrides |
 
 Conventions:
 

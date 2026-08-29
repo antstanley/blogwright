@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
+import {
+  createRecordingPackageManager,
+  createTestContext,
+  TEST_AGENT_DIR,
+} from './test-support.js';
 
 describe('createTestContext', () => {
   it('builds a complete context with derived defaults', async () => {
@@ -49,5 +53,24 @@ describe('createTestContext', () => {
     await expect(ctx.clients.secrets.describeSecret('name')).rejects.toThrow(
       /unexpected AWS request/,
     );
+  });
+});
+
+describe('createRecordingPackageManager', () => {
+  it('answers detect with the configured manager, defaulting to pnpm', async () => {
+    await expect(createRecordingPackageManager().detect('/repo')).resolves.toBe('pnpm');
+    await expect(createRecordingPackageManager('yarn').detect('/repo')).resolves.toBe('yarn');
+  });
+
+  it('records add/remove calls instead of spawning a process', async () => {
+    const packages = createRecordingPackageManager();
+
+    await packages.add('blogwright-analytics', { dev: true, exact: true });
+    await packages.remove('blogwright-pds');
+
+    expect(packages.calls).toEqual([
+      { op: 'add', spec: 'blogwright-analytics', opts: { dev: true, exact: true } },
+      { op: 'remove', name: 'blogwright-pds' },
+    ]);
   });
 });

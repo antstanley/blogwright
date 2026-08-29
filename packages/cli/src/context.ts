@@ -19,6 +19,7 @@ import {
 
 import { createFetchPing } from './adapters/fetch-ping.js';
 import { createNodeModuleLoader } from './adapters/node-module-loader.js';
+import { createProcessPackageManager } from './adapters/process-package-manager.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
 import { createLogger, type Logger } from './logger.js';
 import type { Ports } from './ports.js';
@@ -109,12 +110,14 @@ export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<
  * real adapters are constructed and wired.
  */
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {
+  const fs = opts.ports?.fs ?? createNodeFileSystem();
   const ports: Ports = {
-    fs: opts.ports?.fs ?? createNodeFileSystem(),
+    fs,
     vcs: opts.ports?.vcs ?? createProcessVcs(),
     terminal: opts.ports?.terminal ?? createNodeTerminal(),
     ping: opts.ports?.ping ?? createFetchPing(),
     loader: opts.ports?.loader ?? createNodeModuleLoader(),
+    packages: opts.ports?.packages ?? createProcessPackageManager(fs),
   };
   const logger = createLogger(ports.terminal);
   const agentDir = fileURLToPath(new URL('../agent', import.meta.url));
