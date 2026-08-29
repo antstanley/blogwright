@@ -6,6 +6,7 @@ import * as pds from 'blogwright-pds';
 import * as commands from './commands.js';
 import type { ContextOptions, OpsContext } from './context.js';
 import { initSite } from './init.js';
+import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
 
 const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
@@ -63,16 +64,6 @@ Options:
 `;
 
 const HASH_COMMANDS = new Set(['rollback', 'logs']);
-const KNOWN_COMMANDS = new Set([
-  'bootstrap',
-  'deploy',
-  'rollback',
-  'delete',
-  'destroy',
-  'history',
-  'logs',
-  'status',
-]);
 
 /** Builds the Terminal after flag parsing, so --plain shapes the whole session. */
 export type TerminalFactory = (opts: { plain: boolean }) => Terminal;

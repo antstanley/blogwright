@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import { main, type ContextFactory } from './cli.js';
 import type { OpsContext } from './context.js';
+import { RESERVED_COMMANDS } from './known-commands.js';
 import { createLogger } from './logger.js';
 import { createTestContext } from './test-support.js';
 
@@ -189,5 +190,35 @@ describe('main - status dispatch', () => {
     // catches each node's read failure - the default test context's clients
     // reject every AWS call - so the command still completes and returns 0.
     expect(terminal.writes[0]).toBe(`Status for "production" (bucket ${ctx.names.bucket})`);
+  });
+});
+
+describe('RESERVED_COMMANDS', () => {
+  it('equals the CLI\'s own dispatch set, including "init", "preview" and "plugin" which dispatch outside KNOWN_COMMANDS', () => {
+    // This literal list is independent of known-commands.ts's own
+    // KNOWN_COMMANDS/union construction on purpose: if a built-in is ever
+    // added to KNOWN_COMMANDS without being folded into RESERVED_COMMANDS
+    // too (or one of the three names dispatched ahead of KNOWN_COMMANDS -
+    // init, preview, plugin - is ever dropped from the union), this test
+    // fails instead of silently letting a plugin shadow that command.
+    expect([...RESERVED_COMMANDS].sort()).toEqual(
+      [
+        'bootstrap',
+        'delete',
+        'deploy',
+        'destroy',
+        'history',
+        'init',
+        'logs',
+        'plugin',
+        'preview',
+        'rollback',
+        'status',
+      ].sort(),
+    );
+  });
+
+  it('does not reserve "pds" - see plugins.ts\'s module comment for why', () => {
+    expect(RESERVED_COMMANDS.has('pds')).toBe(false);
   });
 });

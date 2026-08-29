@@ -17,6 +17,31 @@
  * only things this module *does* throw for are the two preconditions
  * discovery cannot proceed without at all: the repo's own `package.json` and
  * the CLI's own `package.json`, both read before any candidate is resolved.
+ *
+ * The same collect-never-throw rule governs the two namespace-collision
+ * checks this module applies itself, after a candidate has already loaded
+ * and validated cleanly: a plugin whose declared name is one the CLI
+ * dispatches itself (`RESERVED_COMMANDS`, `known-commands.ts` - a leaf
+ * module with no imports of its own, so this domain module never has to
+ * import the composition root just to read it), and two plugins that
+ * declare the same name as each other. §CLI → Namespace collisions calls
+ * this "rejected with an error", but - exactly like a malformed manifest or
+ * a failed `validatePlugin` check above - that rejection is a reported
+ * `failures` entry, not a thrown one. Throwing here would let a single
+ * colliding plugin abort discovery for every other, unrelated plugin and
+ * every built-in command that runs it; `blogwright plugin list` (task 17)
+ * depends on the collect outcome too, since it is the one place a collision
+ * becomes visible to a human.
+ *
+ * `pds` is deliberately absent from `RESERVED_COMMANDS`. The hardcoded
+ * `command === 'pds'` branch in `cli.ts` (ahead of its `KNOWN_COMMANDS`
+ * membership test) already shadows any plugin that declares the name `pds`
+ * - but that shadow belongs to task 29, which deletes the branch once the
+ * bundled `blogwright-pds` package is dispatched as an ordinary plugin.
+ * Reserving `pds` here now would fix a problem this module does not have
+ * (nothing here lets `pds` through unchecked; `cli.ts` intercepts it first)
+ * while creating one task 29 would then have to undo - so the name stays
+ * unreserved on purpose, pinned by a test below.
  */
 
 import { join } from 'node:path';
@@ -30,6 +55,7 @@ import {
   type PluginManifest,
 } from 'blogwright-core';
 
+import { RESERVED_COMMANDS } from './known-commands.js';
 import type { Ports } from './ports.js';
 
 /** Only a dependency name starting with this becomes a plugin candidate. */
@@ -124,6 +150,14 @@ function pluginDependencyNames(pkg: DependencyManifest): string[] {
  * `blogwright` nor `blogwright/package.json` is ever a candidate: the bare
  * name never matches the `blogwright-` prefix, so it is filtered out before
  * any resolution is attempted.
+ *
+ * A package name present in BOTH manifests - e.g. a plugin `blogwright
+ * plugin add` (task 18) pinned directly into the consuming repo, which
+ * already sits in the CLI's own bundled dependencies too - is one installed
+ * package, not two: it is deduped here, consumer half winning, so it is
+ * probed exactly once. Without this, the same package would reach
+ * `resolveNamespaceCollisions` as two `LoadedPlugin` entries sharing one
+ * `packageName` and reject itself as a "duplicate" of itself.
  */
 async function collectCandidates(
   ports: Pick<Ports, 'fs' | 'loader'>,
@@ -141,12 +175,16 @@ async function collectCandidates(
     "the CLI's own package",
   );
 
-  const consumerCandidates = pluginDependencyNames(consumerPkg).map(
+  const consumerNames = pluginDependencyNames(consumerPkg);
+  const consumerCandidates = consumerNames.map(
     (packageName): Candidate => ({ packageName, fromDir: repoRoot }),
   );
-  const bundledCandidates = pluginDependencyNames(cliPkg).map(
-    (packageName): Candidate => ({ packageName, fromDir: cliPackageDir }),
-  );
+
+  const consumerNameSet = new Set(consumerNames);
+  const bundledCandidates = pluginDependencyNames(cliPkg)
+    .filter((packageName) => !consumerNameSet.has(packageName))
+    .map((packageName): Candidate => ({ packageName, fromDir: cliPackageDir }));
+
   return [...consumerCandidates, ...bundledCandidates];
 }
 
@@ -228,6 +266,64 @@ async function loadCandidate(
   }
 }
 
+/** A successfully loaded, `validatePlugin`-passing plugin, paired with the package it came from. */
+interface LoadedPlugin {
+  readonly packageName: string;
+  readonly plugin: Plugin;
+}
+
+/**
+ * Split every loaded plugin into survivors and namespace-collision failures.
+ * A name is checked for a reserved collision before a duplicate one: two
+ * plugins both claiming a reserved name are each reported once, against the
+ * reservation, not twice against each other. Neither check depends on the
+ * order `loaded` arrives in - a duplicate group has no "first" survivor (all
+ * of it fails, see the module comment), and every failure naming more than
+ * one package lists them from a `.sort()`ed array, so the rendered message
+ * text is identical no matter which candidate was resolved first.
+ */
+function resolveNamespaceCollisions(loaded: readonly LoadedPlugin[]): {
+  plugins: Plugin[];
+  failures: PluginLoadFailure[];
+} {
+  const byName = new Map<string, LoadedPlugin[]>();
+  for (const entry of loaded) {
+    const bucket = byName.get(entry.plugin.name);
+    if (bucket) bucket.push(entry);
+    else byName.set(entry.plugin.name, [entry]);
+  }
+
+  const plugins: Plugin[] = [];
+  const failures: PluginLoadFailure[] = [];
+  for (const [name, entries] of byName) {
+    if (RESERVED_COMMANDS.has(name)) {
+      for (const entry of entries) {
+        failures.push({
+          packageName: entry.packageName,
+          reason:
+            `${entry.packageName} declares plugin name "${name}", which is reserved for the ` +
+            `built-in "${name}" command - built-in commands always win`,
+        });
+      }
+      continue;
+    }
+    if (entries.length > 1) {
+      const packageNames = entries.map((entry) => entry.packageName).sort();
+      for (const packageName of packageNames) {
+        failures.push({
+          packageName,
+          reason: `plugin name "${name}" is claimed by more than one installed package: ${packageNames.join(', ')}`,
+        });
+      }
+      continue;
+    }
+    const [entry] = entries;
+    if (entry) plugins.push(entry.plugin);
+  }
+
+  return { plugins, failures };
+}
+
 /**
  * Discover every installed plugin reachable from `repoRoot` (the consuming
  * repo) and `cliPackageDir` (the CLI's own package directory, from
@@ -242,13 +338,19 @@ export async function discover(
 ): Promise<DiscoveryResult> {
   const candidates = await collectCandidates(ports, repoRoot, cliPackageDir);
 
-  const plugins: Plugin[] = [];
+  const loaded: LoadedPlugin[] = [];
   const failures: PluginLoadFailure[] = [];
   for (const candidate of candidates) {
     const outcome = await loadCandidate(candidate, ports);
-    if (outcome.kind === 'plugin') plugins.push(outcome.plugin);
-    else if (outcome.kind === 'failure') failures.push(outcome.failure);
+    if (outcome.kind === 'plugin') {
+      loaded.push({ packageName: candidate.packageName, plugin: outcome.plugin });
+    } else if (outcome.kind === 'failure') {
+      failures.push(outcome.failure);
+    }
   }
 
-  return { plugins, failures };
+  const collisions = resolveNamespaceCollisions(loaded);
+  failures.push(...collisions.failures);
+
+  return { plugins: collisions.plugins, failures };
 }

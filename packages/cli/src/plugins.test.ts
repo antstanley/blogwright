@@ -234,6 +234,59 @@ describe('discover - candidate selection', () => {
 
     expect(result).toEqual({ plugins: [], failures: [] });
   });
+
+  it('resolves a package listed in both the consumer and CLI-bundled manifests only once, from the consumer half, not as a duplicate of itself', async () => {
+    // A pnpm install commonly hoists one package to a location resolvable
+    // from either directory, so both the consuming repo and the CLI's own
+    // package.json can legitimately list the same blogwright-* dependency -
+    // `blogwright plugin add` (task 18) is the natural way a user creates
+    // exactly this arrangement by pinning a plugin alongside `blogwright`.
+    // That is one installed package, not two, so it must be probed once.
+    const fs = createMemoryFileSystem({
+      [`${REPO_ROOT}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-both': '^1.0.0' },
+      }),
+      [`${CLI_DIR}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-both': '^1.0.0' },
+      }),
+      '/both/package.json': JSON.stringify({
+        name: 'blogwright-both',
+        blogwright: { plugin: 'both' },
+      }),
+    });
+    const loader = createFakeModuleLoader([
+      // Registered as resolvable from BOTH directories, mirroring a real
+      // hoisted install - if collectCandidates ever stopped deduping, both
+      // of these would be probed and loaded, producing two LoadedPlugin
+      // entries with the same packageName that reject each other as
+      // "duplicates".
+      {
+        specifier: 'blogwright-both',
+        fromDir: REPO_ROOT,
+        packageJsonPath: '/both/package.json',
+        entryPath: '/both/index.js',
+        module: validPluginModule('both'),
+      },
+      {
+        specifier: 'blogwright-both',
+        fromDir: CLI_DIR,
+        packageJsonPath: '/both/package.json',
+        entryPath: '/both/index.js',
+        module: validPluginModule('both'),
+      },
+    ]);
+
+    const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
+
+    expect(result.failures).toEqual([]);
+    expect(result.plugins.map((p) => p.name)).toEqual(['both']);
+    // Probed exactly once, from the consumer half - the CLI-bundled half is
+    // never even asked for it.
+    expect(loader.packageJsonPathForCalls).toEqual([
+      { specifier: 'blogwright-both', fromDir: REPO_ROOT },
+    ]);
+    expect(loader.resolveCalls).toEqual([{ specifier: 'blogwright-both', fromDir: REPO_ROOT }]);
+  });
 });
 
 describe('discover - manifest handling', () => {
@@ -378,6 +431,172 @@ describe('discover - manifest handling', () => {
     expect(result.failures).toEqual([]);
     expect(result.plugins).toHaveLength(1);
     expect(result.plugins[0]?.name).toBe('good');
+  });
+});
+
+describe('discover - namespace collisions', () => {
+  it('rejects a plugin claiming a reserved name, naming both the package and the collided name, and absent from plugins', async () => {
+    // "preview" is reserved only through the union with the literal
+    // {init, preview, plugin} set, not through KNOWN_COMMANDS - proving the
+    // check consults RESERVED_COMMANDS (cli.ts) rather than KNOWN_COMMANDS
+    // directly, which would under-reserve and let this collision through.
+    const fs = createMemoryFileSystem({
+      [`${REPO_ROOT}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-previewer': '^1.0.0' },
+      }),
+      [`${CLI_DIR}/package.json`]: '{}',
+      '/previewer/package.json': JSON.stringify({
+        name: 'blogwright-previewer',
+        blogwright: { plugin: 'preview' },
+      }),
+    });
+    const loader = createFakeModuleLoader([
+      {
+        specifier: 'blogwright-previewer',
+        fromDir: REPO_ROOT,
+        packageJsonPath: '/previewer/package.json',
+        entryPath: '/previewer/index.js',
+        module: validPluginModule('preview'),
+      },
+    ]);
+
+    const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
+
+    expect(result.plugins).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        packageName: 'blogwright-previewer',
+        reason:
+          'blogwright-previewer declares plugin name "preview", which is reserved for the ' +
+          'built-in "preview" command - built-in commands always win',
+      },
+    ]);
+  });
+
+  it('rejects two plugins claiming the same name, both recorded as failures naming both packages, identically regardless of candidate order', async () => {
+    const expectedFailures = [
+      {
+        packageName: 'blogwright-alpha',
+        reason:
+          'plugin name "shared" is claimed by more than one installed package: ' +
+          'blogwright-alpha, blogwright-zulu',
+      },
+      {
+        packageName: 'blogwright-zulu',
+        reason:
+          'plugin name "shared" is claimed by more than one installed package: ' +
+          'blogwright-alpha, blogwright-zulu',
+      },
+    ];
+
+    // Order A: blogwright-alpha resolves as a consumer dependency,
+    // blogwright-zulu as a CLI-bundled one - so `alpha` is processed first.
+    const fsOrderA = createMemoryFileSystem({
+      [`${REPO_ROOT}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-alpha': '^1.0.0' },
+      }),
+      [`${CLI_DIR}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-zulu': '^1.0.0' },
+      }),
+      '/alpha/package.json': JSON.stringify({
+        name: 'blogwright-alpha',
+        blogwright: { plugin: 'shared' },
+      }),
+      '/zulu/package.json': JSON.stringify({
+        name: 'blogwright-zulu',
+        blogwright: { plugin: 'shared' },
+      }),
+    });
+    const loaderOrderA = createFakeModuleLoader([
+      {
+        specifier: 'blogwright-alpha',
+        fromDir: REPO_ROOT,
+        packageJsonPath: '/alpha/package.json',
+        entryPath: '/alpha/index.js',
+        module: validPluginModule('shared'),
+      },
+      {
+        specifier: 'blogwright-zulu',
+        fromDir: CLI_DIR,
+        packageJsonPath: '/zulu/package.json',
+        entryPath: '/zulu/index.js',
+        module: validPluginModule('shared'),
+      },
+    ]);
+
+    const resultOrderA = await discover(REPO_ROOT, CLI_DIR, { fs: fsOrderA, loader: loaderOrderA });
+
+    expect(resultOrderA.plugins).toEqual([]);
+    expect(resultOrderA.failures).toEqual(expectedFailures);
+
+    // Order B: the reverse - blogwright-zulu now resolves as the consumer
+    // dependency and blogwright-alpha as the CLI-bundled one, so `zulu` is
+    // processed first this time. The outcome (including message text) must
+    // be identical to order A.
+    const fsOrderB = createMemoryFileSystem({
+      [`${REPO_ROOT}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-zulu': '^1.0.0' },
+      }),
+      [`${CLI_DIR}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-alpha': '^1.0.0' },
+      }),
+      '/alpha/package.json': JSON.stringify({
+        name: 'blogwright-alpha',
+        blogwright: { plugin: 'shared' },
+      }),
+      '/zulu/package.json': JSON.stringify({
+        name: 'blogwright-zulu',
+        blogwright: { plugin: 'shared' },
+      }),
+    });
+    const loaderOrderB = createFakeModuleLoader([
+      {
+        specifier: 'blogwright-zulu',
+        fromDir: REPO_ROOT,
+        packageJsonPath: '/zulu/package.json',
+        entryPath: '/zulu/index.js',
+        module: validPluginModule('shared'),
+      },
+      {
+        specifier: 'blogwright-alpha',
+        fromDir: CLI_DIR,
+        packageJsonPath: '/alpha/package.json',
+        entryPath: '/alpha/index.js',
+        module: validPluginModule('shared'),
+      },
+    ]);
+
+    const resultOrderB = await discover(REPO_ROOT, CLI_DIR, { fs: fsOrderB, loader: loaderOrderB });
+
+    expect(resultOrderB.plugins).toEqual([]);
+    expect(resultOrderB.failures).toEqual(expectedFailures);
+  });
+
+  it('does not reserve "pds" - a plugin may declare that name and is discovered normally (cli.ts\'s hardcoded branch is the only thing shadowing it, until task 29)', async () => {
+    const fs = createMemoryFileSystem({
+      [`${REPO_ROOT}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-pds-clone': '^1.0.0' },
+      }),
+      [`${CLI_DIR}/package.json`]: '{}',
+      '/pds-clone/package.json': JSON.stringify({
+        name: 'blogwright-pds-clone',
+        blogwright: { plugin: 'pds' },
+      }),
+    });
+    const loader = createFakeModuleLoader([
+      {
+        specifier: 'blogwright-pds-clone',
+        fromDir: REPO_ROOT,
+        packageJsonPath: '/pds-clone/package.json',
+        entryPath: '/pds-clone/index.js',
+        module: validPluginModule('pds'),
+      },
+    ]);
+
+    const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
+
+    expect(result.failures).toEqual([]);
+    expect(result.plugins.map((p) => p.name)).toEqual(['pds']);
   });
 });
 
