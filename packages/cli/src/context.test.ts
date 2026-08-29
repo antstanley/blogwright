@@ -166,10 +166,12 @@ describe('PluginContext composition', () => {
       create: async () => undefined,
       delete: async () => undefined,
     };
-    // destroyGraph is typed on OpsContext, not PluginContext; run it against
-    // ops directly. ctx.state is the very same object (assigned before the
-    // PluginContext was composed above), so its mutation - `delete
-    // ctx.state.resources[node.id]` (graph.ts) - is visible through ctx too.
+    // Run it against ops, whose state is the very same object the
+    // PluginContext was composed over above - so the engine's mutation,
+    // `delete ctx.state.resources[node.id]` (graph.ts), is visible through
+    // ctx too, which is what this test asserts. Since task 02 the engine is
+    // generic over GraphContext and would accept the PluginContext directly;
+    // using ops keeps the aliasing that makes the assertion meaningful.
     await destroyGraph([node], ops);
 
     expect(ctx.state.resources['queue']).toBeUndefined();

@@ -171,9 +171,13 @@ export interface PluginContext<TConfig = never> {
  * `PluginContext`: it lacks `pluginConfig`, `siteState` and `record` - the
  * same three members task 01's `PluginContext composition` test
  * (`packages/cli/src/context.test.ts`) names off the `TS2739` its own gate
- * rests on. Under a `Ctx extends PluginContext` bound, every one of the
- * CLI's fifteen `ResourceNode<OpsContext>` annotations (`nodes.ts`) would
- * fail to compile with `TS2344`, because the argument fails the constraint.
+ * rests on. Under a `Ctx extends PluginContext` bound the CLI stops
+ * compiling with `TS2344`, because the argument fails the constraint: its
+ * fifteen node factories annotate `ResourceNode` bare, so the error surfaces
+ * at the one alias they resolve through (`nodes.ts`'s
+ * `type ResourceNode = CoreResourceNode<OpsContext>`) and at each remaining
+ * explicit instantiation - twelve diagnostics in all, measured, not
+ * estimated.
  * Nor is there a supertype of the two contexts worth naming as a bound -
  * `OpsContext` carries CLI-private concerns (`agentDir`, the four-member
  * `Ports`) that `PluginContext` must never see, and `PluginContext` carries
