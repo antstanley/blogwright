@@ -560,6 +560,17 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *`StateStore` validates its scope but not its env.* Raised by task 04's gate
+  2026-08-29 and deliberately closed as not-actionable, recorded so it is not
+  re-discovered. An environment literally named `<env>.<plugin>` would collide
+  with that plugin's scoped key. It is not reachable: `deriveNames`
+  (`packages/core/src/config.ts:349`) rejects any env outside `^[a-z0-9-]+$`,
+  and it runs on the line *before* every `new StateStore(...)` at both call
+  sites, because `names.bucket` is an argument to the constructor. What remains
+  is an asymmetry - the class guards one of its two key components - reachable
+  only by constructing a store directly, which only tests do. Not worth
+  reopening a merged task for; worth knowing if `StateStore` ever gains a third
+  caller.
 - *SPI versioning.* Nothing declares or checks an SPI version - task 18 pins an
   installed plugin to the running CLI's own version, and that is the whole
   compatibility mechanism. Should the SPI declare a version a plugin states it
