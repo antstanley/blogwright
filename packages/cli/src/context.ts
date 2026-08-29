@@ -92,7 +92,12 @@ export interface ContextOptions {
  * `discover`'s second argument.
  */
 export function cliPackageDir(): string {
-  return fileURLToPath(new URL('..', import.meta.url));
+  // `new URL('..', …)` yields a trailing separator, unlike every other directory
+  // value in the CLI. join() and createRequire() tolerate it, but a caller
+  // writing `${cliPackageDir()}/x` would get a doubled separator - in the path
+  // and in any error message built from it. Normalise here so no caller has to
+  // remember. Four discovery-running paths (tasks 10, 11, 14, 17) consume this.
+  return resolve(fileURLToPath(new URL('..', import.meta.url)));
 }
 
 export interface ConfigSource {
