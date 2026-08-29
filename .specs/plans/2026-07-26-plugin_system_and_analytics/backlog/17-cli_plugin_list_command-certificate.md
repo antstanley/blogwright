@@ -17,7 +17,7 @@ names (a file location, a test result, or an execution trace) - not by assertion
 
 - **P1 - Goal.** The built-in `plugin` namespace with its `list` action, printing one row per installed plugin - namespace, package name, version, owned config key - plus a row per plugin that failed to load with the reason, in both interactive and `--plain` modes.
 - **P2 - Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 - Invariants.** Must not break task 08's `discover(repoRoot, ports)` for the dispatch path, task 09's reserved-name and duplicate-name rejections, task 10's `blogwright <plugin> <action>` routing, or the built-in command switch at `packages/cli/src/cli.ts:142-173`.
+- **P3 - Invariants.** Must not break task 08's `discover(repoRoot, cliPackageDir, ports)` for the dispatch path, task 09's reserved-name and duplicate-name rejections, task 10's `blogwright <plugin> <action>` routing, or the built-in command switch at `packages/cli/src/cli.ts:142-173`.
 
 ## Obligations
 

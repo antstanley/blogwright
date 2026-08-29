@@ -660,12 +660,16 @@ without indexing a type that has no index signature.
    New adapters: adapters/node-module-loader.ts (createRequire + import),
    adapters/process-package-manager.ts (lockfile detect + spawn), modelled on
    adapters/process-vcs.ts. Wire both in context.ts:111-116.
-7. packages/cli - new src/plugins.ts: discover(repoRoot, ports) reading
-   <repoRoot>/package.json via ports.fs, filtering `blogwright-*` deps,
+7. packages/cli - new src/plugins.ts: discover(repoRoot, cliPackageDir, ports)
+   reading <repoRoot>/package.json via ports.fs, filtering `blogwright-*` deps,
    resolving each via ports.loader from repoRoot; and the CLI's own
-   package.json, located from import.meta.url as context.ts:118 locates
-   agentDir, whose `blogwright-*` deps resolve from the CLI package dir.
-   Reserved-name and duplicate-name checks here.
+   package.json at cliPackageDir, whose `blogwright-*` deps resolve from there.
+   That directory is a parameter, not something plugins.ts derives: locating it
+   means reading import.meta.url, which is a composition-root concern - so
+   context.ts exports a standalone cliPackageDir() beside the agentDir
+   resolution at :118 (standalone because `blogwright plugin list` dispatches
+   before createContext and still needs it), and every discovery-running path
+   passes that one value. Reserved-name and duplicate-name checks here.
 8. packages/cli - new src/plugin-commands.ts for `plugin add|list|remove`,
    and src/config-block.ts for the textual JSONC block splice used by
    `<plugin> init`. init.ts:42 renderConfig is the style to match; the

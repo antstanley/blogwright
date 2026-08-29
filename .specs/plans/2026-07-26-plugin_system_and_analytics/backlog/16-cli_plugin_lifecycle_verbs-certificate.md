@@ -30,7 +30,7 @@ names (a file location, a test result, or an execution trace) - not by assertion
 - **O2 - Precedence decided, recorded and tested in both directions.**
   - *Claim:* `bootstrap` and `destroy` are always generic and a plugin declaring either is rejected with an error naming the collision; `status` is generic unless the plugin declares one.
   - *Evidence to collect:* read the module comment at the top of `packages/cli/src/plugin-commands.ts` and confirm it states the rule and the constraint (a plugin may not import the CLI, so it cannot run the engine); run `pnpm test -- plugin-commands` and locate four tests - a plugin declaring `bootstrap` rejected, a plugin declaring `destroy` rejected, a plugin declaring `status` reaching its own `run`, a plugin without `status` reaching the generic verb; confirm the rejection messages name both the plugin and the action.
-  - *Checks:* trace where the rejection fires - confirm it is at load/validation time (task 03's `validatePlugin` or task 09's collision pass), not on first dispatch of that action.
+  - *Checks:* trace where the rejection fires - confirm it is at load time, in task 09's collision pass in `packages/cli/src/plugins.ts`, beside the `init` rejection task 13 put there (the home task 13 decided), and NOT in core's `validatePlugin`: core declares the `Plugin` contract and must not know which actions a host contributes generically. It must not fire on first dispatch of the action either. If the two declared-action rejections have landed in two different modules, that is the defect this check exists to catch.
   - *Status:* ☐ unverified
 
 - **O3 - State isolation holds in both directions.**

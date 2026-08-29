@@ -17,7 +17,7 @@ names (a file location, a test result, or an execution trace) - not by assertion
 
 - **P1 - Goal.** Help text is assembled at runtime - today's static base plus one section per discovered plugin - with failed loads surfaced and the no-plugins output byte-identical to today's `USAGE`.
 - **P2 - Obligations.** The task is done iff O1…O6 all hold. One Oi per definition-of-done item, in DoD order; O6 is the `Reviewable:` item.
-- **P3 - Invariants.** Must not break the six sites that print help today (`packages/cli/src/cli.ts:103,119,171,200,256,288`), the exit codes at `:102-106`, or the task-07 byte-exact pin in `packages/cli/src/cli.test.ts`.
+- **P3 - Invariants.** Must not break the five sites that print help once this task runs (`packages/cli/src/cli.ts:103,171,200,256,288`), the exit codes at `:102-106`, or the task-07 byte-exact pin in `packages/cli/src/cli.test.ts`. Of the six that print help in today's tree, `:119` is already gone by this point - task 10 replaced `:117-121` with the plugin fall-through - so a validator who expects `:119` to carry the assembled text is discharging against a superseded tree. `:200` still exists (`runPds` lives until task 29) and IS wired.
 
 ## Obligations
 
@@ -57,8 +57,8 @@ names (a file location, a test result, or an execution trace) - not by assertion
 
 For each module the task touched, the validator traces one downstream caller:
 
-- `packages/cli/src/cli.ts:119` prints help after `unknown command: x` → expect the assembled text, not a stale `USAGE` constant, and the exit code still 1 : ☐ (PRESERVED / REGRESSION)
-- `packages/cli/src/cli.ts:200` prints help after `unknown pds action: …` → expect the assembled text and exit code 1, with the hardcoded `pds` branch at `:114` still live until task 29 : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/cli.ts:117-121` no longer prints help at all: task 10 replaced that branch with the plugin fall-through, so an unrecognised first positional reaches plugin dispatch and reports an unknown plugin naming `blogwright plugin list` → expect NO `USAGE` print site there and the exit code still 1 : ☐ (PRESERVED / REGRESSION)
+- `packages/cli/src/cli.ts:200` prints help after `unknown pds action: …`, with the hardcoded `pds` branch at `:114` still live until task 29 → expect the assembled text and exit code 1, because task 26 removes the static `pds` block from the base and an unwired site would list no pds actions for the whole 26→29 span : ☐ (PRESERVED / REGRESSION)
 - `packages/cli/src/cli.ts:256` and `:288` print help after an unknown `preview` action → expect the assembled text and exit code 1 : ☐ (PRESERVED / REGRESSION)
 - `packages/cli/src/bin.ts:9` invokes `main` for a real `blogwright --help` → expect the built CLI to print today's text plus any installed plugin sections, verified by running `node packages/cli/dist/bin.js --help` after `pnpm build` : ☐ (PRESERVED / REGRESSION)
 

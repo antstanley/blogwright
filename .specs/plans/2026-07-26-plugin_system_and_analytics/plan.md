@@ -261,7 +261,7 @@ The dependency table is the source of truth; the Mermaid graph visualizes it.
 | 49 · catalog integration node | 48 | build | the account-scoped federation is adopted rather than created, and no teardown deletes it |
 | 50 · transform role and function nodes | 2, 38, 43, 44 | build | the transform Lambda and its scoped execution role are provisioned by source hash |
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants, its error bucket, and a role declaring every node whose ARN it grants on |
-| 52 · shared delivery-source guards | 37 | build, contract | `deliveriesForSource` carries each delivery's destination ARN, so the site's log-delivery node never deletes a source it shares and its retry scopes to its own delivery |
+| 52 · shared delivery-source guards | 37 | build, contract | `deliveriesForSource` carries each delivery's destination ARN, so the site's log-delivery node never removes a source it shares - in `delete()` or in its `ConflictException` retry, which also scopes its delete to the site's own delivery |
 | 53 · log destination and delivery nodes | 37, 51, 52 | build, data | CloudFront logs reach Firehose, the site's existing CloudWatch delivery survives, and the delivery's creation day is recorded once in scoped state - the backfill bound task 61 reads |
 | 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile twelve nodes against `state/<env>.analytics.json` |
 | 55 · analytics status | 45, 54 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
@@ -494,7 +494,14 @@ task 59, whose role rewrite is what its warning backs.
 - *Declared commands win over generic actions.* **A plugin that declares
   `init` keeps it (task 13).** The action name is claimed in two opposite senses
   across the specs - pds's `init` creates the publication record, analytics's
-  writes a config block - and this rule makes both correct.
+  writes a config block - and this rule makes both correct. The enforceable half
+  of it - the rejections - has one home, decided at task 13 and extended by task
+  16: task 09's collision pass in `packages/cli/src/plugins.ts`, not core's
+  `validatePlugin`. Core declares the `Plugin` contract and must not know which
+  actions a host contributes generically, and `plugins.ts` already holds
+  `RESERVED_COMMANDS` and reports collisions as load failures. Both tasks named
+  the two candidates and left the choice open, which is how one rule ends up
+  implemented in two modules.
 - *Lifecycle-verb precedence is settled before either plugin ships.* **Task 16
   decides it and records it in a module comment; task 47's command table is
   written against that decision.** The recommended resolution is that
@@ -825,3 +832,33 @@ mechanical - task 00's [type-claim gate](type-claims/README.md) compiles all
 29 of the corpus's type-level claims against the repo's real types on every
 run, and reintroducing this very defect makes it fail in seconds, naming the
 claim.
+
+**2026-08-29 - eighth review, plan against its three change specs.** One
+blocking, two important, four minor. Coverage was clean - all 34 `Proposed
+changes` blocks and all four `Type changes` fragments resolve to an owning task
+- and so was every mechanical check: the Mermaid graph, the dependency table
+and the task files' `Depends on:` lines agree on 62 nodes and 115 edges, no
+edge points backward, every relative link resolves, and all 324 distinct
+`file:line` anchors name the construct claimed. The defects were behavioural
+and editorial:
+
+| Finding | Root cause | Repaired in |
+|---|---|---|
+| The site's `ConflictException` retry still deleted the shared delivery source, so `blogwright bootstrap` would remove the site's own delivery and then throw whenever the analytics delivery was attached | the spec's guard 1 was scoped to `delete()` and guard 2 to the retry's *delivery* deletion, leaving `deleteDeliverySource` (`nodes.ts:758`) unconditional on the one path guard 1 does not cover | analytics spec §Two guards and Implementation notes step 4; task 52 (both guards refuse before any delete, and a fake that can actually fail) and its certificate's new O5 |
+| `discover`'s `cliPackageDir` argument had no supplier, and three artifacts still called it with two arguments | task 08 stated self-location is "passed in" without naming an owner; four call sites each assumed another had it | task 08 (exports `cliPackageDir()` from `context.ts` beside `agentDir`), tasks 10, 11, 14, 17, cert 08, cert 17, and plugin spec notes step 7 |
+| Task 11 told its implementer to wire a `USAGE` print site task 10 deletes (`:119`), and twice credited task 29 with removing the static `pds` block that task 26 removes | pointers were corrected in an earlier round; the step, the DoD and the certificate's regression checks were not | task 11 and its certificate |
+| The pds and analytics specs' merge-plan steps 1–2 had no owner and no recorded deferral, so tasks 60 and 61 would flip both headers to `Merged` with two unexecuted steps each | task 20 set the "do not silently skip the step" standard for the plugin-system spec; the other four closure tasks did not follow it | tasks 30 and 58 |
+| Task 52's step ordered the teardown delivery → destination → source while its DoD and the code order it delivery → source → destination, and cited two `create()`-path assertions as proof of a `delete()`-path order | the guard was written against the wrong half of `logDeliveryNode` | task 52 |
+| The declared-action rejections named two candidate homes ("`validatePlugin`, or the collision pass") in both tasks 13 and 16, neither choosing, with 13 executing first and deferring to 16 | the decision fell between two tasks with no edge between them | tasks 13 and 16, their certificate, and the Decision above |
+| Task 59 called the deferral pairs "20/58 and 30/59"; the pds pair is 30/60 | task 59 was written before task 60 existed | task 59 |
+
+The blocking finding is the one to remember, and it is a testing lesson rather
+than a design one: the recording fake's `deleteDeliverySource`
+(`nodes.test.ts:67-69`) returns void whatever the source carries, so an
+implementation that still deletes a shared source passes every assertion about
+which delivery ids were deleted. The guard was specified, planned and
+certificated in terms the fake could not falsify - the same shape as the
+discovery finding from the first review, one layer down. Task 52 now requires
+the fake to reject `deleteDeliverySource` while deliveries remain, and the
+certificate carries it as a premise (P4) so a green suite over a
+never-failing fake counts as no evidence at all.

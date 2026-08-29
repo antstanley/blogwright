@@ -124,12 +124,26 @@ and, for SPI confidence, on
 >   error code, `blogwright destroy` throws partway through teardown. The guard
 >   turns that into an early, actionable refusal and does not depend on the code
 >   AWS returns.
-> - **The `ConflictException` retry deletes only the site's own delivery id.**
+> - **The `ConflictException` retry deletes only the site's own delivery id, and
+>   refuses outright while the source carries a delivery the site does not own.**
 >   Today it iterates `deliveriesForSource` and deletes every delivery
 >   ([`nodes.ts:751-761`](../../packages/cli/src/nodes.ts)) before rewiring -
 >   which silently removes the analytics delivery while the plugin's scoped state
 >   still records it as `configured`, so `analytics status` reports healthy and
->   log delivery has stopped.
+>   log delivery has stopped. Scoping the delivery deletion is not sufficient on
+>   its own, and this is the half that is easy to miss: the retry then calls
+>   `deleteDeliverySource` ([`nodes.ts:758`](../../packages/cli/src/nodes.ts))
+>   unconditionally, which is the very call the first guard exists to prevent, on
+>   the one path that guard does not cover. With the plugin's delivery still
+>   attached AWS rejects it, `deleteDeliverySource` catches only `isNotFound`, and
+>   `blogwright bootstrap` throws *after* deleting the site's own delivery - a
+>   stack left with no CloudWatch delivery and a bootstrap that failed partway,
+>   strictly worse than the conflict it was healing. Nor can the retry succeed
+>   there by some other route: `putDeliverySource` refuses to repoint a source
+>   that still exists, so removing the source is the whole point of the retry and
+>   a foreign delivery forecloses it. The retry therefore runs the first guard's
+>   own test before deleting anything and refuses with the same message naming
+>   `blogwright analytics destroy`.
 >
 > Both guards have to tell the site's delivery from the plugin's, and neither
 > lookup the CLI has can express that: `deliveriesForSource`
@@ -505,9 +519,12 @@ Stage 1 - the core seams (no plugin service client lands in core)
      and fieldDelimiter. Defaults preserve today's behaviour exactly; assert
      that with a test against the site's existing delivery. This one is
      genuinely core's: the site graph owns LogsClient.
-  4. packages/cli/src/nodes.ts:713 - the two guards on logDeliveryNode (refuse
-     to delete a shared source; scope the Conflict retry to the site's own
-     delivery id).
+  4. packages/cli/src/nodes.ts:713 - the two guards on logDeliveryNode: refuse
+     to delete a shared source, and scope the Conflict retry to the site's own
+     delivery id AND apply the same refusal to it, because the retry's
+     deleteDeliverySource at :758 is otherwise left unconditional - the same
+     call the first guard exists to prevent, on the one path it does not
+     cover.
   5. The four clients live in packages/analytics/src/aws/, built over
      ctx.clients.signingUsEast1 with their own descriptors. Follow
      secretsmanager.ts for AWS-JSON services and s3.ts for REST ones;
