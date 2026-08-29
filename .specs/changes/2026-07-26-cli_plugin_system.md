@@ -384,7 +384,17 @@ plugin that ships outside the CLI). Both depend on this change.
 > the Decision below.
 >
 > Resolution of a *plugin* goes through that package's **entry point**, not
-> through `<name>/package.json`. A package that declares an `exports` map
+> through `<name>/package.json`, and the walk up from the resolved file stops at
+> the nearest `package.json` **that is a package manifest** - one carrying a
+> `name`. The qualifier is load-bearing and was added 2026-08-29 after task 05's
+> gate demonstrated its absence: a plugin published with the standard
+> dual-package layout - `exports: {".": "./dist/index.js"}` plus a
+> `dist/package.json` of `{"type": "module"}` - has a nearest manifest that is
+> that stub, which carries no `name` and no `blogwright` field. Discovery would
+> read it, conclude the package is not a plugin, and skip it **silently**: no
+> error, no failure entry, the plugin's commands simply absent from
+> `blogwright --help`. Walking past a `name`-less manifest costs one condition
+> and closes it. A package that declares an `exports` map
 > without a `"./package.json"` entry makes `require.resolve` of that subpath
 > throw `ERR_PACKAGE_PATH_NOT_EXPORTED` under Node's exports encapsulation -
 > which `blogwright-pds/package.json` does today. The loader therefore resolves
