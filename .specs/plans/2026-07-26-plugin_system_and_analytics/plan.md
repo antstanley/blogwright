@@ -1,6 +1,6 @@
 # Plan: Plugin system and analytics
 
-**Status:** Draft · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin - CloudFront logs to Iceberg](../../changes/2026-07-26-analytics_plugin.md)
+**Status:** In progress · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin - CloudFront logs to Iceberg](../../changes/2026-07-26-analytics_plugin.md)
 
 Land three linked change specs as one dependency-ordered graph of 62 tasks: an
 internal plugin SPI in `blogwright-core` with discovery and generic dispatch in
