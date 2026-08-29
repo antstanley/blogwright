@@ -1,4 +1,4 @@
-import { colors, findRepoRoot } from 'blogwright-core';
+import { colors, findRepoRoot, type ResourceNode } from 'blogwright-core';
 import { syncAfterDeploy } from 'blogwright-pds';
 
 import type { OpsContext } from './context.js';
@@ -10,7 +10,7 @@ import {
   runBuild,
   type DeployManifest,
 } from './deploy.js';
-import { applyGraph, destroyGraph } from './graph.js';
+import { applyGraph, destroyGraph, type GraphContext } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import {
@@ -297,34 +297,59 @@ export async function logs(ctx: OpsContext, hash: string): Promise<void> {
   }
 }
 
-/** Show the planned graph against live state (drift view). */
-export async function status(ctx: OpsContext): Promise<void> {
-  ctx.logger.info(colors.bold(`Status for "${ctx.env}" (bucket ${ctx.names.bucket})`));
-  const pretty = ctx.ports.terminal.isInteractive;
+/**
+ * Read each node's live status against `ctx.state`: present/missing from
+ * `node.read(ctx)`, or an `error` entry carrying the message if it throws.
+ * A query, not a command - it never writes to the logger, so a caller (the
+ * CLI's own `status` below, and a plugin's `status` verb) decides how to
+ * report each entry. Iterates `nodes` in the order given (no `topoSort` -
+ * status is a read, not a reconcile, so dependency order doesn't matter).
+ */
+export async function readNodeStatus<Ctx extends GraphContext>(
+  nodes: ResourceNode<Ctx>[],
+  ctx: Ctx,
+): Promise<StatusEntry[]> {
   const entries: StatusEntry[] = [];
-  for (const node of buildNodes(ctx)) {
+  for (const node of nodes) {
     let exists = false;
     try {
       exists = await node.read(ctx);
     } catch (err) {
-      if (pretty) {
-        entries.push({ title: node.title, state: 'error', detail: (err as Error).message });
-      } else {
-        ctx.logger.warn(`${node.title}: read failed (${(err as Error).message})`);
-      }
+      entries.push({ title: node.title, state: 'error', detail: (err as Error).message });
       continue;
     }
     const outputs = ctx.state.resources[node.id];
     const detail = outputs ? JSON.stringify(outputs) : undefined;
-    if (pretty) {
-      entries.push({ title: node.title, state: exists ? 'present' : 'missing', detail });
-      continue;
-    }
-    // The plain form is the stable contract for CI logs and agents.
-    const mark = exists ? colors.green('present') : colors.yellow('missing');
-    ctx.logger.info(`  ${mark}  ${node.title} ${detail ? colors.dim(detail) : ''}`);
+    entries.push({ title: node.title, state: exists ? 'present' : 'missing', detail });
   }
+  return entries;
+}
+
+/**
+ * Show the planned graph against live state (drift view). `nodes` defaults to
+ * the production graph (`buildNodes(ctx)`) - every real call site is
+ * unchanged - but is a parameter, not reached-for, so a test (or a future
+ * caller) can hand this the same loop over a different node set without
+ * patching a module.
+ */
+export async function status(
+  ctx: OpsContext,
+  nodes: ResourceNode<OpsContext>[] = buildNodes(ctx),
+): Promise<void> {
+  ctx.logger.info(colors.bold(`Status for "${ctx.env}" (bucket ${ctx.names.bucket})`));
+  const pretty = ctx.ports.terminal.isInteractive;
+  const entries = await readNodeStatus(nodes, ctx);
   if (pretty) {
     for (const line of renderStatusTree(entries)) ctx.logger.info(line);
+    return;
+  }
+  // The plain form is the stable contract for CI logs and agents.
+  for (const entry of entries) {
+    if (entry.state === 'error') {
+      ctx.logger.warn(`${entry.title}: read failed (${entry.detail})`);
+      continue;
+    }
+    const mark = entry.state === 'present' ? colors.green('present') : colors.yellow('missing');
+    ctx.logger.info(`  ${mark}  ${entry.title} ${entry.detail ? colors.dim(entry.detail) : ''}`);
   }
 }
