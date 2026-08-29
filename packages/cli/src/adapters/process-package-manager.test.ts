@@ -93,6 +93,12 @@ describe('addArgs', () => {
       '--exact',
     ]);
     expect(addArgs('bun', 'pkg', { dev: true })).toEqual(['add', 'pkg', '--dev']);
+    // bun's lockfile is pinned by a literal here and nowhere else. The positive
+    // detect cases derive both the seeded file and the expected manager from
+    // PACKAGE_MANAGER_LOCKFILES, so they cannot falsify a wrong cell: typo this
+    // to bun.lockb and every other test stays green while every bun >= 1.2 repo
+    // silently falls through to "no supported package manager detected".
+    expect(PACKAGE_MANAGER_LOCKFILES.bun).toBe('bun.lock');
     expect(addArgs('bun', 'pkg', { exact: true })).toEqual(['add', 'pkg', '--exact']);
     expect(addArgs('bun', 'pkg', { dev: true, exact: true })).toEqual([
       'add',

@@ -32,7 +32,7 @@ export interface PluginLogger {
 
 /**
  * The two ports core owns that a plugin may cross: repo files and the
- * operator's terminal. Deliberately narrower than the CLI's four-member
+ * operator's terminal. Deliberately narrower than the CLI's six-member
  * `Ports` (`packages/cli/src/ports.ts`) - `vcs` and `ping` are CLI-private
  * ports declared in the CLI, and any port a later CLI feature adds joins
  * them - so a `PluginContext` declared in core cannot name any of those
@@ -179,7 +179,7 @@ export interface PluginContext<TConfig = never> {
  * explicit instantiation - twelve diagnostics in all, measured, not
  * estimated.
  * Nor is there a supertype of the two contexts worth naming as a bound -
- * `OpsContext` carries CLI-private concerns (`agentDir`, the four-member
+ * `OpsContext` carries CLI-private concerns (`agentDir`, the six-member
  * `Ports`) that `PluginContext` must never see, and `PluginContext` carries
  * `pluginConfig`/`siteState`/`record` that `OpsContext` has no use for.
  * `ResourceNode<OpsContext>` and `ResourceNode<PluginContext>` are therefore
