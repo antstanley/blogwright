@@ -4,7 +4,7 @@ import { createNodeFileSystem, type Terminal } from 'blogwright-core';
 import * as pds from 'blogwright-pds';
 
 import * as commands from './commands.js';
-import { createContext } from './context.js';
+import type { ContextOptions, OpsContext } from './context.js';
 import { initSite } from './init.js';
 import { createLogger, type Logger } from './logger.js';
 
@@ -77,7 +77,19 @@ const KNOWN_COMMANDS = new Set([
 /** Builds the Terminal after flag parsing, so --plain shapes the whole session. */
 export type TerminalFactory = (opts: { plain: boolean }) => Terminal;
 
-export async function main(argv: string[], makeTerminal: TerminalFactory): Promise<number> {
+/**
+ * Builds the OpsContext for a dispatched command. `bin.ts` defaults this to
+ * `createContext` (the real, AWS- and disk-reaching composition root); tests
+ * supply `createTestContext` instead so dispatch can be asserted without a
+ * module mock or an env-var override.
+ */
+export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
+
+export async function main(
+  argv: string[],
+  makeTerminal: TerminalFactory,
+  makeContext: ContextFactory,
+): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -109,10 +121,10 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
     return initSite(createNodeFileSystem(), terminal, logger);
   }
   if (command === 'preview') {
-    return runPreview(positionals, values, terminal, logger);
+    return runPreview(positionals, values, terminal, logger, makeContext);
   }
   if (command === 'pds') {
-    return runPds(positionals, values, terminal, logger);
+    return runPds(positionals, values, terminal, logger, makeContext);
   }
   if (!KNOWN_COMMANDS.has(command)) {
     logger.error(`unknown command: ${command}`);
@@ -131,7 +143,7 @@ export async function main(argv: string[], makeTerminal: TerminalFactory): Promi
   }
   const env = values.env ?? envPositional ?? 'production';
 
-  const ctx = await createContext({
+  const ctx = await makeContext({
     env,
     configPath: values.config,
     domain: values.domain,
@@ -189,6 +201,7 @@ async function runPds(
   values: PdsValues,
   terminal: Terminal,
   logger: Logger,
+  makeContext: ContextFactory,
 ): Promise<number> {
   // `pds secret set production` - the secret sub-action shifts positionals by one.
   const secret = positionals[1] === 'secret';
@@ -200,7 +213,7 @@ async function runPds(
     logger.info(USAGE);
     return 1;
   }
-  const ctx = await createContext({
+  const ctx = await makeContext({
     env: values.env ?? envPositional ?? 'production',
     configPath: values.config,
     domain: values.domain,
@@ -248,6 +261,7 @@ async function runPreview(
   values: PreviewValues,
   terminal: Terminal,
   logger: Logger,
+  makeContext: ContextFactory,
 ): Promise<number> {
   const action = positionals[1];
   const id = values.id ?? positionals[2];
@@ -256,7 +270,7 @@ async function runPreview(
     logger.info(USAGE);
     return 1;
   }
-  const ctx = await createContext({
+  const ctx = await makeContext({
     env: 'preview',
     preview: true,
     configPath: values.config,

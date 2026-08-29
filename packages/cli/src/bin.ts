@@ -2,11 +2,12 @@
 import { createNodeTerminal } from 'blogwright-core';
 
 import { main } from './cli.js';
+import { createContext } from './context.js';
 import { createLogger } from './logger.js';
 
 const makeTerminal = (opts: { plain: boolean }) => createNodeTerminal(opts);
 
-main(process.argv.slice(2), makeTerminal)
+main(process.argv.slice(2), makeTerminal, createContext)
   .then((code) => {
     process.exitCode = code;
   })
