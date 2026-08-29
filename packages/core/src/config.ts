@@ -238,10 +238,36 @@ export function stripTrailingCommas(input: string): string {
   return out;
 }
 
+/**
+ * Parse a JSONC config document into both its validated `OpsConfig` and the
+ * raw parsed document. `raw` carries every top-level property the file has,
+ * including a plugin's own key - `OpsConfig` has no index signature to read
+ * one off `config`, so a plugin's block survives the parse only here.
+ * `parseConfig` keeps its existing signature as this function's `config`
+ * half, so no existing caller changes.
+ */
+export function parseConfigDocument(text: string): {
+  config: OpsConfig;
+  raw: Readonly<Record<string, unknown>>;
+} {
+  const raw = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as Record<string, unknown>;
+  const config = mergeConfig(raw as Partial<OpsConfig>);
+  return { config, raw };
+}
+
 /** Parse + validate a JSONC config document, merged over defaults. */
 export function parseConfig(text: string): OpsConfig {
-  const raw = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as Partial<OpsConfig>;
-  return mergeConfig(raw);
+  return parseConfigDocument(text).config;
+}
+
+/**
+ * Read a plugin's own block out of a config document's raw form - the
+ * `unknown` the CLI hands straight to that plugin's `validateConfig`. Not a
+ * function a plugin calls itself; only the CLI's dispatch path reads a
+ * block this way, over the `raw` half {@link parseConfigDocument} returns.
+ */
+export function pluginBlock(raw: Readonly<Record<string, unknown>>, key: string): unknown {
+  return raw[key];
 }
 
 export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {

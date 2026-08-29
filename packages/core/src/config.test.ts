@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveNames, parseConfig, stripJsonComments, stripTrailingCommas } from './config.js';
+import {
+  deriveNames,
+  parseConfig,
+  parseConfigDocument,
+  pluginBlock,
+  stripJsonComments,
+  stripTrailingCommas,
+} from './config.js';
 
 /** Wrap a config fragment with the required siteName. */
 const withSite = (fragment: string): string =>
@@ -117,6 +124,41 @@ describe('parseConfig', () => {
     expect(() =>
       parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "nope" } }')),
     ).toThrow(/URL/);
+  });
+});
+
+describe('parseConfigDocument', () => {
+  it('returns a config byte-identical to parseConfig, plus a raw document carrying an unknown top-level key', () => {
+    const text = withSite('{ "domain": "example.com", "analytics": { "table": "events" } }');
+
+    const { config, raw } = parseConfigDocument(text);
+
+    expect(config).toEqual(parseConfig(text));
+    expect(raw['siteName']).toBe('example');
+    expect(raw['domain']).toBe('example.com');
+    // `analytics` survives the `...raw` spread mergeConfig already does, so
+    // it round-trips into `raw` too - `OpsConfig`'s *type* has no declared
+    // property for it (a compile-time fact: `config[key]` is a `TS7053` for
+    // an arbitrary string `key`), which is why `pluginBlock` reads it off
+    // `raw`, never off `config`.
+    expect(raw['analytics']).toEqual({ table: 'events' });
+  });
+
+  it('parseConfig keeps its existing signature as the config half of parseConfigDocument', () => {
+    const text = withSite('{ "domain": "example.com" }');
+    expect(parseConfig(text)).toEqual(parseConfigDocument(text).config);
+  });
+});
+
+describe('pluginBlock', () => {
+  it('reads a plugin key out of the raw document', () => {
+    const { raw } = parseConfigDocument(withSite('{ "analytics": { "table": "events" } }'));
+    expect(pluginBlock(raw, 'analytics')).toEqual({ table: 'events' });
+  });
+
+  it('returns undefined for a key the document does not carry', () => {
+    const { raw } = parseConfigDocument(withSite('{}'));
+    expect(pluginBlock(raw, 'analytics')).toBeUndefined();
   });
 });
 
