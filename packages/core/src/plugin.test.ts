@@ -100,8 +100,45 @@ describe('validatePlugin', () => {
       default: { name: 'ok', description: 'd', commands: [{ action: 'a', summary: 's' }] },
     };
     expect(() => validatePlugin(missingAction, PACKAGE)).toThrow(new RegExp(PACKAGE));
-    expect(() => validatePlugin(missingAction, PACKAGE)).toThrow(/missing action or run/);
-    expect(() => validatePlugin(missingRun, PACKAGE)).toThrow(/missing action or run/);
+    expect(() => validatePlugin(missingAction, PACKAGE)).toThrow(/missing action, summary or run/);
+    expect(() => validatePlugin(missingRun, PACKAGE)).toThrow(/missing action, summary or run/);
+  });
+
+  it('rejects a command missing summary, which the returned Plugin type declares required', () => {
+    // validatePlugin asserts its result to Plugin, whose PluginCommand declares
+    // `summary: string`. Without this check a command omitting it validates and
+    // reads back undefined while typed string - and tasks 11 and 17 render that
+    // field straight into `blogwright --help` and `blogwright plugin list`.
+    const missingSummary = {
+      default: {
+        name: 'ok',
+        description: 'd',
+        commands: [{ action: 'a', run: async () => undefined }],
+      },
+    };
+    const blankSummary = {
+      default: {
+        name: 'ok',
+        description: 'd',
+        commands: [{ action: 'a', summary: '', run: async () => undefined }],
+      },
+    };
+    expect(() => validatePlugin(missingSummary, PACKAGE)).toThrow(/missing action, summary or run/);
+    expect(() => validatePlugin(blankSummary, PACKAGE)).toThrow(/missing action, summary or run/);
+  });
+
+  it('names the package without a stray space before the possessive', () => {
+    // rejectPlugin joins `plugin package "<name>"` to a detail that usually
+    // opens with `'s`. A joining space rendered `… "acme" 's Plugin.name …`
+    // on every plugin-load failure.
+    const noName = { default: { description: 'd', commands: [] } };
+    expect(() => validatePlugin(noName, PACKAGE)).toThrow(
+      new RegExp(`plugin package "${PACKAGE}"'s Plugin\\.name is required`),
+    );
+    const noDefault = { notDefault: 1 };
+    expect(() => validatePlugin(noDefault, PACKAGE)).toThrow(
+      new RegExp(`plugin package "${PACKAGE}" has no default export`),
+    );
   });
 
   it('validates cleanly even when nodes() would throw if called', () => {

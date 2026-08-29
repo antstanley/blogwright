@@ -365,7 +365,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Raise, naming `packageName` and stating what would fix it. Never echoes a value read off the module. */
 function rejectPlugin(packageName: string, detail: string): never {
-  throw new Error(`plugin package "${packageName}" ${detail}`);
+  // No space before `detail`: six of the seven details open with a possessive
+  // `'s`, so a joining space renders `plugin package "acme" 's Plugin.name ...`.
+  // Details that are not possessive supply their own leading space.
+  throw new Error(`plugin package "${packageName}"${detail}`);
 }
 
 /**
@@ -383,14 +386,14 @@ export function validatePlugin(module: unknown, packageName: string): Plugin {
   if (!isRecord(module)) {
     rejectPlugin(
       packageName,
-      'has no default export - export a Plugin object as the package default export',
+      ' has no default export - export a Plugin object as the package default export',
     );
   }
   const candidate = module.default;
   if (candidate === undefined) {
     rejectPlugin(
       packageName,
-      'has no default export - export a Plugin object as the package default export',
+      ' has no default export - export a Plugin object as the package default export',
     );
   }
   if (!isRecord(candidate)) {
@@ -431,11 +434,18 @@ export function validatePlugin(module: unknown, packageName: string): Plugin {
       isRecord(command) &&
       typeof command.action === 'string' &&
       command.action.length > 0 &&
+      typeof command.summary === 'string' &&
+      command.summary.length > 0 &&
       typeof command.run === 'function';
     if (!valid) {
+      // `summary` is checked because this function's return is asserted to
+      // `Plugin`, whose PluginCommand declares `summary: string` as required.
+      // Without the check a command omitting it validates and reads back
+      // `undefined` while typed `string` - and tasks 11 and 17 render exactly
+      // that field into `blogwright --help` and `blogwright plugin list`.
       rejectPlugin(
         packageName,
-        "'s Plugin.commands has an entry missing action or run - each command needs a non-empty action and a run(ctx, args) function",
+        "'s Plugin.commands has an entry missing action, summary or run - each command needs a non-empty action, a non-empty summary and a run(ctx, args) function",
       );
     }
   }
