@@ -180,10 +180,18 @@ async function collectCandidates(
     (packageName): Candidate => ({ packageName, fromDir: repoRoot }),
   );
 
-  const consumerNameSet = new Set(consumerNames);
-  const bundledCandidates = pluginDependencyNames(cliPkg)
-    .filter((packageName) => !consumerNameSet.has(packageName))
-    .map((packageName): Candidate => ({ packageName, fromDir: cliPackageDir }));
+  // The bundled half is NOT filtered against the consumer's names here. A name
+  // in both manifests must still be probed from both directories, because a
+  // consumer can DECLARE a plugin it cannot resolve - a pruned devDependency,
+  // `pnpm install --prod`, a hand-edited manifest before install - while the
+  // CLI's bundled copy is installed and working. Filtering here would suppress
+  // that copy and report nothing at all, which is the silent outcome the
+  // two-source union exists to prevent. `discover` instead skips the bundled
+  // probe only once the consumer's has actually resolved, so the consumer still
+  // wins wherever both work.
+  const bundledCandidates = pluginDependencyNames(cliPkg).map(
+    (packageName): Candidate => ({ packageName, fromDir: cliPackageDir }),
+  );
 
   return [...consumerCandidates, ...bundledCandidates];
 }
@@ -340,11 +348,19 @@ export async function discover(
 
   const loaded: LoadedPlugin[] = [];
   const failures: PluginLoadFailure[] = [];
+  // A package named in both manifests appears twice, consumer entry first.
+  // Skip the second only when the first RESOLVED - to a plugin or to a failure -
+  // so a declared-but-unresolvable consumer entry still falls through to the
+  // CLI's bundled copy instead of silently suppressing it.
+  const resolved = new Set<string>();
   for (const candidate of candidates) {
+    if (resolved.has(candidate.packageName)) continue;
     const outcome = await loadCandidate(candidate, ports);
     if (outcome.kind === 'plugin') {
+      resolved.add(candidate.packageName);
       loaded.push({ packageName: candidate.packageName, plugin: outcome.plugin });
     } else if (outcome.kind === 'failure') {
+      resolved.add(candidate.packageName);
       failures.push(outcome.failure);
     }
   }

@@ -1,4 +1,18 @@
 /**
+ * A LEAF. This module must never import anything.
+ *
+ * Task 09 moved `KNOWN_COMMANDS` and `RESERVED_COMMANDS` here out of `cli.ts`
+ * because `plugins.ts` needs the reserved set and `cli.ts` imports `plugins.ts`
+ * for dispatch - a cycle between the composition root and a domain module. It
+ * did not throw, because the set was only read inside a function body, but
+ * adding one ordinary top-level derivation to `plugins.ts` under that cycle
+ * produced `ReferenceError: Cannot access 'RESERVED_COMMANDS' before
+ * initialization` and killed every command including `--help`.
+ *
+ * A single import added here re-opens that fault, silently, for whichever
+ * module happens to be entered first. Keep it dependency-free.
+ */
+/**
  * The CLI's command-name registries, isolated in their own leaf module with
  * no imports of its own. Both `cli.ts` (the dispatcher - it pulls in every
  * command implementation and the bundled `blogwright-pds` package) and

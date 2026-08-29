@@ -235,6 +235,43 @@ describe('discover - candidate selection', () => {
     expect(result).toEqual({ plugins: [], failures: [] });
   });
 
+  it('falls through to the CLI-bundled copy when the consumer declares the plugin but cannot resolve it', async () => {
+    // The consumer's package.json names the plugin, but it is not installed
+    // there - a pruned devDependency, `pnpm install --prod`, or a manifest
+    // edited before install. The CLI's bundled copy IS installed. Deduping on
+    // DECLARATION would suppress the working copy and report nothing at all:
+    // no plugin, no failure, so `blogwright plugin list` shows neither. That is
+    // exactly the silence the two-source union exists to prevent, which is why
+    // discover() skips a duplicate only once the first entry has RESOLVED.
+    const fs = createMemoryFileSystem({
+      [`${REPO_ROOT}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-pruned': '^1.0.0' },
+      }),
+      [`${CLI_DIR}/package.json`]: JSON.stringify({
+        dependencies: { 'blogwright-pruned': '^1.0.0' },
+      }),
+      '/pruned/package.json': JSON.stringify({
+        name: 'blogwright-pruned',
+        blogwright: { plugin: 'pruned' },
+      }),
+    });
+    // Registered ONLY from the CLI directory: resolution from REPO_ROOT fails.
+    const loader = createFakeModuleLoader([
+      {
+        specifier: 'blogwright-pruned',
+        fromDir: CLI_DIR,
+        packageJsonPath: '/pruned/package.json',
+        entryPath: '/pruned/index.js',
+        module: validPluginModule('pruned'),
+      },
+    ]);
+
+    const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
+
+    expect(result.plugins.map((p) => p.name)).toEqual(['pruned']);
+    expect(result.failures).toEqual([]);
+  });
+
   it('resolves a package listed in both the consumer and CLI-bundled manifests only once, from the consumer half, not as a duplicate of itself', async () => {
     // A pnpm install commonly hoists one package to a location resolvable
     // from either directory, so both the consuming repo and the CLI's own
