@@ -305,3 +305,36 @@ describe('spliceConfigBlock - scanner discipline', () => {
     expect(parsed['note']).toBe('a"}');
   });
 });
+
+describe('spliceConfigBlock - scanner invariants the refactor rests on', () => {
+  // Both cases below were correct in the shipped scanner but pinned by nothing:
+  // task 12's gate mutated each line and watched all 16 tests stay green.
+
+  it('does not mistake a top-level string VALUE for a key', () => {
+    // Pins `expectKey = false` (config-block.ts:156). Without it every top-level
+    // value string is recorded as a key, so this splice would be refused as a
+    // duplicate of a key the document does not actually declare.
+    const source = '{\n  "siteName": "analytics"\n}\n';
+    const out = spliceConfigBlock(
+      { path: PATH, text: source },
+      { key: 'analytics', rendered: '  "analytics": {\n    "namespace": "web"\n  }' },
+    );
+    expect(out).toContain('"analytics": {');
+    expect(parseConfig(out).siteName).toBe('analytics');
+  });
+
+  it('still detects a top-level duplicate that follows an array-valued entry', () => {
+    // Pins `containers.pop()` (config-block.ts:200). Without it the stack stays
+    // topped by 'array' after the nested array closes, so the following depth-1
+    // comma stops expecting a key, the real `analytics` key is never recorded,
+    // and the splice emits it a SECOND time instead of refusing - the exact
+    // silent duplication this module exists to prevent.
+    const source = '{\n  "tags": ["a", "b"],\n  "analytics": { "namespace": "web" }\n}\n';
+    expect(() =>
+      spliceConfigBlock(
+        { path: PATH, text: source },
+        { key: 'analytics', rendered: '  "analytics": {}' },
+      ),
+    ).toThrow(/already declares a "analytics" key/);
+  });
+});
