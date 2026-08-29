@@ -40,6 +40,30 @@ async function writeFakePackage(
   await writeFile(join(dir, 'index.js'), `export const value = ${JSON.stringify(value)};\n`);
 }
 
+/**
+ * Build `<root>/node_modules/<name>` shaped like the standard dual-package
+ * layout: an outer `package.json` (carrying `name`) exporting `"."` to
+ * `./dist/index.js`, plus a `dist/package.json` stub of `{"type": "module"}`
+ * - no `name`, no `blogwright` field. `dist/package.json` is the *nearer* of
+ * the two package.json files to the resolved entry point, so an unguarded
+ * walk-up stops there instead of at the real manifest one level further up.
+ */
+async function writeDualPackage(packagesRoot: string, name: string): Promise<void> {
+  const dir = join(packagesRoot, 'node_modules', name);
+  await mkdir(join(dir, 'dist'), { recursive: true });
+  await writeFile(
+    join(dir, 'package.json'),
+    JSON.stringify(
+      { name, version: '1.0.0', type: 'module', exports: { '.': './dist/index.js' } },
+      undefined,
+      2,
+    ),
+  );
+  // The dual-package stub: no "name", no "blogwright" field.
+  await writeFile(join(dir, 'dist', 'package.json'), JSON.stringify({ type: 'module' }));
+  await writeFile(join(dir, 'dist', 'index.js'), `export const value = "dual";\n`);
+}
+
 beforeEach(async () => {
   // realpath: on macOS, os.tmpdir() lives under a /var symlink to /private/var,
   // and Node's module resolver returns the real (symlink-resolved) path, so
@@ -50,6 +74,9 @@ beforeEach(async () => {
   await writeFakePackage(root, 'fake-pkg', { '.': './index.js' }, 'hello');
   // Shaped like blogwright itself: exports a subpath but not ".".
   await writeFakePackage(root, 'no-entry-pkg', { './sub': './index.js' }, 'unreachable');
+  // Shaped like a published dual-package plugin: a name-less dist/package.json
+  // stub sits nearer than the real manifest.
+  await writeDualPackage(root, 'dual-pkg');
 });
 
 afterEach(async () => {
@@ -91,6 +118,18 @@ describe('createNodeModuleLoader packageJsonPathFor', () => {
   it('reports an uninstalled specifier as not found', async () => {
     const result = await loader.packageJsonPathFor('does-not-exist-anywhere', root);
     expect(result).toEqual({ found: false });
+  });
+
+  it('walks past a nested package.json with no "name" (dual-package layout) to the real manifest', async () => {
+    // Without the name-carrying guard this resolves to
+    // node_modules/dual-pkg/dist/package.json instead - the nearer stub that
+    // discovery would then read, find no "name" and no "blogwright" field on,
+    // and silently conclude is not a plugin.
+    const result = await loader.packageJsonPathFor('dual-pkg', root);
+    expect(result).toEqual({
+      found: true,
+      path: join(root, 'node_modules/dual-pkg/package.json'),
+    });
   });
 
   it('contrast: require.resolve of the direct subpath throws ERR_PACKAGE_PATH_NOT_EXPORTED for the same package', () => {

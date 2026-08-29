@@ -77,6 +77,13 @@ export interface ModuleLoader {
    * `adapters/node-module-loader.ts` for the walk-up implementation and a
    * side-by-side of both resolution strategies.
    *
+   * The walk stops at the nearest `package.json` **that carries a `name`**,
+   * not merely the nearest one on disk: a package published with the
+   * standard dual-package layout (`exports: {".": "./dist/index.js"}` plus a
+   * `dist/package.json` of `{"type": "module"}`) has a nearer, name-less stub
+   * that would otherwise be mistaken for the manifest, making a valid plugin
+   * silently invisible to discovery.
+   *
    * Limit: `blogwright` itself cannot be reached this way either - its own
    * `exports` map has no `.` entry (only `./rkey`; the CLI is consumed
    * through its `bin`, not imported), so resolving the bare specifier

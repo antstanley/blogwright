@@ -1,4 +1,4 @@
-import { basename, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -75,6 +75,26 @@ export interface ContextOptions {
   ports?: Partial<Ports> | undefined;
 }
 
+/**
+ * The directory holding the CLI's own `package.json` - `blogwright`'s package
+ * root. Located from `import.meta.url` the same way {@link OpsContext.agentDir}
+ * is (below): `packages/cli/package.json` declares an `exports` map with a
+ * `./rkey` entry and no `.` entry (the CLI is consumed through its `bin`, not
+ * imported), so neither `blogwright` nor `blogwright/package.json` can be
+ * resolved through the `ModuleLoader` port - see that port's doc comment.
+ * Self-location is therefore a composition-root concern, not something
+ * `discover` (`plugins.ts`) can derive itself.
+ *
+ * A standalone function, not folded into {@link createContext}: `blogwright
+ * plugin list` dispatches before a context exists and still needs this
+ * value, and it is the one supplier every discovery-running path (plugin
+ * dispatch, `blogwright --help`, the init wizard, `plugin list`) passes as
+ * `discover`'s second argument.
+ */
+export function cliPackageDir(): string {
+  return fileURLToPath(new URL('..', import.meta.url));
+}
+
 export interface ConfigSource {
   env: string;
   /** Repo root the default config candidates resolve against. */
@@ -120,7 +140,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     packages: opts.ports?.packages ?? createProcessPackageManager(fs),
   };
   const logger = createLogger(ports.terminal);
-  const agentDir = fileURLToPath(new URL('../agent', import.meta.url));
+  const agentDir = join(cliPackageDir(), 'agent');
   const root = await findRepoRoot(ports.fs);
   const config = await loadConfig(ports.fs, {
     env: opts.env,

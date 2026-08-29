@@ -1,5 +1,8 @@
+import { join } from 'node:path';
+
 import {
   createMemoryFileSystem,
+  createNodeFileSystem,
   emptyState,
   type OpsState,
   type PluginContext,
@@ -9,11 +12,23 @@ import {
 import type { PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
 
-import { deriveAppTag, loadConfig, type OpsContext } from './context.js';
+import { cliPackageDir, deriveAppTag, loadConfig, type OpsContext } from './context.js';
 import { destroyGraph } from './graph.js';
 import { createTestContext } from './test-support.js';
 
 const ROOT = '/repo';
+
+describe('cliPackageDir', () => {
+  it("resolves the real directory holding the CLI's own package.json, callable with no context", async () => {
+    // No createContext/createTestContext call anywhere here: blogwright plugin
+    // list dispatches before a context exists and still needs this value.
+    const dir = cliPackageDir();
+    const pkg = JSON.parse(await createNodeFileSystem().readText(join(dir, 'package.json'))) as {
+      name: string;
+    };
+    expect(pkg.name).toBe('blogwright');
+  });
+});
 
 describe('loadConfig', () => {
   it('loads the per-environment file, stripping JSONC comments', async () => {

@@ -7,7 +7,7 @@
  * the resolved file's URL, so both CJS and ESM plugin packages work.
  */
 
-import { access } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -48,19 +48,42 @@ function resolveEntryPoint(specifier: string, fromDir: string): ModuleResolution
   }
 }
 
-async function fileExists(path: string): Promise<boolean> {
+/**
+ * True when `path` exists, parses as a JSON object, and carries a non-empty
+ * `name` - i.e. is genuinely a package manifest, not merely a `package.json`
+ * that happens to sit in the walk's path. A dual-package layout
+ * (`exports: {".": "./dist/index.js"}` plus a `dist/package.json` stub of
+ * `{"type": "module"}`) has exactly such a stub as the nearest file on disk:
+ * it carries no `name` and no `blogwright` field, so treating it as the
+ * manifest would make discovery conclude the package is not a plugin and
+ * skip it silently. Any read or parse failure - the file is absent, or is not
+ * valid JSON - answers `false` so the walk continues upward, rather than
+ * raising: a stray malformed `package.json` above the real one (unrelated to
+ * this resolution) must not abort the walk before it reaches the manifest
+ * that does carry a `name`.
+ */
+async function isPackageManifest(path: string): Promise<boolean> {
+  let text: string;
   try {
-    await access(path);
-    return true;
+    text = await readFile(path, 'utf8');
+  } catch {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+    const name = (parsed as Record<string, unknown>).name;
+    return typeof name === 'string' && name.length > 0;
   } catch {
     return false;
   }
 }
 
 /**
- * Walk up from `entryFile` to the nearest `package.json`. This - not
- * `require.resolve('<specifier>/package.json')` - is how `packageJsonPathFor`
- * finds a plugin's manifest.
+ * Walk up from `entryFile` to the nearest `package.json` **that is a package
+ * manifest** - one carrying a `name` (see {@link isPackageManifest}). This -
+ * not `require.resolve('<specifier>/package.json')` - is how
+ * `packageJsonPathFor` finds a plugin's manifest.
  *
  * The direct subpath throws under Node's exports encapsulation whenever a
  * package's `exports` map omits `"./package.json"`, which is true of every
@@ -81,12 +104,18 @@ async function fileExists(path: string): Promise<boolean> {
  * enforce), which is why this behaviour is proven by an integration test
  * against this real adapter (`node-module-loader.test.ts`) rather than a fake.
  * Do not "simplify" this back to the direct subpath.
+ *
+ * The `name`-carrying qualifier was added 2026-08-29: without it, the walk
+ * stops at the *first* `package.json` it finds above the entry file, which
+ * for a dual-package layout is the `dist/package.json` stub, not the real
+ * manifest one directory further up. Skipping past a name-less manifest costs
+ * one extra read per level and closes that gap.
  */
 async function nearestPackageJson(entryFile: string): Promise<ModuleResolution> {
   let dir = dirname(entryFile);
   for (;;) {
     const candidate = join(dir, 'package.json');
-    if (await fileExists(candidate)) return { found: true, path: candidate };
+    if (await isPackageManifest(candidate)) return { found: true, path: candidate };
     const parent = dirname(dir);
     if (parent === dir) return { found: false };
     dir = parent;
