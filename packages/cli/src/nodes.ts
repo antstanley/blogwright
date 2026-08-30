@@ -881,7 +881,7 @@ const GITHUB_OIDC_THUMBPRINT = '6938fd4d98bab03faadb97b34396831e3780aea1';
  * invalidation and read access to the PDS credentials secret).
  */
 function githubOidcRoleNode(preview: boolean): ResourceNode {
-  const roleName = (ctx: OpsContext) => `${ctx.names.prefix}-gh`;
+  const roleName = (ctx: OpsContext) => ctx.names.githubRole;
   return {
     id: 'gh-oidc-role',
     // Production deploys invalidate the distribution, so its ARN must be in state.

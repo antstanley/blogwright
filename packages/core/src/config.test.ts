@@ -202,6 +202,16 @@ describe('deriveNames', () => {
     expect(names.cloudfrontLogGroup).toBe('/example/staging/cloudfront');
   });
 
+  it('pins the GitHub OIDC deploy role name so no existing role is renamed', () => {
+    // `<env>-<siteName>-gh` is the value `githubOidcRoleNode` derived privately
+    // before this field existed (`packages/cli/src/nodes.ts`), and it is the
+    // name `blogwright-pds` attaches its own inline policy to. A change here
+    // silently orphans every deployed role.
+    const cfg = parseConfig(withSite('{}'));
+    expect(deriveNames('production', '123456789012', cfg).githubRole).toBe('production-example-gh');
+    expect(deriveNames('staging', '123456789012', cfg).githubRole).toBe('staging-example-gh');
+  });
+
   it('rejects an invalid environment name', () => {
     expect(() => deriveNames('Prod!', '1', parseConfig(withSite('{}')))).toThrow(/environment/);
   });

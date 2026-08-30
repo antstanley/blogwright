@@ -362,6 +362,16 @@ export interface Names {
   prefix: string;
   buildRole: string;
   execRole: string;
+  /**
+   * The GitHub Actions OIDC deploy role. Derived here rather than inside the
+   * CLI's own `githubOidcRoleNode` because it has two readers: that node, and
+   * `blogwright-pds`, whose resource node attaches its own named inline policy
+   * to the same role (`packages/pds/src/nodes.ts`). Only the role's ARN reaches
+   * the site's state, so a plugin cannot recover the name from there - and a
+   * second, private derivation is exactly the duplication DEVELOPMENT.md
+   * §Limits and bounds bans for a derived AWS name.
+   */
+  githubRole: string;
   microvmImage: string;
   microvmLogGroup: string;
   cloudfrontLogGroup: string;
@@ -389,6 +399,7 @@ export function deriveNames(env: string, accountId: string, cfg: OpsConfig): Nam
     prefix,
     buildRole: `${prefix}-build-role`,
     execRole: `${prefix}-exec-role`,
+    githubRole: `${prefix}-gh`,
     microvmImage,
     microvmLogGroup: `/aws/lambda/microvms/${microvmImage}`,
     cloudfrontLogGroup: `/${cfg.siteName}/${env}/cloudfront`,
