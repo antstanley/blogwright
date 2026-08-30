@@ -27,6 +27,7 @@ import { toPluginContext } from './plugin-commands.js';
 import type { ModuleLoader } from './ports.js';
 import {
   buildDiscoveryPorts,
+  createFakeModuleLoader,
   createTestContext,
   makeFakePlugin,
   type FakePluginSpec,
@@ -499,6 +500,156 @@ Plugins that failed to load:
         '`blogwright plugin list` to see what is installed',
     ]);
     expect(terminal.writes).toEqual([]);
+  });
+});
+
+describe('main - init dispatch', () => {
+  it('discovers installed plugins and asks their questions in deterministic (name-sorted) order, writing every block into the one file', async () => {
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const asked: string[] = [];
+    const zzz: Plugin = {
+      name: 'zzz',
+      description: 'plugin zzz',
+      commands: [],
+      configKey: 'zzz',
+      init: async () => {
+        asked.push('zzz');
+        return [{ property: '"x": true' }];
+      },
+    };
+    const aaa: Plugin = {
+      name: 'aaa',
+      description: 'plugin aaa',
+      commands: [],
+      configKey: 'aaa',
+      init: async () => {
+        asked.push('aaa');
+        return [{ property: '"y": true' }];
+      },
+    };
+    // A package's name and the plugin namespace it exports are independent,
+    // and here they are deliberately inverted: `blogwright-aaa` exports the
+    // plugin named "zzz", `blogwright-zzz` the one named "aaa". Discovery
+    // enumerates CANDIDATES in package-name order (`plugins.ts`'s
+    // `pluginDependencyNames` sorts them), so `discover` hands the wizard
+    // "zzz" first here whichever order this array is written in. The wizard
+    // asking "aaa" first can therefore only come from the init path sorting
+    // by PLUGIN name of its own accord (`init.ts`'s `collectPluginBlocks`) -
+    // with that sort removed, `asked` comes back as ['zzz', 'aaa'] and this
+    // fails. A fixture whose package names matched its plugin names would
+    // pin nothing: discovery's own ordering would satisfy it either way.
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-zzz', namespace: 'aaa', plugin: aaa },
+      { packageName: 'blogwright-aaa', namespace: 'zzz', plugin: zzz },
+    ]);
+    const repoRoot = await findRepoRoot(fs);
+
+    const code = await main(
+      ['init'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(asked).toEqual(['aaa', 'zzz']);
+    const written = await fs.readText(`${repoRoot}/config/production.jsonc`);
+    expect(written).toContain('"aaa": {\n    "y": true\n  }');
+    expect(written).toContain('"zzz": {\n    "x": true\n  }');
+    // Written in the same sorted order they were asked in, not discovery's.
+    expect(written.indexOf('"aaa"')).toBeLessThan(written.indexOf('"zzz"'));
+  });
+
+  it('runs the plain four-question wizard AND warns, rather than crashing on plugin discovery, when there is no repo root or root package.json at all', async () => {
+    // blogwright init is exactly the wizard that bootstraps a repo, so this
+    // is not a hypothetical: a genuinely first run may have neither. A
+    // sibling task's own gate caught an unguarded discovery call breaking
+    // `blogwright --help` outside a repo the same way - this pins the fix
+    // on init's own discovery call. The tolerance is narrow - mirroring
+    // `helpText`'s own `isMissingPackageJsonError` - so this also pins that
+    // the warning names the SPECIFIC "missing package.json" precondition,
+    // not a blanket "something went wrong" catch-all.
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const fs = createMemoryFileSystem();
+    const loader = createFakeModuleLoader([]);
+
+    const code = await main(
+      ['init'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toHaveLength(1);
+    expect(terminal.errors[0]).toContain('no package.json found at');
+    expect(terminal.errors[0]).toContain('continuing with no plugins discovered');
+    const written = await fs.readText(`${process.cwd()}/config/production.jsonc`);
+    expect(written).toContain('"siteName": "myblog"');
+  });
+
+  it('never touches the ModuleLoader for a non-interactive invocation - it refuses before discovery, not after', async () => {
+    // D3: discovery (and therefore importing every installed plugin's
+    // module) must not run for a command that is about to decline anyway.
+    //
+    // The fixture has a plugin actually INSTALLED on purpose. Against an
+    // empty `createMemoryFileSystem()` the three call logs below stay empty
+    // whether or not the guard exists - `discover` would abort at its first
+    // precondition (reading the repo's own package.json) long before
+    // resolving a single candidate - so the assertions could never fail. With
+    // `blogwright-aaa` resolvable, dropping the `!terminal.isInteractive`
+    // guard from cli.ts's `init` branch makes all three non-empty and fails
+    // this test.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const installed: Plugin = {
+      name: 'aaa',
+      description: 'plugin aaa',
+      commands: [],
+      configKey: 'aaa',
+      init: async () => [{ property: '"y": true' }],
+    };
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-aaa', namespace: 'aaa', plugin: installed },
+    ]);
+
+    const code = await main(
+      ['init'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(1);
+    expect(loader.resolveCalls).toEqual([]);
+    expect(loader.packageJsonPathForCalls).toEqual([]);
+    expect(loader.loadCalls).toEqual([]);
+    expect(terminal.errors.some((l) => l.includes('interactive wizard'))).toBe(true);
+  });
+
+  it('propagates a genuine discovery defect (a malformed root package.json) rather than silently discarding plugin config blocks', async () => {
+    // D1: the tolerance is narrow. A malformed package.json is a real
+    // defect - not a "nothing set up yet" state - so it must NOT be
+    // swallowed into "no plugins found" the way a missing file is.
+    // Otherwise an operator with a typo'd package.json and a plugin
+    // installed gets a config silently missing that plugin's block and a
+    // success exit, discovering the problem only later.
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    const fs = createMemoryFileSystem({
+      [`${repoRoot}/.jj`]: '',
+      [`${repoRoot}/package.json`]: '{ this is not json',
+      [`${cliPackageDir()}/package.json`]: '{}',
+    });
+    const loader = createFakeModuleLoader([]);
+
+    await expect(
+      main(['init'], fixedTerminal(terminal), testContextFactory(terminal).makeContext, () => ({
+        fs,
+        loader,
+      })),
+    ).rejects.toThrow(/failed to (read or )?parse/);
+
+    expect(await fs.exists(`${repoRoot}/config/production.jsonc`)).toBe(false);
   });
 });
 

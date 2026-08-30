@@ -1,7 +1,6 @@
 import { parseArgs } from 'node:util';
 
 import {
-  createNodeFileSystem,
   FileNotFoundError,
   findRepoRoot,
   type Plugin,
@@ -228,9 +227,7 @@ export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
  * Builds the `fs`/`loader` ports plugin dispatch needs for discovery -
  * BEFORE any environment is known and therefore before any `OpsContext`
  * exists at all. `bin.ts` defaults this to the real Node adapters
- * (`createNodeFileSystem`/`createNodeModuleLoader`), mirroring the `init`
- * branch below, which already constructs a `FileSystem` directly with no
- * context; tests supply a map-backed pair instead. Declared as a required
+ * (`createNodeFileSystem`/`createNodeModuleLoader`). Declared as a required
  * parameter, not defaulted inside this module, for the same reason
  * `ContextFactory` is: the composition root (`bin.ts`) is the only place
  * real adapters get constructed.
@@ -247,9 +244,14 @@ export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
  *      stale about what is installed.
  *   3. `blogwright plugin list` (task 17), which names plugins that failed
  *      to load - only a load attempt can discover that.
- *   4. `blogwright init` (task 14), whose wizard asks each discovered
- *      plugin's questions and writes their blocks into the config file it
- *      produces.
+ *   4. `blogwright init`, whose wizard asks each discovered plugin's
+ *      questions and writes their blocks into the config file it produces
+ *      - but only on an interactive terminal. A non-interactive invocation
+ *      still calls this factory (it needs the `FileSystem` half to build
+ *      `initSite`'s arguments) but refuses before ever calling `discover`,
+ *      so it never resolves or imports a single plugin module for a
+ *      command that was always going to decline (see the `init` branch's
+ *      own comment, below).
  *
  * Every other built-in command pays nothing for discovery - `deploy`,
  * `bootstrap` and `status` among them (the three a laziness test in
@@ -296,8 +298,47 @@ export async function main(
     return values.help || command ? 0 : 1;
   }
   if (command === 'init') {
+    const discoveryPorts = makeDiscoveryPorts();
+    if (!terminal.isInteractive) {
+      // `initSite`'s own first check refuses immediately on a
+      // non-interactive terminal, before it ever touches `fs` or `plugins`.
+      // Skip discovery entirely here rather than resolving - and dynamically
+      // importing - every installed plugin's module for a command that was
+      // always going to decline; `makeDiscoveryPorts()` above is cheap
+      // (adapter construction only, no I/O), unlike `discover` itself.
+      return initSite(discoveryPorts.fs, terminal, logger, []);
+    }
     // Runs before any context exists - there is no config to load yet.
-    return initSite(createNodeFileSystem(), terminal, logger);
+    // `init` is one of the four discovery-running paths `DiscoveryPortsFactory`
+    // enumerates above: the wizard asks each discovered plugin's questions
+    // too, so discovery runs over the SAME factory plugin dispatch uses
+    // below, not a second, ad hoc seam. `blogwright init` is also exactly
+    // the situation `helpText` above already tolerates a discovery
+    // precondition failure for: a resolved repo root, a readable
+    // package.json there, may not hold at all, since this is the wizard
+    // that BOOTSTRAPS a repo. Mirrors `helpText`'s two-step try/catch
+    // exactly, narrowed the same way with the same two helpers: a missing
+    // repo root or a missing package.json is tolerated - a real first-run
+    // state, not a defect - and treated as "no plugins installed" so the
+    // plain four-question flow still completes; anything else - a
+    // malformed package.json, say, which IS a defect worth surfacing -
+    // propagates unchanged rather than silently discarding a plugin's
+    // config block.
+    let repoRoot: string;
+    try {
+      repoRoot = await findRepoRoot(discoveryPorts.fs);
+    } catch (err) {
+      if (!isNoRepoRootError(err)) throw err;
+      repoRoot = process.cwd();
+    }
+    let plugins: readonly Plugin[] = [];
+    try {
+      plugins = (await discover(repoRoot, cliPackageDir(), discoveryPorts)).plugins;
+    } catch (err) {
+      if (!isMissingPackageJsonError(err)) throw err;
+      logger.warn(`${(err as Error).message} - continuing with no plugins discovered`);
+    }
+    return initSite(discoveryPorts.fs, terminal, logger, plugins, repoRoot);
   }
   if (command === 'preview') {
     return runPreview(positionals, values, terminal, logger, makeContext, makeDiscoveryPorts);
