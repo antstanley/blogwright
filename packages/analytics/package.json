@@ -1,5 +1,8 @@
 {
   "name": "blogwright-analytics",
+  "blogwright": {
+    "plugin": "analytics"
+  },
   "version": "0.3.3",
   "type": "module",
   "sideEffects": false,
