@@ -3,13 +3,17 @@
  * through Firehose into an Iceberg table, with a local dashboard over it.
  * The plugin is installed on demand with `blogwright plugin add analytics`,
  * never shipped with the CLI - see DEVELOPMENT.md §Hexagonal architecture
- * ("Features live in their own packages"). This module carries only the
- * plugin's namespace constant today; the `Plugin` default export and the
- * package's `blogwright.plugin` manifest field land together once the
- * plugin has commands and nodes to declare, so a package carrying the
- * manifest without a conforming export never becomes a discovery error
- * naming this package in the meantime.
+ * ("Features live in their own packages"). This module carries the plugin's
+ * namespace constant and its own AWS service clients (built over core's
+ * shared SigV4 transport through the plugin-supplied `ServiceDescriptor`
+ * seam) today; the `Plugin` default export and the package's
+ * `blogwright.plugin` manifest field land together once the plugin has
+ * commands and nodes to declare, so a package carrying the manifest without
+ * a conforming export never becomes a discovery error naming this package
+ * in the meantime.
  */
+
+export * from './aws/s3tables.js';
 
 /**
  * The CLI namespace this plugin will claim (`blogwright analytics <action>`),
