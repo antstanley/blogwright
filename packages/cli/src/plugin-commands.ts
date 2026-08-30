@@ -181,12 +181,26 @@ function matchAction(
   return best;
 }
 
-/** Render a plugin's declared actions, one per line, for an unknown-action refusal. */
+/**
+ * Render a plugin's available actions, one per line, for an unknown-action
+ * refusal.
+ *
+ * Includes the generic `init` when the plugin contributes one, because a
+ * contributor-only plugin declares NO commands: listing `plugin.commands`
+ * alone printed `"demo" actions:` and then nothing at all, while
+ * `blogwright demo init` worked perfectly well. A refusal that tells an
+ * operator the plugin has no actions, when it has one, is worse than no
+ * refusal.
+ */
 function renderActions(plugin: Plugin<unknown>): string {
-  return [
-    `"${plugin.name}" actions:`,
-    ...plugin.commands.map((command) => `  ${command.action} - ${command.summary}`),
-  ].join('\n');
+  const declared = plugin.commands.map((command) => `  ${command.action} - ${command.summary}`);
+  const generic =
+    typeof plugin.init === 'function'
+      ? [
+          `  ${GENERIC_INIT_ACTION} - write this plugin's config block into the environment's config file`,
+        ]
+      : [];
+  return [`"${plugin.name}" actions:`, ...declared, ...generic].join('\n');
 }
 
 /**

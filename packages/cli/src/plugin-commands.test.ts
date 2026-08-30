@@ -293,6 +293,42 @@ function makeContributorOnlyPlugin(): Plugin {
 }
 
 describe('runPlugin - the generic `init` action', () => {
+  it('writes the environment named by the trailing positional, not the default', async () => {
+    // The generic init is a second path through runPlugin that never reaches
+    // matchAction, where the matched-action path resolves the environment. It
+    // reads the positional itself, and until this test nothing pinned that:
+    // mutating its `rest.slice(1)` to `[]` left the whole suite green while
+    // silently sending `analytics init staging` at config/production.jsonc -
+    // the exact fallback-to-production defect runPlugin's own doc comment
+    // warns about. Both files are seeded, so writing the wrong one is visible.
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeContributorOnlyPlugin() },
+    ]);
+    const production = `${repoRoot}/config/production.jsonc`;
+    const staging = `${repoRoot}/config/staging.jsonc`;
+    const seeded = '{\n  "siteName": "demo"\n}\n';
+    await fs.writeText(production, seeded);
+    await fs.writeText(staging, seeded);
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['secret-abc'] });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'demo',
+      ['init', 'staging'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    expect(await fs.readText(staging)).toContain('"token"');
+    // Production must be byte-identical to what was seeded.
+    expect(await fs.readText(production)).toBe(seeded);
+  });
+
   it("splices a contributor-only plugin's answered block into config/<env>.jsonc, and the result re-parses cleanly", async () => {
     const repoRoot = await realRepoRoot();
     const { fs, loader } = await buildDiscoveryPorts([
