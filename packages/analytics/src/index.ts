@@ -15,6 +15,7 @@
 
 export * from './aws/firehose.js';
 export * from './aws/glue.js';
+export * from './aws/lambda.js';
 export * from './aws/s3tables.js';
 
 /**
