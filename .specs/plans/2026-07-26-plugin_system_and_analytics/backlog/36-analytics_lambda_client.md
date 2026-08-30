@@ -7,6 +7,23 @@
 **Produces:** a `LambdaClient` for the standard Lambda function API sharing the host and signing name with `MicrovmsClient` but none of its paths, with the relationship stated in a module doc comment and proved by a test asserting no request carries the `/2025-09-09/` prefix
 **Pointers:** `packages/analytics/src/aws/lambda.ts` (new - the client lives here), `packages/core/src/aws/microvms.ts:4-11` (the module doc comment to mirror and extend with a back-reference), `packages/core/src/aws/microvms.ts:13,15-21` (`API = '/2025-09-09'` and the `PATHS` table this task must leave untouched), `packages/core/src/aws/microvms.ts:124-140,179-195` (the REST-JSON `call<T>` helper and the get-returns-undefined / delete-swallows-not-found shapes), `packages/core/src/aws/endpoint.ts:19-31` (`SIGNING_NAMES`, which gains NO `lambda` key - the plugin supplies `{ service: 'lambda', signingName: 'lambda' }` as a descriptor through task 31's seam), `packages/core/src/aws/logs.test.ts:9-16` (the transport-stub helpers the tests mirror), `packages/analytics/src/index.ts` (task 32's seeded barrel - the client is exported from there, never from core)
 
+> **ROUTED FINDING - added 2026-08-30 from task 33's verification gate.**
+> This task has the SAME defect task 33 shipped, for the same reason. Core's
+> `parseError` (`packages/core/src/aws/signer.ts:177-197`) reads a code only from
+> a JSON body (`__type`/`code`/`Code`) or an XML `<Code>` - it never reads
+> response headers. Lambda is REST-JSON: its error body is `{"Type":…,"message":…}`
+> with the code in the **`x-amzn-ErrorType` header**, so `AwsError.code` arrives as
+> `"Http409"` and `ResourceConflictException` never matches `isAlreadyExists`;
+> `requestId` is always `undefined`. Task 33's gate confirmed this against the live
+> service, not from documentation.
+> Mirror task 33's resolution: a local predicate with a `statusCode === 409` limb
+> (409 is `ResourceConflictException`'s only status), and an error-response test
+> helper that emits the header shape AWS actually sends rather than an invented
+> body `code`. Do NOT edit `packages/core`.
+> The durable fix - `parseError` reading `x-amzn-errortype`/`x-amzn-requestid`
+> from headers it already receives - is recorded in plan.md's open questions as a
+> follow-up, and would subsume both instances.
+
 ## Steps
 
 - [ ] Write `packages/analytics/src/aws/lambda.ts` opening with a module doc comment in the `packages/core/src/aws/microvms.ts:4-11` shape that states the relationship explicitly: the same host (`lambda.<region>.amazonaws.com`) and SigV4 signing name (`lambda`) as `MicrovmsClient`, but the standard `/2015-03-31/functions` API rather than the `/2025-09-09/` MicroVM paths.

@@ -97,8 +97,21 @@ key.
   a module-load validation later proved surplus by negative control, and task 39
   shipped two assertions that cannot fail. Each made the gate green while
   removing exactly the signal it exists to give. A verifier that finds an
-  assertion which cannot fail should treat it as a defect, not a style note. Task files add only
-  task-specific acceptance on top.
+  assertion which cannot fail should treat it as a defect, not a style note.
+- **Every assertion must be able to fail, and the fixture is half of that.**
+  Added 2026-08-30, generalising the bullet above after the same defect appeared
+  with nothing to do with knip. Task 14 pinned "`--plain` resolves no plugin
+  module" by asserting three recorded call lists were empty - against a fixture
+  whose filesystem was empty, so discovery threw at the first manifest read and
+  the lists were empty whether the guard existed or not. Deleting the guard left
+  the suite green. The property was true and the code was right; the test proved
+  neither. A vacuous fixture is the commonest way an assertion loses its teeth:
+  when the setup never lets execution reach the behaviour, an empty expectation
+  passes for the wrong reason. So the obligation is not "write a test" but
+  "watch it fail" - mutate the line the test exists to protect, see the named
+  failure, restore. An implementer states that mutation and its observed output
+  for every claim; a verifier that cannot reproduce it treats the obligation as
+  undischarged. Task files add only task-specific acceptance on top.
 
 ---
 
@@ -582,6 +595,25 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *`parseError` never reads response headers.* Raised by task 33's gate
+  2026-08-30, which confirmed it against the live S3 Tables endpoint rather
+  than from documentation. `packages/core/src/aws/signer.ts:177-197` takes a
+  code from a JSON body (`__type`/`code`/`Code`) or an XML `<Code>` and
+  nothing else, so for any REST-JSON service that returns its code in
+  `x-amzn-ErrorType` - S3 Tables and Lambda both do - `AwsError.code` is
+  `Http<status>` and `requestId` is always `undefined`. Two consequences:
+  `isAlreadyExists`/`isNotFound` narrowing by code silently never matches
+  (tasks 33 and 36 each work around it with a `statusCode` limb), and an
+  operator debugging a production failure has no request id to give AWS
+  support - for every client in the repo, including the site's own. The
+  durable fix is to read `x-amzn-errortype` and `x-amzn-requestid` from
+  headers `parseError` already receives, falling back to today's body parse;
+  it is strictly additive, since it only fills a code that is currently the
+  synthesised `Http<status>`. Deliberately NOT done inside tasks 33 or 36:
+  both are contractually forbidden from touching `packages/core`, and a
+  change to shared error parsing wants its own task and its own gate covering
+  the site's existing pds/cli clients. Decide whether to add that task before
+  task 58 closes the stream.
 - *A plugin cannot introduce its own flag.* Raised by task 10's gate
   2026-08-30. `main`'s `parseArgs` table (`packages/cli/src/cli.ts`, task 07)
   is strict, so `blogwright analytics query --since 7d` dies in the parser
