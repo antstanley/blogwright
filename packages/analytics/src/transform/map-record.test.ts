@@ -8,12 +8,49 @@ import {
   VIEWER_IP_FIELD,
 } from '../schema.js';
 import { type CloudFrontRecord, mapRecord } from './map-record.js';
+import { dailySalt, visitorKey } from './visitor-key.js';
 
 /** 2026-08-30T14:23:45.123Z, as CloudFront's epoch-milliseconds field spells it. */
 const EVENT_MS = 1_788_099_825_123;
 
 /** The viewer IP the fixture carries, which no column may ever hold. */
 const VIEWER_IP = '203.0.113.42';
+
+/**
+ * The shortest run of an address that is still an address rather than a digit
+ * prose could legitimately contain. Below three characters this would forbid
+ * "4" and reject reasons that say nothing about the visitor.
+ */
+const IP_FRAGMENT_LENGTH = 3;
+
+/**
+ * Every fragment of the viewer IP at least `IP_FRAGMENT_LENGTH` long -
+ * `203`, `0.113`, `13.42` and the rest. Half an address is still a leak, so
+ * the drop path is checked against the pieces, not only the whole.
+ */
+const VIEWER_IP_FRAGMENTS = (() => {
+  const fragments = new Set<string>();
+  for (let start = 0; start + IP_FRAGMENT_LENGTH <= VIEWER_IP.length; start += 1) {
+    for (let end = start + IP_FRAGMENT_LENGTH; end <= VIEWER_IP.length; end += 1) {
+      fragments.add(VIEWER_IP.slice(start, end));
+    }
+  }
+  return [...fragments];
+})();
+
+/**
+ * The long-lived stored secret every row here is keyed under. The same fixed
+ * value as `visitor-key.test.ts` uses, so the digests below are the ones that
+ * file pins - a fixed secret, never a generated one, because a `visitor_key`
+ * has to be reproducible from the test source alone.
+ */
+const SALT_SECRET = 'K7mQ2vZp8sX1nR4tY6wB9cD3fG5hJ0lA';
+
+/** A second secret, to show the parameter is what the key depends on. */
+const OTHER_SALT_SECRET = 'ZzYy1234XxWw5678VvUu9012TtSs3456';
+
+/** A digest as `visitorKey` renders one. */
+const HEX_DIGEST = /^[0-9a-f]{64}$/;
 
 /** One CloudFront record with every selected field populated. */
 const FULL_RECORD: CloudFrontRecord = {
@@ -37,7 +74,15 @@ const FULL_RECORD: CloudFrontRecord = {
   'x-edge-request-id': 'AbCdEf0123456789abcdefghijklmnop==',
 };
 
-/** The row `FULL_RECORD` must produce, spelled out column by column. */
+/**
+ * The row `FULL_RECORD` must produce, spelled out column by column.
+ *
+ * `visitor_key` is the pinned digest of this fixture's IP, its user agent and
+ * `dailySalt(SALT_SECRET, '2026-08-30')` - `visitor-key.test.ts` pins the same
+ * value against openssl. It is spelled as a literal rather than recomputed so
+ * that a change of salt day, of hashed inputs, or of algorithm fails here too:
+ * every one of those silently orphans the keys already in `page_views`.
+ */
 const FULL_ROW = {
   event_time: '2026-08-30T14:23:45.123Z',
   day: '2026-08-30',
@@ -57,15 +102,23 @@ const FULL_ROW = {
   content_type: 'text/html',
   protocol: 'https',
   request_id: 'AbCdEf0123456789abcdefghijklmnop==',
+  visitor_key: 'ae82326052984f91b769171d0d41ce0a325e5269eb739bf91b06698bb81d2c00',
+  is_bot: false,
 };
 
 /**
- * The columns a fully populated record fills today: every `FIELD_TO_COLUMN`
- * target plus the two this transform derives. `visitor_key` and `is_bot` join
- * them with task 41; until then the table's two remaining columns are absent,
- * which it permits.
+ * The columns a fully populated record fills: every `FIELD_TO_COLUMN` target
+ * plus the four this transform derives. With `visitor_key` and `is_bot` landed
+ * that is every column `page_views` has, so a column added to the table
+ * without a source here fails `fills exactly the columns schema.ts maps`.
  */
-const COLUMNS_FILLED_HERE = [...Object.values(FIELD_TO_COLUMN), 'event_time', 'day'];
+const COLUMNS_FILLED_HERE = [
+  ...Object.values(FIELD_TO_COLUMN),
+  'event_time',
+  'day',
+  'visitor_key',
+  'is_bot',
+];
 
 /** The JavaScript type each Iceberg type must arrive as for Firehose to match it. */
 const JS_TYPE_BY_ICEBERG_TYPE = {
@@ -87,25 +140,25 @@ function recordWith(field: string, value: unknown): CloudFrontRecord {
 }
 
 /** The mapped row, or a failure naming why the record was dropped instead. */
-function rowOf(record: CloudFrontRecord) {
-  const result = mapRecord(record);
+function rowOf(record: CloudFrontRecord, secret = SALT_SECRET) {
+  const result = mapRecord(record, secret);
   if (!result.mapped) throw new Error(`expected a mapped row, got a drop: ${result.reason}`);
   return result.row;
 }
 
 /** The drop, or a failure showing the row that was produced instead. */
 function dropOf(record: CloudFrontRecord) {
-  const result = mapRecord(record);
+  const result = mapRecord(record, SALT_SECRET);
   if (result.mapped) throw new Error(`expected a drop, got a row: ${JSON.stringify(result.row)}`);
   return result;
 }
 
 describe('mapRecord', () => {
   it('maps a fully populated CloudFront record to a fully spelled page_views row', () => {
-    expect(mapRecord(FULL_RECORD)).toStrictEqual({ mapped: true, row: FULL_ROW });
+    expect(mapRecord(FULL_RECORD, SALT_SECRET)).toStrictEqual({ mapped: true, row: FULL_ROW });
   });
 
-  it('fills exactly the columns schema.ts maps, plus the two it derives', () => {
+  it('fills exactly the columns schema.ts maps, plus the four it derives', () => {
     expect(Object.keys(rowOf(FULL_RECORD)).sort()).toEqual([...COLUMNS_FILLED_HERE].sort());
   });
 
@@ -148,6 +201,14 @@ describe('mapRecord', () => {
   it('writes the viewer IP into no column', () => {
     expect(FULL_RECORD[VIEWER_IP_FIELD]).toBe(VIEWER_IP);
     expect(Object.values(rowOf(FULL_RECORD))).not.toContain(VIEWER_IP);
+    // The line above is exact array membership, so a column that *embedded*
+    // the address in a longer value would slip past it. Kept as-is because it
+    // pins the whole-value case exactly, and paired with the substring form,
+    // which is the one that actually holds the line; `mapRecord visitor_key`
+    // runs the same search over the bot and no-user-agent records too.
+    for (const [column, value] of Object.entries(rowOf(FULL_RECORD))) {
+      expect(String(value), `column "${column}"`).not.toContain(VIEWER_IP);
+    }
   });
 });
 
@@ -219,6 +280,160 @@ describe('mapRecord event_time and day', () => {
     expect(drop).not.toHaveProperty('row');
     expect(drop.field).toBe(TIMESTAMP_MS_FIELD);
     expect(drop.reason).toContain(String(milliseconds));
+  });
+});
+
+/** The same visitor's request one day later, to the millisecond. */
+const NEXT_DAY_MS = EVENT_MS + 86_400_000;
+
+/** A user agent that names itself; `bots.test.ts` owns the matcher's coverage. */
+const BOT_USER_AGENT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+
+/** The CloudFront field the user agent arrives in, and the column it fills. */
+const USER_AGENT_FIELD = 'cs(User-Agent)';
+
+/**
+ * The pinned key for this fixture's IP on `FULL_ROW.day` when the request
+ * carried no user agent - the digest of an *empty* user agent, not of a
+ * message with the user agent left out of it.
+ */
+const NO_USER_AGENT_VISITOR_KEY =
+  '25f516deff6db788d689c2fc2d27f81b1dc3baaaa0c69dbe2afcc828aaabd296';
+
+describe('mapRecord visitor_key', () => {
+  it("replaces the viewer IP with the digest of IP, user agent and that day's salt", () => {
+    expect(rowOf(FULL_RECORD).visitor_key).toBe(
+      visitorKey(VIEWER_IP, FULL_ROW.user_agent, dailySalt(SALT_SECRET, FULL_ROW.day)),
+    );
+  });
+
+  // The salt belongs to the record's own day, not to the batch: a Firehose
+  // buffer straddles midnight routinely, and one salt for the whole batch would
+  // file the far side of it under the wrong day's key.
+  it('salts each record with the day the record itself falls on', () => {
+    const tomorrow = rowOf(recordWith(TIMESTAMP_MS_FIELD, NEXT_DAY_MS));
+    expect(tomorrow.day).toBe('2026-08-31');
+    expect(tomorrow.visitor_key).toBe(
+      visitorKey(VIEWER_IP, FULL_ROW.user_agent, dailySalt(SALT_SECRET, '2026-08-31')),
+    );
+    expect(tomorrow.visitor_key).not.toBe(FULL_ROW.visitor_key);
+  });
+
+  it('gives one visitor one key across a day of requests', () => {
+    const first = rowOf(recordWith('cs-uri-stem', '/posts/hello-world'));
+    const second = rowOf(recordWith('cs-uri-stem', '/posts/second-post'));
+    expect(second.uri).not.toBe(first.uri);
+    expect(second.visitor_key).toBe(first.visitor_key);
+  });
+
+  it('keys under the secret it is handed, not one of its own', () => {
+    const row = rowOf(FULL_RECORD, OTHER_SALT_SECRET);
+    expect(row.visitor_key).toMatch(HEX_DIGEST);
+    expect(row.visitor_key).not.toBe(FULL_ROW.visitor_key);
+  });
+
+  // An unknown visitor is a null visitor. Keying on the user agent alone would
+  // collapse every anonymous request in a day onto one fabricated returning
+  // visitor, which a `COUNT(DISTINCT visitor_key)` would then report as fact.
+  it.each([
+    { label: 'the field missing entirely', record: recordWithout(VIEWER_IP_FIELD) },
+    { label: "CloudFront's absence marker", record: recordWith(VIEWER_IP_FIELD, '-') },
+    { label: 'an empty string', record: recordWith(VIEWER_IP_FIELD, '') },
+  ])('leaves visitor_key unwritten when the viewer IP is $label', ({ record }) => {
+    const row = rowOf(record);
+    expect(row).not.toHaveProperty('visitor_key');
+    expect(typeof row.is_bot).toBe('boolean');
+    for (const column of PAGE_VIEWS_COLUMNS.filter((candidate) => candidate.required)) {
+      expect(row, `required column "${column.name}"`).toHaveProperty(column.name);
+    }
+  });
+
+  it('drops a record whose viewer IP is present but unusable', () => {
+    const drop = dropOf(recordWith(VIEWER_IP_FIELD, { address: VIEWER_IP }));
+    expect(drop).not.toHaveProperty('row');
+    expect(drop.column).toBe('visitor_key');
+    expect(drop.field).toBe(VIEWER_IP_FIELD);
+    expect(drop.reason).toContain('visitor_key');
+    expect(drop.reason).toContain(VIEWER_IP_FIELD);
+  });
+
+  // The drop path is the one place left where a raw address could still reach
+  // an operator: a reason is free text, and "make it say what the value was" is
+  // exactly the edit an incident invites - `numberFrom` in the same file
+  // already interpolates its raw value verbatim, so the pattern to copy is
+  // sitting right there. The row is searched above; this searches the drop.
+  it.each([
+    { label: 'an object', value: { address: VIEWER_IP } },
+    { label: 'an array', value: [VIEWER_IP] },
+    { label: 'a nested object', value: { client: { address: VIEWER_IP } } },
+  ])('names no part of a viewer IP held in $label in the drop reason', ({ value }) => {
+    expect(JSON.stringify(value)).toContain(VIEWER_IP);
+    const drop = dropOf(recordWith(VIEWER_IP_FIELD, value));
+    expect(drop.column).toBe('visitor_key');
+    expect(drop.reason).not.toContain(VIEWER_IP);
+    for (const fragment of VIEWER_IP_FRAGMENTS) {
+      expect(drop.reason, `drop reason leaks "${fragment}"`).not.toContain(fragment);
+    }
+    expect(JSON.stringify(drop)).not.toContain(VIEWER_IP);
+  });
+
+  // The property the whole column exists for, searched across every value of
+  // the row rather than the one column anyone would think to check. The first
+  // assertion keeps it from passing vacuously: the fixture really does carry
+  // the address, and the row really was keyed from it.
+  it.each([
+    { label: 'a fully populated record', record: FULL_RECORD },
+    { label: 'a bot record', record: recordWith(USER_AGENT_FIELD, BOT_USER_AGENT) },
+    { label: 'a record that sent no user agent', record: recordWithout(USER_AGENT_FIELD) },
+  ])('writes no value holding the viewer IP for $label', ({ record }) => {
+    expect(record[VIEWER_IP_FIELD]).toBe(VIEWER_IP);
+    const row = rowOf(record);
+    expect(row.visitor_key).toMatch(HEX_DIGEST);
+    for (const [column, value] of Object.entries(row)) {
+      expect(String(value), `column "${column}"`).not.toContain(VIEWER_IP);
+    }
+    expect(JSON.stringify(row)).not.toContain(VIEWER_IP);
+  });
+});
+
+describe('mapRecord is_bot', () => {
+  // Flagged in place, never dropped: a wrong flag is a query filter away, a
+  // dropped record is gone.
+  it('flags a bot record and still returns every column of it', () => {
+    const row = rowOf(recordWith(USER_AGENT_FIELD, BOT_USER_AGENT));
+    expect(row).toStrictEqual({
+      ...FULL_ROW,
+      user_agent: BOT_USER_AGENT,
+      is_bot: true,
+      visitor_key: visitorKey(VIEWER_IP, BOT_USER_AGENT, dailySalt(SALT_SECRET, FULL_ROW.day)),
+    });
+    expect(Object.keys(row).sort()).toEqual([...COLUMNS_FILLED_HERE].sort());
+  });
+
+  it('leaves is_bot false for a browser', () => {
+    expect(rowOf(FULL_RECORD).is_bot).toBe(false);
+  });
+
+  // Negative space: neither derived column may be missing or null because the
+  // request said nothing about its agent.
+  it.each([
+    { label: 'missing entirely', record: recordWithout(USER_AGENT_FIELD) },
+    { label: "CloudFront's absence marker", record: recordWith(USER_AGENT_FIELD, '-') },
+    { label: 'an empty string', record: recordWith(USER_AGENT_FIELD, '') },
+  ])('still fills is_bot and visitor_key when the user agent is $label', ({ record }) => {
+    const row = rowOf(record);
+    expect(row).not.toHaveProperty('user_agent');
+    expect(typeof row.is_bot).toBe('boolean');
+    expect(row.is_bot).toBe(false);
+    expect(typeof row.visitor_key).toBe('string');
+    expect(row.visitor_key).toBe(NO_USER_AGENT_VISITOR_KEY);
+  });
+
+  it('reads an absent and an empty user agent as one and the same visitor', () => {
+    const absent = rowOf(recordWithout(USER_AGENT_FIELD));
+    const empty = rowOf(recordWith(USER_AGENT_FIELD, '-'));
+    expect(absent.visitor_key).toBe(empty.visitor_key);
+    expect(absent.visitor_key).not.toBe(FULL_ROW.visitor_key);
   });
 });
 

@@ -1,13 +1,25 @@
 /**
  * `mapRecord`: one CloudFront standard-logging (v2) record in, one `page_views`
  * row out - or a droppable result naming the column that could not be filled
- * and the CloudFront field behind it. This is steps 1, 2 and 5 of
+ * and the CloudFront field behind it. This is all five steps of
  * [§Record transformation](../../../../.specs/changes/2026-07-26-analytics_plugin.md):
  * rename each selected field to its column, derive `event_time` and the `day`
- * partition from `timestamp(ms)`, and drop what the schema cannot accept.
- * Steps 3 and 4 - `visitor_key` and `is_bot` - land beside this function
- * later; until they do the two columns are simply absent, which the table
- * permits (both are nullable).
+ * partition from `timestamp(ms)`, replace the viewer IP with `visitor_key`,
+ * set `is_bot` from the user agent, and drop what the schema cannot accept.
+ *
+ * The viewer IP is an *input* here and never a value. It reaches `visitorKey`
+ * and nothing else: it has no `FIELD_TO_COLUMN` entry to be renamed through,
+ * and `map-record.test.ts` searches every value of every produced row for it.
+ * That search is the standing check that no later field addition puts a raw
+ * address in the warehouse.
+ *
+ * The salt secret is a parameter for the same reason the day is read off the
+ * record: this function has no clock and reads no secret. The caller supplies
+ * the long-lived stored secret - the transform reads it once at cold start, a
+ * backfill reads the same one - and the day's salt is derived here rather than
+ * by the caller, because the day comes from the record's own timestamp. A
+ * batch can straddle midnight, so one salt chosen for a whole batch would be
+ * the wrong day's for the records on the other side of it.
  *
  * Why the drop path exists at all: Firehose matches incoming JSON keys to
  * Iceberg column names **exactly**, and a record it cannot match goes to the
@@ -20,10 +32,10 @@
  *
  * Every column and field name comes from `schema.ts`: the row is built by
  * iterating `FIELD_TO_COLUMN`, the required set and the numeric set are
- * derived from `PAGE_VIEWS_COLUMNS`, and the only two names spelled here are
- * the two derived columns this task fills, each checked against
- * `PageViewColumnName` so a typo is a compile error rather than a column
- * Firehose silently drops.
+ * derived from `PAGE_VIEWS_COLUMNS`, and the only names spelled here are the
+ * four derived columns and the one column the two of them read back
+ * (`user_agent`), each checked against `PageViewColumnName` so a typo is a
+ * compile error rather than a column Firehose silently drops.
  *
  * Three input decisions the spec left open, settled here:
  *
@@ -47,9 +59,11 @@
  * is a different - and false - fact about that request.
  *
  * Pure: no clock (`event_time` comes from the record's own `timestamp(ms)`, in
- * UTC), no `node:` builtin, no vendor SDK, no `fetch`. The record arrives
- * already parsed and is trusted to be an object - JSON parsing and its
- * failures are the handler's boundary, not this function's.
+ * UTC), no secret read, no vendor SDK, no `fetch`. The one `node:` builtin
+ * this directory uses is `node:crypto`, reached through `visitor-key.ts` and
+ * only for the digests - the same import `packages/core/src/aws/s3.ts` makes.
+ * The record arrives already parsed and is trusted to be an object - JSON
+ * parsing and its failures are the handler's boundary, not this function's.
  */
 
 import {
@@ -59,7 +73,10 @@ import {
   type PageViewColumnName,
   type PageViewsColumn,
   TIMESTAMP_MS_FIELD,
+  VIEWER_IP_FIELD,
 } from '../schema.js';
+import { isBotUserAgent } from './bots.js';
+import { dailySalt, visitorKey } from './visitor-key.js';
 
 /**
  * One CloudFront access-log record as the delivery hands it over: the selected
@@ -141,9 +158,17 @@ const NUMERIC_COLUMNS: ReadonlySet<PageViewColumnName> = new Set(
   ),
 );
 
-/** The two columns this transform derives; checked against the table's names. */
+/** The four columns this transform derives; checked against the table's names. */
 const EVENT_TIME_COLUMN = 'event_time' satisfies PageViewColumnName;
 const DAY_COLUMN = 'day' satisfies PageViewColumnName;
+const VISITOR_KEY_COLUMN = 'visitor_key' satisfies PageViewColumnName;
+const IS_BOT_COLUMN = 'is_bot' satisfies PageViewColumnName;
+
+/** The mapped column both derived columns above read their user agent back from. */
+const USER_AGENT_COLUMN = 'user_agent' satisfies PageViewColumnName;
+
+/** A row under construction: column names only, each value in the column's type. */
+type PartialRow = Partial<Record<PageViewColumnName, string | number | boolean>>;
 
 /** A field that produced no value, and why. */
 type UnfilledField =
@@ -230,6 +255,19 @@ function dayFrom(eventTime: string): string {
   return eventTime.slice(0, ISO_DATE_LENGTH);
 }
 
+/**
+ * The user agent as the row will carry it - trimmed, with CloudFront's absence
+ * markers already read as absent - or `undefined` when the request named none.
+ * Both derived columns read it back from the row rather than from the record,
+ * so the text hashed into `visitor_key` and the text `is_bot` was decided from
+ * are exactly the text stored in `user_agent`. A divergence between the three
+ * would be invisible in the table and unfalsifiable from a query.
+ */
+function userAgentOf(row: PartialRow): string | undefined {
+  const userAgent = row[USER_AGENT_COLUMN];
+  return typeof userAgent === 'string' ? userAgent : undefined;
+}
+
 /** A drop naming the column, the field behind it, and what was wrong. */
 function dropped(column: PageViewColumnName, field: string, detail: string): DroppedRecord {
   return {
@@ -254,14 +292,23 @@ function droppedTimestamp(detail: string): DroppedRecord {
  * Turns one CloudFront access-log record into a `page_views` row, or reports
  * why it cannot. Never returns a partially populated row: the first column it
  * cannot fill ends the mapping.
+ *
+ * `saltSecret` is the long-lived stored secret behind `visitor_key`, not the
+ * day's salt - that is derived here from the record's own day. It is required
+ * rather than optional on purpose: a row mapped without it would carry no
+ * visitor at all, or worse an unsalted digest, and either would look like a
+ * normal row in the table. `dailySalt` throws on an empty secret for the same
+ * reason, so a caller whose secret read failed fails its batch instead of
+ * quietly writing unprotected data.
  */
-export function mapRecord(record: CloudFrontRecord): MapRecordResult {
+export function mapRecord(record: CloudFrontRecord, saltSecret: string): MapRecordResult {
   const eventTime = eventTimeFrom(record[TIMESTAMP_MS_FIELD]);
   if (eventTime.kind !== 'value') return droppedTimestamp(unfilledDetail(eventTime));
 
-  const columns: Partial<Record<PageViewColumnName, string | number | boolean>> = {
+  const day = dayFrom(eventTime.value);
+  const columns: PartialRow = {
     [EVENT_TIME_COLUMN]: eventTime.value,
-    [DAY_COLUMN]: dayFrom(eventTime.value),
+    [DAY_COLUMN]: day,
   };
 
   for (const [field, column] of Object.entries(FIELD_TO_COLUMN)) {
@@ -272,6 +319,30 @@ export function mapRecord(record: CloudFrontRecord): MapRecordResult {
       continue;
     }
     columns[column] = outcome.value;
+  }
+
+  // `is_bot` is set for every record, including the ones that named no agent:
+  // the column answers "did this agent name itself as a bot", and `false` is
+  // that question's answer for a request that named nothing.
+  const userAgent = userAgentOf(columns);
+  columns[IS_BOT_COLUMN] = isBotUserAgent(userAgent);
+
+  // The viewer IP goes in here and comes out as a digest. An unusable value
+  // drops the record like any other - the same rule the rest of this module
+  // follows - but an *absent* one leaves `visitor_key` empty rather than
+  // hashing the user agent alone, which would collapse every anonymous request
+  // in a day onto one fabricated returning visitor. A null visitor is exactly
+  // what an unknown one is, and `COUNT(DISTINCT visitor_key)` skips it.
+  const viewerIp = stringFrom(record[VIEWER_IP_FIELD]);
+  if (viewerIp.kind === 'invalid') {
+    return dropped(VISITOR_KEY_COLUMN, VIEWER_IP_FIELD, viewerIp.detail);
+  }
+  if (viewerIp.kind === 'value') {
+    columns[VISITOR_KEY_COLUMN] = visitorKey(
+      viewerIp.value,
+      userAgent ?? '',
+      dailySalt(saltSecret, day),
+    );
   }
 
   // Every required column is filled above or the record has already dropped:
