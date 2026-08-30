@@ -1214,14 +1214,33 @@ export async function runPluginNamespace(
   if (action === 'list') return runPluginList(ports, terminal, logger);
 
   const name = rest[1];
-  if (name === undefined) {
+  // An EMPTY name is a missing one, not a package name: `blogwright plugin
+  // add ""` resolves to the bare prefix `blogwright-`, which the pattern
+  // below accepts, so without this the operator gets the package manager's
+  // 404 rather than the message that says what to type.
+  if (name === undefined || name === '') {
     logger.error(
       `\`blogwright plugin ${action}\` needs a plugin name - e.g. \`blogwright plugin ${action} analytics\``,
     );
     return 1;
   }
   const packageName = resolvePluginPackage(name);
-  if (!PACKAGE_NAME_PATTERN.test(packageName)) {
+  // The pattern is asked of the RAW name as well as the resolved one, because
+  // the `blogwright-` expansion hides a leading `.`: `..` resolves to
+  // `blogwright-..`, which npm's grammar accepts, so the gate over the
+  // resolved name alone would pass a path-shaped input to the package manager.
+  // The raw test is NOT redundant with the resolved one and must not be
+  // folded back into it. For a scoped name or an already-prefixed one the two
+  // test the same string; everywhere else the raw test is the only thing that
+  // sees what the prefix covered up. What it costs, over the resolved test
+  // alone, is exactly the names the prefix would have made respectable: a
+  // name of otherwise-legal package characters that OPENS with `-`, `.` or
+  // `_` (`.`, `..`, `.npmrc`, `-rf`). Any other rejected opening character -
+  // `A`, `$`, a space - fails the resolved test too, so the raw test adds
+  // nothing there. And it strands nothing: whoever genuinely wants
+  // `blogwright-.x` spells that package name out, which already starts with
+  // the prefix, so it resolves to itself and clears both tests.
+  if (!PACKAGE_NAME_PATTERN.test(name) || !PACKAGE_NAME_PATTERN.test(packageName)) {
     logger.error(
       `"${name}" is not a plugin package name - \`blogwright plugin ${action}\` takes a short ` +
         'name (`analytics`, installed as `blogwright-analytics`), a `blogwright-` package name, ' +

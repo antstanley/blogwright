@@ -1910,6 +1910,57 @@ describe('runPluginNamespace - blogwright plugin add', () => {
     }
   });
 
+  it('refuses a name whose `blogwright-` expansion would hide a path, installing nothing', async () => {
+    // The prefix expansion is what makes these dangerous: `.` becomes
+    // `blogwright-.`, which npm's own grammar accepts, so the gate over the
+    // RESOLVED name alone lets a path-shaped input through to the package
+    // manager and the operator reads pnpm's 404 instead of this message.
+    for (const name of ['.', '..']) {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { fs, loader } = await buildDiscoveryPorts([]);
+      const packages = createRecordingPackageManager();
+
+      const code = await runPluginNamespace(
+        ['add', name],
+        terminal,
+        createLogger(terminal),
+        { fs, loader },
+        namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+      );
+
+      expect(code).toBe(1);
+      expect(packages.calls).toEqual([]);
+      expect(terminal.errors).toEqual([
+        `✗ "${name}" is not a plugin package name - \`blogwright plugin add\` takes a short ` +
+          'name (`analytics`, installed as `blogwright-analytics`), a `blogwright-` package name, ' +
+          'or a scoped package name (`@scope/thing`)',
+      ]);
+    }
+  });
+
+  it('refuses an empty plugin name the way it refuses an absent one, installing nothing', async () => {
+    // `blogwright plugin add ""` resolves to the bare prefix `blogwright-`,
+    // which the package-name pattern accepts; an empty name is a missing name,
+    // so it gets the missing-name message rather than the package manager.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['add', ''],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+    );
+
+    expect(code).toBe(1);
+    expect(packages.calls).toEqual([]);
+    expect(terminal.errors).toEqual([
+      '✗ `blogwright plugin add` needs a plugin name - e.g. `blogwright plugin add analytics`',
+    ]);
+  });
+
   it('refuses with no plugin name at all, installing nothing', async () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const { fs, loader } = await buildDiscoveryPorts([]);

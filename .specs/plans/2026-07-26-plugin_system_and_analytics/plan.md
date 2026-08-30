@@ -595,6 +595,65 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *Task 58 can flip the plugin-system spec to `Merged` while the obligation
+  blocking it is still open.* Raised by task 20's re-gate 2026-08-31, one task
+  downstream of the note it was checking. Task 20 correctly deferred merge-plan
+  steps 4 and 5 and named the true blocker: §Plugin SPI -> *A plugin owns its
+  own topography* says "no config key of a plugin's is read by a site node",
+  and `packages/cli/src/nodes.ts:971` still reads `ctx.config.pds` with `:983`
+  interpolating its secret name. **Task 59 removes that.**
+  But the flip is handed to task 58, which does not depend on 59 (its deps are
+  20, 30, 55, 57) and whose DoD conditions the flip on the transport **seam**
+  alone - which has been present since build 33. Task 59 is release-gated, so
+  58-before-59 is the expected order. Task 58 would therefore verify the seam,
+  find it present, flip the header to `Merged` and move the spec into
+  `merged/` while a site node still reads a plugin's config key: a spec
+  claiming shipped work that has not shipped, which is the exact failure this
+  plan's own risk row exists to prevent.
+  Fix is one line in task 58's DoD - condition the flip on task 59 as well as
+  the seam, or add the edge. Recorded here because it spans two tasks and
+  neither one's contract is wrong on its own.
+- *The transform Lambda's own CloudWatch logs will not appear.* Raised by task
+  50's implementation 2026-08-31. Its Step 4 enumerates exactly
+  `logs:CreateLogStream` and `logs:PutLogEvents`, so that is what the execution
+  role grants - but no node creates `/aws/lambda/<function>`, and Lambda's
+  implicit creation of the group on first invoke requires `logs:CreateLogGroup`
+  on the execution role. The implementer wrote what the step enumerated rather
+  than widening the grant on its own authority, and recorded the consequence in
+  a comment on `transformLogGroupArn`.
+  This matters more than it sounds. The transform is the component whose
+  failures are otherwise invisible: a record it cannot map becomes a
+  `ProcessingFailed` entry with no diagnosis, and this plan's recurring hazard
+  is an empty dashboard with no error anywhere. CloudWatch is the only place an
+  operator could see why - and today there would be nothing in it.
+  Two coherent fixes: add `logs:CreateLogGroup` to the role, or add a log-group
+  node with a retention policy (the site's own graph already has log-group
+  nodes to follow). The second is better - it makes retention explicit and the
+  group's lifecycle owned - but either needs a task, and none exists. Decide
+  before task 58 closes the stream.
+- *Task 47's definition of done contains an item no test can satisfy.* Found by
+  its implementer 2026-08-30, upheld by its gate. The DoD asks for an
+  end-to-end test that `blogwright analytics init` reaches the generic splice
+  path and writes the block. There is no admissible place to write it: a plugin
+  may not import `blogwright` (the same DoD's bullet 4 forbids it, with a grep),
+  and the CLI may not depend on `blogwright-analytics` either - not merely for
+  tidiness, but because `pluginDependencyNames` scans BOTH `dependencies` and
+  `devDependencies` for `blogwright-*` and turns each into a bundled discovery
+  candidate, so a devDependency would ship analytics with the CLI. No third
+  location exists.
+  The implementer did not fabricate one. It pinned the three preconditions
+  `runGenericInit` actually reads, cited the host-side coverage task 13 already
+  landed, and round-tripped its real output through host stand-ins into core's
+  real `parseConfigDocument`. The gate went further and drove the real
+  `runPlugin('analytics', ['init'])` over the built `dist` from outside both
+  packages - it works - but that is a verification, not a repository test, and
+  nothing defends it.
+  Two plan-level questions follow. Whether the DoD item should be rewritten to
+  what is achievable, so a later reader does not read the gap as skipped
+  coverage; and whether the repo wants a cross-package integration test location
+  at all - several tasks now have properties provable only by loading built
+  artefacts from outside both packages, and there is nowhere for such a test to
+  live.
 - *`config.region` is validated for truthiness only, and is interpolated into
   ARNs and endpoint hostnames.* Raised by task 46's verification gate
   2026-08-30, which did not merely observe it - it drove arbitrary SQL
@@ -776,6 +835,85 @@ task 59, whose role rewrite is what its warning backs.
   settled 2026-07-27 as the declared optional `analytics backfill` action -
   task 61. Plugin teardown on removal, once a bullet of its own, was settled
   the same day: `plugin remove` asks, at task 18.)
+- *The plugin-system spec's merge-plan step 1 has no target, and its fallback
+  is refused rather than skipped.* Recorded by task 20 on 2026-08-30. Step 1
+  says to apply the spec's `Proposed changes` blocks to whichever canonical
+  page first documents CLI dispatch, the graph engine and the state store,
+  and, "if none exists, record the SPI as a new canonical page and index it".
+  No canonical spec set exists in this repo, so that fallback is the live
+  branch rather than a conditional one - and taking it would publish the SPI
+  as canonical documentation, which the spec's own decision forbids: the SPI
+  is internal, "undocumented and unversioned until it has carried two features
+  through a release cycle", and publishing it is a separate product decision.
+  Both halves of step 1 cannot be honoured at once, so it is deferred with the
+  reason recorded, not silently skipped. Owner: the spec's owner (Ant
+  Stanley), because the unblocking condition is a product decision no task in
+  this plan can take - and not task 58 either, since two features through a
+  RELEASE cycle is not met at the end of this plan: the pds migration and the
+  analytics plugin ship IN the release this stream produces. Merge-plan step 3
+  (fold the `PluginManifest` `$def` into the canonical schema "when one
+  exists") is vacuous for the first half of the same reason and carries the
+  same owner. Task 58 should carry both forward rather than close them.
+- *Merge-plan steps 4 and 5 are deferred from task 20 to task 58 - and the
+  reason recorded for it elsewhere is stale.* Recorded by task 20 on
+  2026-08-30; its reason corrected 2026-08-31, when the premise was checked
+  against the build log. The deferral itself is this plan's own **Decisions**
+  bullet *The plugin-system spec's merge is split across two tasks*; what
+  follows corrects only the reason given for it. That bullet, the task-graph
+  and milestone rows that echo it, and task 20's own Steps and definition of
+  done all say §Plugin SPI -> Plugin-supplied AWS services - the transport seam
+  and `signingUsEast1` on `AwsClients` - lands at tasks 31 and 38 "after task
+  20". Execution contradicts that: task 31 landed at build 16/62 and task 38 at
+  build 33/62, both ancestors of task 20's base at 42/62, and the seam is in
+  the tree - `signer.ts:32` declares `service: ServiceKey | ServiceDescriptor`
+  and `clients.ts:33` declares `signingUsEast1: SigningClient`. Do not
+  re-derive the deferral from that wording. It still stands unedited above and
+  in task 20's file, whose Pointers line also still addresses tasks 31 and 38
+  in `backlog/` when both are in `done/` - the one signal that the premise had
+  gone stale.
+  The true reason: a `Merged` header claims the whole spec shipped, and one of
+  its `Proposed changes` blocks has not - §Plugin SPI -> A plugin owns its own
+  topography requires that no site node read a plugin's config key, while the
+  CLI's site graph still reads `ctx.config.pds` (`nodes.ts:971`, secret name
+  interpolated at `:983`) until task 59, which is in `backlog/`. Steps 4 and 5
+  also do not decompose: step 5 rewrites `.specs/README.md`'s pending list down
+  to the two entries naming tasks 60 and 61, which task 58 does in one edit for
+  all three specs, and task 58's definition of done makes the flip conditional
+  on re-verifying the seam rather than assuming it. Owner: task 58, which
+  already depends on 20 and transitively on 38. Until it runs,
+  `.specs/changes/2026-07-26-cli_plugin_system.md` stays at that path reading
+  `Status: Proposed` and `.specs/README.md`'s pending list stays at three.
+  That is the state task 20 verified and left deliberately - not an omission
+  for the next agent who notices it to tidy up.
+- *Does `preview` become a plugin?* Carried forward at task 20 from the
+  plugin-system spec's own open questions, which are otherwise recorded here
+  in full. `preview` is the one remaining built-in namespace shaped like a
+  plugin, but it shares the site's resource graph and `OpsContext` in ways a
+  plugin deliberately cannot: a plugin owns a separate node set and a separate
+  state key (`state/<env>.<plugin>.json`), while a preview stack is the site's
+  own graph parameterised by an id. Nothing in this plan is blocked by the
+  answer; it is recorded so it is not lost when the spec is eventually merged.
+  (The spec's other open question, SPI version declaration, already has its
+  own bullet above and is unchanged by this task.)
+- *`pnpm knip` does not see unused INTERFACE members either.* Raised by task
+  18's gate, discharged at task 20 on 2026-08-30. knip v6 has no issue type
+  for a member of an interface any more than for a member of a class, so
+  `Ports.packages` - added by task 06 for task 18, read by nothing, and
+  constructed on every `deploy`, `status` and `bootstrap` (`context.ts:219`) -
+  was reported clean by every gate this build runs. Task 18 was right not to
+  use it: a member of `OpsContext` is unreachable from `plugin add`, which
+  must dispatch before `createContext` because `createContext` calls
+  `sts.getAccountId()` and installing a plugin is what an operator does on a
+  repo that has neither config nor credentials yet. Task 20 deleted the member
+  (`ports.ts`, `context.ts`, `test-support.ts`) rather than leaving misleading
+  port wiring behind, on two pieces of evidence rather than on a reading:
+  a control that replaced it with a stub throwing on every access left all 348
+  CLI tests passing, and `pnpm typecheck` - which IS total over the readers of
+  a typed member, where knip is silent - stayed green with it gone. The open
+  part is the class, not the instance: `Ports` is the repo's central port bag,
+  and the same decision the class-member bullet above asks for - a CI grep, or
+  knowingly accepting the gap in the definition-of-done baseline - should
+  answer for interface members in the same breath.
 
 ---
 

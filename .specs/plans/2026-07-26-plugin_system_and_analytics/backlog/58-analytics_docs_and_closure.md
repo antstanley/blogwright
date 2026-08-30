@@ -22,6 +22,23 @@
 > reads the sentence as a decision input, and the authoritative statement
 > already exists correctly at `transform-hash.ts:40-42`.
 
+> **ROUTED CONSTRAINT - added 2026-08-31 from task 20's verification gate.**
+> **Do not flip `2026-07-26-cli_plugin_system.md` to `Merged` on the strength of
+> the transport seam alone.** Your DoD conditions that flip on re-verifying the
+> seam, which has been present since build 33 and will pass - but task 20
+> deferred merge-plan steps 4 and 5 to you for a DIFFERENT and still-open
+> reason: §Plugin SPI -> *A plugin owns its own topography* requires that no
+> config key of a plugin's is read by a site node, and
+> `packages/cli/src/nodes.ts:971` still reads `ctx.config.pds`, with `:983`
+> interpolating its secret name.
+> **Task 59 removes it, and you do not depend on task 59** (your deps are 20,
+> 30, 55, 57). Task 59 is release-gated, so the expected order puts you first.
+> Verify that obligation directly - grep `nodes.ts` for `config.pds` - and if it
+> still stands, defer the flip again and record why, exactly as task 20 did.
+> A `Merged` header claims the whole spec shipped; flipping it here would claim
+> work that has not happened, which is the failure this plan's risk row exists
+> to prevent.
+
 ## Steps
 
 - [ ] Record why merge-plan steps 1 and 2 are not executed, rather than passing over them: step 1 applies the `Proposed changes` blocks to canonical pages for the resource nodes, the AWS clients and the CLI surface "once they exist", and none does; step 2 says to fold `AnalyticsConfig` and `PageView` into the canonical schema, and it is written unconditionally although this repo has no `canonical-types.schema.json` for them to fold into. Both are vacuous today, not done - write that, with an owner, into this task's change description and into plan.md's open questions, exactly as task 20 records the plugin-system spec's step-1 deferral and task 30 records the pds spec's. Task 61 executes steps 5–6 against a spec whose first two steps stay recorded as not-applicable.

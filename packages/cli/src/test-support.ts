@@ -150,9 +150,11 @@ type PackageManagerCall =
 
 /**
  * Records every `add`/`remove` call and answers `detect` with `manager`,
- * without touching disk or a process. The default `ports.packages` for
- * {@link createTestContext}; importable directly for a test that needs to
- * configure which manager `detect` reports and inspect what was requested.
+ * without touching disk or a process. The test substitute for the
+ * `PackageManager` port: `plugin add`/`plugin remove` dispatch before any
+ * `OpsContext` exists, so a test hands this to `main` (or to
+ * `runPluginNamespace`) as the `PackageManagerFactory`, not through
+ * `createTestContext`.
  */
 export function createRecordingPackageManager(
   manager: PackageManagerName = 'pnpm',
@@ -227,7 +229,6 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     terminal: overrides.ports?.terminal ?? silentTerminal,
     ping: overrides.ports?.ping ?? noopPing,
     loader: overrides.ports?.loader ?? rejectAllLoader,
-    packages: overrides.ports?.packages ?? createRecordingPackageManager(),
   };
 
   return {

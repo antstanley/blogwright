@@ -52,11 +52,34 @@ blogwright destroy --yes                    # tear everything down
 
 blogwright preview …                        # per-PR preview stack
 blogwright pds …                            # standard.site (AT Protocol) publishing
+
+blogwright plugin add <name>                # install a plugin, pinned to this version
+blogwright plugin list                      # list installed plugins and their versions
+blogwright plugin remove <name>             # uninstall a plugin, teardown asked first
+blogwright <plugin> <action>                # run an installed plugin's own command
 ```
 
 Environment defaults to `production`; pass another as the positional `[env]` or
 `--env`. Full flags, positional layouts, and output contracts are in the
 [CLI reference](https://blogwright.iamstan.dev/reference/cli/).
+
+An installed plugin claims its own namespace: `blogwright <plugin> <action>` runs
+one of its commands, `blogwright <plugin> init` splices that plugin's block into
+the environment's config file, and `blogwright <plugin> bootstrap|status|destroy`
+reconciles that plugin's own resources, recorded in its own state object rather
+than the site's. `blogwright plugin add analytics` installs the package
+`blogwright-analytics` at this CLI's own version and pins it exactly, so every
+checkout of the repo gets the same pair. The pin is taken at install time, not
+maintained: upgrading the CLI on its own leaves the plugin at the version it was
+pinned to, and nothing declares or checks an interface version, so nothing
+reports the gap - re-running `blogwright plugin add` will not close it either,
+since a package the manifest already declares is left untouched.
+
+The plugin interface itself is **internal and unversioned**: it is deliberately
+undocumented, it can change in any release without a major version, and it is not
+a public contract - so no third party should write a plugin against it yet. It
+becomes a documented, versioned API only once it has carried two features through
+a release cycle.
 
 ## Documentation
 

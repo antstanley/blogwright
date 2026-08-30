@@ -19,7 +19,6 @@ import {
 
 import { createFetchPing } from './adapters/fetch-ping.js';
 import { createNodeModuleLoader } from './adapters/node-module-loader.js';
-import { createProcessPackageManager } from './adapters/process-package-manager.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
 import { createLogger, type Logger } from './logger.js';
 import type { Ports } from './ports.js';
@@ -216,7 +215,6 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     terminal: opts.ports?.terminal ?? createNodeTerminal(),
     ping: opts.ports?.ping ?? createFetchPing(),
     loader: opts.ports?.loader ?? createNodeModuleLoader(),
-    packages: opts.ports?.packages ?? createProcessPackageManager(fs),
   };
   const logger = createLogger(ports.terminal);
   const agentDir = join(cliPackageDir(), 'agent');
