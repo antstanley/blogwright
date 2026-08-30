@@ -33,13 +33,19 @@ import { main } from './cli.js';
 import { cliPackageDir, type ContextOptions, type OpsContext } from './context.js';
 import { createLogger } from './logger.js';
 import { buildNodes } from './nodes.js';
-import { runPlugin, toPluginContext, type PluginValues } from './plugin-commands.js';
+import {
+  runPlugin,
+  runPluginNamespace,
+  toPluginContext,
+  type PluginValues,
+} from './plugin-commands.js';
 import { discover } from './plugins.js';
 import {
   buildDiscoveryPorts,
   createTestContext,
   makeFakePlugin,
   scopedStateOnlyS3,
+  withBrokenPlugin,
   type RecordedRun,
   type TestContextOverrides,
 } from './test-support.js';
@@ -1275,5 +1281,300 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
     // graph was genuinely exercised rather than no-opped, so the state-key
     // assertion above is not vacuous.
     expect(keys).toContain(`build/agent/agent-${AGENT_HASH}.zip`);
+  });
+});
+
+/**
+ * TASK 17 - `blogwright plugin list`.
+ *
+ * Every case here calls `runPluginNamespace` DIRECTLY, with no
+ * `ContextFactory` in sight: the command takes ports, never a context, which
+ * is what lets it run on a repo with no `config/<env>.jsonc` and no AWS
+ * credentials. `cli.test.ts` covers the same command through `main` with a
+ * `ContextFactory` that throws if it is called, pinning the dispatch
+ * placement itself.
+ *
+ * The two fixture plugins deliberately do NOT match their package names:
+ * `blogwright-metrics` exports the namespace `widget` and
+ * `blogwright-widgets` the namespace `analytics`. Discovery enumerates
+ * candidates in PACKAGE-name order (`plugins.ts`'s `pluginDependencyNames`
+ * sorts them), so the fixture arrives as `widget, analytics` and the listing
+ * has to reorder it - a fixture whose two orders agreed would pass whether
+ * the command sorted by namespace or not at all.
+ */
+const LISTED_ANALYTICS: Plugin = {
+  name: 'analytics',
+  description: 'analytics for the site',
+  commands: [{ action: 'sync', summary: 'sync it', run: async () => undefined }],
+  configKey: 'analytics',
+};
+
+/** The same, owning no `configKey` at all - the row that must carry a marker, not a blank cell. */
+const LISTED_WIDGET: Plugin = {
+  name: 'widget',
+  description: 'manage widgets',
+  commands: [{ action: 'sync', summary: 'sync widgets', run: async () => undefined }],
+};
+
+/** Both fixture plugins, each with a version seeded into its own in-memory `package.json`. */
+async function listingPorts(): Promise<Awaited<ReturnType<typeof buildDiscoveryPorts>>> {
+  return buildDiscoveryPorts([
+    {
+      packageName: 'blogwright-metrics',
+      namespace: 'widget',
+      plugin: LISTED_WIDGET,
+      version: '2.0.0',
+    },
+    {
+      packageName: 'blogwright-widgets',
+      namespace: 'analytics',
+      plugin: LISTED_ANALYTICS,
+      version: '0.4.1',
+    },
+  ]);
+}
+
+/** The refusal both unknown-input cases print, hand-typed rather than imported from the action table. */
+const PLUGIN_ACTIONS_LISTING = `"plugin" actions:
+  list - show installed plugins, their versions and the config key each owns`;
+
+describe('runPluginNamespace - blogwright plugin list', () => {
+  it('lists namespace, package, version and configKey per plugin, sorted by namespace, as an aligned table on a TTY', async () => {
+    const terminal = createScriptedTerminal({ interactive: true });
+    const { fs, loader } = await listingPorts();
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toEqual([]);
+    // Hand-typed, never built with `padEnd` here: a pin computed the way the
+    // renderer computes it would pass for any column widths at all.
+    expect(terminal.writes).toEqual([
+      '\u001B[1mnamespace  package             version  configKey\u001B[0m',
+      'analytics  blogwright-widgets  0.4.1    analytics',
+      'widget     blogwright-metrics  2.0.0    (none)',
+    ]);
+  });
+
+  it('prints the same columns single-space separated, with no colour and no padding, in --plain mode', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await listingPorts();
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toEqual([]);
+    expect(terminal.writes).toEqual([
+      'namespace package version configKey',
+      'analytics blogwright-widgets 0.4.1 analytics',
+      'widget blogwright-metrics 2.0.0 (none)',
+    ]);
+  });
+
+  it("takes each version from that package's own package.json, never a shape this module could have guessed", async () => {
+    // A version no `blogwright-*` package has ever carried, written into
+    // this one in-memory manifest: nothing but a read of that file produces
+    // it, which is what rules out a hardcoded map or a registry lookup.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-widgets',
+        namespace: 'analytics',
+        plugin: LISTED_ANALYTICS,
+        version: '9.9.9-rc.2',
+      },
+    ]);
+
+    await runPluginNamespace(['list'], terminal, createLogger(terminal), { fs, loader });
+
+    expect(terminal.writes).toEqual([
+      'namespace package version configKey',
+      'analytics blogwright-widgets 9.9.9-rc.2 analytics',
+    ]);
+  });
+
+  it('marks a plugin whose package.json declares no version at all, rather than leaving the cell blank', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-metrics', namespace: 'widget', plugin: LISTED_WIDGET },
+    ]);
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([
+      'namespace package version configKey',
+      'widget blogwright-metrics (unknown) (none)',
+    ]);
+  });
+
+  it("lists a plugin that failed to load with discovery's own reason, without suppressing the healthy one, and still exits 0", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const base = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-metrics',
+        namespace: 'widget',
+        plugin: LISTED_WIDGET,
+        version: '2.0.0',
+      },
+    ]);
+    const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    // A report, not a health check: the listing was produced, so 0 - the
+    // same contract `--help` already has when it lists a failed plugin.
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([
+      'namespace package version configKey',
+      'widget blogwright-metrics 2.0.0 (none)',
+      'failed to load:',
+      'blogwright-broken: plugin package "blogwright-broken"\'s Plugin.name is required - the CLI namespace it claims, e.g. "analytics"',
+    ]);
+  });
+
+  it('prints an empty-state line naming `blogwright plugin add` and exits 0 on a repo with no plugins, no config file and no AWS credentials', async () => {
+    // The situation the whole dispatch placement exists for. Nothing in this
+    // test builds an OpsContext, and the fixture repo has no config file at
+    // all - asserted rather than assumed, because the empty-state line is
+    // otherwise unreachable in exactly the state it was written for.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const repoRoot = await realRepoRoot();
+    expect(await fs.exists(`${repoRoot}/config/production.jsonc`)).toBe(false);
+    expect(await fs.exists(`${repoRoot}/ops.config.jsonc`)).toBe(false);
+    // The fixture is the same SHAPE the populated cases use - a real repo
+    // root with a readable package.json - so an empty listing here is
+    // discovery finding nothing, not discovery failing before it looked.
+    expect(await fs.exists(`${repoRoot}/package.json`)).toBe(true);
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toEqual([]);
+    expect(terminal.writes).toEqual([
+      'no plugins installed - run `blogwright plugin add <name>` to install one',
+    ]);
+  });
+
+  it('propagates a manifest that became unparseable between discovery and the version read, rather than reporting it as a versionless plugin', async () => {
+    // The narrow window `readPackageVersion`'s bare `JSON.parse` is left
+    // uncaught for: `loadCandidate` parsed this same file moments earlier,
+    // so only a file broken UNDERNEATH the command reaches it. Wrapping that
+    // parse in a blanket catch would render this row as `(unknown)` and exit
+    // 0 - the exact missing-vs-malformed conflation task 11 forbids, where a
+    // manifest that declares no `version` and a manifest that is no longer
+    // JSON at all become the same output.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const base = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-metrics',
+        namespace: 'widget',
+        plugin: LISTED_WIDGET,
+        version: '2.0.0',
+      },
+    ]);
+    const manifestPath = '/pkgs/blogwright-metrics/package.json';
+    let reads = 0;
+    // Discovery's own read still succeeds - the plugin loads, is validated
+    // and reaches the listing - and only the SECOND read of that same path,
+    // the version read, sees the corrupted file.
+    const fs: FileSystem = {
+      ...base.fs,
+      readText: async (path) =>
+        path === manifestPath && ++reads > 1 ? '{ "version": ' : base.fs.readText(path),
+    };
+
+    await expect(
+      runPluginNamespace(['list'], terminal, createLogger(terminal), { fs, loader: base.loader }),
+    ).rejects.toThrow(SyntaxError);
+    // Not merely thrown late: nothing was reported for this plugin at all.
+    expect(reads).toBe(2);
+    expect(terminal.writes).toEqual([]);
+  });
+
+  it('bolds the failure heading on a TTY - the same plain/pretty split the table header makes, and the reason line stays uncoloured', async () => {
+    const terminal = createScriptedTerminal({ interactive: true });
+    const base = await buildDiscoveryPorts([]);
+    const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([
+      'no plugins installed - run `blogwright plugin add <name>` to install one',
+      '\u001B[1mfailed to load:\u001B[0m',
+      'blogwright-broken: plugin package "blogwright-broken"\'s Plugin.name is required - the CLI namespace it claims, e.g. "analytics"',
+    ]);
+  });
+
+  it('prints the empty-state line AND the failure when the only installed plugin is a broken one', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const base = await buildDiscoveryPorts([]);
+    const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
+
+    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([
+      'no plugins installed - run `blogwright plugin add <name>` to install one',
+      'failed to load:',
+      'blogwright-broken: plugin package "blogwright-broken"\'s Plugin.name is required - the CLI namespace it claims, e.g. "analytics"',
+    ]);
+  });
+});
+
+describe('runPluginNamespace - unknown input', () => {
+  it("lists the namespace's actions and exits 1 when no action is given", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await listingPorts();
+
+    const code = await runPluginNamespace([], terminal, createLogger(terminal), { fs, loader });
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown plugin action: (none)']);
+    expect(terminal.writes).toEqual([PLUGIN_ACTIONS_LISTING]);
+  });
+
+  it("lists the namespace's actions and exits 1 for an unrecognised action, resolving and importing nothing", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await listingPorts();
+
+    const code = await runPluginNamespace(['bogus'], terminal, createLogger(terminal), {
+      fs,
+      loader,
+    });
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown plugin action: bogus']);
+    expect(terminal.writes).toEqual([PLUGIN_ACTIONS_LISTING]);
+    // These three recorded lists are empty because the guard returned, not
+    // because there was nothing to find: `listingPorts` carries two
+    // resolvable plugins, and the `list` cases above run the same fixture to
+    // a two-row listing.
+    expect(loader.packageJsonPathForCalls).toEqual([]);
+    expect(loader.resolveCalls).toEqual([]);
+    expect(loader.loadCalls).toEqual([]);
   });
 });

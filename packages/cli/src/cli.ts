@@ -14,7 +14,7 @@ import { cliPackageDir, type ContextOptions, type OpsContext } from './context.j
 import { initSite } from './init.js';
 import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
-import { genericLifecycleActions, runPlugin } from './plugin-commands.js';
+import { genericLifecycleActions, runPlugin, runPluginNamespace } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { Ports } from './ports.js';
 
@@ -39,6 +39,9 @@ Commands:
   preview destroy <id>        Remove one PR preview
   preview list                List active previews
   preview teardown --yes      Tear down the whole preview stack
+
+  plugin list                 List installed plugins: namespace, package,
+                              version and the config key each owns
 
   pds keygen                  Generate the OAuth client key: private JWK into
                               Secrets Manager, public documents into public/oauth/
@@ -355,6 +358,18 @@ export async function main(
     }
     return initSite(discoveryPorts.fs, terminal, logger, plugins, repoRoot);
   }
+  if (command === 'plugin') {
+    // Dispatched HERE, beside `init` and ahead of the built-in switch, and
+    // never from the switch itself: the switch runs past the `makeContext`
+    // call below, which loads the environment's config and calls
+    // `sts.getAccountId()`. `blogwright plugin list` and (task 18) `plugin
+    // add` are what an operator runs BEFORE the repo is configured, so
+    // dispatching them after that build would answer both with `no config
+    // found for environment "production"` on exactly the repo they exist to
+    // serve. `plugin` stays in `KNOWN_COMMANDS` regardless, so no installed
+    // plugin can claim the name (`RESERVED_COMMANDS` derives from that set).
+    return runPluginNamespace(positionals.slice(1), terminal, logger, makeDiscoveryPorts());
+  }
   if (command === 'preview') {
     return runPreview(positionals, values, terminal, logger, makeContext, makeDiscoveryPorts);
   }
@@ -425,6 +440,12 @@ export async function main(
       await commands.status(ctx);
       break;
     default:
+      // Unreachable: past the `KNOWN_COMMANDS` membership test above,
+      // `command` is one of the nine names in that set, and the `plugin`
+      // branch has already claimed the only one without a case here. Kept
+      // wired to the same help text as every other USAGE print site - like
+      // `runPreview`'s own unreachable default below - so it stays correct
+      // if a name is ever added to `KNOWN_COMMANDS` without a case.
       logger.error(`unknown command: ${command}`);
       logger.info(await helpText(makeDiscoveryPorts()));
       return 1;

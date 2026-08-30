@@ -138,7 +138,7 @@ describe('discover - candidate selection', () => {
 
     const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
 
-    expect(result).toEqual({ plugins: [], failures: [] });
+    expect(result).toEqual({ plugins: [], installed: [], failures: [] });
     expect(loader.packageJsonPathForCalls).toEqual([]);
     expect(loader.resolveCalls).toEqual([]);
   });
@@ -232,7 +232,7 @@ describe('discover - candidate selection', () => {
 
     const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
 
-    expect(result).toEqual({ plugins: [], failures: [] });
+    expect(result).toEqual({ plugins: [], installed: [], failures: [] });
   });
 
   it('falls through to the CLI-bundled copy when the consumer declares the plugin but cannot resolve it', async () => {
@@ -350,7 +350,7 @@ describe('discover - manifest handling', () => {
 
     const result = await discover(REPO_ROOT, CLI_DIR, { fs, loader });
 
-    expect(result).toEqual({ plugins: [], failures: [] });
+    expect(result).toEqual({ plugins: [], installed: [], failures: [] });
     expect(loader.loadCalls).toEqual([]);
     expect(loader.resolveCalls).toEqual([]);
   });
@@ -715,6 +715,18 @@ describe('discover (integration - real ModuleLoader adapter, real disk)', () => 
 
       expect(result.failures).toEqual([]);
       expect(result.plugins.map((p) => p.name)).toEqual(['dual']);
+      // The manifest path carried out of discovery is the package's OWN
+      // package.json, never one derived from the resolved entry point.
+      // `<pkgDir>/dist/package.json` is the name-less `{"type":"module"}`
+      // stub written above, which declares no `version`, so an entry-derived
+      // path would make `blogwright plugin list` print `(unknown)` for a
+      // package that plainly declares 1.0.0 - and still exit 0, with no
+      // error anywhere. Asserted as a suffix, not an equality: macOS
+      // realpaths the temp root from `/var/...` to `/private/var/...`.
+      expect(result.installed).toHaveLength(1);
+      expect(result.installed[0]?.packageJsonPath).toMatch(
+        /[/\\]node_modules[/\\]blogwright-dual[/\\]package\.json$/,
+      );
     } finally {
       await removeTempDir(consumerRoot);
       await removeTempDir(cliDir);

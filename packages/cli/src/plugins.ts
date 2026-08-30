@@ -102,9 +102,41 @@ interface PluginLoadFailure {
   readonly reason: string;
 }
 
-/** `discover`'s result: both collections are always arrays, never `null`/`undefined`. */
+/**
+ * A successfully loaded, `validatePlugin`-passing plugin together with the
+ * package it came from - the provenance `blogwright plugin list` (task 17)
+ * reports, and nothing else needs.
+ *
+ * `packageJsonPath` is the path `ModuleLoader.packageJsonPathFor` resolved,
+ * NOT one derived from `ModuleLoader.resolve`'s entry file: a package
+ * published with the standard dual-package layout has its entry point in
+ * `dist/` beside a name-less `{"type":"module"}` stub, so walking up one
+ * directory from the entry file finds the wrong `package.json` entirely (see
+ * that port method's own doc comment). Carried as the PATH rather than a
+ * parsed `version`, so the one command that shows a version reads it lazily
+ * and `--help`/dispatch, which never show one, pay nothing for a field they
+ * do not use.
+ */
+interface InstalledPlugin {
+  readonly packageName: string;
+  readonly packageJsonPath: string;
+  readonly plugin: Plugin;
+}
+
+/**
+ * `discover`'s result: every collection is always an array, never
+ * `null`/`undefined`.
+ *
+ * `plugins` is exactly `installed.map((entry) => entry.plugin)`, derived once
+ * inside `discover` so the two can never disagree. It stays alongside
+ * `installed` because the three callers that dispatch or render a plugin -
+ * `runPlugin`, `buildHelp` and the `init` wizard - want the `Plugin` and
+ * nothing else, and should not have to unwrap an envelope to serve the one
+ * caller (`blogwright plugin list`) that also names the package it came from.
+ */
 export interface DiscoveryResult {
   readonly plugins: readonly Plugin[];
+  readonly installed: readonly InstalledPlugin[];
   readonly failures: readonly PluginLoadFailure[];
 }
 
@@ -185,7 +217,7 @@ function pluginDependencyNames(pkg: DependencyManifest): string[] {
  * already sits in the CLI's own bundled dependencies too - is one installed
  * package, not two: it is deduped here, consumer half winning, so it is
  * probed exactly once. Without this, the same package would reach
- * `resolveNamespaceCollisions` as two `LoadedPlugin` entries sharing one
+ * `resolveNamespaceCollisions` as two `InstalledPlugin` entries sharing one
  * `packageName` and reject itself as a "duplicate" of itself.
  */
 async function collectCandidates(
@@ -234,7 +266,7 @@ function parsePluginManifest(value: unknown): PluginManifest | undefined {
 }
 
 type CandidateOutcome =
-  | { kind: 'plugin'; plugin: Plugin }
+  | { kind: 'plugin'; plugin: Plugin; packageJsonPath: string }
   | { kind: 'failure'; failure: PluginLoadFailure }
   | { kind: 'absent' }
   | { kind: 'not-a-plugin' };
@@ -294,19 +326,17 @@ async function loadCandidate(
     }
 
     const mod = await ports.loader.load(entry.path);
-    return { kind: 'plugin', plugin: validatePlugin(mod, candidate.packageName) };
+    return {
+      kind: 'plugin',
+      plugin: validatePlugin(mod, candidate.packageName),
+      packageJsonPath: manifestPath.path,
+    };
   } catch (err) {
     return {
       kind: 'failure',
       failure: { packageName: candidate.packageName, reason: (err as Error).message },
     };
   }
-}
-
-/** A successfully loaded, `validatePlugin`-passing plugin, paired with the package it came from. */
-interface LoadedPlugin {
-  readonly packageName: string;
-  readonly plugin: Plugin;
 }
 
 /**
@@ -319,18 +349,18 @@ interface LoadedPlugin {
  * one package lists them from a `.sort()`ed array, so the rendered message
  * text is identical no matter which candidate was resolved first.
  */
-function resolveNamespaceCollisions(loaded: readonly LoadedPlugin[]): {
-  plugins: Plugin[];
+function resolveNamespaceCollisions(loaded: readonly InstalledPlugin[]): {
+  installed: InstalledPlugin[];
   failures: PluginLoadFailure[];
 } {
-  const byName = new Map<string, LoadedPlugin[]>();
+  const byName = new Map<string, InstalledPlugin[]>();
   for (const entry of loaded) {
     const bucket = byName.get(entry.plugin.name);
     if (bucket) bucket.push(entry);
     else byName.set(entry.plugin.name, [entry]);
   }
 
-  const plugins: Plugin[] = [];
+  const installed: InstalledPlugin[] = [];
   const failures: PluginLoadFailure[] = [];
   for (const [name, entries] of byName) {
     if (RESERVED_COMMANDS.has(name)) {
@@ -355,10 +385,10 @@ function resolveNamespaceCollisions(loaded: readonly LoadedPlugin[]): {
       continue;
     }
     const [entry] = entries;
-    if (entry) plugins.push(entry.plugin);
+    if (entry) installed.push(entry);
   }
 
-  return { plugins, failures };
+  return { installed, failures };
 }
 
 /** The generic action name `init?(io)` contributors would otherwise collide with - see {@link rejectDeclaredInitCollisions}. */
@@ -373,11 +403,11 @@ const GENERIC_INIT_ACTION = 'init';
  * valid and passes through untouched: pds declares the `init` command and no
  * contributor, analytics the contributor and no command.
  */
-function rejectDeclaredInitCollisions(loaded: readonly LoadedPlugin[]): {
-  survivors: LoadedPlugin[];
+function rejectDeclaredInitCollisions(loaded: readonly InstalledPlugin[]): {
+  survivors: InstalledPlugin[];
   failures: PluginLoadFailure[];
 } {
-  const survivors: LoadedPlugin[] = [];
+  const survivors: InstalledPlugin[] = [];
   const failures: PluginLoadFailure[] = [];
   for (const entry of loaded) {
     const declaresInitCommand = entry.plugin.commands.some(
@@ -419,11 +449,11 @@ const RESERVED_LIFECYCLE_ACTIONS = new Set(['bootstrap', 'destroy']);
  * ordinary `matchAction` precedence already lets a declared `status` win
  * over the generic one with no boundary check required.
  */
-function rejectDeclaredLifecycleCollisions(loaded: readonly LoadedPlugin[]): {
-  survivors: LoadedPlugin[];
+function rejectDeclaredLifecycleCollisions(loaded: readonly InstalledPlugin[]): {
+  survivors: InstalledPlugin[];
   failures: PluginLoadFailure[];
 } {
-  const survivors: LoadedPlugin[] = [];
+  const survivors: InstalledPlugin[] = [];
   const failures: PluginLoadFailure[] = [];
   for (const entry of loaded) {
     const collision = entry.plugin.commands.find((command) =>
@@ -459,7 +489,7 @@ export async function discover(
 ): Promise<DiscoveryResult> {
   const candidates = await collectCandidates(ports, repoRoot, cliPackageDir);
 
-  const loaded: LoadedPlugin[] = [];
+  const loaded: InstalledPlugin[] = [];
   const failures: PluginLoadFailure[] = [];
   // A package named in both manifests appears twice, consumer entry first.
   // Skip the second only when the first RESOLVED - to a plugin or to a failure -
@@ -471,7 +501,11 @@ export async function discover(
     const outcome = await loadCandidate(candidate, ports);
     if (outcome.kind === 'plugin') {
       resolved.add(candidate.packageName);
-      loaded.push({ packageName: candidate.packageName, plugin: outcome.plugin });
+      loaded.push({
+        packageName: candidate.packageName,
+        packageJsonPath: outcome.packageJsonPath,
+        plugin: outcome.plugin,
+      });
     } else if (outcome.kind === 'failure') {
       resolved.add(candidate.packageName);
       failures.push(outcome.failure);
@@ -487,5 +521,9 @@ export async function discover(
     ...collisions.failures,
   );
 
-  return { plugins: collisions.plugins, failures };
+  // `plugins` is derived from `installed` here, at the single point both are
+  // built, so no later change can leave the two disagreeing about which
+  // plugins survived the collision passes.
+  const installed = collisions.installed;
+  return { plugins: installed.map((entry) => entry.plugin), installed, failures };
 }

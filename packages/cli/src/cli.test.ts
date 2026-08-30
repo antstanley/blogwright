@@ -31,6 +31,7 @@ import {
   createTestContext,
   makeFakePlugin,
   scopedStateOnlyS3,
+  withBrokenPlugin,
   type FakePluginSpec,
   type RecordedRun,
 } from './test-support.js';
@@ -63,6 +64,9 @@ Commands:
   preview destroy <id>        Remove one PR preview
   preview list                List active previews
   preview teardown --yes      Tear down the whole preview stack
+
+  plugin list                 List installed plugins: namespace, package,
+                              version and the config key each owns
 
   pds keygen                  Generate the OAuth client key: private JWK into
                               Secrets Manager, public documents into public/oauth/
@@ -189,53 +193,6 @@ Plugins:
   widget - manage widgets
     sync - sync widgets
 `;
-
-/**
- * Wrap a `buildDiscoveryPorts` result with one additional BROKEN candidate:
- * `brokenPackageName` resolves and loads fine, but its default export is
- * `{}` - no `name`, `description` or `commands` - so `validatePlugin`
- * (`blogwright-core`) rejects it and `discover` reports a `failures` entry
- * instead of a `plugins` one, the same outcome `plugins.test.ts` proves
- * against the real validator in "reports a failure ... when the default
- * export fails validatePlugin". `packageJsonPathFor`/`resolve`/`load` for
- * every OTHER specifier still delegate to `base.loader` unchanged.
- */
-async function withBrokenPlugin(
-  base: { fs: Awaited<ReturnType<typeof buildDiscoveryPorts>>['fs']; loader: ModuleLoader },
-  brokenPackageName: string,
-): Promise<{ fs: typeof base.fs; loader: ModuleLoader }> {
-  const repoRoot = await findRepoRoot(base.fs);
-  const packageJsonPath = `/pkgs/${brokenPackageName}/package.json`;
-  const entryPath = `/pkgs/${brokenPackageName}/index.js`;
-  await base.fs.writeText(
-    packageJsonPath,
-    JSON.stringify({ name: brokenPackageName, blogwright: { plugin: 'broken' } }),
-  );
-  const repoPackageJsonPath = `${repoRoot}/package.json`;
-  const repoPkg = JSON.parse(await base.fs.readText(repoPackageJsonPath)) as {
-    dependencies?: Record<string, string>;
-  };
-  await base.fs.writeText(
-    repoPackageJsonPath,
-    JSON.stringify({
-      ...repoPkg,
-      dependencies: { ...repoPkg.dependencies, [brokenPackageName]: '1.0.0' },
-    }),
-  );
-
-  const loader: ModuleLoader = {
-    resolve: async (specifier, fromDir) =>
-      specifier === brokenPackageName
-        ? { found: true, path: entryPath }
-        : base.loader.resolve(specifier, fromDir),
-    packageJsonPathFor: async (specifier, fromDir) =>
-      specifier === brokenPackageName
-        ? { found: true, path: packageJsonPath }
-        : base.loader.packageJsonPathFor(specifier, fromDir),
-    load: async (path) => (path === entryPath ? { default: {} } : base.loader.load(path)),
-  };
-  return { fs: base.fs, loader };
-}
 
 describe('main - help and error surface', () => {
   it('runs discovery, and with no plugins installed prints USAGE byte-identical to the task-07 pin, exiting 0 for --help', async () => {
@@ -422,11 +379,12 @@ Plugins that failed to load:
     ]);
   });
 
-  it('renders the same discovered-plugin help at the unknown-command fallback inside KNOWN_COMMANDS (`blogwright plugin`, not yet dispatched)', async () => {
-    // `plugin` is in `KNOWN_COMMANDS` (reserved for task 17's `blogwright
-    // plugin list`/`add`/`remove`) but `main`'s switch has no case for it
-    // yet, so a bare `blogwright plugin` falls to the switch's own
-    // `default:` - one of the five USAGE print sites this task wires.
+  it('dispatches the built-in `plugin` namespace instead of the switch default, listing its actions and exiting 1 for a bare `blogwright plugin`', async () => {
+    // `plugin` is in `KNOWN_COMMANDS`, so no installed plugin can claim the
+    // name - but `main` now intercepts it ahead of the switch (task 17), so
+    // it never reaches the switch's `default:` arm any more. That arm is
+    // consequently unreachable and documented as such in `cli.ts`: every
+    // other member of `KNOWN_COMMANDS` has a case.
     const terminal = createScriptedTerminal({ interactive: false });
     const base = await buildDiscoveryPorts([
       { packageName: 'blogwright-widget', namespace: 'widget', plugin: WIDGET_PLUGIN },
@@ -440,8 +398,35 @@ Plugins that failed to load:
     );
 
     expect(code).toBe(1);
-    expect(terminal.errors).toEqual(['✗ unknown command: plugin']);
-    expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_WIDGET]);
+    expect(terminal.errors).toEqual(['✗ unknown plugin action: (none)']);
+    expect(terminal.writes).toEqual([
+      `"plugin" actions:
+  list - show installed plugins, their versions and the config key each owns`,
+    ]);
+  });
+
+  it('runs `blogwright plugin list` without ever building an OpsContext, so it works with no config and no AWS credentials', async () => {
+    // The whole reason `cli.ts` dispatches `plugin` beside `init` rather
+    // than from the switch: `createContext` loads `config/<env>.jsonc` and
+    // calls `sts.getAccountId()`. This `ContextFactory` throws if it is ever
+    // called, so a regression that moved the dispatch below `makeContext`
+    // fails here rather than only on an operator's unconfigured repo.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const base = await buildDiscoveryPorts([
+      { packageName: 'blogwright-widget', namespace: 'widget', plugin: WIDGET_PLUGIN },
+    ]);
+    const refuseContext: ContextFactory = () => {
+      throw new Error('createContext must not run for `blogwright plugin list`');
+    };
+
+    const code = await main(['plugin', 'list'], fixedTerminal(terminal), refuseContext, () => base);
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toEqual([]);
+    expect(terminal.writes).toEqual([
+      'namespace package version configKey',
+      'widget blogwright-widget (unknown) (none)',
+    ]);
   });
 
   it('falls back to plain USAGE (not a crash) when --help runs outside any discoverable repo, exiting 0', async () => {

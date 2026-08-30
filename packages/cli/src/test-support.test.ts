@@ -1,9 +1,12 @@
+import { createNodeFileSystem, findRepoRoot, type Plugin } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildDiscoveryPorts,
   createRecordingPackageManager,
   createTestContext,
   TEST_AGENT_DIR,
+  withBrokenPlugin,
 } from './test-support.js';
 
 describe('createTestContext', () => {
@@ -72,5 +75,39 @@ describe('createRecordingPackageManager', () => {
       { op: 'add', spec: 'blogwright-analytics', opts: { dev: true, exact: true } },
       { op: 'remove', name: 'blogwright-pds' },
     ]);
+  });
+});
+
+/** A fixture plugin for the {@link withBrokenPlugin} cases below. */
+const HEALTHY_PLUGIN: Plugin = {
+  name: 'widget',
+  description: 'manage widgets',
+  commands: [{ action: 'sync', summary: 'sync widgets', run: async () => undefined }],
+};
+
+describe('withBrokenPlugin', () => {
+  it('joins the broken candidate onto the consumer manifest, keeping every other field it already declared', async () => {
+    // `collectCandidates` (`plugins.ts`) unions `dependencies` AND
+    // `devDependencies`, so a helper that rewrote the manifest down to a
+    // lone `dependencies` key would erase half the candidate set of any
+    // fixture that seeded the other half - silently, since the erased
+    // plugins simply stop being discovered rather than failing.
+    const base = await buildDiscoveryPorts([
+      { packageName: 'blogwright-metrics', namespace: 'widget', plugin: HEALTHY_PLUGIN },
+    ]);
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    const manifestPath = `${repoRoot}/package.json`;
+    const seeded: unknown = JSON.parse(await base.fs.readText(manifestPath));
+    await base.fs.writeText(
+      manifestPath,
+      JSON.stringify({ ...(seeded as object), devDependencies: { 'blogwright-dev': '1.0.0' } }),
+    );
+
+    const { fs } = await withBrokenPlugin(base, 'blogwright-broken');
+
+    expect(JSON.parse(await fs.readText(manifestPath))).toEqual({
+      dependencies: { 'blogwright-metrics': '1.0.0', 'blogwright-broken': '1.0.0' },
+      devDependencies: { 'blogwright-dev': '1.0.0' },
+    });
   });
 });

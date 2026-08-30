@@ -343,6 +343,14 @@ export interface FakePluginSpec {
   plugin: Plugin;
   /** Resolved as the CLI's own bundled dependency rather than the consumer's. */
   bundled?: boolean;
+  /**
+   * Written as the fake package's own `version` field, for
+   * `blogwright plugin list`, which reads it back through the FileSystem
+   * port. Omit to seed a manifest declaring no version at all - the shape a
+   * private workspace package has, and the one the listing must mark rather
+   * than leave blank.
+   */
+  version?: string;
 }
 
 /**
@@ -384,6 +392,7 @@ export async function buildDiscoveryPorts(
     const pkgDir = `/pkgs/${spec.packageName}`;
     files[`${pkgDir}/package.json`] = JSON.stringify({
       name: spec.packageName,
+      ...(spec.version === undefined ? {} : { version: spec.version }),
       blogwright: { plugin: spec.namespace },
     });
     installed.push({
@@ -436,4 +445,72 @@ export function makeFakePlugin(calls: RecordedRun[]): Plugin {
       recordingCommand('secret delete', 'delete the secret'),
     ],
   };
+}
+
+/** The same narrowing `plugins.ts` and `plugin-commands.ts` each keep locally. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Wrap a {@link buildDiscoveryPorts} result with one additional BROKEN
+ * candidate: `brokenPackageName` resolves and loads fine, but its default
+ * export is `{}` - no `name`, `description` or `commands` - so
+ * `validatePlugin` (`blogwright-core`) rejects it and `discover` reports a
+ * `failures` entry instead of an `installed` one, the same outcome
+ * `plugins.test.ts` proves against the real validator in "reports a failure
+ * ... when the default export fails validatePlugin".
+ * `packageJsonPathFor`/`resolve`/`load` for every OTHER specifier still
+ * delegate to `base.loader` unchanged.
+ *
+ * Shared by `cli.test.ts` (a working plugin's `--help` section survives a
+ * broken sibling) and `plugin-commands.test.ts` (`blogwright plugin list`
+ * lists both), for the same reason every other fixture in this section is:
+ * one definition rather than two near-identical copies.
+ */
+export async function withBrokenPlugin(
+  base: { fs: FileSystem; loader: ModuleLoader },
+  brokenPackageName: string,
+): Promise<{ fs: FileSystem; loader: ModuleLoader }> {
+  const repoRoot = await findRepoRoot(base.fs);
+  const packageJsonPath = `/pkgs/${brokenPackageName}/package.json`;
+  const entryPath = `/pkgs/${brokenPackageName}/index.js`;
+  await base.fs.writeText(
+    packageJsonPath,
+    JSON.stringify({ name: brokenPackageName, blogwright: { plugin: 'broken' } }),
+  );
+  const repoPackageJsonPath = `${repoRoot}/package.json`;
+  const repoPkg: unknown = JSON.parse(await base.fs.readText(repoPackageJsonPath));
+  // Narrowed rather than cast, and the manifest is REWRITTEN rather than
+  // replaced: the broken candidate has to JOIN whatever
+  // `buildDiscoveryPorts` already declared, or seeding it would drop every
+  // healthy plugin out of the consumer manifest and the mixed good/broken
+  // fixtures would silently become broken-only ones. That applies to the
+  // whole file, not just to `dependencies` - `collectCandidates` reads
+  // `devDependencies` too (`plugins.ts`), so emitting a lone `dependencies`
+  // key here would silently erase a fixture that seeded those, with no
+  // failure to say so.
+  const manifest: Record<string, unknown> = isRecord(repoPkg) ? repoPkg : {};
+  const declared = manifest.dependencies;
+  const dependencies: Record<string, unknown> = isRecord(declared) ? declared : {};
+  await base.fs.writeText(
+    repoPackageJsonPath,
+    JSON.stringify({
+      ...manifest,
+      dependencies: { ...dependencies, [brokenPackageName]: '1.0.0' },
+    }),
+  );
+
+  const loader: ModuleLoader = {
+    resolve: async (specifier, fromDir) =>
+      specifier === brokenPackageName
+        ? { found: true, path: entryPath }
+        : base.loader.resolve(specifier, fromDir),
+    packageJsonPathFor: async (specifier, fromDir) =>
+      specifier === brokenPackageName
+        ? { found: true, path: packageJsonPath }
+        : base.loader.packageJsonPathFor(specifier, fromDir),
+    load: async (path) => (path === entryPath ? { default: {} } : base.loader.load(path)),
+  };
+  return { fs: base.fs, loader };
 }

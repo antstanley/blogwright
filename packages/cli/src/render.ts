@@ -142,3 +142,98 @@ export function renderHistoryTable(entries: HistoryEntry[], now: number): string
   });
   return [colors.bold(`${'hash'.padEnd(13)} ${' '} ${'finished'.padEnd(9)} duration`), ...rows];
 }
+
+/** One installed plugin's row in `blogwright plugin list`. */
+export interface PluginListRow {
+  /** The CLI namespace the plugin claims - `Plugin.name`. */
+  namespace: string;
+  /** The npm package the plugin was loaded from. */
+  packageName: string;
+  /** From the package's own `package.json`; `undefined` when it declares none. */
+  version?: string | undefined;
+  /** The single top-level config key the plugin owns; `undefined` when it owns none. */
+  configKey?: string | undefined;
+}
+
+/** One plugin that failed to load, as `discover` reported it. */
+interface PluginListFailure {
+  packageName: string;
+  reason: string;
+}
+
+/** What `blogwright plugin list` has to show: the plugins that loaded, and the ones that did not. */
+export interface PluginListing {
+  rows: readonly PluginListRow[];
+  failures: readonly PluginListFailure[];
+}
+
+/**
+ * Printed in place of a cell the plugin genuinely has no value for. An
+ * explicit marker, never an empty cell: plain output is column-per-line and
+ * whitespace-separated, so a blank cell would silently shift every column
+ * after it for whatever is parsing the line.
+ */
+const NO_CONFIG_KEY = '(none)';
+
+/** Printed for a plugin whose own `package.json` declares no `version` field at all. */
+const UNKNOWN_VERSION = '(unknown)';
+
+/** Column headers, in the order {@link pluginListCells} emits the cells. */
+const PLUGIN_LIST_HEADERS = ['namespace', 'package', 'version', 'configKey'] as const;
+
+/** Heading the failure lines are printed under, in both forms. */
+const FAILED_TO_LOAD_HEADING = 'failed to load:';
+
+function pluginListCells(row: PluginListRow): string[] {
+  return [
+    row.namespace,
+    row.packageName,
+    row.version ?? UNKNOWN_VERSION,
+    row.configKey ?? NO_CONFIG_KEY,
+  ];
+}
+
+/** Pad every cell but the last to the widest value in its column. */
+function alignCells(cells: readonly string[], widths: readonly number[]): string {
+  return cells
+    .map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+    .join('  ')
+    .trimEnd();
+}
+
+/**
+ * The `blogwright plugin list` listing, in the two forms every renderer in
+ * this module offers: an aligned table under a bold header on a TTY, and the
+ * same columns single-space separated otherwise. The plain form is the stable
+ * contract for CI logs and agents - the same split `history` makes
+ * (`commands.ts`), which is why the column set is identical in both and only
+ * the padding and the colour differ.
+ *
+ * Emits NOTHING for a listing with no rows and no failures, so a repo with no
+ * plugins installed gets its caller's empty-state line and not a header over
+ * an empty table.
+ */
+export function renderPluginList(listing: PluginListing, pretty: boolean): string[] {
+  const lines: string[] = [];
+  if (listing.rows.length > 0) {
+    const cells = listing.rows.map(pluginListCells);
+    if (pretty) {
+      const widths = PLUGIN_LIST_HEADERS.map((header, i) =>
+        Math.max(header.length, ...cells.map((row) => (row[i] ?? '').length)),
+      );
+      lines.push(colors.bold(alignCells(PLUGIN_LIST_HEADERS, widths)));
+      lines.push(...cells.map((row) => alignCells(row, widths)));
+    } else {
+      lines.push(PLUGIN_LIST_HEADERS.join(' '));
+      lines.push(...cells.map((row) => row.join(' ')));
+    }
+  }
+  if (listing.failures.length > 0) {
+    lines.push(pretty ? colors.bold(FAILED_TO_LOAD_HEADING) : FAILED_TO_LOAD_HEADING);
+    // The same `<package>: <reason>` shape `--help` already prints a failed
+    // plugin in (`cli.ts`'s `renderPluginFailure`), and for the same reason:
+    // the reason is `discover`'s own message, never an `Error.stack`.
+    lines.push(...listing.failures.map((failure) => `${failure.packageName}: ${failure.reason}`));
+  }
+  return lines;
+}

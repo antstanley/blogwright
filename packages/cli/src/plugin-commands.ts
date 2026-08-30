@@ -100,6 +100,15 @@
  * object itself once `destroyGraph` has torn down every node - mirroring
  * `commands.ts`'s own `destroy`/`previewTeardown`, both of which call
  * `ctx.store.delete()` right after `destroyGraph`.
+ *
+ * TASK 17 - the built-in `plugin` namespace (`runPluginNamespace`, at the
+ * foot of this module) is a SECOND entry point, not an action of the generic
+ * dispatch above: `plugin` is reserved (`known-commands.ts`), so no installed
+ * plugin can claim it and `runPlugin` never sees it. It lives here because it
+ * is the same surface - the actions an operator types after `blogwright` -
+ * and shares this module's discovery call and its unknown-action refusal
+ * shape. See its own section comment for why `cli.ts` must dispatch it before
+ * `createContext`.
  */
 
 import {
@@ -130,7 +139,7 @@ import { ask } from './init.js';
 import type { Logger } from './logger.js';
 import type { Ports } from './ports.js';
 import { discover } from './plugins.js';
-import { logStatusEntries } from './render.js';
+import { logStatusEntries, renderPluginList, type PluginListRow } from './render.js';
 
 /** The default environment every built-in command falls back to. */
 // Also the default `--env` in `cli.ts`'s option table; kept here because the
@@ -684,4 +693,165 @@ export async function runPlugin(
 
   await match.command.run(await toPluginContext(ctx, plugin.name), args);
   return 0;
+}
+
+/*
+ * TASK 17 - the built-in `plugin` namespace.
+ *
+ * `runPluginNamespace` is NOT reached through `runPlugin` above: `plugin` is
+ * a member of `KNOWN_COMMANDS` (`known-commands.ts`), so no installed plugin
+ * can ever claim the name, and `cli.ts` dispatches it directly. It is
+ * dispatched BEFORE `createContext` - beside the `init` branch, not from the
+ * built-in `switch` - because `createContext` loads the environment's config
+ * and calls `sts.getAccountId()`, neither of which holds on the repo this
+ * namespace exists to serve: `blogwright plugin list` on a checkout with no
+ * `config/<env>.jsonc` and no AWS credentials would otherwise fail with `no
+ * config found for environment "production"` instead of printing the
+ * empty-state line that names `blogwright plugin add` - the very command an
+ * operator runs BEFORE the repo is configured. Nothing this namespace does
+ * needs an environment at all, which is why it takes ports rather than a
+ * `ContextFactory`.
+ */
+
+/**
+ * The `plugin` namespace's own actions, `action -> summary`, in the same
+ * shape {@link GENERIC_LIFECYCLE_ACTIONS} uses - so the refusal listing
+ * ({@link renderPluginNamespaceActions}) is built from the same table the
+ * dispatcher matches against and cannot advertise an action that does not
+ * run, or hide one that does. Tasks 18 and 19 add `add` and `remove` here.
+ */
+const PLUGIN_NAMESPACE_ACTIONS: ReadonlyMap<string, string> = new Map([
+  ['list', 'show installed plugins, their versions and the config key each owns'],
+]);
+
+/**
+ * Printed when a repo has no plugins installed. Names the command that
+ * installs one, because an empty listing with nothing else on it reads as a
+ * broken command rather than an accurate report.
+ */
+const NO_PLUGINS_INSTALLED =
+  'no plugins installed - run `blogwright plugin add <name>` to install one';
+
+/**
+ * List the `plugin` namespace's actions for a refusal, in the same shape
+ * {@link renderActions} renders an installed plugin's actions in, so the two
+ * refusals an operator can hit read identically.
+ */
+function renderPluginNamespaceActions(): string {
+  return [
+    '"plugin" actions:',
+    ...Array.from(PLUGIN_NAMESPACE_ACTIONS, ([action, summary]) => `  ${action} - ${summary}`),
+  ].join('\n');
+}
+
+/** Narrow parsed JSON to an object before reading a field off it - no cast, no `any`. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Read one plugin package's own declared `version` through the `FileSystem`
+ * port - never a table in this module, never a registry lookup, so the
+ * listing reports what is actually installed on this machine and works with
+ * no network.
+ *
+ * `packageJsonPath` is what `ModuleLoader.packageJsonPathFor` resolved during
+ * discovery (`plugins.ts`'s `InstalledPlugin`), not a path this module
+ * builds from `ModuleLoader.resolve`'s entry file: for a package published
+ * with the standard dual-package layout, the directory holding the entry
+ * point carries a name-less `{"type":"module"}` stub rather than the
+ * manifest.
+ *
+ * The file is re-read here rather than carried out of discovery already
+ * parsed, so that `--help` and plugin dispatch - which run the same discovery
+ * but never show a version - keep paying nothing for this field.
+ *
+ * `undefined`, rendered as an explicit marker by `render.ts`, for a manifest
+ * that declares no `version` (a private workspace package, an unpublished
+ * plugin under development). An unreadable or unparseable manifest is a
+ * different thing entirely - the file discovery itself read moments ago,
+ * broken underneath us - and propagates, exactly as the same distinction is
+ * drawn between a MISSING and a MALFORMED `package.json` in `cli.ts`'s
+ * `isMissingPackageJsonError`.
+ */
+async function readPackageVersion(
+  fs: FileSystem,
+  packageJsonPath: string,
+): Promise<string | undefined> {
+  const parsed: unknown = JSON.parse(await fs.readText(packageJsonPath));
+  if (!isRecord(parsed)) return undefined;
+  const version = parsed.version;
+  return typeof version === 'string' && version.length > 0 ? version : undefined;
+}
+
+/**
+ * Run `blogwright plugin list`: one row per installed plugin - namespace,
+ * package, version and the config key it owns - plus one line per plugin
+ * that failed to load, with the reason `discover` produced.
+ *
+ * Always returns 0. This is a REPORT: its exit code says the listing was
+ * produced, not that every plugin in it is healthy - the same contract
+ * `blogwright --help` already has (it lists load failures and exits 0) and
+ * `status` has for drift. A failed plugin is data in the listing, and an
+ * empty listing is never an error.
+ *
+ * Rows are ordered by namespace, never by `discover`'s own array order: the
+ * candidate set is built from two `dependencies`/`devDependencies` maps
+ * (`plugins.ts`'s `collectCandidates`) whose key order is an implementation
+ * detail of those manifests, not something a CI-consumed listing should vary
+ * with. The same reason - and the same plain string comparison rather than
+ * `localeCompare` - as `cli.ts`'s `buildHelp`.
+ */
+async function runPluginList(
+  ports: Pick<Ports, 'fs' | 'loader'>,
+  terminal: Terminal,
+  logger: Logger,
+): Promise<number> {
+  const repoRoot = await findRepoRoot(ports.fs);
+  const discovered = await discover(repoRoot, cliPackageDir(), ports);
+
+  const rows: PluginListRow[] = [];
+  for (const entry of discovered.installed) {
+    rows.push({
+      namespace: entry.plugin.name,
+      packageName: entry.packageName,
+      version: await readPackageVersion(ports.fs, entry.packageJsonPath),
+      configKey: entry.plugin.configKey,
+    });
+  }
+  rows.sort((a, b) => (a.namespace < b.namespace ? -1 : a.namespace > b.namespace ? 1 : 0));
+
+  // Printed whenever nothing LOADED, even when a failure line follows it: a
+  // repo whose only plugin is broken has no usable plugin installed, and the
+  // failure below says which one and why.
+  if (rows.length === 0) logger.info(NO_PLUGINS_INSTALLED);
+  const listing = { rows, failures: discovered.failures };
+  for (const line of renderPluginList(listing, terminal.isInteractive)) logger.info(line);
+  return 0;
+}
+
+/**
+ * Handle `blogwright plugin <action>`. Dispatched by `cli.ts` ahead of any
+ * `OpsContext` - see this section's own comment above for why that placement
+ * is load-bearing rather than merely tidy.
+ *
+ * An absent or unrecognised action lists the namespace's actions and returns
+ * 1, the same shape `runPlugin` refuses an unknown action of an installed
+ * plugin in.
+ */
+export async function runPluginNamespace(
+  rest: readonly string[],
+  terminal: Terminal,
+  logger: Logger,
+  ports: Pick<Ports, 'fs' | 'loader'>,
+): Promise<number> {
+  const action = rest[0];
+  if (action === undefined || !PLUGIN_NAMESPACE_ACTIONS.has(action)) {
+    logger.error(`unknown plugin action: ${action ?? '(none)'}`);
+    logger.info(renderPluginNamespaceActions());
+    return 1;
+  }
+  // `PLUGIN_NAMESPACE_ACTIONS` has exactly one member until task 18 adds
+  // `add`; the membership test above is what keeps this exhaustive.
+  return runPluginList(ports, terminal, logger);
 }
