@@ -612,8 +612,15 @@ task 59, whose role rewrite is what its warning backs.
   sequences this way (`nodes.test.ts`'s teardown order, task 38's
   authorization-header scopes), so check before scheduling anything that adds a
   request against a path they cover. Resolved by rebasing task 52 onto the tip
-  and updating the expected sequences to grow by the new call, with a mutation
-  confirming they still notice its absence.
+  and adding a new ordered projection of the delivery calls - NOT, as this note
+  first recorded, by growing the existing expected sequences. Nothing was
+  edited: 67 pre-existing `expect` lines are textually identical to the tip,
+  four were added, none removed or changed, and the two dead lines dropped were
+  a stub and a comment. The outcome is stricter than a widened sequence would
+  have been, because order is the property that matters - AWS rejects
+  `DeleteDeliverySource` while a delivery is attached, so a read placed after
+  either delete would not be a guard at all, and the projection catches that
+  reordering where a set-membership assertion would not.
 - *`pnpm knip` does not see unused class members.* Raised by task 52's gate
   2026-08-30. knip v6 has no class-member issue type at all, so a public method
   with no caller anywhere is reported as clean. Task 52 left

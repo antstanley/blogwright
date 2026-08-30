@@ -30,9 +30,33 @@ function actionsOf(statements: object[]): string[] {
 }
 
 describe('cloudfront log delivery self-heal', () => {
-  function deliveryCtx(failFirstPut: boolean) {
+  /** A `delivery-destination` ARN, whose final segment is the destination's name. */
+  function destArn(name: string): string {
+    return `arn:aws:logs:us-east-1:123456789012:delivery-destination:${name}`;
+  }
+
+  /** The analytics plugin's delivery: a second delivery hung off the site's shared source. */
+  const FOREIGN = { id: 'analytics-d', deliveryDestinationArn: destArn('staging-analytics-dest') };
+
+  /**
+   * Stands in for the delivery source as AWS actually behaves: `DeleteDeliverySource`
+   * is REJECTED while any delivery is still attached (a Conflict that
+   * `deleteDeliverySource` does not catch - it swallows only not-found). A fake that
+   * returned void here would let a guard-less teardown pass every assertion about
+   * which delivery ids were deleted, which is how the unconditional
+   * `deleteDeliverySource` in the retry survived earlier reviews.
+   */
+  function deliveryCtx(
+    failFirstPut: boolean,
+    opts: { foreign?: boolean; unattributable?: boolean } = {},
+  ) {
     const calls: string[] = [];
     let putCount = 0;
+    const aws = {
+      sourcePresent: true,
+      destinationPresent: true,
+      deliveries: [] as { id: string; deliveryDestinationArn: string }[],
+    };
     const ctx = createTestContext({
       env: 'staging',
       config: { retention: { microvmDays: 1, cloudfrontDays: 1 } },
@@ -54,26 +78,50 @@ describe('cloudfront log delivery self-heal', () => {
                 statusCode: 400,
               });
             }
+            aws.sourcePresent = true;
             return 'arn:source';
           },
           putDeliveryDestination: async () => (calls.push('putDest'), 'arn:dest'),
           createDelivery: async () => {
             calls.push('createDelivery');
           },
-          deliveriesForSource: async () => (calls.push('listDeliveries'), ['d-1']),
+          deliveriesForSource: async () => (calls.push('listDeliveries'), [...aws.deliveries]),
           deleteDelivery: async (id: string) => {
             calls.push(`deleteDelivery:${id}`);
+            aws.deliveries = aws.deliveries.filter((d) => d.id !== id);
           },
           deleteDeliverySource: async () => {
             calls.push('deleteSource');
+            if (aws.deliveries.length > 0) {
+              throw new AwsError({
+                service: 'logs',
+                code: 'ConflictException',
+                message: 'Delivery Source still has deliveries attached.',
+                statusCode: 400,
+              });
+            }
+            aws.sourcePresent = false;
           },
           deleteDeliveryDestination: async () => {
             calls.push('deleteDest');
+            aws.destinationPresent = false;
           },
         },
       },
     });
-    return { ctx, calls };
+    // Seeded after construction so the site's own delivery points at the REAL
+    // derived destination name. The foreign delivery is listed FIRST, so a guard
+    // that picked its own delivery by position would pick the wrong one.
+    const own = { id: 'd-1', deliveryDestinationArn: destArn(ctx.names.deliveryDestination) };
+    // An empty ARN is what `deliveriesForSource` yields for a delivery AWS returns
+    // without a `deliveryDestinationArn` - unattributable, and so not the site's.
+    const unattributable = { id: 'unknown-d', deliveryDestinationArn: '' };
+    aws.deliveries = opts.foreign
+      ? [FOREIGN, own]
+      : opts.unattributable
+        ? [unattributable, own]
+        : [own];
+    return { ctx, calls, aws };
   }
 
   function node(ctx: OpsContext) {
@@ -117,6 +165,52 @@ describe('cloudfront log delivery self-heal', () => {
       });
     };
     await expect(node(ctx).create(ctx)).rejects.toThrow(/AccessDenied/);
+  });
+
+  it('tears down delivery, then source, then destination when the site owns them all', async () => {
+    const { ctx, calls, aws } = deliveryCtx(false);
+    await node(ctx).delete(ctx);
+    expect(calls).toEqual(['listDeliveries', 'deleteDelivery:d-1', 'deleteSource', 'deleteDest']);
+    expect(aws.deliveries).toEqual([]);
+    expect(aws.sourcePresent).toBe(false);
+    expect(aws.destinationPresent).toBe(false);
+  });
+
+  it('refuses to delete a delivery source carrying a delivery the site does not own', async () => {
+    const { ctx, calls, aws } = deliveryCtx(false, { foreign: true });
+    await expect(node(ctx).delete(ctx)).rejects.toThrow(
+      'blogwright analytics destroy staging --yes',
+    );
+    await expect(node(ctx).delete(ctx)).rejects.toThrow(/analytics-d/);
+    // Nothing removed: not the foreign delivery, not the site's own, not the source.
+    expect(calls).toEqual(['listDeliveries', 'listDeliveries']);
+    expect(aws.deliveries.map((d) => d.id)).toEqual(['analytics-d', 'd-1']);
+    expect(aws.sourcePresent).toBe(true);
+    expect(aws.destinationPresent).toBe(true);
+  });
+
+  it('refuses when a delivery carries no destination ARN to attribute it by', async () => {
+    // The `?? ''` fallback in `deliveriesForSource` is fail-closed by design: a
+    // delivery AWS reports without a destination matches no destination name, so it
+    // counts as foreign and the guard refuses rather than deleting on a guess.
+    const { ctx, calls, aws } = deliveryCtx(false, { unattributable: true });
+    await expect(node(ctx).delete(ctx)).rejects.toThrow(/unknown-d/);
+    expect(calls).toEqual(['listDeliveries']);
+    expect(aws.deliveries.map((d) => d.id)).toEqual(['unknown-d', 'd-1']);
+    expect(aws.sourcePresent).toBe(true);
+  });
+
+  it('refuses the conflict retry rather than unwiring a shared delivery source', async () => {
+    const { ctx, calls, aws } = deliveryCtx(true, { foreign: true });
+    await expect(node(ctx).create(ctx)).rejects.toThrow(
+      'blogwright analytics destroy staging --yes',
+    );
+    // The refusal lands BEFORE any delete: the site's own delivery is still
+    // attached, so the stack is left whole rather than half torn down.
+    expect(calls).not.toContain('deleteDelivery:analytics-d');
+    expect(calls).toEqual(['putSource', 'listDeliveries']);
+    expect(aws.deliveries.map((d) => d.id)).toEqual(['analytics-d', 'd-1']);
+    expect(aws.sourcePresent).toBe(true);
   });
 });
 

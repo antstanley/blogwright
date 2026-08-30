@@ -368,6 +368,9 @@ describe('assertNoScopedState', () => {
   });
 });
 
+/** The id the delivery source in {@link fullDestroyContext} reports for the site's own delivery. */
+const OWN_DELIVERY_ID = 'site-own-delivery';
+
 /**
  * A full, empty-state run of `buildNodes(ctx)`'s production graph through
  * `destroy` - not a fake node set, because the guard's own definition of
@@ -391,6 +394,11 @@ function fullDestroyContext(
   } = {},
 ): { ctx: OpsContext; calls: string[] } {
   const calls: string[] = [];
+  // Assigned from the derived names below, and read only when a delete
+  // actually runs - so the site's own delivery carries the REAL destination
+  // ARN this environment's node compares against, rather than a literal that
+  // would keep matching if `deriveNames` changed shape underneath it.
+  let ownDestinationArn = '';
   const ctx = createTestContext({
     env: opts.env ?? 'production',
     preview: opts.preview ?? false,
@@ -427,7 +435,22 @@ function fullDestroyContext(
         deleteLogGroup: async (name) => {
           calls.push(`logsUsEast1.deleteLogGroup ${name}`);
         },
-        findDeliveryIdBySource: async () => undefined,
+        // The site's own delivery, and nothing else. A delivery source is
+        // shared - AWS permits exactly one per distribution - so the log
+        // delivery node reads it before touching anything and refuses when it
+        // carries a delivery pointed at some other stack's destination.
+        // Answering with a delivery on THIS environment's destination
+        // (`ownDestinationArn`, filled in below once the derived name exists)
+        // runs that guard's proceed path. An empty list would also let the
+        // teardown through, but by skipping the ownership comparison rather
+        // than passing it - and would leave `deleteDelivery` unexercised.
+        deliveriesForSource: async () => {
+          calls.push('logsUsEast1.deliveriesForSource');
+          return [{ id: OWN_DELIVERY_ID, deliveryDestinationArn: ownDestinationArn }];
+        },
+        deleteDelivery: async (id) => {
+          calls.push(`logsUsEast1.deleteDelivery ${id}`);
+        },
         deleteDeliverySource: async () => {
           calls.push('logsUsEast1.deleteDeliverySource');
         },
@@ -450,6 +473,7 @@ function fullDestroyContext(
       },
     },
   });
+  ownDestinationArn = `arn:aws:logs:us-east-1:123456789012:delivery-destination:${ctx.names.deliveryDestination}`;
   return { ctx, calls };
 }
 
@@ -487,7 +511,9 @@ describe('destroy', () => {
     // every call after it is `destroy`'s own pre-existing sequence -
     // microvm listing, then each node's delete (in reverse dependency
     // order) interleaved with the state save after each, then the site's
-    // own state object deleted last.
+    // own state object deleted last. The delivery-source read that now
+    // follows the listing belongs to THAT sequence, not to this guard: it is
+    // the log delivery node's own ownership check, pinned separately below.
     expect(calls[0]).toBe('s3.listObjects my-bucket state/');
     expect(calls.at(-1)).toBe('s3.deleteObject state/production.json');
     // The graph's own deletes genuinely ran - the guard did not swallow them.
@@ -500,6 +526,20 @@ describe('destroy', () => {
     expect(calls).toContain(`cloudfront.deleteFunction ${ctx.names.prefix}-router`);
     expect(calls).toContain('logsUsEast1.deleteDeliverySource');
     expect(calls).toContain('logsUsEast1.deleteDeliveryDestination');
+    // The log delivery node's calls in full, as a SEQUENCE rather than a set.
+    // `deliveriesForSource` is the ownership read the node makes before it
+    // deletes anything, and its position is the whole point of it: AWS rejects
+    // `DeleteDeliverySource` while a delivery is still attached, so a read
+    // placed after either delete - or dropped entirely - would not be a guard.
+    // The `toContain`s above pass either way; this does not.
+    expect(
+      calls.filter((call) => /^logsUsEast1\.(deliveriesForSource|deleteDelivery)/.test(call)),
+    ).toEqual([
+      'logsUsEast1.deliveriesForSource',
+      `logsUsEast1.deleteDelivery ${OWN_DELIVERY_ID}`,
+      'logsUsEast1.deleteDeliverySource',
+      'logsUsEast1.deleteDeliveryDestination',
+    ]);
     // Every production node, and no plugin node - the guard neither adds
     // nor removes any of the site's own graph.
     expect(buildNodes(ctx)).toHaveLength(11);
@@ -544,6 +584,11 @@ describe('destroy', () => {
     expect(calls).toContain(`cloudfront.deleteFunction ${ctx.names.prefix}-router`);
     expect(calls).toContain('logsUsEast1.deleteDeliverySource');
     expect(calls).toContain('logsUsEast1.deleteDeliveryDestination');
+    // The delivery is the eighth of them, and the first of its trio to go -
+    // both the source and the destination are referenced by it. It is deleted
+    // by id, from the ownership read the node makes before touching anything;
+    // drop that read and this call disappears with it.
+    expect(calls).toContain(`logsUsEast1.deleteDelivery ${OWN_DELIVERY_ID}`);
     // The guard ran first and got out of the way, rather than aborting ahead
     // of `clearRunningMicrovms`.
     expect(calls[0]).toBe('s3.listObjects my-bucket state/');
@@ -652,6 +697,12 @@ describe('previewTeardown', () => {
     expect(calls).toEqual(['s3.listObjects my-bucket state/', ...baseline.calls]);
     // Not a vacuous comparison: the preview graph genuinely tore itself down.
     expect(calls).toContain('s3.deleteBucket my-bucket');
+    // ...including the log delivery node's ownership read and the delete it
+    // authorises. The equality above is blind to both by construction: the
+    // baseline runs the same node, so dropping the read would shorten the two
+    // sides alike and still compare equal. These two lines are what notice.
+    expect(calls).toContain('logsUsEast1.deliveriesForSource');
+    expect(calls).toContain(`logsUsEast1.deleteDelivery ${OWN_DELIVERY_ID}`);
     expect(calls.at(-1)).toBe(`s3.deleteObject state/${PREVIEW_ENV}.json`);
     // The preview graph, unchanged by the guard: the production eleven plus
     // the wildcard DNS record and the preview GitHub OIDC role.

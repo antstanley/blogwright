@@ -56,6 +56,84 @@ describe('LogsClient.findDeliveryIdBySource', () => {
   });
 });
 
+describe('LogsClient.deliveriesForSource', () => {
+  it('pages DescribeDeliveries and pairs each id with its destination ARN', async () => {
+    const transport: Transport = async (req) => {
+      const body = JSON.parse(String(req.body ?? '{}')) as { nextToken?: string };
+      if (!body.nextToken) {
+        return response(
+          200,
+          JSON.stringify({
+            deliveries: [
+              {
+                id: 'site',
+                deliverySourceName: 'preview-example-cf-source',
+                deliveryDestinationArn: 'arn:aws:logs:us-east-1:1:delivery-destination:cf-dest',
+              },
+            ],
+            nextToken: 'p2',
+          }),
+        );
+      }
+      return response(
+        200,
+        JSON.stringify({
+          deliveries: [
+            {
+              id: 'analytics',
+              deliverySourceName: 'preview-example-cf-source',
+              deliveryDestinationArn: 'arn:aws:logs:us-east-1:1:delivery-destination:firehose',
+            },
+            {
+              // Another distribution's delivery: still filtered out by source name.
+              id: 'elsewhere',
+              deliverySourceName: 'someone-else-cf-source',
+              deliveryDestinationArn: 'arn:aws:logs:us-east-1:1:delivery-destination:other',
+            },
+          ],
+        }),
+      );
+    };
+    expect(await logsWith(transport).deliveriesForSource('preview-example-cf-source')).toEqual([
+      {
+        id: 'site',
+        deliveryDestinationArn: 'arn:aws:logs:us-east-1:1:delivery-destination:cf-dest',
+      },
+      {
+        id: 'analytics',
+        deliveryDestinationArn: 'arn:aws:logs:us-east-1:1:delivery-destination:firehose',
+      },
+    ]);
+  });
+
+  it('returns an empty list when the source carries nothing', async () => {
+    const transport: Transport = async () => response(200, JSON.stringify({ deliveries: [] }));
+    expect(await logsWith(transport).deliveriesForSource('nope')).toEqual([]);
+  });
+
+  /**
+   * `deliveryDestinationArn` is optional in the DescribeDeliveries response, and the
+   * empty string it falls back to is a deliberate fail-closed choice, not a filler:
+   * it matches no destination name, so `isOwnDelivery` calls such a delivery foreign
+   * and the delivery-source guards refuse rather than delete on unknown ownership.
+   * Any other placeholder would do the same, but only until one of them collides -
+   * this pins the value so a later tidy-up cannot quietly drop it or swap it.
+   */
+  it('falls back to an empty destination ARN so an unattributable delivery reads as foreign', async () => {
+    const transport: Transport = async () =>
+      response(
+        200,
+        JSON.stringify({
+          deliveries: [{ id: 'no-dest', deliverySourceName: 'preview-example-cf-source' }],
+        }),
+      );
+    const deliveries = await logsWith(transport).deliveriesForSource('preview-example-cf-source');
+    expect(deliveries).toEqual([{ id: 'no-dest', deliveryDestinationArn: '' }]);
+    // Explicit: `toEqual` alone would also accept `undefined` slipping through.
+    expect(deliveries[0]?.deliveryDestinationArn).toBe('');
+  });
+});
+
 describe('LogsClient delete* idempotency', () => {
   it('swallows ResourceNotFoundException so teardown is re-runnable', async () => {
     const transport: Transport = async () =>

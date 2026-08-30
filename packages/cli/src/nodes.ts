@@ -5,6 +5,7 @@ import {
   pollUntil,
   textTag,
   type CreateImageInput,
+  type DeliverySummary,
   type DistributionListItem,
   type ResourceNode as CoreResourceNode,
 } from 'blogwright-core';
@@ -711,6 +712,56 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
   };
 }
 
+/**
+ * True when `delivery` is the one this site's node created. AWS permits exactly
+ * one delivery source per distribution, so the analytics plugin necessarily
+ * hangs its own delivery off the site's source: ownership is the destination a
+ * delivery feeds, and nothing else. The final `:`-separated segment of a
+ * `delivery-destination` ARN is its name, which is derived from the environment
+ * (`deriveNames`) and therefore also matches the previous stack's delivery on a
+ * destroy → bootstrap cycle - exactly the delivery the ConflictException retry
+ * exists to remove.
+ *
+ * Position cannot stand in for this (`findDeliveryIdBySource` takes whichever
+ * delivery AWS lists first), and neither can the recorded `destination` output:
+ * it is empty precisely when the retry needs it, because `putDeliverySource`
+ * throws the Conflict before `putDeliveryDestination` ever runs.
+ */
+function isOwnDelivery(delivery: DeliverySummary, destinationName: string): boolean {
+  return delivery.deliveryDestinationArn.split(':').pop() === destinationName;
+}
+
+/**
+ * The ids of the site's own deliveries on `names.deliverySource`, after
+ * refusing outright when the shared source carries a delivery the site did not
+ * create. Both the `delete()` teardown and the ConflictException retry call
+ * this BEFORE deleting anything: each of them goes on to delete the delivery
+ * source, and AWS rejects that while another delivery is attached - a refusal
+ * `deleteDeliverySource` does not catch (it swallows only not-found). Refusing
+ * up front turns a teardown that throws part-way, after the site's own delivery
+ * is already gone, into an actionable stop with nothing removed.
+ */
+async function ownDeliveryIdsOrRefuse(ctx: OpsContext): Promise<string[]> {
+  const deliveries = await ctx.clients.logsUsEast1.deliveriesForSource(ctx.names.deliverySource);
+  const foreign = deliveries.filter((d) => !isOwnDelivery(d, ctx.names.deliveryDestination));
+  if (foreign.length > 0) {
+    const listed = foreign
+      .map((d) => `${d.id} (destination ${d.deliveryDestinationArn})`)
+      .join(', ');
+    throw new Error(
+      `delivery source ${ctx.names.deliverySource} still carries ` +
+        `${foreign.length === 1 ? 'a delivery' : `${foreign.length} deliveries`} this site does ` +
+        `not own (${listed}); removing the source would break whoever does. Tear that stack ` +
+        `down first, then retry: blogwright analytics destroy ${ctx.env} --yes`,
+    );
+  }
+  // Filtered, not `deliveries.map(...)`: the throw above already guarantees every
+  // delivery here is the site's own, but that is a non-local guarantee. Re-applying
+  // the predicate makes the name and the body agree on their own, so softening the
+  // refusal cannot silently start feeding foreign ids to the delete loop.
+  return deliveries.filter((d) => isOwnDelivery(d, ctx.names.deliveryDestination)).map((d) => d.id);
+}
+
 /** Wire CloudFront access logs to the CloudWatch log group via vended log delivery. */
 function logDeliveryNode(): ResourceNode {
   async function wire(ctx: OpsContext): Promise<void> {
@@ -752,9 +803,15 @@ function logDeliveryNode(): ResourceNode {
         // delivery/source/destination trio and retry once.
         if (!(err instanceof AwsError && /Conflict/i.test(err.code))) throw err;
         ctx.logger.step('stale log delivery from a previous stack - removing and retrying');
-        for (const id of await ctx.clients.logsUsEast1.deliveriesForSource(
-          ctx.names.deliverySource,
-        )) {
+        // Refuse before deleting anything when the source is shared: removing it
+        // IS the retry (PutDeliverySource will not repoint a source that still
+        // exists), so a foreign delivery forecloses the retry entirely. Deleting
+        // only the site's own delivery and pressing on would leave the stack with
+        // no CloudWatch delivery and a failed bootstrap - worse than the conflict
+        // being healed. Only the site's own ids are removed here; the old loop
+        // deleted every delivery on the source, silently unwiring the other owner.
+        const ownDeliveryIds = await ownDeliveryIdsOrRefuse(ctx);
+        for (const id of ownDeliveryIds) {
           await ctx.clients.logsUsEast1.deleteDelivery(id);
         }
         await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
@@ -767,11 +824,10 @@ function logDeliveryNode(): ResourceNode {
       // delivery source/destination persist, and a later bootstrap against a new
       // distribution ARN fails with ConflictException ("Update to existing Delivery Source
       // with new ResourceId is not allowed"). Delete the delivery first (it references both),
-      // then the source and destination. The id isn't in state, so look it up by source name.
-      const deliveryId = await ctx.clients.logsUsEast1.findDeliveryIdBySource(
-        ctx.names.deliverySource,
-      );
-      if (deliveryId) await ctx.clients.logsUsEast1.deleteDelivery(deliveryId);
+      // then the source and destination. The ids aren't in state, so look them up by source
+      // name - which also settles whether this site still owns the source at all.
+      const deliveryIds = await ownDeliveryIdsOrRefuse(ctx);
+      for (const id of deliveryIds) await ctx.clients.logsUsEast1.deleteDelivery(id);
       await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
       await ctx.clients.logsUsEast1.deleteDeliveryDestination(ctx.names.deliveryDestination);
     },

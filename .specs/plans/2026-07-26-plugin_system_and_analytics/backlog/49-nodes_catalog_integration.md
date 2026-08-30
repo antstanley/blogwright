@@ -7,6 +7,25 @@
 **Produces:** `analytics-catalog-integration` in `packages/analytics/src/nodes.ts` - the one node in the graph that adopts shared account-scoped state rather than owning it, so a second environment never re-creates it and a teardown never removes it
 **Pointers:** `packages/analytics/src/nodes.ts` (task 48 - the node module this appends to, and the `output` helper it reuses), `packages/analytics/src/nodes.test.ts` (task 48 - the transport-mocked suite this extends), `packages/analytics/src/aws/glue.ts` (task 35 - the catalog federation create and lookup), `packages/core/src/aws/iam.ts:112-125` (`ensureOidcProvider` - the existing "account-global; never deleted here" precedent, comment included), `packages/cli/src/nodes.ts:937` (its only call site, inside `githubOidcRoleNode`, whose `delete` likewise never removes the provider), `packages/cli/src/nodes.ts:809-812` (`bucketPolicyNode.delete` - the existing empty-delete-with-a-reason shape), `packages/cli/src/graph.ts:89-99` (`destroyGraph` - every node's `delete` runs on teardown, which is why this one must be inert), [the spec paragraph stating the scoping rule](../../../changes/2026-07-26-analytics_plugin.md) (§Analytics pipeline → Resource nodes, the `analytics-catalog-integration` paragraph)
 
+> **ROUTED FINDING - added 2026-08-30 from task 35's verification gate.**
+> `EntityNotFoundException` carries an unmodelled `FromFederationSource` flag,
+> and the exception is documented on BOTH of that client's operations meaning
+> different things. On `getCatalogFederation` it is "no such catalog"; but a
+> **source-level** miss - the S3 Tables bucket the catalog would federate does
+> not exist, typically a wrong ARN - also surfaces as `EntityNotFoundException`
+> and so reads as "catalog absent". This node then calls create, which swallows
+> `FederatedResourceAlreadyExistsException`, and the whole reconcile converges
+> silently on a federation that was never actually wired to a bucket.
+> Task 35 correctly did not handle this: its contract says narrow on
+> `isNotFound`, and the flag is not in the service model. It lands here because
+> this node is what decides "adopt or create". Decide explicitly: either verify
+> the federation's `sourceIdentifier` matches the configured table bucket ARN
+> after an adopt, or let a source-level miss fail loudly instead of converging.
+> Note `CatalogFederation` already carries `sourceIdentifier` as a required key
+> of type `string | undefined` precisely so a same-named but non-federated or
+> wrongly-federated catalog is distinguishable - use it rather than treating a
+> successful lookup as sufficient.
+
 ## Steps
 
 - [ ] Write `analytics-catalog-integration` with `dependsOn: ['analytics-table']`, creating the Glue `s3tablescatalog` federation that Firehose reads the table through, via the plugin bundle's `glue` client.

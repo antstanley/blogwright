@@ -27,6 +27,18 @@ export interface DeliveryOptions {
   fieldDelimiter?: string | undefined;
 }
 
+/**
+ * One delivery attached to a delivery source. The destination ARN travels with
+ * the id because a delivery source is shared - AWS permits exactly one per
+ * distribution - so a caller tearing its own wiring down has to tell its
+ * delivery from someone else's, and the destination it feeds is the only thing
+ * that distinguishes them. `DescribeDeliveries` already returns the field.
+ */
+export interface DeliverySummary {
+  id: string;
+  deliveryDestinationArn: string;
+}
+
 /** CloudWatch Logs client (AWS JSON 1.1). */
 export class LogsClient {
   constructor(private readonly client: SigningClient) {}
@@ -164,21 +176,27 @@ export class LogsClient {
     return undefined;
   }
 
-  /** Ids of every delivery attached to a delivery source. */
-  async deliveriesForSource(sourceName: string): Promise<string[]> {
-    const ids: string[] = [];
+  /** Every delivery attached to a delivery source, each paired with the destination it feeds. */
+  async deliveriesForSource(sourceName: string): Promise<DeliverySummary[]> {
+    const deliveries: DeliverySummary[] = [];
     let nextToken: string | undefined;
     do {
       const out = await this.call<{
-        deliveries?: Array<{ id: string; deliverySourceName?: string }>;
+        deliveries?: Array<{
+          id: string;
+          deliverySourceName?: string;
+          deliveryDestinationArn?: string;
+        }>;
         nextToken?: string;
       }>('DescribeDeliveries', nextToken ? { nextToken } : {});
       for (const d of out.deliveries ?? []) {
-        if (d.deliverySourceName === sourceName) ids.push(d.id);
+        if (d.deliverySourceName === sourceName) {
+          deliveries.push({ id: d.id, deliveryDestinationArn: d.deliveryDestinationArn ?? '' });
+        }
       }
       nextToken = out.nextToken;
     } while (nextToken);
-    return ids;
+    return deliveries;
   }
 
   async deleteDelivery(id: string): Promise<void> {
