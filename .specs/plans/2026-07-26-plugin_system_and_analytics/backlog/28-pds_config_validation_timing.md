@@ -7,6 +7,18 @@
 **Produces:** the settled dispatch-time validation pinned by tests - a malformed `pds` block accepted by `bootstrap`, `deploy` and `status`, which load no plugin, and rejected by `blogwright pds <action>` with core's original messages - so the divergence the spec's §Upgrading a deployed stack item 5 lists cannot regress silently in either direction
 **Pointers:** `packages/cli/src/context.ts:110-124` (`createContext` → `loadConfig`, the single place every built-in command's config is parsed), `packages/cli/src/context.ts:85-102` (`loadConfig`, the candidate loop), `packages/cli/src/context.test.ts:8-55` (the `loadConfig` describe block the new cases join), `packages/cli/src/cli.ts:134-140` (the built-in dispatch's `createContext` call), `packages/cli/src/plugins.ts` (task 08 discovery - lazy by design, so plugins are not loaded for built-in commands), `packages/cli/src/plugins.ts` (task 19 - `validatePluginConfig`, called from the dispatch path), `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md` §Assumptions and open questions (where an accepted divergence is recorded)
 
+> **ROUTED FINDING - added 2026-08-30 from task 25's implementation.**
+> `validatePdsConfig(undefined)` throws `TypeError: Cannot read properties of
+> undefined (reading 'name')`, verified against the built package. Task 19's
+> dispatch path calls `validateConfig` with `undefined` whenever a plugin's
+> block is absent - that is the corrected contract, landed at build 38, and the
+> analytics validator handles it by returning a fully-defaulted block.
+> This is yours to fix: the task owns pds config-validation outcomes. Decide
+> what an absent `pds` block should mean - pds has no derivable defaults the way
+> analytics does, so returning a defaulted block may be wrong and a clear
+> refusal may be right - but a bare `TypeError` is neither. Note task 26 makes
+> it reachable, so if 26 lands first this is live in the meantime.
+
 ## Steps
 
 - [ ] Establish the current behaviour with a test before changing anything: load a config whose `pds` block has a blank `name`, and one whose `handleResolver` is `http://resolver`, through `loadConfig`/`createContext` on a built-in command path, and record whether it throws after task 27.

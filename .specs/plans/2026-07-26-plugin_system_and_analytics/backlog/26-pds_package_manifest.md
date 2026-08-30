@@ -7,6 +7,26 @@
 **Produces:** `blogwright-pds` is discoverable as the `pds` plugin from a consuming repo that depends only on `blogwright`, with `blogwright plugin list` reporting it - while `blogwright pds <action>` still runs through the hardcoded branch, so nothing user-visible moves yet
 **Pointers:** `packages/pds/package.json:2` (`"name": "blogwright-pds"`, unchanged), `packages/pds/package.json:9-18` (the `.` and `./rkey` export conditions that must stay byte-identical), `packages/cli/src/plugins.ts` (new at task 08 - discovery, including the bundled-plugin path), `packages/cli/src/plugins.test.ts` (task 08's discovery tests, extended here), `packages/cli/package.json:28` (`"blogwright-pds": "workspace:*"` - why pds is in the CLI's own bundle), `packages/cli/src/rkey.ts:7` and `packages/cli/src/rkey.test.ts` (the subpath contract), `packages/cli/src/cli.ts:114` (the hardcoded branch that still wins)
 
+> **ROUTED FINDING - added 2026-08-30 from task 25's implementation.**
+> **This task is what makes an existing defect reachable.** `validatePdsConfig`
+> (`packages/pds/src/config.ts`) throws `TypeError: Cannot read properties of
+> undefined (reading 'name')` when called with `undefined` - verified against the
+> built package. Task 19 landed the dispatch path calling `validateConfig` with
+> `undefined` when a plugin's block is absent, deliberately, so a plugin's own
+> defaults apply; task 19's changeset promises "a plugin that defaults every
+> setting works on a repo that has never written its block".
+> It is unreachable today only because the pds plugin is inert. The moment this
+> task adds the `blogwright.plugin` manifest field, discovery imports it and
+> `blogwright plugin remove pds` on a repo with no `pds` block surfaces
+> `plugin "pds" rejected the "pds" config block: Cannot read properties of
+> undefined (reading 'name')` instead of today's actionable `config has no "pds"
+> section`. Note the reachable point is HERE, not task 29 - task 18's
+> `plugin remove` teardown calls `resolvePluginConfig` at
+> `plugin-commands.ts:1097`.
+> The fix belongs to task 28, which owns pds config-validation outcomes. Either
+> land 28 first, or land a guard with this task and say so - do not land the
+> manifest field alone.
+
 ## Steps
 
 - [ ] Delete the static `pds` block from the `USAGE` string (`packages/cli/src/cli.ts:33-47`) in THIS task, not in task 29. The manifest field added here makes `blogwright-pds` discoverable, so task 11's dynamic help section starts rendering pds immediately; leaving the static block until 29 would list every pds action twice in `blogwright --help` for the whole span 26→29. That is a user-visible change the spec does not list, on top of the shorter help section it does. Removing it here keeps help correct at every commit, because the dynamic section replaces it in the same step that creates it.

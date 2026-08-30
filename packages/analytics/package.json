@@ -13,7 +13,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "rolldown -c src/transform/rolldown.config.ts && node dist/write-transform-manifest.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "lint": "oxlint src",
     "test": "vitest run"
@@ -25,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^26.1.0",
     "oxlint": "^1.72.0",
+    "rolldown": "^1.1.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
