@@ -12,7 +12,13 @@ import {
 import type { PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
 
-import { cliPackageDir, deriveAppTag, loadConfig, type OpsContext } from './context.js';
+import {
+  cliPackageDir,
+  deriveAppTag,
+  loadConfig,
+  resolveConfigPath,
+  type OpsContext,
+} from './context.js';
 import { destroyGraph } from './graph.js';
 import { createTestContext } from './test-support.js';
 
@@ -75,6 +81,50 @@ describe('loadConfig', () => {
     });
     await expect(loadConfig(fs, { env: 'production', root: ROOT })).rejects.toThrow(
       /siteName is required/,
+    );
+  });
+});
+
+describe('resolveConfigPath', () => {
+  // `loadConfig` (above) is entirely `parseConfig(await fs.readText(await resolveConfigPath(...)))`
+  // now, so these pin the extracted candidate resolution directly - the same
+  // function `blogwright <plugin> init` (`plugin-commands.ts`) calls to find
+  // exactly the file `loadConfig` would read, without re-deriving the
+  // candidate list a second time.
+  it('resolves the per-environment candidate when it exists', async () => {
+    const fs = createMemoryFileSystem({
+      '/repo/config/production.jsonc': '{"siteName": "example"}',
+    });
+    await expect(resolveConfigPath(fs, { env: 'production', root: ROOT })).resolves.toBe(
+      '/repo/config/production.jsonc',
+    );
+  });
+
+  it('falls back to ops.config.jsonc when the per-environment file is absent', async () => {
+    const fs = createMemoryFileSystem({ '/repo/ops.config.jsonc': '{"siteName": "example"}' });
+    await expect(resolveConfigPath(fs, { env: 'staging', root: ROOT })).resolves.toBe(
+      '/repo/ops.config.jsonc',
+    );
+  });
+
+  it('resolves only the explicit --config path when one is given, never the per-environment candidates', async () => {
+    const fs = createMemoryFileSystem({
+      '/repo/config/production.jsonc': '{"siteName": "wrong"}',
+      '/elsewhere/custom.jsonc': '{"siteName": "custom"}',
+    });
+    await expect(
+      resolveConfigPath(fs, {
+        env: 'production',
+        root: ROOT,
+        configPath: '/elsewhere/custom.jsonc',
+      }),
+    ).resolves.toBe('/elsewhere/custom.jsonc');
+  });
+
+  it('throws naming every candidate it looked for when none exists - the same message loadConfig has always raised', async () => {
+    const fs = createMemoryFileSystem();
+    await expect(resolveConfigPath(fs, { env: 'staging', root: ROOT })).rejects.toThrow(
+      /no config found for environment "staging".*config\/staging\.jsonc.*ops\.config\.jsonc/,
     );
   });
 });

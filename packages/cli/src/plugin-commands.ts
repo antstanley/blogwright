@@ -32,17 +32,54 @@
  * Steps 1-3 run BEFORE any `OpsContext` is built - see `runPlugin`'s own
  * doc comment for why an earlier, provisional-context version of this
  * function was wrong, not merely wasteful.
+ *
+ * TASK 13 - the generic `init` action, and PRECEDENCE. Step 2 above matches
+ * a plugin's own `commands` FIRST; the generic `init` action (`runGenericInit`,
+ * below) is only ever reached once that match has already failed AND the
+ * leading word is exactly `init`. This is the whole of §CLI → `blogwright
+ * <plugin> init`'s precedence rule: a plugin declaring its own `init`
+ * command owns whatever `blogwright <plugin> init` does, full stop - pds's
+ * `init` creates the standard.site publication record
+ * (`packages/pds/src/commands.ts:118`) and writes no config block at all,
+ * and it must never be shadowed by a generic config writer. Nothing here
+ * requires a declared `init` command to write config; the generic action
+ * applies only where NO `init` command is declared. The other half of the
+ * rule - a plugin may not declare BOTH an `init` command and an `init?(io)`
+ * contributor, because the contributor would then never run - is a
+ * discovery-time rejection in `plugins.ts`'s collision pass, not something
+ * this dispatcher has to account for: by the time a plugin reaches here it
+ * has at most one of the two.
+ *
+ * The generic action itself needs none of the AWS-reaching machinery
+ * `makeContext` builds (accountId, clients, state) - only the two ports a
+ * plugin's `init?(io)` contributor is typed against (`fs`, `terminal`) and
+ * the resolved environment/repo root `runPlugin` already has before any
+ * `OpsContext` exists. Building a real context just to splice a text file
+ * would additionally require a runnable AWS session before an operator has
+ * even finished being asked their plugin's questions - so it deliberately
+ * does not.
  */
 
 import {
   findRepoRoot,
+  parseConfig,
+  type ConfigBlockEntry as PluginConfigBlockEntry,
+  type FileSystem,
   type Plugin,
   type PluginCommand,
   type PluginContext,
+  type PluginInitIo,
   type Terminal,
 } from 'blogwright-core';
 
-import { cliPackageDir, type ContextOptions, type OpsContext } from './context.js';
+import { renderConfigBlock, spliceConfigBlock } from './config-block.js';
+import {
+  cliPackageDir,
+  resolveConfigPath,
+  type ContextOptions,
+  type OpsContext,
+} from './context.js';
+import { ask } from './init.js';
 import type { Logger } from './logger.js';
 import type { Ports } from './ports.js';
 import { discover } from './plugins.js';
@@ -211,6 +248,98 @@ export function toPluginContext(ops: OpsContext): PluginContext<unknown> {
 }
 
 /**
+ * The one action name `matchAction` failing to match against a plugin's own
+ * `commands` falls through to the generic writer for - see `runGenericInit`
+ * and the PRECEDENCE section of this module's own doc comment. Kept as a
+ * named constant, mirrored (not imported - see that module's own DECISION
+ * note) by `plugins.ts`'s discovery-time collision check, so both reads of
+ * "the generic init action" spell it the same way without a cross-module
+ * dependency neither side needs otherwise.
+ */
+const GENERIC_INIT_ACTION = 'init';
+
+/**
+ * Build the `io` an `init?(io)` contributor asks its own questions through,
+ * entirely over the `Terminal` port - never `node:readline` directly, which
+ * `.oxlintrc.json`'s `no-restricted-imports` enforces for this file (it
+ * carries no override, unlike `init.ts`/`bin.ts`/the adapters). Every prompt
+ * crosses `init.ts`'s exported `ask`, the SAME prompt/validate/retry loop
+ * `blogwright init`'s own four questions use, so a plugin's contributor
+ * never has to write its own. `ask` resolves `undefined` for an unanswered
+ * optional question; `PluginInitIo.ask` promises a `string` always, per the
+ * no-null rule, so the empty string stands in for "declined" here.
+ */
+function buildInitIo(terminal: Terminal, logger: Logger): PluginInitIo {
+  return {
+    isInteractive: terminal.isInteractive,
+    logger,
+    ask: async (question) => (await ask(terminal, logger, question)) ?? '',
+  };
+}
+
+/**
+ * Run the generic `blogwright <plugin> init` action: ask `contributor`'s
+ * questions over the `Terminal` port, render what it returns, and splice it
+ * into exactly the file `loadConfig` (`context.ts`) would read for `env` -
+ * `resolveConfigPath` is the SAME candidate resolution `loadConfig` calls,
+ * not a second string built here. Reached only once `matchAction` has
+ * already failed to match the plugin's own `commands` and the leading word
+ * is `init` - see this module's PRECEDENCE documentation above.
+ *
+ * The splice's own errors (an existing key, a document that is not a single
+ * top-level object) propagate unchanged - this function adds nothing to
+ * them - and `fs.writeText` runs only once the splice has already returned,
+ * so a refused splice leaves the file byte-for-byte what it was.
+ */
+async function runGenericInit(
+  plugin: Plugin<unknown>,
+  contributor: (io: PluginInitIo) => Promise<PluginConfigBlockEntry[]>,
+  repoRoot: string,
+  afterAction: readonly string[],
+  values: PluginValues,
+  terminal: Terminal,
+  logger: Logger,
+  fs: FileSystem,
+): Promise<number> {
+  const configKey = plugin.configKey;
+  if (!configKey) {
+    // A plugin authoring bug, not an operator refusal: `init?(io)` exists to
+    // fill in a `configKey`'s block, so a contributor with nowhere to file
+    // its answers is unsatisfiable in the same way a declared `init` command
+    // paired with a contributor is - just not one `plugins.ts`'s discovery
+    // pass can catch ahead of time, since `configKey` says nothing about
+    // whether `init` is also declared.
+    throw new Error(
+      `plugin "${plugin.name}" declares an init(io) contributor but no configKey - there is ` +
+        'nothing to file its answered block under',
+    );
+  }
+
+  const env = values.env ?? afterAction[0] ?? DEFAULT_ENV;
+  const path = await resolveConfigPath(fs, { env, root: repoRoot, configPath: values.config });
+
+  const entries = await contributor(buildInitIo(terminal, logger));
+  if (entries.length === 0) {
+    logger.info(`${plugin.name}: no questions answered - nothing written to ${path}`);
+    return 0;
+  }
+
+  const text = await fs.readText(path);
+  const rendered = renderConfigBlock(
+    configKey,
+    entries.map((entry) => ({ prop: entry.property, comment: entry.comment })),
+  );
+  const spliced = spliceConfigBlock({ path, text }, { key: configKey, rendered });
+  // Re-parsed before it is trusted onto disk: a bug in the splice itself
+  // must never reach the operator as an unloadable config file, which is the
+  // one thing this whole feature promises never to do.
+  parseConfig(spliced);
+  await fs.writeText(path, spliced);
+  logger.ok(`wrote "${configKey}" into ${path}`);
+  return 0;
+}
+
+/**
  * Handle `blogwright <command> <action> [env] [args]` once `command` has
  * failed the `KNOWN_COMMANDS` membership test - i.e. it is either an
  * installed plugin's namespace or entirely unknown.
@@ -284,6 +413,24 @@ export async function runPlugin(
 
   const match = matchAction(plugin.commands, rest);
   if (!match) {
+    // The generic `init` action - only reached because no declared command
+    // matched. A plugin with its own `init` command never gets here for
+    // that action (matchAction already returned it above); a plugin with
+    // neither a command nor a contributor falls through to the same unknown
+    // action refusal every other unmatched action gets, which already
+    // reports the action unavailable and lists what the plugin does have.
+    if (rest[0] === GENERIC_INIT_ACTION && typeof plugin.init === 'function') {
+      return runGenericInit(
+        plugin,
+        plugin.init,
+        repoRoot,
+        rest.slice(1),
+        values,
+        terminal,
+        logger,
+        ports.fs,
+      );
+    }
     logger.error(`unknown ${plugin.name} action: ${rest[0] ?? '(none)'}`);
     logger.info(renderActions(plugin));
     return 1;

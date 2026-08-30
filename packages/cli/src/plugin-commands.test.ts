@@ -16,18 +16,38 @@
  * two near-identical copies.
  */
 
-import { createScriptedTerminal, type Plugin } from 'blogwright-core';
+import {
+  createNodeFileSystem,
+  createScriptedTerminal,
+  findRepoRoot,
+  parseConfig,
+  parseConfigDocument,
+  type Plugin,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { cliPackageDir, type ContextOptions, type OpsContext } from './context.js';
 import { createLogger } from './logger.js';
 import { runPlugin, toPluginContext, type PluginValues } from './plugin-commands.js';
+import { discover } from './plugins.js';
 import {
   buildDiscoveryPorts,
   createTestContext,
   makeFakePlugin,
   type RecordedRun,
 } from './test-support.js';
+
+/**
+ * The real repo root `buildDiscoveryPorts` resolves its fixture `fs` around
+ * (see that function's own doc comment) - a test seeding an additional
+ * config file on top of that fixture (task 13's generic `init` cases) needs
+ * the same value to build the same path, rather than a test-local constant
+ * that would not match what `runPlugin`'s own (non-injectable) `findRepoRoot`
+ * call resolves to.
+ */
+async function realRepoRoot(): Promise<string> {
+  return findRepoRoot(createNodeFileSystem());
+}
 
 /** Every `PluginValues` field at its parsed-but-unset default. */
 const BASE_VALUES: PluginValues = {
@@ -246,6 +266,283 @@ describe('runPlugin', () => {
       specifier: 'blogwright-fake',
       fromDir: cliPackageDir(),
     });
+  });
+});
+
+/**
+ * A plugin carrying only an `init?(io)` contributor - no `init` command, so
+ * the generic action is the only thing `blogwright <namespace> init` can
+ * mean for it (declaring both is rejected at discovery - see the
+ * "declares both" describe block below). Every question the fixture asks is
+ * required, so a scripted terminal's `answers` array lines up 1:1 with the
+ * entries returned.
+ */
+const CONTRIBUTOR_CONFIG_KEY = 'demo';
+
+function makeContributorOnlyPlugin(): Plugin {
+  return {
+    name: 'demo',
+    description: 'a demo plugin with only an init(io) contributor',
+    commands: [],
+    configKey: CONTRIBUTOR_CONFIG_KEY,
+    init: async (io) => {
+      const token = await io.ask({ prompt: 'API token', required: true });
+      return [{ property: `"token": "${token}"`, comment: 'demo API token' }];
+    },
+  };
+}
+
+describe('runPlugin - the generic `init` action', () => {
+  it("splices a contributor-only plugin's answered block into config/<env>.jsonc, and the result re-parses cleanly", async () => {
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeContributorOnlyPlugin() },
+    ]);
+    const configPath = `${repoRoot}/config/production.jsonc`;
+    await fs.writeText(configPath, '{\n  "siteName": "demo"\n}\n');
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['secret-abc'] });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'demo',
+      ['init'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    const written = await fs.readText(configPath);
+    expect(written).toContain('"demo": {');
+    expect(written).toContain('"token": "secret-abc"');
+    expect(written).toContain('"siteName": "demo"'); // every other byte is untouched
+    // The whole point: a bug in the splice must never leave an unloadable file.
+    const { raw } = parseConfigDocument(written);
+    expect(raw['demo']).toEqual({ token: 'secret-abc' });
+  });
+
+  it('writes to the file resolved via --config when one is given, not to config/<env>.jsonc', async () => {
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeContributorOnlyPlugin() },
+    ]);
+    const configPath = '/elsewhere/custom.jsonc';
+    await fs.writeText(configPath, '{\n  "siteName": "demo"\n}\n');
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['secret-xyz'] });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'demo',
+      ['init'],
+      { ...BASE_VALUES, config: configPath },
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    const written = await fs.readText(configPath);
+    expect(written).toContain('"token": "secret-xyz"');
+    expect(() => parseConfig(written)).not.toThrow();
+  });
+
+  it("lets a plugin's own declared `init` command win - it reaches its own `run` and the config file is never touched", async () => {
+    const calls: RecordedRun[] = [];
+    const plugin: Plugin = {
+      name: 'pdslike',
+      description: 'declares its own init, like pds - creates a record, writes no config block',
+      commands: [
+        {
+          action: 'init',
+          summary: 'create the publication record',
+          run: async (ctx, args) => {
+            calls.push({ action: 'init', ctx, args });
+          },
+        },
+      ],
+      // No init(io) contributor: declaring both would be a discovery-time
+      // rejection (see the "declares both" describe block below).
+    };
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-pdslike', namespace: 'pdslike', plugin },
+    ]);
+    const configPath = `${repoRoot}/config/production.jsonc`;
+    const seeded = '{\n  "siteName": "demo"\n}\n';
+    await fs.writeText(configPath, seeded);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'pdslike',
+      ['init'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toEqual([{ action: 'init', ctx: expect.anything(), args: [] }]);
+    // Nothing in the config-writing path ran at all - byte-identical.
+    expect(await fs.readText(configPath)).toBe(seeded);
+  });
+
+  it('reports the action unavailable and lists the actions it does have when a plugin declares neither an init command nor a contributor, exiting non-zero', async () => {
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'fake',
+      ['init'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(1);
+    expect(calls).toEqual([]);
+    expect(terminal.errors).toEqual(['✗ unknown fake action: init']);
+    expect(terminal.writes[0]).toContain('"fake" actions:');
+    expect(terminal.writes[0]).toContain('sync - sync it');
+  });
+
+  it("rejects with the splice module's own message and leaves the file byte-identical when the config already declares the plugin's key", async () => {
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeContributorOnlyPlugin() },
+    ]);
+    const configPath = `${repoRoot}/config/production.jsonc`;
+    const seeded = '{\n  "siteName": "demo",\n  "demo": { "token": "existing" }\n}\n';
+    await fs.writeText(configPath, seeded);
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['secret-abc'] });
+    const { makeContext } = testContextFactory(terminal);
+
+    await expect(
+      runPlugin('demo', ['init'], BASE_VALUES, terminal, createLogger(terminal), makeContext, {
+        fs,
+        loader,
+      }),
+    ).rejects.toThrow(/already declares a "demo" key/);
+
+    expect(await fs.readText(configPath)).toBe(seeded);
+  });
+
+  it('writes nothing and says so when the contributor answers no questions', async () => {
+    const plugin: Plugin = {
+      name: 'declines',
+      description: 'a plugin whose operator may decline every question',
+      commands: [],
+      configKey: 'declines',
+      init: async () => [],
+    };
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-declines', namespace: 'declines', plugin },
+    ]);
+    const configPath = `${repoRoot}/config/production.jsonc`;
+    const seeded = '{\n  "siteName": "demo"\n}\n';
+    await fs.writeText(configPath, seeded);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'declines',
+      ['init'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    expect(await fs.readText(configPath)).toBe(seeded);
+    expect(terminal.writes.some((line) => line.includes('nothing written'))).toBe(true);
+  });
+
+  it('rejects naming the plugin when an init(io) contributor is declared but the plugin has no configKey to file its block under', async () => {
+    const plugin: Plugin = {
+      name: 'nokey',
+      description: 'an authoring bug: init(io) with no configKey',
+      commands: [],
+      init: async () => [{ property: '"x": 1' }],
+    };
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-nokey', namespace: 'nokey', plugin },
+    ]);
+    await fs.writeText(`${repoRoot}/config/production.jsonc`, '{\n  "siteName": "demo"\n}\n');
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal);
+
+    await expect(
+      runPlugin('nokey', ['init'], BASE_VALUES, terminal, createLogger(terminal), makeContext, {
+        fs,
+        loader,
+      }),
+    ).rejects.toThrow(/"nokey".*no configKey/);
+  });
+});
+
+describe('discover - a plugin declaring both an init command and an init(io) contributor', () => {
+  function makeBothPlugin(): Plugin {
+    return {
+      name: 'both',
+      description: 'declares both an init command and a contributor - unsatisfiable',
+      commands: [{ action: 'init', summary: 'own init', run: async () => undefined }],
+      configKey: 'both',
+      init: async () => [],
+    };
+  }
+
+  it('is rejected at discovery, naming the package and both halves of the collision, and absent from the discovered plugins', async () => {
+    const repoRoot = await realRepoRoot();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-both', namespace: 'both', plugin: makeBothPlugin() },
+    ]);
+
+    const result = await discover(repoRoot, cliPackageDir(), { fs, loader });
+
+    expect(result.plugins).toEqual([]);
+    expect(result.failures).toEqual([
+      {
+        packageName: 'blogwright-both',
+        reason:
+          'blogwright-both declares both an "init" command and an init(io) contributor - ' +
+          'a declared command always wins dispatch, so the contributor would never run; declare only one',
+      },
+    ]);
+  });
+
+  it('never reaches dispatch: `blogwright both init` reports "both" as not installed at all', async () => {
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-both', namespace: 'both', plugin: makeBothPlugin() },
+    ]);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal);
+
+    const code = await runPlugin(
+      'both',
+      ['init'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors[0]).toContain('no built-in command or installed plugin claims "both"');
   });
 });
 

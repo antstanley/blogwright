@@ -6,7 +6,6 @@ import {
   createNodeFileSystem,
   createNodeTerminal,
   deriveNames,
-  FileNotFoundError,
   findRepoRoot,
   parseConfig,
   StateStore,
@@ -108,24 +107,38 @@ export interface ConfigSource {
   configPath?: string | undefined;
 }
 
-/** Load and parse the first config candidate that exists. Exported for tests. */
-export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<OpsConfig> {
-  const candidates = source.configPath
+/** Candidate config paths, in the precedence `loadConfig`/`resolveConfigPath` read them: an explicit `--config`, or `config/<env>.jsonc` then `ops.config.jsonc`. */
+function configCandidates(source: ConfigSource): string[] {
+  return source.configPath
     ? [source.configPath]
     : [
         resolve(source.root, `config/${source.env}.jsonc`),
         resolve(source.root, 'ops.config.jsonc'),
       ];
+}
+
+/**
+ * Resolve the first config candidate that exists, in `configCandidates`'
+ * precedence. Throws, naming every candidate it looked for, when none does -
+ * the same message `loadConfig` has always raised on this path.
+ *
+ * Exported so `blogwright <plugin> init` (`plugin-commands.ts`) writes its
+ * spliced block into exactly the file `loadConfig` would read, rather than
+ * re-deriving the candidate list a second time.
+ */
+export async function resolveConfigPath(fs: FileSystem, source: ConfigSource): Promise<string> {
+  const candidates = configCandidates(source);
   for (const path of candidates) {
-    try {
-      return parseConfig(await fs.readText(path));
-    } catch (err) {
-      if (!(err instanceof FileNotFoundError)) throw err;
-    }
+    if (await fs.exists(path)) return path;
   }
   throw new Error(
     `no config found for environment "${source.env}" - looked for ${candidates.join(', ')}`,
   );
+}
+
+/** Load and parse the first config candidate that exists. Exported for tests. */
+export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<OpsConfig> {
+  return parseConfig(await fs.readText(await resolveConfigPath(fs, source)));
 }
 
 /**

@@ -42,6 +42,29 @@
  * (nothing here lets `pds` through unchecked; `cli.ts` intercepts it first)
  * while creating one task 29 would then have to undo - so the name stays
  * unreserved on purpose, pinned by a test below.
+ *
+ * DECISION (task 13, record here for task 16 to find): a plugin's declared
+ * ACTIONS can collide with a generic action the CLI contributes, distinct
+ * from the namespace collisions above. §CLI → `blogwright <plugin> init`
+ * names exactly one such collision a boundary check can reject: a plugin
+ * declaring BOTH an `init` command in its own `commands` AND an `init?(io)`
+ * contributor is unsatisfiable, because a declared command always wins
+ * dispatch (`plugin-commands.ts`'s `matchAction` matches a plugin's own
+ * `commands` before the generic action is ever considered), so the
+ * contributor would ask its questions nowhere. That check - `rejectDeclaredInitCollisions`
+ * below - lives HERE, in this module's collision pass, rather than in core's
+ * `validatePlugin` (`blogwright-core`'s `plugin.ts`), for the same reason the
+ * namespace checks do: it is about actions the *CLI* contributes generically
+ * (the config-writing `init`), which core must not know exists, and this
+ * module already reports a plugin-level rejection as a `failures` entry
+ * rather than a thrown error. §CLI → Plugin lifecycle adds the sibling rule
+ * for `bootstrap`/`destroy` (always generic; a plugin may never declare
+ * either, full stop - no "unless paired with a contributor" nuance, since
+ * there is no bootstrap/destroy contributor to pair with). Task 16 extends
+ * `rejectDeclaredInitCollisions` (or adds a sibling function called from the
+ * same place in `discover`, below) with that rule, so every declared-action
+ * collision rejection greps to this one module instead of splitting across
+ * whichever of the two tasks happened to land first.
  */
 
 import { join } from 'node:path';
@@ -332,6 +355,43 @@ function resolveNamespaceCollisions(loaded: readonly LoadedPlugin[]): {
   return { plugins, failures };
 }
 
+/** The generic action name `init?(io)` contributors would otherwise collide with - see {@link rejectDeclaredInitCollisions}. */
+const GENERIC_INIT_ACTION = 'init';
+
+/**
+ * Reject a plugin declaring BOTH an `init` command in its own `commands` and
+ * an `init?(io)` contributor - the one half of §CLI → `blogwright <plugin>
+ * init`'s precedence rule a boundary check can decide (see the module
+ * comment's DECISION note on why this check lives here, in the collision
+ * pass, rather than core's `validatePlugin`). Declaring either alone is
+ * valid and passes through untouched: pds declares the `init` command and no
+ * contributor, analytics the contributor and no command.
+ */
+function rejectDeclaredInitCollisions(loaded: readonly LoadedPlugin[]): {
+  survivors: LoadedPlugin[];
+  failures: PluginLoadFailure[];
+} {
+  const survivors: LoadedPlugin[] = [];
+  const failures: PluginLoadFailure[] = [];
+  for (const entry of loaded) {
+    const declaresInitCommand = entry.plugin.commands.some(
+      (command) => command.action === GENERIC_INIT_ACTION,
+    );
+    const declaresInitContributor = typeof entry.plugin.init === 'function';
+    if (declaresInitCommand && declaresInitContributor) {
+      failures.push({
+        packageName: entry.packageName,
+        reason:
+          `${entry.packageName} declares both an "init" command and an init(io) contributor - ` +
+          'a declared command always wins dispatch, so the contributor would never run; declare only one',
+      });
+      continue;
+    }
+    survivors.push(entry);
+  }
+  return { survivors, failures };
+}
+
 /**
  * Discover every installed plugin reachable from `repoRoot` (the consuming
  * repo) and `cliPackageDir` (the CLI's own package directory, from
@@ -365,8 +425,9 @@ export async function discover(
     }
   }
 
-  const collisions = resolveNamespaceCollisions(loaded);
-  failures.push(...collisions.failures);
+  const actionCollisions = rejectDeclaredInitCollisions(loaded);
+  const collisions = resolveNamespaceCollisions(actionCollisions.survivors);
+  failures.push(...actionCollisions.failures, ...collisions.failures);
 
   return { plugins: collisions.plugins, failures };
 }

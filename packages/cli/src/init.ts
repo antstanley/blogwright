@@ -13,14 +13,36 @@ const SITE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GITHUB_REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 const MAX_ATTEMPTS = 3;
 
-interface Question {
+/**
+ * One question, and how to ask it: shown text, a prefilled default, whether
+ * an empty answer must re-prompt, and an optional validator. Exported - and
+ * `ask` below along with it - because `plugin-commands.ts`'s `io.ask` (the
+ * surface an `init?(io)` contributor asks its own questions through) reuses
+ * this exact prompt/validate/retry loop rather than writing a second one; no
+ * plugin path may reach `node:readline` itself. Structurally the same shape
+ * as core's `PluginQuestion` (`blogwright-core`'s `plugin.ts`), so a
+ * contributor's question passes straight through with no conversion.
+ */
+export interface Question {
   prompt: string;
   defaultValue?: string | undefined;
   required?: boolean | undefined;
   validate?: ((answer: string) => string | undefined) | undefined;
 }
 
-async function ask(terminal: Terminal, logger: Logger, q: Question): Promise<string | undefined> {
+/**
+ * Ask `q.prompt` over `terminal`, retrying up to `MAX_ATTEMPTS` times on a
+ * required-but-empty answer or a `validate` failure, and resolving with
+ * `undefined` for an unanswered optional question. Throws once every attempt
+ * is spent. The one prompt/validate/retry loop every wizard-shaped question -
+ * `blogwright init`'s own four and any plugin's `init?(io)` contributor -
+ * asks through.
+ */
+export async function ask(
+  terminal: Terminal,
+  logger: Logger,
+  q: Question,
+): Promise<string | undefined> {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const suffix = q.defaultValue ? ` [${q.defaultValue}]` : '';
     const answer = (await terminal.question(`${q.prompt}${suffix}: `)).trim() || q.defaultValue;
