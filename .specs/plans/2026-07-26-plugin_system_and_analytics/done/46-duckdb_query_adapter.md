@@ -35,19 +35,19 @@
 
 ## Steps
 
-- [ ] Add `@duckdb/node-api` to `packages/analytics/package.json` dependencies only, and confirm it appears in no other package's manifest.
-- [ ] Write `createDuckDbAnalyticsQuery(opts)` in `packages/analytics/src/adapters/duckdb-query.ts` taking the resolved config and a `CredentialProvider`, returning an `AnalyticsQuery` - the interface from task 45 - and nothing wider.
-- [ ] Resolve credentials through the injected provider and inject the values into DuckDB's secret statement, so the adapter never lets DuckDB resolve its own chain; take the seam as a constructor parameter so a test can pass `staticCredentials`.
-- [ ] Attach the S3 Tables catalog in read-only mode as a named step, so the attach target and its mode are one identifiable call the test can observe.
-- [ ] Wrap every DuckDB call in a translation boundary raising the repo's own `Error` with the query name and the attach target in the message; no vendor error object escapes the module.
-- [ ] Write `packages/analytics/src/adapters/duckdb-query.test.ts` observing the secret statement built from `staticCredentials` values, asserting the read-only attach, and asserting a vendor failure surfaces as a repo `Error` with context.
-- [ ] Construct the adapter only at the plugin's composition root (task 56's dashboard command wires it); leave every domain module importing the port.
+- [x] Add `@duckdb/node-api` to `packages/analytics/package.json` dependencies only, and confirm it appears in no other package's manifest.
+- [x] Write `createDuckDbAnalyticsQuery(opts)` in `packages/analytics/src/adapters/duckdb-query.ts` taking the resolved config and a `CredentialProvider`, returning an `AnalyticsQuery` - the interface from task 45 - and nothing wider.
+- [x] Resolve credentials through the injected provider and inject the values into DuckDB's secret statement, so the adapter never lets DuckDB resolve its own chain; take the seam as a constructor parameter so a test can pass `staticCredentials`.
+- [x] Attach the S3 Tables catalog in read-only mode as a named step, so the attach target and its mode are one identifiable call the test can observe.
+- [x] Wrap every DuckDB call in a translation boundary raising the repo's own `Error` with the query name and the attach target in the message; no vendor error object escapes the module.
+- [x] Write `packages/analytics/src/adapters/duckdb-query.test.ts` observing the secret statement built from `staticCredentials` values, asserting the read-only attach, and asserting a vendor failure surfaces as a repo `Error` with context.
+- [x] Construct the adapter only at the plugin's composition root (task 56's dashboard command wires it); leave every domain module importing the port.
 
 ## Definition of done
 
-- [ ] The adapter wraps `@duckdb/node-api`, attaches the S3 Tables catalog in read-only mode (asserted), lives under `adapters/`, is constructed only at the plugin's composition root with no domain module importing it, and the port it implements exposes only `run(name, params)` so no write path exists through it.
-- [ ] Credentials are passed in explicitly: the adapter takes a `CredentialProvider` resolved through `createCredentialProvider` (`packages/core/src/aws/credentials.ts:19`) and injects the values into DuckDB's secret; a test with `staticCredentials` (`packages/core/src/aws/credentials.ts:44`) observes those exact values reaching the secret statement.
-- [ ] DuckDB errors are translated into the repo's own `Error` vocabulary at the boundary, carrying the query name and the attach target, and a negative-space test asserts no vendor error object escapes the adapter.
-- [ ] `@duckdb/node-api` is a dependency of `blogwright-analytics` only - `grep -rn "@duckdb" packages/*/package.json` shows one match - and `pnpm knip` reports it used, not unused.
-- [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run duckdb-query --reporter=verbose` inside `packages/analytics`; confirm the credential test asserts the literal `staticCredentials` access key and session token reaching the secret statement, and that `grep -rn "@duckdb" packages/analytics/src/` matches only `adapters/duckdb-query.ts` (only files under `adapters/` once task 61 adds `duckdb-ingest.ts` beside it).
+- [x] The adapter wraps `@duckdb/node-api`, attaches the S3 Tables catalog in read-only mode (asserted), lives under `adapters/`, is constructed only at the plugin's composition root with no domain module importing it, and the port it implements exposes only `run(name, params)` so no write path exists through it.
+- [x] Credentials are passed in explicitly: the adapter takes a `CredentialProvider` resolved through `createCredentialProvider` (`packages/core/src/aws/credentials.ts:19`) and injects the values into DuckDB's secret; a test with `staticCredentials` (`packages/core/src/aws/credentials.ts:44`) observes those exact values reaching the secret statement.
+- [x] DuckDB errors are translated into the repo's own `Error` vocabulary at the boundary, carrying the query name and the attach target, and a negative-space test asserts no vendor error object escapes the adapter.
+- [x] `@duckdb/node-api` is a dependency of `blogwright-analytics` only - `grep -rn "@duckdb" packages/*/package.json` shows one match - and `pnpm knip` reports it used, not unused.
+- [x] Meets the repo definition of done (see plan.md baseline).
+- [x] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run duckdb-query --reporter=verbose` inside `packages/analytics`; confirm the credential test asserts the literal `staticCredentials` access key and session token reaching the secret statement, and that `grep -rn "@duckdb" packages/analytics/src/` matches only `adapters/duckdb-query.ts` (only files under `adapters/` once task 61 adds `duckdb-ingest.ts` beside it).

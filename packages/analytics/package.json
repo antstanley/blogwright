@@ -19,6 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@duckdb/node-api": "1.5.5-r.4",
     "blogwright-core": "workspace:*"
   },
   "devDependencies": {
