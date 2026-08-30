@@ -6,10 +6,14 @@
  *
  * Real, existing types (`OpsContext`, `OpsConfig`, `OpsState`, `AwsClients`,
  * `PdsContext`, `StateStore`, `ResourceOutputs`, `ServiceKey`, `SendOptions`,
- * `Names`, `FileSystem`, `Terminal`, `SecretsManagerClient`) are imported
- * from `packages/` - they are ground truth, never transcribed. The tsconfig
- * maps `blogwright-core` onto `packages/core/src`, so nominal types such as
- * `StateStore` resolve to one declaration on every path.
+ * `Names`, `FileSystem`, `Terminal`, `SecretsManagerClient`, and since task 44
+ * landed, `AnalyticsConfig` and `ResolvedAnalyticsConfig`) are imported from
+ * `packages/` - they are ground truth, never transcribed. The tsconfig maps
+ * `blogwright-core` onto `packages/core/src`, so nominal types such as
+ * `StateStore` resolve to one declaration on every path. A type leaves this
+ * file the moment its task lands: the point of the harness is to check the
+ * documents against reality, and a transcription that outlives its
+ * implementation checks the documents against a copy of themselves.
  */
 
 import type {
@@ -205,15 +209,29 @@ export type ProposedPdsContext = Pick<
 };
 
 /**
- * 2026-07-26-analytics_plugin.md §Configuration → The `analytics` block and
- * §Type changes: the RESOLVED shape (`validateConfig` "applies the plugin's
- * own defaults", so every field is total on `pluginConfig`).
+ * `AnalyticsConfig` is no longer transcribed: task 44 landed it in
+ * `packages/analytics/src/config.ts`, so it is ground truth now and is
+ * imported rather than restated, like every other type this harness can reach
+ * in `packages/`.
+ *
+ * What the transcription said until 2026-08-30, and why it was wrong: it
+ * declared ONE total shape - "the RESOLVED shape (`validateConfig` 'applies
+ * the plugin's own defaults', so every field is total on `pluginConfig`)",
+ * read off 2026-07-26-analytics_plugin.md §Configuration → The `analytics`
+ * block and §Type changes. `validateConfig(raw)` cannot produce that shape.
+ * `tableBucket` defaults to `<env>-<siteName>-analytics` and `saltSecretName`
+ * to `<siteName>/<env>/analytics-salt`, and the SPI hands the validator the
+ * block alone: task 19's `resolvePluginConfig(plugin, configDocument)` passes
+ * no `env` and no `siteName`. So the landed module is two types, and this
+ * gate now models both. `AnalyticsConfig` is what `validateConfig` returns and
+ * the host puts on `ctx.pluginConfig`: the four literal-defaulted settings,
+ * total, plus the two environment-carrying ones sealed under a module-private
+ * symbol. `ResolvedAnalyticsConfig` is the total shape this transcription
+ * described, produced by `resolveAnalyticsConfig(ctx)` - which takes the
+ * context, and therefore always has the environment. Claims C30 and C31 pin
+ * the seal and the resolved shape.
  */
-export interface AnalyticsConfig {
-  tableBucket: string;
-  namespace: string;
-  table: string;
-  bots: 'flag' | 'filter';
-  saltSecretName: string;
-  dashboard: { port: number };
-}
+export type {
+  AnalyticsConfig,
+  ResolvedAnalyticsConfig,
+} from '../../../../packages/analytics/src/config.js';

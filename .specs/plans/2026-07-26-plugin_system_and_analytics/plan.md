@@ -595,6 +595,41 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *The dependency table missed a real edge between tasks 16 and 52.* Found
+  2026-08-30 at merge time, not by either task's gate. Task 16 added
+  call-sequence assertions to `packages/cli/src/commands.test.ts` pinning
+  exactly what a site teardown issues; task 52 made `logDeliveryNode.delete()`
+  issue a `listDeliveries` as its first action. Both are correct alone, and the
+  table records no edge, so they were built in parallel from different bases -
+  task 52 from build 24, task 16 landing at build 26. On the merged tree three
+  of task 16's tests failed with `unexpected AWS request in test: POST
+  https://logs.us-east-1.amazonaws.com/`.
+  Neither gate could have seen it: each verified its own workspace, which was
+  green. The lesson for the rest of the build is that "independent" in this
+  table means "no shared file", and that is not the same as "no shared
+  invariant" - a task that pins a call SEQUENCE is coupled to every later task
+  that adds a call to it, whatever files each touches. Two more tasks pin
+  sequences this way (`nodes.test.ts`'s teardown order, task 38's
+  authorization-header scopes), so check before scheduling anything that adds a
+  request against a path they cover. Resolved by rebasing task 52 onto the tip
+  and updating the expected sequences to grow by the new call, with a mutation
+  confirming they still notice its absence.
+- *`pnpm knip` does not see unused class members.* Raised by task 52's gate
+  2026-08-30. knip v6 has no class-member issue type at all, so a public method
+  with no caller anywhere is reported as clean. Task 52 left
+  `findDeliveryIdBySource` (`packages/core/src/aws/logs.ts:124-136`) with no
+  production caller - only its own two tests - which its contract explicitly
+  required, since the guards must read the widened list instead and the task
+  was told to leave it unchanged. knip is silent, and that silence is not
+  evidence of a consumer.
+  This matters beyond one function: the definition-of-done baseline treats knip
+  as the signal that an export has no consumer, and three tasks have already
+  been corrected for answering it the wrong way. That signal simply does not
+  exist for methods on a class, which is how every AWS client in this repo is
+  written. Decide whether to delete `findDeliveryIdBySource` in a follow-up
+  task, and whether anything should check class members - a grep in CI, or
+  accepting the gap knowingly and saying so in the baseline so a later reader
+  does not mistake knip's silence for coverage.
 - *The analytics change spec names four Firehose operations; task 51 needs a
   fifth.* Raised by task 34's gate 2026-08-30. §Analytics plugin → Its own
   service clients scopes `FirehoseClient` to create/describe/delete/tagging,

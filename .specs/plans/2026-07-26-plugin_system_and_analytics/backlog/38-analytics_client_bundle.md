@@ -22,6 +22,16 @@
 > 400 so `code` is the only usable signal there. Extract the framing helpers;
 > do NOT collapse the four already-exists predicates into one, and do not
 > assume a shared helper can key on status.
+> **This task also closes a gap all four clients share** (named honestly by task
+> 35, 2026-08-30): no client's own tests can catch a wrong `signingName`.
+> Mutating it changes only the SigV4 signature, which a transport stub does not
+> verify - so `signingName: 'gluex'` passes every test in `glue.test.ts`. This
+> task's authorization-header assertions ARE that check: the credential scope is
+> `<date>/<region>/<service>/aws4_request`, where `<service>` is the signing
+> name, so `/us-east-1/glue/` pins it. Treat those four assertions as
+> load-bearing rather than as a region test with a service name incidentally
+> attached, and make sure a wrong signing name is what one of them reddens on.
+>
 > Task 34 also found an edge worth preserving: `DeleteDeliveryStream` returns
 > `ResourceInUseException` meaning "still CREATING, cannot delete yet", so that
 > predicate is create-path-only. A shared module must not tempt a later reader

@@ -28,6 +28,7 @@ import type {
   PluginContext,
   ProposedPdsConfig,
   ProposedPdsContext,
+  ResolvedAnalyticsConfig,
   ResolvedPdsConfig,
   ResourceNode,
   ServiceDescriptor,
@@ -349,3 +350,41 @@ void ops.clients.signingUsEast1;
 // `PluginContext.store` types against core's class with no wrapper.
 const storeOnContext: PluginContext<unknown>['store'] = scopedStore;
 void storeOnContext;
+
+// ---------------------------------------------------------------------------
+// The analytics config block (task 44) - the sealed environment-carrying names
+// ---------------------------------------------------------------------------
+
+declare const analyticsCtx: PluginContext<AnalyticsConfig>;
+
+// CLAIM C30 [analytics_plugin §Configuration → The `analytics` block / task 44]
+// expects TS2339 - `validateConfig(raw)` receives no `env` and no `siteName`
+// (task 19's `resolvePluginConfig`), so `tableBucket` and `saltSecretName`
+// cannot be defaulted on the validated block and are not readable off it.
+// That is what stops a node writing
+// ``ctx.pluginConfig.tableBucket ?? `${ctx.config.siteName}-analytics` `` - a
+// line that would compile if the field were merely optional, and would make
+// `analytics destroy --yes` in staging delete production's table bucket.
+// @ts-expect-error TS2339
+void analyticsCtx.pluginConfig.tableBucket;
+// @ts-expect-error TS2339
+void analyticsCtx.pluginConfig.saltSecretName;
+
+// CLAIM C31 [analytics_plugin §Configuration → The `analytics` block / task 44]
+// expects clean - the four settings whose defaults are literals ARE total on
+// `pluginConfig` (the spec's "applies the plugin's own defaults", carried as
+// far as a validator with no environment can carry it), and the total
+// six-field shape the spec describes is what `resolveAnalyticsConfig` returns.
+const totalOnPluginConfig: { namespace: string; table: string; port: number } = {
+  namespace: analyticsCtx.pluginConfig.namespace,
+  table: analyticsCtx.pluginConfig.table,
+  port: analyticsCtx.pluginConfig.dashboard.port,
+};
+void totalOnPluginConfig;
+declare const resolvedAnalytics: ResolvedAnalyticsConfig;
+const totalAfterResolve: {
+  tableBucket: string;
+  saltSecretName: string;
+  bots: 'flag' | 'filter';
+} = resolvedAnalytics;
+void totalAfterResolve;
