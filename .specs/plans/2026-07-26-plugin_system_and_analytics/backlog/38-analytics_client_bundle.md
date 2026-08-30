@@ -7,6 +7,26 @@
 **Produces:** `packages/analytics/src/aws/clients.ts` exposing `createAnalyticsClients(ctx)` - the plugin's four new clients (`s3tables`, `firehose`, `glue`, `lambda`) plus core's existing `S3Client` and `SecretsManagerClient`, all six built over `ctx.clients.signingUsEast1` and signing against `us-east-1` whatever `config.region` says, with core's `AwsClients` gaining that one signer and no service key
 **Pointers:** `packages/analytics/src/aws/clients.ts` (new - the plugin's bundle), `packages/analytics/src/aws/clients.test.ts` (new), `packages/core/src/clients.ts:21-39` (`AwsClients` - gains `signingUsEast1` and nothing else), `packages/core/src/clients.ts:28-32` (the `logsUsEast1` doc comment whose shape the plugin's comments copy), `packages/core/src/clients.ts:52,54` (the `signing` and `usEast1` clients - `:54` is the local const this task exposes as `signingUsEast1`), `packages/core/src/aws/signer.ts:83,89` (a `SigningClient`'s region is fixed at construction) and `:85-86` (`credentials` and `transport` are private, which is why exposing the host's existing us-east-1 signer is the only route to one that shares them), `packages/core/src/aws/signer.test.ts:6-16` (the `capture()` recording transport to reuse), `packages/cli/src/test-support.ts:32,35,69-88` (`ServiceName`, `ClientOverrides` and the explicit `testClients` enumeration, which widens by `signingUsEast1` alone), `packages/cli/src/context.ts:127` (the CLI composition root's `createClients` call), `packages/pds/src/test-support.ts:50` (the pds package's `createClients` call)
 
+> **ROUTED FINDING - added 2026-08-30 from task 34's implementation.**
+> `stripAwsFraming` and `rethrowWithContext` are duplicated between
+> `s3tables.ts` and `firehose.ts`, and tasks 35 and 36 make that a third and
+> fourth copy. Task 34 declined to extract them because doing so means editing
+> task 33's landed file, which no contract instructed - the right call, and it
+> lands the decision here instead.
+> This task assembles the four clients, so it is the natural home. Extract a
+> shared `packages/analytics/src/aws/errors.ts` and re-point all four, OR record
+> why four copies are preferable. If you extract, note that the two helpers are
+> NOT interchangeable across the four services: task 33's local
+> `isAlreadyExists` needs a `statusCode === 409` limb because S3 Tables returns
+> its code only in `x-amzn-ErrorType`, while every Firehose exception is HTTP
+> 400 so `code` is the only usable signal there. Extract the framing helpers;
+> do NOT collapse the four already-exists predicates into one, and do not
+> assume a shared helper can key on status.
+> Task 34 also found an edge worth preserving: `DeleteDeliveryStream` returns
+> `ResourceInUseException` meaning "still CREATING, cannot delete yet", so that
+> predicate is create-path-only. A shared module must not tempt a later reader
+> into reusing it on a delete path.
+
 ## Steps
 
 - [ ] Add `signingUsEast1: SigningClient` to `AwsClients` and `createClients` (`packages/core/src/clients.ts:21,42`) - the delta the plugin-system change spec owns and this task lands, since it is its first consumer. The us-east-1 signer already exists as a local `const` at `:54` but is reachable only through the pre-built `acm`/`cloudfront`/`route53`/`logsUsEast1` clients. A `SigningClient`'s region is fixed at construction (`packages/core/src/aws/signer.ts:83,89`), and every analytics service is us-east-1. The plugin could technically construct its own - `SigningClient` and `createCredentialProvider` are public core exports - but not one that shares the host's: `credentials` and `transport` are `private readonly` (`packages/core/src/aws/signer.ts:85-86`), so a hand-built signer re-resolves credentials, drops the CLI's `--endpoint` override and ignores the transport a test injected. Exposing the one the host already built is what keeps the plugin inside transport-level substitution. This is a core change, but a generic one: it exposes a signer, not a plugin's service.
