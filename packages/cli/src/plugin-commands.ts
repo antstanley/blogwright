@@ -48,6 +48,8 @@ import type { Ports } from './ports.js';
 import { discover } from './plugins.js';
 
 /** The default environment every built-in command falls back to. */
+// Also the default `--env` in `cli.ts`'s option table; kept here because the
+// dispatcher is the only place that resolves an environment from positionals.
 const DEFAULT_ENV = 'production';
 
 /**
@@ -239,6 +241,17 @@ export function toPluginContext(ops: OpsContext): PluginContext<unknown> {
  * is built, and exactly one `makeContext` call happens, with the confirmed
  * environment, reusing the SAME `fs`/`loader` discovery already used rather
  * than letting a second call default fresh ones.
+ *
+ * EXIT CODES, and a deliberate deviation tasks 13/16/17 must not assume away.
+ * This task's definition of done asks that "a plugin command's return value
+ * maps to the process exit code". It cannot: `PluginCommand.run` is declared
+ * `Promise<void>` (`blogwright-core`'s `plugin.ts`), and the change spec names
+ * no return-code channel. So there is no value to map. What this dispatcher
+ * owns it returns - 0 once `run` resolves, 1 for an unknown plugin and 1 for an
+ * unknown action - and a command that genuinely fails signals it by REJECTING,
+ * which propagates to `bin.ts`'s error path. Adding actions here (tasks 13, 16,
+ * 17) means following that contract: reject to fail, do not invent a numeric
+ * return the SPI has nowhere to carry.
  */
 export async function runPlugin(
   command: string,

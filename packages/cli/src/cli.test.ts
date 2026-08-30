@@ -217,11 +217,12 @@ describe('main - generic plugin dispatch', () => {
     const { fs, loader } = await buildDiscoveryPorts([
       { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
     ]);
+    const factory = testContextFactory(terminal);
 
     const code = await main(
       ['fake', 'sync', 'staging'],
       fixedTerminal(terminal),
-      testContextFactory(terminal).makeContext,
+      factory.makeContext,
       () => ({ fs, loader }),
     );
 
@@ -230,6 +231,14 @@ describe('main - generic plugin dispatch', () => {
     expect(calls[0]?.ctx.env).toBe('staging');
     // The environment positional is consumed, never forwarded as a data arg.
     expect(calls[0]?.args).toEqual([]);
+    // Exactly ONE context is built, with the resolved environment. The earlier
+    // design built a provisional `production` context first and rebuilt when the
+    // positional differed; the staging-only regression test below catches that
+    // only on a repo where production has no config. On a repo where it does,
+    // this count is the only thing that would notice the second build coming
+    // back - along with its second sts.getAccountId round-trip.
+    expect(factory.contexts).toHaveLength(1);
+    expect(factory.contexts[0]?.env).toBe('staging');
   });
 
   it('dispatches a multi-word action ("secret status") by declaration, not by positional shifting, with a trailing environment', async () => {

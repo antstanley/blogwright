@@ -560,6 +560,17 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *A plugin cannot introduce its own flag.* Raised by task 10's gate
+  2026-08-30. `main`'s `parseArgs` table (`packages/cli/src/cli.ts`, task 07)
+  is strict, so `blogwright analytics query --since 7d` dies in the parser
+  before dispatch ever runs - the flag is not in the table and `parseArgs`
+  rejects unknown options. Nothing in this plan needs one: every declared
+  action's arguments are either positionals or flags the table already carries
+  (`--yes`, `--identifier`, `--env`, `--plain`). But the SPI gives a plugin
+  `run(ctx, args)` and no way to declare an option, so the first plugin that
+  wants one is blocked on a core change. Decide whether `PluginCommand` should
+  declare options, or whether dispatch should stop parsing at the plugin
+  namespace and hand the raw tail through.
 - *`StateStore` validates its scope but not its env.* Raised by task 04's gate
   2026-08-29 and deliberately closed as not-actionable, recorded so it is not
   re-discovered. An environment literally named `<env>.<plugin>` would collide
