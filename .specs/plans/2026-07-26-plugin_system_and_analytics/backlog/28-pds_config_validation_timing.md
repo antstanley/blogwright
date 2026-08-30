@@ -16,8 +16,16 @@
 > This is yours to fix: the task owns pds config-validation outcomes. Decide
 > what an absent `pds` block should mean - pds has no derivable defaults the way
 > analytics does, so returning a defaulted block may be wrong and a clear
-> refusal may be right - but a bare `TypeError` is neither. Note task 26 makes
-> it reachable, so if 26 lands first this is live in the meantime.
+> refusal may be right - but a bare `TypeError` is neither.
+> **CORRECTED 2026-08-30 by task 25's verification gate: this is reachable NOW,
+> from task 25 (landed), not from task 26.** `loadPluginForRemoval`
+> (`plugin-commands.ts:1050-1061`) goes through the `ModuleLoader` port rather
+> than `discover`, so the `blogwright.plugin` manifest field is not the gate -
+> `isDeclaredDependency` is, and `blogwright plugin add pds` satisfies it. The
+> live sequence on the current tip is: `plugin add pds`, then `plugin remove
+> pds` answered yes, on a repo with no `pds` block. Impact is a confusing
+> message and a refused teardown, not data loss - but it is live, and task 19's
+> shipped changeset explicitly promises the behaviour it breaks.
 
 ## Steps
 
