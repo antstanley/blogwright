@@ -1,12 +1,22 @@
 /**
- * Tests for `discover`. Every case but the final `describe` block runs over a
+ * Tests for `discover`. Every case but the three integration `describe`
+ * blocks at the END of this file runs over a
  * Map-backed `FileSystem` (`createMemoryFileSystem`) and a map-backed
  * `ModuleLoader` fake (`createFakeModuleLoader`, below) - no disk or registry
- * access. The final block is the deliberate exception: it exercises the REAL
+ * access. Those three are the deliberate exception: they exercise the REAL
  * `ModuleLoader` adapter (`createNodeModuleLoader`) and the real `FileSystem`
  * adapter against actual files on disk, because Node's `exports`
  * encapsulation is invisible to a map-backed fake - a fake has no `exports`
- * map to enforce, so it cannot reproduce `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+ * map to enforce, so it cannot reproduce `ERR_PACKAGE_PATH_NOT_EXPORTED` -
+ * and because the bundled `blogwright-pds` plugin (task 26) is only really
+ * discoverable if its published manifest, its `exports` map and its default
+ * export all line up, which no fake can tell you.
+ * The last of the three reaches past `discover` into `runPluginNamespace`
+ * (`plugin-commands.ts`) for `blogwright plugin list`: that command is where
+ * the same real-disk discovery becomes something a human reads, and this
+ * task's `Reviewable:` line runs `vitest run plugins`, which matches this
+ * file and not `plugin-commands.test.ts`. Every other `plugin list` case -
+ * the ones pinning the RENDERING - stays there, over fixtures.
  * Without these integration cases, the whole discovery path could pass every
  * fake-backed test here and still fail for every real install. Fixtures are
  * built through `ports.fs.writeText` (which creates parent directories as
@@ -17,11 +27,18 @@
 
 import { join } from 'node:path';
 
-import { createMemoryFileSystem, createNodeFileSystem, findRepoRoot } from 'blogwright-core';
+import {
+  createMemoryFileSystem,
+  createNodeFileSystem,
+  createScriptedTerminal,
+  findRepoRoot,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { createNodeModuleLoader } from './adapters/node-module-loader.js';
 import { cliPackageDir } from './context.js';
+import { createLogger } from './logger.js';
+import { runPluginNamespace } from './plugin-commands.js';
 import { discover } from './plugins.js';
 import type { ModuleLoader, ModuleResolution } from './ports.js';
 import { makeTempDir, removeTempDir } from './test-support.js';
@@ -731,5 +748,152 @@ describe('discover (integration - real ModuleLoader adapter, real disk)', () => 
       await removeTempDir(consumerRoot);
       await removeTempDir(cliDir);
     }
+  });
+});
+
+/**
+ * TASK 26 - the bundled `blogwright-pds` package, now that
+ * `packages/pds/package.json` declares `"blogwright": { "plugin": "pds" }`.
+ *
+ * Real adapters and this actual workspace again, for the same reason the
+ * block above uses them: the thing under test is that the REAL manifest
+ * field, the REAL `exports` map and the REAL default export line up, and a
+ * map-backed fake proves none of that. The two cases here are the concrete
+ * assertions §`blogwright-pds` -> Package manifest's "no install step"
+ * guarantee rests on - a consuming repo depends on `blogwright`, never on
+ * `blogwright-pds`, so the plugin has to arrive through the CLI's own
+ * bundled dependency half or not at all.
+ */
+describe('discover (integration) - the bundled blogwright-pds plugin', () => {
+  it('discovers blogwright-pds as the "pds" plugin from a consuming repo whose package.json names only "blogwright"', async () => {
+    const consumerRoot = await makeTempDir('plugins-discover-pds-consumer');
+    const cliStub = await makeTempDir('plugins-discover-pds-cli-stub');
+    try {
+      const fs = createNodeFileSystem();
+      const loader = createNodeModuleLoader();
+      // A real, on-disk consuming repo the way one looks after `npm i
+      // blogwright`: one dependency, spelled `blogwright`, and NO
+      // node_modules of its own. `blogwright-pds` is not resolvable from
+      // here by construction, so whatever is discovered below arrived
+      // through `cliPackageDir()`'s own dependencies.
+      await fs.writeText(
+        join(consumerRoot, 'package.json'),
+        JSON.stringify({ name: 'consumer', dependencies: { blogwright: '^0.3.3' } }),
+      );
+
+      const result = await discover(consumerRoot, cliPackageDir(), { fs, loader });
+
+      expect(result.failures).toEqual([]);
+      expect(result.plugins.map((plugin) => plugin.name)).toEqual(['pds']);
+      const entry = result.installed[0];
+      expect(entry?.packageName).toBe('blogwright-pds');
+      // The plugin object really is the one `packages/pds/src/plugin.ts`
+      // default-exports: its config key and its six actions, in declaration
+      // order, none of which a stub or a name-only match would carry.
+      expect(entry?.plugin.configKey).toBe('pds');
+      expect(entry?.plugin.commands.map((command) => command.action)).toEqual([
+        'keygen',
+        'login',
+        'init',
+        'sync',
+        'secret status',
+        'secret delete',
+      ]);
+      // And the manifest discovery actually read is the pds package's own,
+      // carrying the field this task added - not a stub, and not one
+      // derived from the resolved entry file.
+      const manifest = JSON.parse(await fs.readText(entry?.packageJsonPath ?? '')) as {
+        name?: string;
+        blogwright?: { plugin?: string };
+      };
+      expect(manifest.name).toBe('blogwright-pds');
+      expect(manifest.blogwright).toEqual({ plugin: 'pds' });
+
+      // The control, run against the SAME consumer root: a CLI package that
+      // bundles nothing discovers nothing. Without it, a discovery that had
+      // somehow reached blogwright-pds through the consumer half - or
+      // through this test process's own module graph - would pass the
+      // assertions above just as well.
+      await fs.writeText(join(cliStub, 'package.json'), JSON.stringify({ name: 'cli-stub' }));
+      const control = await discover(consumerRoot, cliStub, { fs, loader });
+      expect(control.plugins).toEqual([]);
+      expect(control.failures).toEqual([]);
+    } finally {
+      await removeTempDir(consumerRoot);
+      await removeTempDir(cliStub);
+    }
+  });
+});
+
+/**
+ * TASK 26 - `blogwright plugin list` over the real bundled plugin.
+ *
+ * Lives beside the discovery cases above, rather than with the other
+ * `runPluginNamespace` tests in `plugin-commands.test.ts`, because it is the
+ * same integration assertion in the register a human reads it: those tests
+ * pin the RENDERING against map-backed fixtures, this one pins that the row
+ * describes the package actually installed on disk. The task's `Reviewable:`
+ * line runs `vitest run plugins`, which matches this file and not
+ * `plugin-commands.test.ts`.
+ */
+describe('blogwright plugin list (integration) - the bundled blogwright-pds plugin', () => {
+  it('reports the pds row: the namespace, the package, the version packages/pds/package.json declares, and the pds config key', async () => {
+    const fs = createNodeFileSystem();
+    const loader = createNodeModuleLoader();
+    const terminal = createScriptedTerminal({ interactive: false });
+    // Read from the package's own manifest by a path this test builds
+    // itself - never off the discovery result the command under test
+    // produced, which would make the version assertion circular.
+    const repoRoot = await findRepoRoot(fs);
+    const pdsManifest = JSON.parse(
+      await fs.readText(join(repoRoot, 'packages', 'pds', 'package.json')),
+    ) as { version?: string };
+    expect(typeof pdsManifest.version).toBe('string');
+
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      {
+        values: {
+          env: undefined,
+          domain: undefined,
+          config: undefined,
+          endpoint: undefined,
+          hash: undefined,
+          id: undefined,
+          identifier: undefined,
+          plain: false,
+          refresh: false,
+          yes: false,
+          help: false,
+        },
+        makePackages: () => {
+          throw new Error('unexpected: package manager built for `plugin list`');
+        },
+        cliVersion: () => {
+          throw new Error('unexpected: CLI version resolved for `plugin list`');
+        },
+        makeContext: () => {
+          throw new Error('unexpected: OpsContext built for `plugin list`');
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toEqual([]);
+    // One row, because this workspace's own root package.json declares
+    // `blogwright` and no `blogwright-*` package at all: pds is here purely
+    // as the CLI's bundled dependency. Hand-typed in `--plain`'s
+    // single-space form rather than assembled with the renderer's own
+    // padding, so a renderer that stopped emitting a column fails here.
+    expect(terminal.writes).toEqual([
+      'namespace package version configKey',
+      `pds blogwright-pds ${pdsManifest.version} pds`,
+    ]);
   });
 });

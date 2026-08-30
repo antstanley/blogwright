@@ -47,22 +47,6 @@ Commands:
   plugin remove <name>        Uninstall a plugin, asking first whether to tear
                               down the resources it provisioned
 
-  pds keygen                  Generate the OAuth client key: private JWK into
-                              Secrets Manager, public documents into public/oauth/
-                              (commit + release those before pds login)
-  pds login --identifier <handle-or-did>
-                              Interactive OAuth bootstrap: prints an authorize URL,
-                              then expects the pasted /oauth/callback redirect URL;
-                              the session is stored in Secrets Manager and refreshed
-                              automatically on every sync
-  pds secret status           Show secret metadata (never the value)
-  pds secret delete --yes     Delete the secret (logs out and discards the key)
-  pds init                    Create/update the standard.site publication record and
-                              write the site verification files (commit them)
-  pds sync                    Reconcile site.standard.document records with the
-                              content collection (production only; also runs after
-                              every successful production deploy)
-
 Options:
   --env <name>      Environment (default: production; also accepted positionally)
   --domain <fqdn>   Custom domain (ACM cert + CloudFront alias)

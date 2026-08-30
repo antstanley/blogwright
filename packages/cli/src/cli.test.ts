@@ -42,11 +42,23 @@ import {
 } from './test-support.js';
 
 /**
- * An independent copy of the `USAGE` constant at cli.ts:11-63, pinned
- * byte-exact at the time this test was written. This is the regression net
- * tasks 11 and 29 rebuild help output against - an import of the live
- * constant would not catch a change to it, so the text is duplicated here
- * on purpose.
+ * An independent copy of the `USAGE` constant in `cli.ts`, pinned
+ * byte-exact. This is the regression net tasks 11 and 29 rebuild help
+ * output against - an import of the live constant would not catch a change
+ * to it, so the text is duplicated here on purpose.
+ *
+ * MOVED DELIBERATELY AT TASK 26, and this is the only edit this pin has
+ * taken: the fifteen static `pds …` lines are gone from both copies. Task
+ * 26 declares `"blogwright": { "plugin": "pds" }` in
+ * `packages/pds/package.json`, which makes the bundled `blogwright-pds`
+ * package a DISCOVERED plugin, so task 11's dynamic `Plugins:` section
+ * renders every pds action from the plugin's own `description` and its
+ * commands' `summary` fields. Keeping the static block until task 29
+ * deletes `runPds` would list all six actions twice, in every repo, for the
+ * whole span 26 -> 29. The rest of the constant - every other command, and
+ * every `Options:` line - is byte-identical to what task 07 pinned, which
+ * is what a reviewer should check: this is one block removed, not a pin
+ * re-typed from whatever the code now emits.
  */
 const EXPECTED_USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
 
@@ -76,22 +88,6 @@ Commands:
                               version and the config key each owns
   plugin remove <name>        Uninstall a plugin, asking first whether to tear
                               down the resources it provisioned
-
-  pds keygen                  Generate the OAuth client key: private JWK into
-                              Secrets Manager, public documents into public/oauth/
-                              (commit + release those before pds login)
-  pds login --identifier <handle-or-did>
-                              Interactive OAuth bootstrap: prints an authorize URL,
-                              then expects the pasted /oauth/callback redirect URL;
-                              the session is stored in Secrets Manager and refreshed
-                              automatically on every sync
-  pds secret status           Show secret metadata (never the value)
-  pds secret delete --yes     Delete the secret (logs out and discards the key)
-  pds init                    Create/update the standard.site publication record and
-                              write the site verification files (commit them)
-  pds sync                    Reconcile site.standard.document records with the
-                              content collection (production only; also runs after
-                              every successful production deploy)
 
 Options:
   --env <name>      Environment (default: production; also accepted positionally)
@@ -1127,6 +1123,171 @@ describe('main - pds dispatch', () => {
     expect(code).toBe(1);
     expect(terminal.errors).toEqual(['✗ unknown pds action: bogus']);
     expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_WIDGET]);
+  });
+
+  /*
+   * TASK 26 - BOTH PATHS ARE LIVE AT ONCE, and the hardcoded branch wins.
+   *
+   * `packages/pds/package.json` now declares `"blogwright": { "plugin":
+   * "pds" }`, so the bundled `blogwright-pds` package is a DISCOVERED plugin
+   * claiming the `pds` namespace - while `main`'s own `command === 'pds'`
+   * branch still answers `blogwright pds <action>` through `runPds`. The
+   * three cases below pin that precedence rather than leaving it to fall out
+   * of statement order: `cli.ts` tests `command === 'pds'` BEFORE the
+   * `KNOWN_COMMANDS` membership test that would otherwise let the namespace
+   * fall through to `runPlugin`, and `pds` is deliberately absent from
+   * `RESERVED_COMMANDS` (pinned below) so discovery still admits the plugin.
+   *
+   * The fixture plugin is a stand-in rather than the real one: these tests
+   * substitute at the port (a map-backed `{ fs, loader }`), and the point is
+   * what `main` does when a plugin claiming `pds` IS installed, not which
+   * object it is. It declares `bogus` - an action `runPds` has never
+   * accepted - so a precedence flip cannot hide: it would answer 0 and
+   * record a run instead of refusing.
+   */
+  const pdsFixture = (calls: RecordedRun[]): Plugin => ({
+    name: 'pds',
+    description: 'a stand-in for the bundled pds plugin',
+    commands: [
+      {
+        action: 'sync',
+        summary: 'sync it',
+        run: async (ctx, args) => {
+          calls.push({ action: 'sync', ctx, args });
+        },
+      },
+      {
+        action: 'bogus',
+        summary: 'an action the hardcoded pds branch has never accepted',
+        run: async (ctx, args) => {
+          calls.push({ action: 'bogus', ctx, args });
+        },
+      },
+    ],
+    // Contributed so the three generic lifecycle verbs are advertised too -
+    // the real pds plugin contributes nodes as well.
+    nodes: () => [],
+  });
+
+  /**
+   * What `--help` renders for that fixture, hand-typed the way
+   * `EXPECTED_HELP_WITH_WIDGET` is: the plugin's own two commands, then the
+   * three generic lifecycle verbs `genericLifecycleActions` adds for a
+   * nodes-contributing plugin.
+   */
+  const EXPECTED_HELP_WITH_PDS = `${EXPECTED_USAGE}
+Plugins:
+
+  pds - a stand-in for the bundled pds plugin
+    sync - sync it
+    bogus - an action the hardcoded pds branch has never accepted
+    bootstrap - reconcile this plugin's resources
+    status - show this plugin's resource status
+    destroy - tear down this plugin's resources
+`;
+
+  it('answers `pds bogus` through the hardcoded runPds branch even when a discovered plugin claims the `pds` namespace and declares that very action', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-pds',
+        namespace: 'pds',
+        plugin: pdsFixture(calls),
+        bundled: true,
+      },
+    ]);
+
+    const code = await main(
+      ['pds', 'bogus'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+      unreachablePackages,
+    );
+
+    // `runPds` refused, exactly as it does with no plugin installed at all.
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown pds action: bogus']);
+    // The plugin's own `bogus` never ran - the assertion that a precedence
+    // flip would break, since generic dispatch would have matched it and
+    // returned 0.
+    expect(calls).toEqual([]);
+    // And it really was discovered in this same run: the help the refusal
+    // printed carries its section. Both paths, one invocation.
+    expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_PDS]);
+  });
+
+  it("routes `pds sync staging` to blogwright-pds's own `sync` through runPds, with the environment positional resolved, not to the discovered plugin's command", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-pds',
+        namespace: 'pds',
+        plugin: pdsFixture(calls),
+        bundled: true,
+      },
+    ]);
+    const { makeContext, contexts } = testContextFactory(terminal);
+
+    // The REAL `sync` from `blogwright-pds` - the one `cli.ts` imports
+    // statically - refuses any non-production environment as its first
+    // statement, before it touches the filesystem, AWS or a PDS. That
+    // refusal is therefore proof the hardcoded branch reached the real
+    // package's own command function, and it needs no fixture to produce.
+    await expect(
+      main(
+        ['pds', 'sync', 'staging'],
+        fixedTerminal(terminal),
+        makeContext,
+        () => ({ fs, loader }),
+        unreachablePackages,
+      ),
+    ).rejects.toThrow(
+      'pds sync publishes canonical production URLs and refuses to run for "staging"',
+    );
+
+    expect(calls).toEqual([]);
+    expect(contexts.map((ctx) => ctx.env)).toEqual(['staging']);
+  });
+
+  it('still refuses the generic lifecycle verbs its own help now advertises - the deliberate, transient 26 -> 29 gap', async () => {
+    // KNOWN AND DELIBERATE, and the reason this is pinned rather than left
+    // to be discovered: the moment `packages/pds/package.json` declares the
+    // manifest field, `--help`'s dynamic section lists `bootstrap`,
+    // `status` and `destroy` for the pds plugin (it contributes `nodes`),
+    // but `main`'s `command === 'pds'` branch still routes every
+    // `blogwright pds <action>` to `runPds`, whose known-action set has
+    // never held any of the three. So help advertises three verbs that are
+    // refused, for the span 26 -> 29. Task 29 deletes `runPds` and closes
+    // it; until then this test says out loud what the gap is, and fails
+    // when 29 closes it rather than letting the refusal survive silently.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-pds',
+        namespace: 'pds',
+        plugin: pdsFixture(calls),
+        bundled: true,
+      },
+    ]);
+
+    const code = await main(
+      ['pds', 'bootstrap'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+      unreachablePackages,
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown pds action: bootstrap']);
+    expect(calls).toEqual([]);
+    // The same run's help does list the verb it just refused.
+    expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_PDS]);
+    expect(terminal.writes[0]).toContain("    bootstrap - reconcile this plugin's resources");
   });
 });
 

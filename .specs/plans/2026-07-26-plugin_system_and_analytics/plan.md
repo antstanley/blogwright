@@ -595,6 +595,46 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *`plugin list` and `plugin remove` contradict each other for a bundled
+  plugin.* Found by task 26's verification gate 2026-08-31, on the real binary.
+  This is the first commit at which `plugin list` reports a plugin the CLI
+  **bundles** rather than one the repo installed. `blogwright plugin list`
+  prints `pds blogwright-pds 0.3.3 pds`; `blogwright plugin remove pds` then
+  answers ``blogwright-pds is not a dependency of <repoRoot> - nothing to
+  remove; run `blogwright plugin list` to see what is installed``
+  (`plugin-commands.ts:1140-1144`) - pointing the operator at the listing that
+  just showed it.
+  The refusal itself is right: pds is a non-optional dependency of the CLI and
+  removing it is not something `plugin remove` can or should do. What is wrong
+  is the remedy, which assumes every listed plugin is a removable dependency.
+  Neither the change spec nor this plan anticipated a bundled plugin appearing
+  in that listing, so no task owns it and task 26 could not fix it without
+  contradicting its own DoD - the message belongs to task 18.
+  Two shapes of fix: mark bundled entries in the listing (a column, or a
+  suffix) so the two commands agree about what is removable; or reword the
+  refusal to distinguish "not installed" from "bundled with the CLI and not
+  removable". The second is cheaper; the first is what an operator actually
+  wants to know before they try.
+- *The `blogwright.plugin` manifest string is never checked against the plugin's
+  own `name`.* Found by task 26's implementation 2026-08-31, by mutation: change
+  `packages/pds/package.json`'s `{"blogwright": {"plugin": "pds"}}` to
+  `{"plugin": "not-pds"}` and the package is still discovered and still
+  dispatches as `pds`, because `validatePlugin` never compares the two. The
+  manifest string is a discovery **marker** - it tells `collectCandidates` this
+  package is a plugin - while the namespace a command dispatches under comes
+  from `plugin.name` on the loaded object.
+  So the two can disagree silently, and nothing anywhere in the repo notices.
+  `blogwright plugin list` cannot see it either: the row's namespace column is
+  read from `plugin.name`, so a mismatched manifest renders a perfectly normal
+  row. Task 26 caught it only because its discovery test asserts the manifest's
+  *content* at the resolved `packageJsonPath` rather than trusting the
+  discovery result.
+  Consequences are mild today - one package, and we control it - but the SPI is
+  the thing third parties will eventually write against, and a plugin whose
+  manifest and export disagree is exactly the shape that produces
+  "why is my plugin not called what I named it". Decide whether `validatePlugin`
+  should reject the mismatch, or whether the manifest string should be dropped
+  in favour of reading `plugin.name` after load. No task owns this.
 - *Task 58 can flip the plugin-system spec to `Merged` while the obligation
   blocking it is still open.* Raised by task 20's re-gate 2026-08-31, one task
   downstream of the note it was checking. Task 20 correctly deferred merge-plan
