@@ -115,11 +115,14 @@
  * `createContext`.
  */
 
+import { join } from 'node:path';
+
 import {
   colors,
   findRepoRoot,
   parseConfig,
   StateStore,
+  validatePlugin,
   type ConfigBlockEntry as PluginConfigBlockEntry,
   type FileSystem,
   type Plugin,
@@ -140,8 +143,8 @@ import {
 } from './context.js';
 import { applyGraph, destroyGraph } from './graph.js';
 import { ask } from './init.js';
-import type { Logger } from './logger.js';
-import type { Ports } from './ports.js';
+import { confirm, type Logger } from './logger.js';
+import type { PackageManager, Ports } from './ports.js';
 import { discover, resolvePluginConfig } from './plugins.js';
 import { logStatusEntries, renderPluginList, type PluginListRow } from './render.js';
 
@@ -739,7 +742,9 @@ export async function runPlugin(
  * run, or hide one that does. Tasks 18 and 19 add `add` and `remove` here.
  */
 const PLUGIN_NAMESPACE_ACTIONS: ReadonlyMap<string, string> = new Map([
+  ['add', "install a plugin package, pinned to the CLI's own version"],
   ['list', 'show installed plugins, their versions and the config key each owns'],
+  ['remove', 'uninstall a plugin package, asking first about its teardown'],
 ]);
 
 /**
@@ -848,6 +853,340 @@ async function runPluginList(
   return 0;
 }
 
+/*
+ * TASK 18 - `blogwright plugin add` and `blogwright plugin remove`.
+ *
+ * Both join `PLUGIN_NAMESPACE_ACTIONS` above and stay on the SAME side of
+ * `cli.ts`'s dispatch line `list` does - ahead of `createContext` - which
+ * matters more for `add` than for anything else in this namespace: installing
+ * a plugin is what an operator does BEFORE the repo has a `config/<env>.jsonc`
+ * or a usable AWS session, and a command that needed either to install a
+ * package would be unusable exactly when it is wanted.
+ *
+ * NOTHING here shells out. Every install and uninstall crosses the
+ * `PackageManager` port (`ports.ts`), whose one real adapter
+ * (`adapters/process-package-manager.ts`) is constructed at the composition
+ * root and injected as a FACTORY (`PluginNamespaceDeps.makePackages`) that
+ * only these two verbs ever call - so `list`, and every refusal below,
+ * construct no package manager at all.
+ *
+ * EXIT CODES, and the deliberate difference from `list`. `list` always
+ * returns 0 because it is a REPORT: producing the listing is the whole job,
+ * and a plugin in it that failed to load is data. These two are ACTIONS, and
+ * an action that did not happen must not look like one that did:
+ *
+ *   - `add` of an already-installed plugin returns 0. The requested state -
+ *     the plugin is installed - holds, so the run succeeded; re-running an
+ *     install must be idempotent for any script that wraps it.
+ *   - `remove` of a plugin that is not installed returns 1, NOT 0. This is
+ *     the asymmetry worth stating: it is the shape of a name typo
+ *     (`blogwright plugin remove analytcs`), and answering a typo with a
+ *     success code is how a CI step "uninstalls" a plugin that is still
+ *     installed. Idempotence is not the property here; "the package you named
+ *     is not here" is.
+ *   - Every refusal - no name, a name that is not a package name, a teardown
+ *     question this session cannot ask - returns 1 and calls neither the
+ *     package-manager port nor the destroy path.
+ */
+
+/**
+ * What `add` and `remove` need beyond the `fs`/`loader` pair `list` runs on.
+ * A single object rather than four more positional parameters, and every
+ * member is a FACTORY or a value rather than a live port, so a refusal path
+ * pays for none of them:
+ *
+ *   - `values` - the same parsed flags `runPlugin` reads (`--yes`, `--env`,
+ *     and the context overrides `remove`'s teardown branch forwards).
+ *   - `makePackages` - the `PackageManager` port, built at the composition
+ *     root. Called at most once per invocation, and never by `list` or by any
+ *     refusal.
+ *   - `cliVersion` - the running CLI's own version (`context.ts`'s
+ *     `cliVersion`), resolved there because this module may not touch
+ *     `node:fs`. Called only once `add` has decided it is going to install
+ *     something.
+ *   - `makeContext` - the ONE `OpsContext` `remove`'s "tear it down first"
+ *     branch needs, and the only path in this namespace that builds one at
+ *     all. Never called for `add`, for `list`, or for a `remove` that does
+ *     not run a teardown.
+ */
+export interface PluginNamespaceDeps {
+  readonly values: PluginValues;
+  readonly makePackages: () => PackageManager;
+  readonly cliVersion: () => Promise<string>;
+  readonly makeContext: (opts: ContextOptions) => Promise<OpsContext>;
+}
+
+/** The prefix a short plugin name is expanded with - `analytics` -> `blogwright-analytics`. */
+const PLUGIN_PACKAGE_PREFIX = 'blogwright-';
+
+/**
+ * Expand a short plugin name into the package name to install or uninstall,
+ * per §CLI → `blogwright plugin`: `analytics` becomes `blogwright-analytics`,
+ * while a name containing `/` (a scoped package, `@scope/thing`) or already
+ * starting with `blogwright-` is a literal package name and is returned
+ * unchanged.
+ *
+ * Pure, and deliberately total: it never throws and never rejects. What is
+ * ACCEPTABLE as a package name at all is a separate question, asked of the
+ * RESULT by {@link PACKAGE_NAME_PATTERN} below - because both halves of this
+ * function can produce something that is not a package name (`./evil` passes
+ * through the `/` branch; `analytics@9.9.9` becomes
+ * `blogwright-analytics@9.9.9`), and one gate over the result catches both.
+ */
+function resolvePluginPackage(name: string): string {
+  return name.includes('/') || name.startsWith(PLUGIN_PACKAGE_PREFIX)
+    ? name
+    : `${PLUGIN_PACKAGE_PREFIX}${name}`;
+}
+
+/**
+ * The package names these two verbs will hand to the `PackageManager` port:
+ * npm's own grammar - an optional `@scope/` followed by a name of lowercase
+ * ASCII alphanumerics, `-`, `.`, `_` and `~`.
+ *
+ * Two deliberate narrowings of npm's published pattern, both because the
+ * value becomes an ARGUMENT VECTOR element for `pnpm add`/`npm uninstall`
+ * (`adapters/process-package-manager.ts`):
+ *
+ *   - No leading `-`, so no input can arrive at the package manager as a
+ *     FLAG. (`blogwright plugin add --force` never gets that far anyway - it
+ *     is parsed as a flag by `main` - but `resolvePluginPackage` is not the
+ *     place to rely on that.)
+ *   - No leading `.`, so `./local-thing` and `../..` are refused rather than
+ *     installed as a filesystem path. npm's own pattern already excludes
+ *     these; it is stated here because it is the point.
+ *
+ * The `@` character is absent from the name body, which is what refuses
+ * `analytics@9.9.9`: a caller must not be able to smuggle a version past
+ * `add`'s pin by writing one into the name, because the resulting spec would
+ * be `blogwright-analytics@9.9.9@0.3.3` - a request no manager can satisfy,
+ * and, worse, a shape the version pin exists to make impossible.
+ */
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9~][a-z0-9\-._~]*\/)?[a-z0-9~][a-z0-9\-._~]*$/;
+
+/**
+ * True when `packageName` is declared in the consuming repo's own
+ * `package.json` - the same two maps discovery builds its candidate set from
+ * (`plugins.ts`'s `collectCandidates`), read through the `FileSystem` port.
+ *
+ * This, not module resolution, is what "installed" means for both verbs, and
+ * for the same reason in each direction: `add` must not re-install a plugin
+ * the manifest already pins (even one whose `node_modules` copy is missing -
+ * that is `pnpm install`'s job, not this command's), and `remove` must be
+ * able to uninstall a plugin whose module no longer resolves at all, which is
+ * precisely the state a half-broken install leaves behind.
+ *
+ * A missing or unparseable manifest propagates rather than being read as "no
+ * dependencies": a repo with no `package.json` has no package manager to run
+ * either, and silently treating that as an empty dependency set would make
+ * `remove` report a plugin absent when nothing was actually checked.
+ */
+async function isDeclaredDependency(
+  fs: FileSystem,
+  repoRoot: string,
+  packageName: string,
+): Promise<boolean> {
+  const parsed: unknown = JSON.parse(await fs.readText(join(repoRoot, 'package.json')));
+  if (!isRecord(parsed)) return false;
+  for (const field of ['dependencies', 'devDependencies']) {
+    const declared = parsed[field];
+    if (isRecord(declared) && Object.hasOwn(declared, packageName)) return true;
+  }
+  return false;
+}
+
+/**
+ * Install one plugin package, pinned to the running CLI's own version.
+ *
+ * The order of the three steps is the contract: the manifest check comes
+ * FIRST, so an already-installed plugin reports that and returns 0 having
+ * touched neither the version read nor the `PackageManager` port; only then
+ * is the version resolved and the port built and called.
+ *
+ * `exact: true` is what makes the pin survive. The spec string alone
+ * (`blogwright-analytics@0.3.3`) tells the manager WHICH version to fetch,
+ * but every supported manager would then write a `^0.3.3` RANGE into
+ * `package.json` - so the next `install` on a colleague's checkout could
+ * resolve something else entirely, `blogwright plugin list`'s version column
+ * would stop meaning "the version this repo pins", and the CLI and its plugin
+ * could drift apart across two developers' machines without either of them
+ * changing anything.
+ */
+async function runPluginAdd(
+  packageName: string,
+  ports: Pick<Ports, 'fs'>,
+  logger: Logger,
+  deps: PluginNamespaceDeps,
+): Promise<number> {
+  const repoRoot = await findRepoRoot(ports.fs);
+  if (await isDeclaredDependency(ports.fs, repoRoot, packageName)) {
+    logger.info(`${packageName} is already installed - nothing to do`);
+    return 0;
+  }
+  const spec = `${packageName}@${await deps.cliVersion()}`;
+  await deps.makePackages().add(spec, { exact: true });
+  logger.ok(`installed ${spec} - run \`blogwright plugin list\` to see the namespace it claims`);
+  return 0;
+}
+
+/**
+ * Resolve and load the ONE plugin `remove` is about to uninstall, so the
+ * command knows whether it has resources to ask about.
+ *
+ * A single `resolve` + `load` pair through the `ModuleLoader` port - never
+ * `discover` - so §Plugin discovery's laziness rule is untouched: removing
+ * one plugin does not resolve, import or validate every other plugin in the
+ * repo.
+ *
+ * `undefined` for every way that can fail - unresolvable, unimportable, or
+ * rejected by `validatePlugin` - because all of them mean the same thing to
+ * this command: there is no teardown to ask about. A broken plugin could not
+ * run its `destroy` if we asked, so asking would be a question with one
+ * honest answer. It is reported no further than that (no warning line): the
+ * package is on its way out, `blogwright plugin list` is the command that
+ * names load failures, and a refusal-shaped message about a package the
+ * operator has just asked to delete would be noise.
+ */
+async function loadPluginForRemoval(
+  packageName: string,
+  repoRoot: string,
+  ports: Pick<Ports, 'loader'>,
+): Promise<Plugin<unknown> | undefined> {
+  try {
+    const entry = await ports.loader.resolve(packageName, repoRoot);
+    if (!entry.found) return undefined;
+    return validatePlugin(await ports.loader.load(entry.path), packageName);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Run the plugin's own generic `destroy` before it is uninstalled - the exact
+ * tail `runPlugin` runs for `blogwright <plugin> destroy --yes`: one
+ * `makeContext` for the resolved environment, the plugin's OWN config block
+ * validated off that context's raw document (`resolvePluginConfig`), the
+ * narrow `PluginContext` with its scoped state store (`toPluginContext`), and
+ * task 16's `runGenericDestroy` over `plugin.nodes(ctx)`.
+ *
+ * Reached only from an answered "yes", which is why `yes` is passed as `true`
+ * here: the operator has just answered the question `runGenericDestroy`'s own
+ * `--yes` refusal exists to force.
+ *
+ * A rejection propagates and the uninstall never runs - the caller awaits
+ * this before touching the `PackageManager` port. That ordering is the whole
+ * point: a teardown that failed must leave the package installed, so the
+ * operator can fix the cause and run `blogwright <plugin> destroy --yes`
+ * again.
+ */
+async function destroyBeforeRemoval(
+  plugin: Plugin<unknown>,
+  nodesOf: (ctx: PluginContext<unknown>) => ResourceNode[],
+  env: string,
+  ports: Pick<Ports, 'fs' | 'loader'>,
+  terminal: Terminal,
+  deps: PluginNamespaceDeps,
+): Promise<void> {
+  const ops = await deps.makeContext({
+    env,
+    configPath: deps.values.config,
+    domain: deps.values.domain,
+    endpointOverride: deps.values.endpoint,
+    ports: { terminal, fs: ports.fs, loader: ports.loader },
+  });
+  const pluginConfig = resolvePluginConfig(plugin, ops.configDocument);
+  await runGenericDestroy(
+    plugin,
+    nodesOf,
+    await toPluginContext(ops, plugin.name, pluginConfig),
+    true,
+  );
+}
+
+/**
+ * Uninstall one plugin package, asking first whether its resources should be
+ * torn down - §CLI → `blogwright plugin`, and the settled decision
+ * *`plugin remove` asks about teardown; a session that cannot ask is refused,
+ * not defaulted*.
+ *
+ * The question is load-bearing because removal FORECLOSES ITS OWN REMEDY: the
+ * generic `blogwright <plugin> destroy` verb exists only while the package is
+ * installed, so an operator who uninstalls first has to reinstall before they
+ * can tear anything down.
+ *
+ * That is also why the non-interactive path REFUSES rather than taking a
+ * default. `confirm` (`logger.ts`) answers with its default when no TTY is
+ * attached, which is right wherever one answer is safe; here neither is -
+ * running a teardown nobody asked for is destructive, and skipping it strands
+ * AWS resources behind a reinstall. So this follows `initSite`'s refusal
+ * shape instead, naming BOTH ways forward, and `--yes` is the scripted
+ * "uninstall, keep the resources" answer. `--plain` needs no separate test
+ * here: `createNodeTerminal` builds a non-interactive terminal for it
+ * (`plain` forces `isInteractive` false), so it arrives as the same
+ * non-interactive session, and `terminal.isInteractive` stays the single
+ * source of truth for "can this session be asked a question".
+ */
+async function runPluginRemove(
+  name: string,
+  packageName: string,
+  afterName: readonly string[],
+  ports: Pick<Ports, 'fs' | 'loader'>,
+  terminal: Terminal,
+  logger: Logger,
+  deps: PluginNamespaceDeps,
+): Promise<number> {
+  const repoRoot = await findRepoRoot(ports.fs);
+  if (!(await isDeclaredDependency(ports.fs, repoRoot, packageName))) {
+    logger.error(
+      `${packageName} is not a dependency of ${repoRoot} - nothing to remove; run ` +
+        '`blogwright plugin list` to see what is installed',
+    );
+    return 1;
+  }
+
+  const plugin = await loadPluginForRemoval(packageName, repoRoot, ports);
+  const nodesOf = plugin?.nodes;
+  // The NAMESPACE `blogwright <namespace> destroy` actually dispatches on -
+  // the plugin's own declared name, which need not match the package it ships
+  // in (`blogwright-metrics` may claim `widget`) or the short name typed here.
+  // Falls back to what was typed for a plugin that did not load, which is the
+  // best guess available and the only one an operator could act on anyway.
+  const namespace = plugin?.name ?? name;
+  // The usual positional/`--env` rule every built-in command follows, applied
+  // to `blogwright plugin remove <name> [env]`.
+  const env = deps.values.env ?? afterName[0] ?? DEFAULT_ENV;
+
+  let tornDown = false;
+  if (plugin !== undefined && nodesOf !== undefined && !deps.values.yes) {
+    if (!terminal.isInteractive) {
+      logger.error(
+        `removing ${packageName} would strand the resources "${namespace}" provisioned in ` +
+          `"${env}", and this session cannot be asked about them: run \`blogwright ${namespace} ` +
+          'destroy --yes` first to tear them down, or re-run `blogwright plugin remove ' +
+          `${name} --yes\` to uninstall and keep them`,
+      );
+      return 1;
+    }
+    tornDown = await confirm(
+      terminal,
+      `tear down "${namespace}"'s resources in "${env}" before removing ${packageName}?`,
+      { defaultYes: false },
+    );
+    if (tornDown) await destroyBeforeRemoval(plugin, nodesOf, env, ports, terminal, deps);
+  }
+
+  await deps.makePackages().remove(packageName);
+  logger.ok(
+    tornDown
+      ? `removed ${packageName} - its "${env}" resources were torn down first, and its ` +
+          'configuration is untouched'
+      : `removed ${packageName} - configuration and provisioned resources are untouched; ` +
+          `\`blogwright ${namespace} destroy\` tears them down and needs ${packageName} ` +
+          'reinstalled to run',
+  );
+  return 0;
+}
+
 /**
  * Handle `blogwright plugin <action>`. Dispatched by `cli.ts` ahead of any
  * `OpsContext` - see this section's own comment above for why that placement
@@ -855,13 +1194,16 @@ async function runPluginList(
  *
  * An absent or unrecognised action lists the namespace's actions and returns
  * 1, the same shape `runPlugin` refuses an unknown action of an installed
- * plugin in.
+ * plugin in. `add` and `remove` share this function's name resolution and
+ * validation - one gate, so the two verbs cannot disagree about what
+ * `analytics` means or about what is a package name at all.
  */
 export async function runPluginNamespace(
   rest: readonly string[],
   terminal: Terminal,
   logger: Logger,
   ports: Pick<Ports, 'fs' | 'loader'>,
+  deps: PluginNamespaceDeps,
 ): Promise<number> {
   const action = rest[0];
   if (action === undefined || !PLUGIN_NAMESPACE_ACTIONS.has(action)) {
@@ -869,7 +1211,27 @@ export async function runPluginNamespace(
     logger.info(renderPluginNamespaceActions());
     return 1;
   }
-  // `PLUGIN_NAMESPACE_ACTIONS` has exactly one member until task 18 adds
-  // `add`; the membership test above is what keeps this exhaustive.
-  return runPluginList(ports, terminal, logger);
+  if (action === 'list') return runPluginList(ports, terminal, logger);
+
+  const name = rest[1];
+  if (name === undefined) {
+    logger.error(
+      `\`blogwright plugin ${action}\` needs a plugin name - e.g. \`blogwright plugin ${action} analytics\``,
+    );
+    return 1;
+  }
+  const packageName = resolvePluginPackage(name);
+  if (!PACKAGE_NAME_PATTERN.test(packageName)) {
+    logger.error(
+      `"${name}" is not a plugin package name - \`blogwright plugin ${action}\` takes a short ` +
+        'name (`analytics`, installed as `blogwright-analytics`), a `blogwright-` package name, ' +
+        'or a scoped package name (`@scope/thing`)',
+    );
+    return 1;
+  }
+  // `PLUGIN_NAMESPACE_ACTIONS` has exactly three members and `list` returned
+  // above; the membership test at the top is what keeps this exhaustive.
+  return action === 'add'
+    ? runPluginAdd(packageName, ports, logger, deps)
+    : runPluginRemove(name, packageName, rest.slice(2), ports, terminal, logger, deps);
 }

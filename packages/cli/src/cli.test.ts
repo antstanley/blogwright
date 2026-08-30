@@ -19,7 +19,12 @@ import {
 } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { main, type ContextFactory, type DiscoveryPortsFactory } from './cli.js';
+import {
+  main,
+  type ContextFactory,
+  type DiscoveryPortsFactory,
+  type PackageManagerFactory,
+} from './cli.js';
 import { cliPackageDir, loadConfig, type ContextOptions, type OpsContext } from './context.js';
 import { RESERVED_COMMANDS } from './known-commands.js';
 import { createLogger } from './logger.js';
@@ -65,8 +70,12 @@ Commands:
   preview list                List active previews
   preview teardown --yes      Tear down the whole preview stack
 
+  plugin add <name>           Install a plugin, pinned to this CLI's own
+                              version (analytics -> blogwright-analytics)
   plugin list                 List installed plugins: namespace, package,
                               version and the config key each owns
+  plugin remove <name>        Uninstall a plugin, asking first whether to tear
+                              down the resources it provisioned
 
   pds keygen                  Generate the OAuth client key: private JWK into
                               Secrets Manager, public documents into public/oauth/
@@ -146,6 +155,19 @@ const unreachableDiscoveryPorts: DiscoveryPortsFactory = () => {
 };
 
 /**
+ * A `PackageManagerFactory` that throws if called. Every `main` call in this
+ * file passes it, which is the point: `blogwright plugin add` and `plugin
+ * remove` (task 18) are the ONLY commands that may reach the `PackageManager`
+ * port, and both are covered in `plugin-commands.test.ts`. A regression that
+ * built - let alone called - a package manager for `--help`, `init`, `status`,
+ * `pds`, `preview`, plugin dispatch or `plugin list` fails here rather than
+ * shelling out to `pnpm` on someone's machine.
+ */
+const unreachablePackages: PackageManagerFactory = () => {
+  throw new Error('unexpected: package manager built for a command that should never reach it');
+};
+
+/**
  * A `ModuleLoader` that throws if any method is called - for the
  * "discovery cannot even start" tests below, where `findRepoRoot` or
  * `discover`'s own `package.json` read fails before `ports.loader` is ever
@@ -209,6 +231,7 @@ describe('main - help and error surface', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       makeDiscoveryPorts,
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -236,6 +259,7 @@ describe('main - help and error surface', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       makeDiscoveryPorts,
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -272,6 +296,7 @@ describe('main - help and error surface', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -319,6 +344,7 @@ Plugins:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -363,6 +389,7 @@ Plugins:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -395,13 +422,16 @@ Plugins that failed to load:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => base,
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
     expect(terminal.errors).toEqual(['✗ unknown plugin action: (none)']);
     expect(terminal.writes).toEqual([
       `"plugin" actions:
-  list - show installed plugins, their versions and the config key each owns`,
+  add - install a plugin package, pinned to the CLI's own version
+  list - show installed plugins, their versions and the config key each owns
+  remove - uninstall a plugin package, asking first about its teardown`,
     ]);
   });
 
@@ -419,7 +449,13 @@ Plugins that failed to load:
       throw new Error('createContext must not run for `blogwright plugin list`');
     };
 
-    const code = await main(['plugin', 'list'], fixedTerminal(terminal), refuseContext, () => base);
+    const code = await main(
+      ['plugin', 'list'],
+      fixedTerminal(terminal),
+      refuseContext,
+      () => base,
+      unreachablePackages,
+    );
 
     expect(code).toBe(0);
     expect(terminal.errors).toEqual([]);
@@ -442,6 +478,7 @@ Plugins that failed to load:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs: createMemoryFileSystem(), loader: neverLoader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -457,6 +494,7 @@ Plugins that failed to load:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs: createMemoryFileSystem(), loader: neverLoader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -477,6 +515,7 @@ Plugins that failed to load:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader: neverLoader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -494,6 +533,7 @@ Plugins that failed to load:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader: neverLoader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -516,10 +556,16 @@ Plugins that failed to load:
     });
 
     await expect(
-      main(['--help'], fixedTerminal(terminal), testContextFactory(terminal).makeContext, () => ({
-        fs,
-        loader: neverLoader,
-      })),
+      main(
+        ['--help'],
+        fixedTerminal(terminal),
+        testContextFactory(terminal).makeContext,
+        () => ({
+          fs,
+          loader: neverLoader,
+        }),
+        unreachablePackages,
+      ),
     ).rejects.toThrow(/failed to parse .*package\.json as JSON/);
   });
 
@@ -543,6 +589,7 @@ Plugins that failed to load:
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -600,6 +647,7 @@ describe('main - init dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -629,6 +677,7 @@ describe('main - init dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -668,6 +717,7 @@ describe('main - init dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -694,10 +744,16 @@ describe('main - init dispatch', () => {
     const loader = createFakeModuleLoader([]);
 
     await expect(
-      main(['init'], fixedTerminal(terminal), testContextFactory(terminal).makeContext, () => ({
-        fs,
-        loader,
-      })),
+      main(
+        ['init'],
+        fixedTerminal(terminal),
+        testContextFactory(terminal).makeContext,
+        () => ({
+          fs,
+          loader,
+        }),
+        unreachablePackages,
+      ),
     ).rejects.toThrow(/failed to (read or )?parse/);
 
     expect(await fs.exists(`${repoRoot}/config/production.jsonc`)).toBe(false);
@@ -717,6 +773,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -739,6 +796,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       factory.makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -768,6 +826,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -791,6 +850,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -811,6 +871,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -840,6 +901,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -892,6 +954,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(0);
@@ -910,6 +973,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -930,6 +994,7 @@ describe('main - generic plugin dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -965,9 +1030,13 @@ describe('main - generic plugin dispatch', () => {
     const { makeContext } = testContextFactory(terminal);
 
     for (const command of ['deploy', 'status', 'bootstrap']) {
-      await main([command], fixedTerminal(terminal), makeContext, makeDiscoveryPorts).catch(
-        () => undefined,
-      );
+      await main(
+        [command],
+        fixedTerminal(terminal),
+        makeContext,
+        makeDiscoveryPorts,
+        unreachablePackages,
+      ).catch(() => undefined);
     }
 
     expect(discoveryPortsCalls).toBe(0);
@@ -1016,6 +1085,7 @@ describe('main - pds dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -1032,6 +1102,7 @@ describe('main - pds dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -1050,6 +1121,7 @@ describe('main - pds dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -1068,6 +1140,7 @@ describe('main - preview dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -1086,6 +1159,7 @@ describe('main - preview dispatch', () => {
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     expect(code).toBe(1);
@@ -1104,6 +1178,7 @@ describe('main - status dispatch', () => {
       fixedTerminal(terminal),
       makeContext,
       unreachableDiscoveryPorts,
+      unreachablePackages,
     );
 
     expect(code).toBe(0);

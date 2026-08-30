@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -110,6 +111,42 @@ export function cliPackageDir(): string {
   // and in any error message built from it. Normalise here so no caller has to
   // remember. Four discovery-running paths (tasks 10, 11, 14, 17) consume this.
   return resolve(fileURLToPath(new URL('..', import.meta.url)));
+}
+
+/** Narrow parsed JSON to an object before reading a field off it - no cast, no `any`. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The running CLI's own declared version - the value `blogwright plugin add`
+ * (`plugin-commands.ts`) pins into the install spec, so a plugin and the CLI
+ * that dispatches it can never silently drift apart across two developers'
+ * checkouts.
+ *
+ * Read HERE, at the composition root, for exactly the reason
+ * {@link cliPackageDir} is resolved here: `blogwright`'s own `exports` map has
+ * no `.` entry, so neither the package nor its `package.json` can be reached
+ * through the `ModuleLoader` port, and this module is one of the few the
+ * `no-restricted-imports` rule lets touch `node:fs` at all. `plugin-commands.ts`
+ * receives the resolved string as DATA and never walks the filesystem for it -
+ * the same division `agentDir` already makes.
+ *
+ * Read on demand rather than at module load: `blogwright plugin list` and every
+ * built-in command share this module and none of them needs the value, so only
+ * the one command that pins a version pays for the read.
+ */
+export async function cliVersion(): Promise<string> {
+  const path = join(cliPackageDir(), 'package.json');
+  const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+  const version = isRecord(parsed) ? parsed.version : undefined;
+  if (typeof version !== 'string' || version.length === 0) {
+    throw new Error(
+      `${path} declares no "version" - \`blogwright plugin add\` pins the installed plugin to ` +
+        "the running CLI's own version and has nothing to pin to",
+    );
+  }
+  return version;
 }
 
 export interface ConfigSource {

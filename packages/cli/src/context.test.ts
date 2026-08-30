@@ -16,7 +16,12 @@ import {
 import type { PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
 
-import { main, type ContextFactory, type DiscoveryPortsFactory } from './cli.js';
+import {
+  main,
+  type ContextFactory,
+  type DiscoveryPortsFactory,
+  type PackageManagerFactory,
+} from './cli.js';
 import {
   cliPackageDir,
   deriveAppTag,
@@ -37,6 +42,15 @@ import {
 } from './test-support.js';
 
 const ROOT = '/repo';
+
+/**
+ * A `PackageManagerFactory` that throws if called - the two `main` calls in
+ * this file drive built-in commands, none of which may reach the
+ * `PackageManager` port (only `blogwright plugin add`/`plugin remove` do).
+ */
+const unreachablePackages: PackageManagerFactory = () => {
+  throw new Error('unexpected: package manager built for a command that should never reach it');
+};
 
 describe('cliPackageDir', () => {
   it("resolves the real directory holding the CLI's own package.json, callable with no context", async () => {
@@ -675,6 +689,7 @@ describe('plugin config validation', () => {
         () => fixture.terminal,
         fixture.makeContext,
         () => ({ fs: fixture.fs, loader: fixture.loader }),
+        unreachablePackages,
       ),
     ).rejects.toThrow('plugin "fake" rejected the "fake" config block');
   });
@@ -787,7 +802,13 @@ describe('plugin config validation', () => {
       createTestContext({ env: opts.env, ports: opts.ports, logger: createLogger(terminal) });
 
     for (const command of ['deploy', 'bootstrap', 'status']) {
-      await main([command], () => terminal, makeContext, makeDiscoveryPorts).catch(() => undefined);
+      await main(
+        [command],
+        () => terminal,
+        makeContext,
+        makeDiscoveryPorts,
+        unreachablePackages,
+      ).catch(() => undefined);
     }
 
     expect(discoveryPortsCalls).toBe(0);

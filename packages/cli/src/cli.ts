@@ -10,13 +10,13 @@ import {
 import * as pds from 'blogwright-pds';
 
 import * as commands from './commands.js';
-import { cliPackageDir, type ContextOptions, type OpsContext } from './context.js';
+import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from './context.js';
 import { initSite } from './init.js';
 import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
 import { genericLifecycleActions, runPlugin, runPluginNamespace } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
-import type { Ports } from './ports.js';
+import type { PackageManager, Ports } from './ports.js';
 
 const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
 
@@ -40,8 +40,12 @@ Commands:
   preview list                List active previews
   preview teardown --yes      Tear down the whole preview stack
 
+  plugin add <name>           Install a plugin, pinned to this CLI's own
+                              version (analytics -> blogwright-analytics)
   plugin list                 List installed plugins: namespace, package,
                               version and the config key each owns
+  plugin remove <name>        Uninstall a plugin, asking first whether to tear
+                              down the resources it provisioned
 
   pds keygen                  Generate the OAuth client key: private JWK into
                               Secrets Manager, public documents into public/oauth/
@@ -283,11 +287,32 @@ export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
  */
 export type DiscoveryPortsFactory = () => Pick<Ports, 'fs' | 'loader'>;
 
+/**
+ * Builds the `PackageManager` port `blogwright plugin add`/`plugin remove`
+ * install and uninstall through - the only two commands in the CLI that reach
+ * it, and the only two that ever call this factory.
+ *
+ * A SEPARATE factory rather than a third member of {@link DiscoveryPortsFactory}'s
+ * result, because the two seams answer different questions: that one supplies
+ * the pair every discovery-running path needs (`--help`, `init`, plugin
+ * dispatch, `plugin list`), and widening it would hand a package manager to
+ * four paths that must never install anything. Declared as a required
+ * parameter, not defaulted inside this module, for exactly the reason
+ * `ContextFactory` and `DiscoveryPortsFactory` are: the composition root
+ * (`bin.ts`) is the only place real adapters get constructed.
+ *
+ * Passed DOWN to `runPluginNamespace` as the factory itself rather than as a
+ * built port, so `blogwright plugin list` - and every refusal `add`/`remove`
+ * can end at - constructs no package manager at all.
+ */
+export type PackageManagerFactory = () => PackageManager;
+
 export async function main(
   argv: string[],
   makeTerminal: TerminalFactory,
   makeContext: ContextFactory,
   makeDiscoveryPorts: DiscoveryPortsFactory,
+  makePackages: PackageManagerFactory,
 ): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -362,13 +387,25 @@ export async function main(
     // Dispatched HERE, beside `init` and ahead of the built-in switch, and
     // never from the switch itself: the switch runs past the `makeContext`
     // call below, which loads the environment's config and calls
-    // `sts.getAccountId()`. `blogwright plugin list` and (task 18) `plugin
-    // add` are what an operator runs BEFORE the repo is configured, so
-    // dispatching them after that build would answer both with `no config
-    // found for environment "production"` on exactly the repo they exist to
-    // serve. `plugin` stays in `KNOWN_COMMANDS` regardless, so no installed
-    // plugin can claim the name (`RESERVED_COMMANDS` derives from that set).
-    return runPluginNamespace(positionals.slice(1), terminal, logger, makeDiscoveryPorts());
+    // `sts.getAccountId()`. `blogwright plugin list` and `plugin add` are what
+    // an operator runs BEFORE the repo is configured, so dispatching them
+    // after that build would answer both with `no config found for
+    // environment "production"` on exactly the repo they exist to serve -
+    // and `plugin add` would additionally need a working AWS session to
+    // install a package, which is absurd. `plugin` stays in `KNOWN_COMMANDS`
+    // regardless, so no installed plugin can claim the name
+    // (`RESERVED_COMMANDS` derives from that set).
+    //
+    // `makeContext` crosses as the FACTORY it is, never a built context: the
+    // one path in this namespace that needs an `OpsContext` is `plugin
+    // remove`'s answered-yes teardown, which builds it there, after the
+    // question - so the placement above still holds for every other action.
+    return runPluginNamespace(positionals.slice(1), terminal, logger, makeDiscoveryPorts(), {
+      values,
+      makePackages,
+      cliVersion,
+      makeContext,
+    });
   }
   if (command === 'preview') {
     return runPreview(positionals, values, terminal, logger, makeContext, makeDiscoveryPorts);

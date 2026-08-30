@@ -7,6 +7,24 @@
 **Produces:** `blogwright analytics backfill` fills whole pre-Firehose days from `names.cloudfrontLogGroup` into the `page_views` table - each event through the same mapping, `visitor_key` derivation and drop rules as the transform Lambda, written through the new `AnalyticsIngest` port - inserting nothing the Firehose path wrote and nothing twice; the package README gains the action's entry; and the analytics change spec is merged
 **Pointers:** `packages/analytics/src/backfill.ts` (new - the command body behind the stub task 47 declared in `packages/analytics/src/commands.ts`), `packages/analytics/src/ports.ts` (task 45 - `AnalyticsIngest` (`insertDay(day, rows)`) joins `AnalyticsQuery` there), `packages/analytics/src/adapters/duckdb-ingest.ts` (new - the write adapter beside task 46's `duckdb-query.ts`; the dashboard's attach stays read-only), `packages/core/src/aws/logs.ts:71` (`filterEvents` - the read path; no new client and no new core operation), `packages/analytics/src/transform/map-record.ts` and `transform/visitor-key.ts` (tasks 40/41 - the mapping and `dailySalt`/`visitorKey` this command reuses; a historical day's salt is `HMAC-SHA256(secret, day)`), `packages/analytics/src/nodes.ts` (task 53 - the `createdDay` the delivery node records, this command's idempotency bound), `packages/analytics/README.md` (task 58 - the five steady-state actions; the `backfill` entry lands here), [the analytics change spec](../../../changes/2026-07-26-analytics_plugin.md) (its `Status:` line and §Merge plan steps 5–6, which task 58 deferred here), `.specs/README.md` §Change specs (the pending list, whose last entry this task removes - line anchors are deliberately not given for a file this plan's own tasks keep editing), `.specs/changes/merged/` (the destination this task moves the file to)
 
+> **ROUTED FINDING - added 2026-08-30 from task 46's implementation.**
+> `packages/analytics/src/adapters/**` is **missing** from the root
+> `.oxlintrc.json` `no-restricted-imports` override list, which covers
+> `packages/core/src/adapters/**` and `packages/cli/src/adapters/**` but not
+> analytics'. So a real adapter in this package - which is what
+> `duckdb-ingest.ts` is - cannot import `node:fs` without failing `pnpm lint`,
+> even though the architecture explicitly sanctions adapters doing exactly that.
+> Task 46 hit this and worked around it rather than widening the list: its test
+> checks file existence through `createNodeFileSystem()` from `blogwright-core`,
+> which is what the rule's own message directs a non-adapter module at. That
+> port has `exists` but no delete, so its temp files carry `randomUUID` tokens
+> because nothing can clean them up.
+> If this task needs real filesystem access, do not copy that workaround by
+> default and do not silently widen the override either. Decide which is right
+> and say so: the override list is a statement about where the architecture
+> permits I/O, and analytics' absence from it looks like an oversight from when
+> the package had no adapters rather than a deliberate exclusion.
+
 ## Steps
 
 - [ ] Declare `AnalyticsIngest` in `packages/analytics/src/ports.ts` as `insertDay(day, rows)` beside `AnalyticsQuery`, with a doc comment stating it exists for the one-shot backfill and that the dashboard's read path never receives it; write the recording fake beside it.

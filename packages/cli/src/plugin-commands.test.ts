@@ -16,6 +16,8 @@
  * two near-identical copies.
  */
 
+import { join } from 'node:path';
+
 import {
   createNodeFileSystem,
   createScriptedTerminal,
@@ -29,19 +31,21 @@ import {
 } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { main } from './cli.js';
-import { cliPackageDir, type ContextOptions, type OpsContext } from './context.js';
+import { main, type PackageManagerFactory } from './cli.js';
+import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from './context.js';
 import { createLogger } from './logger.js';
 import { buildNodes } from './nodes.js';
 import {
   runPlugin,
   runPluginNamespace,
   toPluginContext,
+  type PluginNamespaceDeps,
   type PluginValues,
 } from './plugin-commands.js';
 import { discover } from './plugins.js';
 import {
   buildDiscoveryPorts,
+  createRecordingPackageManager,
   createTestContext,
   makeFakePlugin,
   scopedStateOnlyS3,
@@ -107,6 +111,38 @@ function testContextFactory(
     return ctx;
   };
   return { makeContext, contexts };
+}
+
+/**
+ * A `PackageManagerFactory` that throws if called - passed to the one `main`
+ * call in this file, which drives the site's own `bootstrap`.
+ */
+const unreachablePackages: PackageManagerFactory = () => {
+  throw new Error('unexpected: package manager built for a command that should never reach it');
+};
+
+/**
+ * The dependencies only `blogwright plugin add`/`plugin remove` read
+ * (`PluginNamespaceDeps`, `plugin-commands.ts`). Every default REFUSES when
+ * touched, so `namespaceDeps()` with no overrides is an assertion in itself:
+ * a `plugin list` case that passes it proves the report resolves no version,
+ * builds no package manager and builds no `OpsContext`. A case that needs one
+ * of the four overrides exactly that one.
+ */
+function namespaceDeps(overrides: Partial<PluginNamespaceDeps> = {}): PluginNamespaceDeps {
+  return {
+    values: BASE_VALUES,
+    makePackages: () => {
+      throw new Error('unexpected: package manager built where none should be');
+    },
+    cliVersion: async () => {
+      throw new Error('unexpected: CLI version resolved where none should be');
+    },
+    makeContext: () => {
+      throw new Error('unexpected: OpsContext built where none should be');
+    },
+    ...overrides,
+  };
 }
 
 describe('runPlugin', () => {
@@ -1254,6 +1290,7 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
       () => terminal,
       async () => ctx,
       () => ({ fs, loader }),
+      unreachablePackages,
     );
 
     // The whole graph applied. `main` does not catch, so a node that threw
@@ -1336,17 +1373,25 @@ async function listingPorts(): Promise<Awaited<ReturnType<typeof buildDiscoveryP
 
 /** The refusal both unknown-input cases print, hand-typed rather than imported from the action table. */
 const PLUGIN_ACTIONS_LISTING = `"plugin" actions:
-  list - show installed plugins, their versions and the config key each owns`;
+  add - install a plugin package, pinned to the CLI's own version
+  list - show installed plugins, their versions and the config key each owns
+  remove - uninstall a plugin package, asking first about its teardown`;
 
 describe('runPluginNamespace - blogwright plugin list', () => {
   it('lists namespace, package, version and configKey per plugin, sorted by namespace, as an aligned table on a TTY', async () => {
     const terminal = createScriptedTerminal({ interactive: true });
     const { fs, loader } = await listingPorts();
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(0);
     expect(terminal.errors).toEqual([]);
@@ -1363,10 +1408,16 @@ describe('runPluginNamespace - blogwright plugin list', () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const { fs, loader } = await listingPorts();
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(0);
     expect(terminal.errors).toEqual([]);
@@ -1391,7 +1442,13 @@ describe('runPluginNamespace - blogwright plugin list', () => {
       },
     ]);
 
-    await runPluginNamespace(['list'], terminal, createLogger(terminal), { fs, loader });
+    await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps(),
+    );
 
     expect(terminal.writes).toEqual([
       'namespace package version configKey',
@@ -1405,10 +1462,16 @@ describe('runPluginNamespace - blogwright plugin list', () => {
       { packageName: 'blogwright-metrics', namespace: 'widget', plugin: LISTED_WIDGET },
     ]);
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(0);
     expect(terminal.writes).toEqual([
@@ -1429,10 +1492,16 @@ describe('runPluginNamespace - blogwright plugin list', () => {
     ]);
     const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     // A report, not a health check: the listing was produced, so 0 - the
     // same contract `--help` already has when it lists a failed plugin.
@@ -1460,10 +1529,16 @@ describe('runPluginNamespace - blogwright plugin list', () => {
     // discovery finding nothing, not discovery failing before it looked.
     expect(await fs.exists(`${repoRoot}/package.json`)).toBe(true);
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(0);
     expect(terminal.errors).toEqual([]);
@@ -1501,7 +1576,13 @@ describe('runPluginNamespace - blogwright plugin list', () => {
     };
 
     await expect(
-      runPluginNamespace(['list'], terminal, createLogger(terminal), { fs, loader: base.loader }),
+      runPluginNamespace(
+        ['list'],
+        terminal,
+        createLogger(terminal),
+        { fs, loader: base.loader },
+        namespaceDeps(),
+      ),
     ).rejects.toThrow(SyntaxError);
     // Not merely thrown late: nothing was reported for this plugin at all.
     expect(reads).toBe(2);
@@ -1513,10 +1594,16 @@ describe('runPluginNamespace - blogwright plugin list', () => {
     const base = await buildDiscoveryPorts([]);
     const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(0);
     expect(terminal.writes).toEqual([
@@ -1531,10 +1618,16 @@ describe('runPluginNamespace - blogwright plugin list', () => {
     const base = await buildDiscoveryPorts([]);
     const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
 
-    const code = await runPluginNamespace(['list'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['list'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(0);
     expect(terminal.writes).toEqual([
@@ -1550,7 +1643,13 @@ describe('runPluginNamespace - unknown input', () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const { fs, loader } = await listingPorts();
 
-    const code = await runPluginNamespace([], terminal, createLogger(terminal), { fs, loader });
+    const code = await runPluginNamespace(
+      [],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(1);
     expect(terminal.errors).toEqual(['✗ unknown plugin action: (none)']);
@@ -1561,10 +1660,16 @@ describe('runPluginNamespace - unknown input', () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const { fs, loader } = await listingPorts();
 
-    const code = await runPluginNamespace(['bogus'], terminal, createLogger(terminal), {
-      fs,
-      loader,
-    });
+    const code = await runPluginNamespace(
+      ['bogus'],
+      terminal,
+      createLogger(terminal),
+      {
+        fs,
+        loader,
+      },
+      namespaceDeps(),
+    );
 
     expect(code).toBe(1);
     expect(terminal.errors).toEqual(['✗ unknown plugin action: bogus']);
@@ -1576,5 +1681,598 @@ describe('runPluginNamespace - unknown input', () => {
     expect(loader.packageJsonPathForCalls).toEqual([]);
     expect(loader.resolveCalls).toEqual([]);
     expect(loader.loadCalls).toEqual([]);
+  });
+});
+
+/*
+ * TASK 18 - `blogwright plugin add` and `blogwright plugin remove`.
+ *
+ * Like the `list` cases above, every case here calls `runPluginNamespace`
+ * DIRECTLY, and `namespaceDeps()` supplies a `PluginNamespaceDeps` whose four
+ * members all THROW unless a case overrides the one it needs - so "the fake
+ * recorded nothing" is never the whole claim: a path that was supposed to
+ * build no package manager, resolve no version or build no context fails
+ * loudly rather than quietly recording an empty list.
+ *
+ * Nothing here spawns a process or touches the network: every install and
+ * uninstall crosses the recording `PackageManager` fake from `test-support.ts`.
+ */
+
+/**
+ * A recording `PackageManager` that ALSO appends each call to `order`, a log
+ * shared with the fake plugin's node teardown below - the one way to assert
+ * that the teardown ran BEFORE the uninstall rather than merely that both
+ * happened.
+ */
+function orderedPackages(order: string[]): ReturnType<typeof createRecordingPackageManager> {
+  const base = createRecordingPackageManager();
+  return {
+    ...base,
+    add: async (spec, opts) => {
+      order.push(`add ${spec}`);
+      await base.add(spec, opts);
+    },
+    remove: async (name) => {
+      order.push(`remove ${name}`);
+      await base.remove(name);
+    },
+  };
+}
+
+/**
+ * A node-contributing plugin whose single node records its teardown into the
+ * same `order` log {@link orderedPackages} writes to. `read` answers true so
+ * `destroyGraph` really reaches `delete` - a node that read as absent would
+ * be skipped, and the ordering assertion would pass with no teardown at all.
+ */
+function makeRemovalPlugin(order: string[]): Plugin {
+  return {
+    name: 'demo',
+    description: 'a fake plugin contributing one resource node',
+    commands: [],
+    nodes: () => [
+      {
+        id: NODE_PLUGIN_RESOURCE_ID,
+        dependsOn: [],
+        title: NODE_PLUGIN_RESOURCE_ID,
+        read: async () => true,
+        create: async () => undefined,
+        delete: async () => {
+          order.push('destroy');
+        },
+      },
+    ],
+  };
+}
+
+/** The notice every no-teardown path prints, hand-typed rather than imported from the module. */
+const UNTOUCHED_NOTICE =
+  'removed blogwright-demo - configuration and provisioned resources are untouched; ' +
+  '`blogwright demo destroy` tears them down and needs blogwright-demo reinstalled to run';
+
+describe('runPluginNamespace - blogwright plugin add', () => {
+  it('resolves the short name `analytics` to `blogwright-analytics`, at the version it is handed, pinned exactly', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['add', 'analytics'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      // A version no package in this workspace carries, so only a call to
+      // THIS function could have produced it in the spec below.
+      namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.errors).toEqual([]);
+    // `exact` is half the pin: the `@version` in the spec chooses what to
+    // fetch, but without it every supported manager writes a `^` RANGE into
+    // package.json and two checkouts drift apart on the next install.
+    expect(packages.calls).toEqual([
+      { op: 'add', spec: 'blogwright-analytics@9.9.9-test', opts: { exact: true } },
+    ]);
+  });
+
+  it('uses a name containing `/` literally - a scoped package is never prefixed', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['add', '@scope/thing'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+    );
+
+    expect(code).toBe(0);
+    expect(packages.calls).toEqual([
+      { op: 'add', spec: '@scope/thing@9.9.9-test', opts: { exact: true } },
+    ]);
+  });
+
+  it('uses a name already starting with `blogwright-` literally, rather than prefixing it twice', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['add', 'blogwright-metrics'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+    );
+
+    expect(code).toBe(0);
+    expect(packages.calls).toEqual([
+      { op: 'add', spec: 'blogwright-metrics@9.9.9-test', opts: { exact: true } },
+    ]);
+  });
+
+  it("pins the running CLI's own version from packages/cli/package.json, driven through `main`, without ever building an OpsContext", async () => {
+    // The version is READ from the CLI's manifest here rather than restated:
+    // a literal would go stale on the next release and would not show that
+    // the value came off disk at all. The whole path is exercised - `main`'s
+    // dispatch, `cli.ts`'s own `cliVersion` import, and the injected
+    // `PackageManagerFactory` - so a regression that stopped wiring any of
+    // the three fails here rather than on an operator's machine.
+    const manifest: unknown = JSON.parse(
+      await createNodeFileSystem().readText(join(cliPackageDir(), 'package.json')),
+    );
+    const declared =
+      typeof manifest === 'object' && manifest !== null && 'version' in manifest
+        ? manifest.version
+        : undefined;
+    if (typeof declared !== 'string') throw new Error("the CLI's package.json declares no version");
+    // The same value `context.ts`'s own resolver produces - the reader's
+    // check that this test and the command agree about where it comes from.
+    expect(await cliVersion()).toBe(declared);
+
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const packages = createRecordingPackageManager();
+
+    const code = await main(
+      ['plugin', 'add', 'analytics'],
+      () => terminal,
+      () => {
+        throw new Error('createContext must not run for `blogwright plugin add`');
+      },
+      () => ({ fs, loader }),
+      () => packages,
+    );
+
+    expect(code).toBe(0);
+    expect(packages.calls).toEqual([
+      { op: 'add', spec: `blogwright-analytics@${declared}`, opts: { exact: true } },
+    ]);
+  });
+
+  it('reports an already-installed plugin and exits 0 without calling the package manager', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    // Declared in the consuming repo's manifest, exactly as `pnpm add` would
+    // have left it - and nothing else about this fixture differs from the
+    // installing case above, which is what makes the empty call list below a
+    // consequence of the manifest rather than of an empty fixture.
+    const { fs, loader } = await buildDiscoveryPorts([], {
+      consumerDeps: { 'blogwright-analytics': '0.3.0' },
+    });
+    expect(await fs.readText(`${await realRepoRoot()}/package.json`)).toContain(
+      'blogwright-analytics',
+    );
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['add', 'analytics'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      // `cliVersion` is left at its throwing default deliberately: the
+      // already-installed path must not even resolve a version to pin.
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(0);
+    expect(packages.calls).toEqual([]);
+    expect(terminal.errors).toEqual([]);
+    expect(terminal.writes).toEqual(['blogwright-analytics is already installed - nothing to do']);
+  });
+
+  it('refuses a name that is not a package name, installing nothing', async () => {
+    // `./evil` would install from a filesystem path, and `analytics@9.9.9`
+    // would smuggle a version past the pin (`blogwright-analytics@9.9.9@0.3.3`).
+    // Both are refused by the one gate over the RESOLVED package name.
+    for (const name of ['./evil', 'analytics@9.9.9', '@scope/../../evil']) {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { fs, loader } = await buildDiscoveryPorts([]);
+      const packages = createRecordingPackageManager();
+
+      const code = await runPluginNamespace(
+        ['add', name],
+        terminal,
+        createLogger(terminal),
+        { fs, loader },
+        namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+      );
+
+      expect(code).toBe(1);
+      expect(packages.calls).toEqual([]);
+      expect(terminal.errors).toEqual([
+        `✗ "${name}" is not a plugin package name - \`blogwright plugin add\` takes a short ` +
+          'name (`analytics`, installed as `blogwright-analytics`), a `blogwright-` package name, ' +
+          'or a scoped package name (`@scope/thing`)',
+      ]);
+    }
+  });
+
+  it('refuses with no plugin name at all, installing nothing', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['add'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages, cliVersion: async () => '9.9.9-test' }),
+    );
+
+    expect(code).toBe(1);
+    expect(packages.calls).toEqual([]);
+    expect(terminal.errors).toEqual([
+      '✗ `blogwright plugin add` needs a plugin name - e.g. `blogwright plugin add analytics`',
+    ]);
+  });
+});
+
+describe('runPluginNamespace - blogwright plugin remove', () => {
+  it('asks first, and a scripted "y" runs the plugin\'s generic destroy BEFORE the uninstall', async () => {
+    const order: string[] = [];
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['y'] });
+    const { calls: s3Calls, s3 } = recordingS3();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const packages = orderedPackages(order);
+    const { makeContext } = testContextFactory(terminal, { s3 });
+
+    const code = await runPluginNamespace(
+      ['remove', 'demo'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages, makeContext }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.prompts).toEqual([
+      'tear down "demo"\'s resources in "production" before removing blogwright-demo? [y/N] ',
+    ]);
+    // The ordering claim, across BOTH fakes through one shared log: the node
+    // was torn down and only then was the package uninstalled.
+    expect(order).toEqual(['destroy', 'remove blogwright-demo']);
+    expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-demo' }]);
+    // Task 16's generic destroy really ran, against the plugin's own scoped
+    // state key and no other.
+    expect(s3Calls).toEqual([
+      { op: 'get', key: 'state/production.demo.json' },
+      { op: 'put', key: 'state/production.demo.json' },
+      { op: 'delete', key: 'state/production.demo.json' },
+    ]);
+    // The closing line reports what actually happened. The untouched-notice
+    // the declining branches print would be a LIE here - the resources are
+    // gone - so it must not appear anywhere in this run's output.
+    expect(terminal.writes.at(-1)).toBe(
+      '\u001B[32m✓\u001B[0m removed blogwright-demo - its "production" resources were torn ' +
+        'down first, and its configuration is untouched',
+    );
+    expect(terminal.writes).not.toContain(`\u001B[32m✓\u001B[0m ${UNTOUCHED_NOTICE}`);
+  });
+
+  it('tears down the environment the invocation resolves - the trailing positional, not the production default', async () => {
+    const order: string[] = [];
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['y'] });
+    const { calls: s3Calls, s3 } = recordingS3();
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const packages = orderedPackages(order);
+    const { makeContext } = testContextFactory(terminal, { s3 });
+
+    const code = await runPluginNamespace(
+      ['remove', 'demo', 'preview'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages, makeContext }),
+    );
+
+    expect(code).toBe(0);
+    expect(order).toEqual(['destroy', 'remove blogwright-demo']);
+    // Every key is the PREVIEW environment's; `state/production.demo.json`,
+    // which the env-less form reaches for, is never touched.
+    expect(s3Calls).toEqual([
+      { op: 'get', key: 'state/preview.demo.json' },
+      { op: 'put', key: 'state/preview.demo.json' },
+      { op: 'delete', key: 'state/preview.demo.json' },
+    ]);
+    expect(terminal.prompts).toEqual([
+      'tear down "demo"\'s resources in "preview" before removing blogwright-demo? [y/N] ',
+    ]);
+  });
+
+  it('a scripted "n" uninstalls without the teardown and says what is left behind', async () => {
+    const order: string[] = [];
+    const terminal = createScriptedTerminal({ interactive: true, answers: ['n'] });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const packages = orderedPackages(order);
+
+    const code = await runPluginNamespace(
+      ['remove', 'demo'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      // `makeContext` is left at its throwing default: a declined teardown
+      // must not build an OpsContext at all.
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(0);
+    expect(order).toEqual(['remove blogwright-demo']);
+    expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-demo' }]);
+    expect(terminal.writes).toEqual([`\u001B[32m✓\u001B[0m ${UNTOUCHED_NOTICE}`]);
+  });
+
+  it('a bare Enter declines - No is the default, so the resources survive an operator who just hits return', async () => {
+    const order: string[] = [];
+    const terminal = createScriptedTerminal({ interactive: true, answers: [''] });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const packages = orderedPackages(order);
+
+    const code = await runPluginNamespace(
+      ['remove', 'demo'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(0);
+    expect(order).toEqual(['remove blogwright-demo']);
+    expect(terminal.prompts).toEqual([
+      'tear down "demo"\'s resources in "production" before removing blogwright-demo? [y/N] ',
+    ]);
+    expect(terminal.writes).toEqual([`\u001B[32m✓\u001B[0m ${UNTOUCHED_NOTICE}`]);
+  });
+
+  it('refuses in a session that cannot be asked, naming both ways forward and touching neither fake', async () => {
+    const order: string[] = [];
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const packages = orderedPackages(order);
+
+    const code = await runPluginNamespace(
+      ['remove', 'demo'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      // `makeContext` and `cliVersion` stay at their throwing defaults; the
+      // refusal must reach neither the destroy path nor anything else.
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(1);
+    // Empty because the guard returned, not because there was nothing to
+    // find: the sibling cases above run this same fixture to a teardown and
+    // an uninstall.
+    expect(order).toEqual([]);
+    expect(packages.calls).toEqual([]);
+    expect(terminal.writes).toEqual([]);
+    expect(terminal.errors).toEqual([
+      '✗ removing blogwright-demo would strand the resources "demo" provisioned in ' +
+        '"production", and this session cannot be asked about them: run `blogwright demo destroy ' +
+        '--yes` first to tear them down, or re-run `blogwright plugin remove demo --yes` to ' +
+        'uninstall and keep them',
+    ]);
+  });
+
+  it('--plain refuses the same way through `main`, while the same fixture without it is asked', async () => {
+    // `--plain` reaches the command as a NON-INTERACTIVE terminal, because
+    // that is what `createNodeTerminal` builds for it - so the refusal has
+    // one condition, not two. Driven through `main` so the flag is really
+    // parsed rather than hand-set, and paired with the same invocation minus
+    // the flag, which DOES get asked: without that pair, a refusal that
+    // fired for some unrelated reason would look identical.
+    const order: string[] = [];
+    const plain = createScriptedTerminal({ interactive: false });
+    const tty = createScriptedTerminal({ interactive: true, answers: ['n'] });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const packages = orderedPackages(order);
+    const makeTerminal = (opts: { plain: boolean }) => (opts.plain ? plain : tty);
+    const refuseContext = () => {
+      throw new Error('createContext must not run for `blogwright plugin remove`');
+    };
+
+    const refused = await main(
+      ['plugin', 'remove', 'demo', '--plain'],
+      makeTerminal,
+      refuseContext,
+      () => ({ fs, loader }),
+      () => packages,
+    );
+
+    expect(refused).toBe(1);
+    expect(order).toEqual([]);
+    expect(packages.calls).toEqual([]);
+    expect(plain.prompts).toEqual([]);
+
+    const asked = await main(
+      ['plugin', 'remove', 'demo'],
+      makeTerminal,
+      refuseContext,
+      () => ({ fs, loader }),
+      () => packages,
+    );
+
+    expect(asked).toBe(0);
+    expect(tty.prompts).toEqual([
+      'tear down "demo"\'s resources in "production" before removing blogwright-demo? [y/N] ',
+    ]);
+    expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-demo' }]);
+  });
+
+  it('--yes uninstalls without asking, in an interactive session and a non-interactive one alike', async () => {
+    for (const interactive of [true, false]) {
+      const order: string[] = [];
+      // No `answers` at all: a scripted terminal throws on an unscripted
+      // question, so an implementation that still asked would fail here
+      // rather than quietly defaulting.
+      const terminal = createScriptedTerminal({ interactive });
+      const { fs, loader } = await buildDiscoveryPorts([
+        { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+      ]);
+      const packages = orderedPackages(order);
+
+      const code = await runPluginNamespace(
+        ['remove', 'demo'],
+        terminal,
+        createLogger(terminal),
+        { fs, loader },
+        namespaceDeps({ values: { ...BASE_VALUES, yes: true }, makePackages: () => packages }),
+      );
+
+      expect(code).toBe(0);
+      expect(terminal.prompts).toEqual([]);
+      expect(order).toEqual(['remove blogwright-demo']);
+      expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-demo' }]);
+    }
+  });
+
+  it('a plugin that contributes no nodes has no teardown to ask about and is removed directly', async () => {
+    const terminal = createScriptedTerminal({ interactive: true });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-metrics', namespace: 'widget', plugin: LISTED_WIDGET },
+    ]);
+    const packages = createRecordingPackageManager();
+
+    // The short name is the PACKAGE's, not the namespace's: this fixture's
+    // `blogwright-metrics` claims the namespace `widget`, and the notice
+    // below names that namespace because the loaded plugin declares it.
+    const code = await runPluginNamespace(
+      ['remove', 'metrics'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(0);
+    // Interactive, and still never asked: there are no resources to strand.
+    expect(terminal.prompts).toEqual([]);
+    expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-metrics' }]);
+    expect(terminal.writes).toEqual([
+      '\u001B[32m✓\u001B[0m removed blogwright-metrics - configuration and provisioned ' +
+        'resources are untouched; `blogwright widget destroy` tears them down and needs ' +
+        'blogwright-metrics reinstalled to run',
+    ]);
+  });
+
+  it('a plugin whose module fails to load is removed directly - it could not run its own teardown either way', async () => {
+    const terminal = createScriptedTerminal({ interactive: true });
+    const base = await buildDiscoveryPorts([]);
+    const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['remove', 'broken'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.prompts).toEqual([]);
+    expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-broken' }]);
+  });
+
+  it('uninstalls the named package and nothing else, with two plugins installed', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await listingPorts();
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['remove', 'metrics'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(0);
+    // The whole call list, not merely "contains": `blogwright-widgets` - the
+    // OTHER installed plugin, and the one whose name a prefix match or a
+    // stale variable would reach - is not in it.
+    expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-metrics' }]);
+  });
+
+  it('reports a plugin that is not installed and exits non-zero without calling the package manager', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await listingPorts();
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['remove', 'analytics'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    // Non-zero, unlike `add`'s already-installed path: this is the shape of a
+    // name typo, and answering one with success is how a CI step "uninstalls"
+    // a plugin that is still installed.
+    expect(code).toBe(1);
+    expect(packages.calls).toEqual([]);
+    expect(terminal.errors).toEqual([
+      `✗ blogwright-analytics is not a dependency of ${await realRepoRoot()} - nothing to ` +
+        'remove; run `blogwright plugin list` to see what is installed',
+    ]);
+  });
+
+  it('refuses a name that is not a package name, uninstalling nothing', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await listingPorts();
+    const packages = createRecordingPackageManager();
+
+    const code = await runPluginNamespace(
+      ['remove', './evil'],
+      terminal,
+      createLogger(terminal),
+      { fs, loader },
+      namespaceDeps({ makePackages: () => packages }),
+    );
+
+    expect(code).toBe(1);
+    expect(packages.calls).toEqual([]);
+    expect(terminal.errors).toEqual([
+      '✗ "./evil" is not a plugin package name - `blogwright plugin remove` takes a short ' +
+        'name (`analytics`, installed as `blogwright-analytics`), a `blogwright-` package name, ' +
+        'or a scoped package name (`@scope/thing`)',
+    ]);
   });
 });

@@ -7,6 +7,26 @@
 **Produces:** consumer docs for `blogwright plugin add|list|remove` and `blogwright <plugin> <action>`, the two new ports recorded in DEVELOPMENT.md's ports table, a changeset for the whole user-facing surface, and both deferrals written down - the canonical-page fallback, and the `Status:` flip that waits for the transport seam at tasks 31 and 38 and lands at task 58 - with the spec's unanswered questions carried forward
 **Pointers:** `README.md:40-56` (the Commands block that gains the plugin lines), `DEVELOPMENT.md:72-81` (§Hexagonal architecture's ports table), `DEVELOPMENT.md:356-366` (the lint-enforcement Decisions bullet listing the adapter exceptions), [the plugin-system change spec](../../../changes/2026-07-26-cli_plugin_system.md) (its `Status:` header line, its §Plugin SPI → Plugin-supplied AWS services block - the one this task cannot claim has landed - its §Merge plan and its §Open questions), `.specs/plans/2026-07-26-plugin_system_and_analytics/backlog/31-core_transport_seam.md` and `38-analytics_client_bundle.md` (where that block lands), `58-analytics_docs_and_closure.md` (which performs the deferred flip), `.specs/README.md` §Change specs (the pending and merged lists - line anchors are deliberately not given for a file this plan's own tasks keep editing)
 
+> **ROUTED FINDINGS - added 2026-08-30 from task 18's verification gate.**
+> **1. `Ports.packages` is orphaned.** Task 06 added the member in
+> `packages/cli/src/ports.ts` for task 18 to use; task 18 correctly chose a
+> `PackageManagerFactory` seam instead, because a member of `OpsContext` is
+> unreachable from a command that dispatches BEFORE `createContext` - and
+> `plugin add` must, since `createContext` calls `sts.getAccountId()` and add is
+> what an operator runs before the repo is configured. So nothing reads
+> `ctx.ports.packages` and no backlog task will, while every `deploy`, `status`
+> and `bootstrap` constructs an adapter it never calls (`context.ts:219`).
+> No behavioural cost; the cost is permanently misleading port wiring. **`knip`
+> cannot see it** - it has no issue type for interface members, the blind spot
+> already recorded in this plan's open questions. Delete it, or record why it
+> stays.
+> **2. Cosmetic, same file.** `plugin-commands.ts:1216`'s empty-name check is
+> `=== undefined` only, so `blogwright plugin add ""` resolves to `blogwright-`,
+> which the pattern accepts, and the operator gets pnpm's error rather than the
+> CLI's actionable one. Same for `.` and `..`. No path, flag or version
+> smuggling - the gate probed 35 hostile shapes and all 17 malicious ones were
+> rejected with an empty call list.
+
 ## Steps
 
 - [ ] Record why merge-plan step 1 is not executed: it says to apply the Proposed-changes blocks to a canonical page and, if none exists, to record the SPI as a NEW canonical page and index it. No canonical spec set exists, so that fallback is live rather than conditional - but the spec's own decision keeps the SPI internal and undocumented until it has carried two features through a release cycle, and publishing a canonical SPI page now would contradict it. Write the deferral and its owner into this task's decision note and into plan.md's open questions; do not silently skip the step.

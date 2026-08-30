@@ -595,6 +595,28 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *`config.region` is validated for truthiness only, and is interpolated into
+  ARNs and endpoint hostnames.* Raised by task 46's verification gate
+  2026-08-30, which did not merely observe it - it drove arbitrary SQL
+  execution through the unmodified built adapter, offline, writing a file:
+  a region of `x' AS "inj" (TYPE duckdb); COPY (...) TO 'pwned.csv'; ATTACH '`
+  closed the quoted literal in DuckDB's ATTACH statement, and DuckDB's
+  `runAndReadAll` executes multiple statements per call. It runs after
+  `CREATE SECRET`, so in a session holding the operator's real AWS credentials
+  with `httpfs` loaded.
+  `packages/core/src/config.ts:306` is `if (!cfg.region) throw` - directly
+  below `siteName`, which IS held to `^[a-z0-9-]+$`. The asymmetry looks
+  accidental rather than considered. `region` reaches four interpolation sites
+  in production code, and not only ARNs: it also composes endpoint hostnames,
+  so a crafted value is a request-redirection surface as well as an injection
+  one, and neither is guarded by anything today.
+  Task 46 escapes the literal at its own boundary, which is right and stands on
+  its own - an adapter should not be one upstream change away from executing
+  arbitrary SQL. But that fixes one call site, not the class. AWS region codes
+  match `^[a-z]{2}(-[a-z]+)+-[0-9]$`; a check beside `siteName`'s would close
+  every site at once. Decide whether to add it, and note it is a core change
+  affecting every package, so it wants its own task and its own gate rather
+  than riding along inside an analytics adapter.
 - *`createContext` is an untested composition root, and one regression in it
   is silent.* Raised by task 19's gate 2026-08-30, which measured it rather
   than inferring it: mutating `context.ts:211` to `configDocument: {}` passes
