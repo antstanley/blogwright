@@ -1,0 +1,45 @@
+{
+  "name": "blogwright-analytics",
+  "version": "0.3.3",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "lint": "oxlint src",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "blogwright-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "oxlint": "^1.72.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "description": "Traffic analytics for blogwright: CloudFront access logs routed through Firehose into an Iceberg table, with a local dashboard. Installed on demand with `blogwright plugin add analytics`, never shipped with the CLI.",
+  "keywords": [
+    "analytics",
+    "cloudfront",
+    "firehose",
+    "iceberg"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/antstanley/blogwright.git"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

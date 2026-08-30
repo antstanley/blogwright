@@ -344,7 +344,7 @@ task 59, whose role rewrite is what its warning backs.
 | M3 - plugin commands | 12, 13, 14, 15, 16, 17, 18, 19, 20 | `blogwright plugin add\|list\|remove`, `<plugin> init`, and the generic `bootstrap\|status\|destroy` verbs all work against a plugin's scoped store, and `blogwright destroy` refuses while one exists | the plugin system releases on its own with pds still on its hardcoded branch; the plugin-system change spec is documented and changeset-covered, its `Status:` flip deferred to task 58 with the transport seam |
 | M4 - pds migration | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | all six pds actions reach the same functions with the same arguments through generic dispatch; `runPds`, the pds import and the static pds USAGE block are gone, and the pds plugin owns a `blogwright-pds` inline policy on the deploy role | `cli.ts` greps clean for `pds`; the post-deploy sync still fires; the deploy role's secret ARN never resolves to `secret:undefined-*` on any commit; tasks 27 and 28 ship in the same release; the release notes name `blogwright pds bootstrap` |
 | M5 - the transport seam and the plugin's clients | 31, 32, 33, 34, 35, 36, 37, 38 | `packages/analytics` builds; core's transport accepts a plugin-supplied service descriptor and `LogsClient` deliveries take an output format, record fields and a delimiter; the plugin builds `s3tables`, `firehose`, `glue` and `lambda` over the shared signer, pinned to us-east-1 | every existing AWS request is byte-identical, `microvms` still signs against the primary region, and core gains no service key - only `signingUsEast1` on `AwsClients` |
-| M6 - analytics foundations | 39, 40, 41, 42, 43, 44, 45, 46 | the schema, the transform's mapping, `visitor_key`, the bot flag, the per-record drop path, the config block and the query layer are all covered by tests | the package is inert - not published, not a CLI dependency, no manifest field; no test starts DuckDB |
+| M6 - analytics foundations | 39, 40, 41, 42, 43, 44, 45, 46 | the schema, the transform's mapping, `visitor_key`, the bot flag, the per-record drop path, the config block and the query layer are all covered by tests | the package is inert IN THE CLI - not a CLI dependency, no manifest field, skipped by discovery as `not-a-plugin` - though from task 32 it IS staged by release.yml, so a release cut here publishes it empty; no test starts DuckDB |
 | M7 - analytics graph | 47, 48, 49, 50, 51, 52, 53, 54, 55 | `blogwright analytics bootstrap` provisions the twelve-node pipeline and `analytics status` reports it; CloudFront logs land in the Iceberg table | the site's CloudWatch delivery survives; `blogwright bootstrap` does not provision any of it and `blogwright destroy` refuses while `state/<env>.analytics.json` exists |
 | M8 - analytics dashboard, the site graph's last plugin branch, and the three closures | 56, 57, 58, 59, 60, 61 | `blogwright analytics dashboard` serves the prebuilt SvelteKit app over a fixed named-query set from 127.0.0.1, `packages/cli/src/nodes.ts` carries no pds knowledge, `blogwright bootstrap` warns while a plugin's scoped state exists, and `analytics backfill` pulls pre-Firehose history idempotently | no route accepts SQL; five gates green with the app tree present; `nodes.ts` greps clean for `pds`; all three change specs merged - the plugin-system spec at task 58, the pds spec at task 60, the analytics spec at task 61 |
 
@@ -390,9 +390,18 @@ task 59, whose role rewrite is what its warning backs.
   nothing in the plugin-system or pds streams and can be worked from day one.
 - *After task 46.* `packages/analytics` exists and builds, with the
   load-bearing transform tests, the schema, the config block and the query layer
-  all proven. The package is not published, is not a dependency of the CLI, and
-  declares no plugin manifest, so it is inert in the repo. Also independent of
-  everything above it.
+  all proven. It is not a dependency of the CLI and declares no plugin manifest,
+  so the CLI ignores it entirely - `loadCandidate` classifies it
+  `not-a-plugin` and never imports it. It IS published, though: task 32 added
+  it to the fixed changeset group AND to `release.yml`'s staging loops, both
+  necessary for `blogwright plugin add analytics` to resolve at task 18. So a
+  release cut anywhere between tasks 32 and 47 puts an inert
+  `blogwright-analytics` on npm at the CLI's version, and `plugin add` installs
+  it successfully and then silently discovers nothing - which is a better
+  failure than the registry 404 the alternative gives, but is worth stating
+  before someone cuts a release here and wonders. Corrected 2026-08-30; this
+  cut line previously said "not published", which was true only until task 32
+  landed the publishing half of the plan's own changeset-group decision.
 - *After task 55.* `blogwright plugin add analytics` then `analytics bootstrap`
   and `analytics status` provision and report the pipeline, and CloudFront logs
   land in the Iceberg table. Shippable provided the `dashboard` and `backfill`

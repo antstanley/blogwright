@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
   "changelog": ["@changesets/changelog-github", { "repo": "antstanley/blogwright" }],
   "commit": false,
-  "fixed": [["blogwright", "blogwright-core", "blogwright-pds"]],
+  "fixed": [["blogwright", "blogwright-core", "blogwright-pds", "blogwright-analytics"]],
   "linked": [],
   "access": "public",
   "baseBranch": "main",

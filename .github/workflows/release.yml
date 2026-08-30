@@ -2,8 +2,9 @@ name: Release
 
 # Tag-driven, staged npm publishing (modeled on antstanley/oidc-exchange):
 # pushing v<x>.<y>.<z> validates versions, stages blogwright-core,
-# blogwright-pds, and blogwright to npm via OIDC trusted publishing, and cuts a
-# GitHub Release. Staged packages are NOT live until approved out-of-band
+# blogwright-pds, blogwright-analytics, and blogwright to npm via OIDC
+# trusted publishing, and cuts a GitHub Release. Staged packages are NOT
+# live until approved out-of-band
 # (`npm stage approve` or the npmjs staged-packages UI), so the trusted
 # publisher can be restricted to stage-publish only. No npm token anywhere.
 on:
@@ -30,7 +31,7 @@ jobs:
           set -euo pipefail
           VERSION="${REF_NAME#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          for pkg in core pds cli; do
+          for pkg in core pds analytics cli; do
             PKG_VERSION=$(jq -r '.version' "packages/${pkg}/package.json")
             if [ "$PKG_VERSION" != "$VERSION" ]; then
               echo "::error::packages/${pkg}/package.json version ($PKG_VERSION) does not match tag ($VERSION)"
@@ -45,7 +46,7 @@ jobs:
         env:
           VERSION: ${{ steps.extract.outputs.version }}
         run: |
-          for name in blogwright-core blogwright-pds blogwright; do
+          for name in blogwright-core blogwright-pds blogwright-analytics blogwright; do
             if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
               echo "${name}@${VERSION} already published (its stage step will skip)"
             else
@@ -86,7 +87,7 @@ jobs:
       - name: Validate package metadata (publint)
         run: |
           set -euo pipefail
-          for pkg in core pds cli; do
+          for pkg in core pds analytics cli; do
             (cd "packages/${pkg}" && npx --yes publint)
           done
 
@@ -95,7 +96,7 @@ jobs:
         # consumers are unsupported, so CJS resolution modes are not failures.
         run: |
           set -euo pipefail
-          for pkg in core pds cli; do
+          for pkg in core pds analytics cli; do
             (cd "packages/${pkg}" && npx --yes @arethetypeswrong/cli --pack --profile esm-only)
           done
 
@@ -128,6 +129,7 @@ jobs:
           }
           stage packages/core blogwright-core "blogwright-core-${VERSION}.tgz"
           stage packages/pds blogwright-pds "blogwright-pds-${VERSION}.tgz"
+          stage packages/analytics blogwright-analytics "blogwright-analytics-${VERSION}.tgz"
           stage packages/cli blogwright "blogwright-${VERSION}.tgz"
 
       # Reads the ids back out of the publish output rather than calling
@@ -205,7 +207,7 @@ jobs:
 
             Packages are **staged** by CI and go live once approved
             (`npm stage approve` or the npmjs staged-packages UI):
-            `blogwright-core`, `blogwright-pds`, `blogwright`.
+            `blogwright-core`, `blogwright-pds`, `blogwright-analytics`, `blogwright`.
 
             ```bash
             pnpm add -D blogwright@${{ needs.validate.outputs.version }}
