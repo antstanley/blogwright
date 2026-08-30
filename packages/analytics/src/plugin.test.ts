@@ -281,12 +281,13 @@ describe('the command table', () => {
     expect(runners.get('backfill')).toBe(backfill);
   });
 
-  it('refuses from each body, naming the task that lands it', async () => {
+  it('refuses from each body that has not landed yet, naming the task that lands it', async () => {
+    // `dashboard` is deliberately absent from this list: task 56 landed its
+    // body, so it no longer refuses - it starts a listener, and
+    // `commands.test.ts` drives it. The table entry above still points at it,
+    // which is the half of task 47's contract this file keeps pinning.
     await expect(status()).rejects.toThrow(
       'blogwright analytics status is not implemented yet - task 55 lands this command',
-    );
-    await expect(dashboard()).rejects.toThrow(
-      'blogwright analytics dashboard is not implemented yet - task 56 lands this command',
     );
     await expect(backfill()).rejects.toThrow(
       'blogwright analytics backfill is not implemented yet - task 61 lands this command',
