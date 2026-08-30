@@ -5,6 +5,7 @@ import {
   FileNotFoundError,
   findRepoRoot,
   type Plugin,
+  RepoRootNotFoundError,
   type Terminal,
 } from 'blogwright-core';
 import * as pds from 'blogwright-pds';
@@ -143,7 +144,7 @@ function buildHelp(base: string, discovered: DiscoveryResult): string {
  * swallowed here.
  */
 function isNoRepoRootError(err: unknown): boolean {
-  return err instanceof Error && err.message.startsWith('could not find the repo root');
+  return err instanceof RepoRootNotFoundError;
 }
 
 /**
