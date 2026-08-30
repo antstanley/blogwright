@@ -303,9 +303,17 @@ void resolvedIsProposed;
 // ---------------------------------------------------------------------------
 
 // CLAIM C26 [cli_plugin_system §Plugin-supplied AWS services] expects TS2322 -
-// the seam's premise, ground truth today: `SendOptions.service` is the closed
-// `ServiceKey` union, so a plugin's service name does not compile. Retires
-// when task 31 opens the seam; delete the claim and re-run.
+// rewritten 2026-08-30, when task 31 landed. It used to read "ground truth
+// today: `SendOptions.service` is the closed `ServiceKey` union", and used to
+// instruct that the claim be DELETED once the seam opened. Both were wrong to
+// keep. The seam widened `SendOptions['service']` to
+// `ServiceKey | ServiceDescriptor`, and a bare service-name string is
+// assignable to neither arm - so this claim did not retire, it changed
+// meaning. It now pins the shape of the widening: the seam takes a
+// DESCRIPTOR, never a plain string, so core keeps a closed set of names it
+// will sign under while a plugin supplies its own signing name and global
+// flag explicitly. Deleting it would have dropped that guarantee and the
+// plan's stated claim count with it.
 const knownService: SendOptions['service'] = 's3';
 void knownService;
 // @ts-expect-error TS2322

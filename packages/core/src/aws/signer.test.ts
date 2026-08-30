@@ -66,6 +66,25 @@ describe('SigningClient', () => {
       },
     );
   });
+
+  it('labels the AwsError with the service NAME, not its signing name', async () => {
+    // `microvms` is the only core key where the two differ - SIGNING_NAMES
+    // maps it to 'lambda' because MicroVMs is served off the standard Lambda
+    // endpoint. Everywhere else they coincide, so swapping resolved.name for
+    // resolved.signingName at signer.ts's parseError call passes the entire
+    // core suite while silently relabelling every MicroVM AwsError as
+    // 'lambda' - the wrong service in the one field an operator reads first.
+    const transport: Transport = async () => ({
+      statusCode: 400,
+      headers: {},
+      body: new Uint8Array(),
+      text: () => '<Error><Code>ValidationException</Code><Message>bad</Message></Error>',
+    });
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport });
+    await expect(
+      client.send({ service: 'microvms', method: 'GET', path: '/2025-09-09/microvm-images' }),
+    ).rejects.toMatchObject({ service: 'microvms', code: 'ValidationException' });
+  });
 });
 
 describe('SigningClient with a plugin-supplied service descriptor', () => {
