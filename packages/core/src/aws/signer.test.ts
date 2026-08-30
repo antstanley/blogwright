@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { staticCredentials } from './credentials.js';
 import { SigningClient, type Transport } from './signer.js';
@@ -65,5 +65,121 @@ describe('SigningClient', () => {
         statusCode: 404,
       },
     );
+  });
+});
+
+describe('SigningClient with a plugin-supplied service descriptor', () => {
+  // Frozen so a ServiceKey request and its equivalent-descriptor request sign
+  // against the same x-amz-date; every other input (path, query, body,
+  // credentials) is already identical, so a frozen clock is what makes the
+  // two Authorization headers provably byte-identical rather than merely
+  // "usually" identical.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-30T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('produces a byte-identical canonical request and Authorization header to the equivalent ServiceKey - s3', async () => {
+    const capKey = capture();
+    await new SigningClient({ region: 'us-east-1', credentials, transport: capKey.transport }).send(
+      { service: 's3', method: 'GET', path: '/my-bucket/key.txt' },
+    );
+
+    const capDescriptor = capture();
+    await new SigningClient({
+      region: 'us-east-1',
+      credentials,
+      transport: capDescriptor.transport,
+    }).send({
+      service: { service: 's3', signingName: 's3' },
+      method: 'GET',
+      path: '/my-bucket/key.txt',
+    });
+
+    expect(capDescriptor.last()).toEqual(capKey.last());
+  });
+
+  it('produces a byte-identical canonical request and Authorization header to the equivalent ServiceKey - logs', async () => {
+    const capKey = capture();
+    await new SigningClient({ region: 'eu-west-1', credentials, transport: capKey.transport }).send(
+      { service: 'logs', method: 'POST', path: '/', body: '{}' },
+    );
+
+    const capDescriptor = capture();
+    await new SigningClient({
+      region: 'eu-west-1',
+      credentials,
+      transport: capDescriptor.transport,
+    }).send({
+      service: { service: 'logs', signingName: 'logs' },
+      method: 'POST',
+      path: '/',
+      body: '{}',
+    });
+
+    expect(capDescriptor.last()).toEqual(capKey.last());
+  });
+
+  it('signs a descriptor named "s3" without path escaping, and every other descriptor with it', async () => {
+    const path = '/bucket/a%20b.txt';
+
+    const capS3Key = capture();
+    await new SigningClient({
+      region: 'us-east-1',
+      credentials,
+      transport: capS3Key.transport,
+    }).send({ service: 's3', method: 'GET', path });
+
+    const capS3Descriptor = capture();
+    await new SigningClient({
+      region: 'us-east-1',
+      credentials,
+      transport: capS3Descriptor.transport,
+    }).send({ service: { service: 's3', signingName: 's3' }, method: 'GET', path });
+
+    const capOtherDescriptor = capture();
+    await new SigningClient({
+      region: 'us-east-1',
+      credentials,
+      transport: capOtherDescriptor.transport,
+    }).send({ service: { service: 'glue', signingName: 'glue' }, method: 'GET', path });
+
+    // uriEscapePath: false for the s3 descriptor, same as the s3 ServiceKey - the
+    // regression this guards is `opts.service !== 's3'` comparing the descriptor
+    // object itself, which is never === 's3' and would silently flip this to true.
+    expect(capS3Descriptor.last().headers['authorization']).toBe(
+      capS3Key.last().headers['authorization'],
+    );
+    // uriEscapePath: true for a descriptor whose service name isn't 's3'.
+    expect(capOtherDescriptor.last().headers['authorization']).not.toBe(
+      capS3Descriptor.last().headers['authorization'],
+    );
+  });
+
+  it('raises an AwsError carrying the descriptor service name, not "[object Object]"', async () => {
+    const transport: Transport = async () => ({
+      statusCode: 400,
+      headers: {},
+      body: new Uint8Array(),
+      text: () => '{"code":"ValidationException","message":"bad table name"}',
+    });
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport });
+
+    await expect(
+      client.send({
+        service: { service: 's3tables', signingName: 's3tables' },
+        method: 'GET',
+        path: '/tables',
+      }),
+    ).rejects.toMatchObject({
+      name: 'AwsError',
+      service: 's3tables',
+      code: 'ValidationException',
+      statusCode: 400,
+      message: 's3tables: ValidationException - bad table name (HTTP 400)',
+    });
   });
 });

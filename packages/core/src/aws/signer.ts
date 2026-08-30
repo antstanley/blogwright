@@ -3,7 +3,12 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { SignatureV4 } from '@smithy/signature-v4';
 
 import type { CredentialProvider } from './credentials.js';
-import { resolveEndpoint, SIGNING_NAMES, type ServiceKey } from './endpoint.js';
+import {
+  resolveEndpoint,
+  resolveService,
+  type ServiceDescriptor,
+  type ServiceKey,
+} from './endpoint.js';
 import { AwsError, isRetryable } from './errors.js';
 import { withRetry } from '../util.js';
 import { textTag } from './xml.js';
@@ -24,7 +29,7 @@ export type Transport = (req: {
 }) => Promise<RawResponse>;
 
 export interface SendOptions {
-  service: ServiceKey;
+  service: ServiceKey | ServiceDescriptor;
   method: string;
   /** Path starting with '/'. For S3 pass an already-percent-encoded path. */
   path: string;
@@ -93,6 +98,7 @@ export class SigningClient {
   }
 
   async send(opts: SendOptions): Promise<RawResponse> {
+    const resolved = resolveService(opts.service);
     const ep = resolveEndpoint(opts.service, this.region, this.endpointOverride);
     const [hostname, portStr] = ep.host.split(':');
     const port = portStr ? Number(portStr) : undefined;
@@ -121,7 +127,7 @@ export class SigningClient {
     });
 
     const signer = new SignatureV4({
-      service: SIGNING_NAMES[opts.service],
+      service: resolved.signingName,
       region: ep.signingRegion,
       credentials: async () => {
         const c = await this.credentials();
@@ -132,7 +138,7 @@ export class SigningClient {
         };
       },
       sha256: Sha256,
-      uriEscapePath: opts.service !== 's3',
+      uriEscapePath: resolved.name !== 's3',
     });
 
     const signed = await signer.sign(request);
@@ -160,7 +166,7 @@ export class SigningClient {
         // PermanentRedirect is a 301 with no Location header, which fetch
         // returns as final - treating it as success would report writes as
         // stored and listings as empty against the wrong endpoint.
-        if (response.statusCode >= 300) throw parseError(opts.service, response);
+        if (response.statusCode >= 300) throw parseError(resolved.name, response);
         return response;
       },
       { retryable },
