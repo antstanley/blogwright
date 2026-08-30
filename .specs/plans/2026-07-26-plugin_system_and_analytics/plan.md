@@ -614,6 +614,25 @@ task 59, whose role rewrite is what its warning backs.
   change to shared error parsing wants its own task and its own gate covering
   the site's existing pds/cli clients. Decide whether to add that task before
   task 58 closes the stream.
+  One fixture to correct alongside it, found by task 33's fix and confirmed
+  2026-08-30: `packages/core/src/aws/signer.test.ts:181-203` (task 31's
+  descriptor-labelling test) drives an `s3tables` descriptor with
+  `headers: {}` and a fabricated body `{"code":"ValidationException",…}`, then
+  asserts `code: 'ValidationException'`. It is not wrong about `parseError` -
+  a body `code` really is parsed - and a header change would leave it green,
+  since the body limb still fires. But it is fiction about the service it
+  names, and it is the reason this defect stayed invisible in core as well as
+  in the plugin: the one core test exercising an S3 Tables error asserts a
+  wire shape S3 Tables never sends. Whoever does the core fix should re-point
+  that fixture at the header form and keep a separate body-form case for the
+  services that do send one. Task 33's own
+  `packages/analytics/src/aws/s3tables.test.ts:416,430,439` needs the same
+  sweep: its three 400 cases name `ValidationException`, which is not an
+  s3tables exception at all (the model's 400 is `BadRequestException`). It is
+  harmless today because nothing reads the header, and it would fail loudly
+  rather than silently once `parseError` does - but it is the same fabricated
+  wire shape, and it should be corrected in the same change rather than
+  discovered by it.
 - *A plugin cannot introduce its own flag.* Raised by task 10's gate
   2026-08-30. `main`'s `parseArgs` table (`packages/cli/src/cli.ts`, task 07)
   is strict, so `blogwright analytics query --since 7d` dies in the parser
