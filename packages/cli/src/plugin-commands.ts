@@ -25,9 +25,13 @@
  *      already does: the first positional left over once the action is
  *      consumed, overridden by `--env`, defaulting to `production`.
  *   4. Builds the ONE `OpsContext` this dispatch needs, now that the real
- *      environment is confirmed, adapts it into the narrow `PluginContext`
- *      the SPI promises (`toPluginContext`, below), and runs the matched
- *      command, mapping a normal return to exit code 0.
+ *      environment is confirmed, validates the matched plugin's OWN config
+ *      block off that context's raw `configDocument` (`resolvePluginConfig`,
+ *      `plugins.ts` - the dispatched plugin's block and no other), adapts
+ *      the context into the narrow `PluginContext` the SPI promises
+ *      (`toPluginContext`, below) with the validated block on
+ *      `pluginConfig`, and runs the matched command, mapping a normal return
+ *      to exit code 0.
  *
  * Steps 1-3 run BEFORE any `OpsContext` is built - see `runPlugin`'s own
  * doc comment for why an earlier, provisional-context version of this
@@ -138,7 +142,7 @@ import { applyGraph, destroyGraph } from './graph.js';
 import { ask } from './init.js';
 import type { Logger } from './logger.js';
 import type { Ports } from './ports.js';
-import { discover } from './plugins.js';
+import { discover, resolvePluginConfig } from './plugins.js';
 import { logStatusEntries, renderPluginList, type PluginListRow } from './render.js';
 
 /** The default environment every built-in command falls back to. */
@@ -276,10 +280,16 @@ function renderActions(plugin: Plugin<unknown>): string {
  * passes every other member through unchanged. No cast, no `any`, anywhere
  * in it.
  *
- * `pluginConfig` is `{}` until task 19 reads it from the plugin's own
- * `validateConfig` over `configDocument[plugin.configKey]`; no plugin
- * declares `configKey` before then, so nothing reads `pluginConfig` as
- * anything but the empty object the no-null rule requires in its place.
+ * `pluginConfig` is supplied by the CALLER rather than read here, because
+ * this function is handed a plugin's NAME and not the plugin: `runPlugin`
+ * calls `resolvePluginConfig(plugin, ctx.configDocument)` (`plugins.ts`)
+ * first, so an invalid block fails BEFORE the scoped `store.load()` below
+ * makes the dispatch's first AWS call and long before the command does any
+ * work. The parameter is required, with no `{}` default: the dispatcher
+ * erases `TConfig` (it dispatches `Plugin<unknown>` and returns
+ * `PluginContext<unknown>`), so a forgotten argument could not be caught
+ * anywhere downstream - `pnpm typecheck` catching it here is the only
+ * check there is.
  *
  * `siteState` is `ops.state` passed through as the read-only view the SPI
  * promises - a plugin reads the site's own recorded outputs through it (the
@@ -308,6 +318,7 @@ function renderActions(plugin: Plugin<unknown>): string {
 export async function toPluginContext(
   ops: OpsContext,
   pluginName: string,
+  pluginConfig: unknown,
 ): Promise<PluginContext<unknown>> {
   const store = new StateStore(ops.clients.s3, ops.names.bucket, ops.env, pluginName);
   const state = await store.load();
@@ -316,7 +327,7 @@ export async function toPluginContext(
     domain: ops.domain,
     preview: ops.preview,
     config: ops.config,
-    pluginConfig: {},
+    pluginConfig,
     names: ops.names,
     accountId: ops.accountId,
     clients: ops.clients,
@@ -691,7 +702,14 @@ export async function runPlugin(
     ports: { terminal, fs: ports.fs, loader: ports.loader },
   });
 
-  await match.command.run(await toPluginContext(ctx, plugin.name), args);
+  // Validated BEFORE `toPluginContext`, which loads the plugin's own scoped
+  // state object: a plugin that refuses its own config block must fail
+  // before the dispatch makes an AWS call on its behalf, and certainly
+  // before its command runs. This is the one call site - the DISPATCHED
+  // plugin's block and no other (`plugins.ts`'s task-19 DECISION note).
+  const pluginConfig = resolvePluginConfig(plugin, ctx.configDocument);
+
+  await match.command.run(await toPluginContext(ctx, plugin.name, pluginConfig), args);
   return 0;
 }
 

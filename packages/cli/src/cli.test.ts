@@ -981,7 +981,7 @@ describe('toPluginContext', () => {
   it('adapts an OpsContext with no cast, supplying pluginConfig/siteState/record and scoping store/state/save to the plugin', async () => {
     const ops = createTestContext({ env: 'staging', clients: { s3: scopedStateOnlyS3() } });
 
-    const ctx = await toPluginContext(ops, 'demo');
+    const ctx = await toPluginContext(ops, 'demo', {});
 
     expect(ctx.env).toBe(ops.env);
     expect(ctx.domain).toBe(ops.domain);

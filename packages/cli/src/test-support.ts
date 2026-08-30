@@ -55,6 +55,7 @@ export interface TestContextOverrides {
   preview?: boolean | undefined;
   accountId?: string | undefined;
   config?: Partial<OpsConfig> | undefined;
+  configDocument?: Readonly<Record<string, unknown>> | undefined;
   names?: Partial<Names> | undefined;
   state?: Partial<OpsState> | undefined;
   clients?: ClientOverrides | undefined;
@@ -209,9 +210,9 @@ export async function removeTempDir(dir: string): Promise<void> {
 /**
  * Build a complete OpsContext for tests. Defaults: env "test", site "example",
  * account 123456789012, config merged over DEFAULT_CONFIG, derived names,
- * empty state, a fresh in-memory FileSystem, a Vcs that fails fast until
- * overridden, TEST_AGENT_DIR as the agent directory, a silent logger, and a
- * no-op save.
+ * empty state, an empty raw config document, a fresh in-memory FileSystem, a
+ * Vcs that fails fast until overridden, TEST_AGENT_DIR as the agent
+ * directory, a silent logger, and a no-op save.
  */
 export function createTestContext(overrides: TestContextOverrides = {}): OpsContext {
   const env = overrides.env ?? 'test';
@@ -237,6 +238,14 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     domain: overrides.domain ?? config.domain,
     preview: overrides.preview ?? false,
     config,
+    // The raw config document `createContext` keeps off `loadConfig`
+    // (`context.ts`). Defaults to an EMPTY document rather than something
+    // derived from `config`: `config` is the merged, validated `OpsConfig`,
+    // not the file it came from, and the document's whole point here is the
+    // top-level keys `OpsConfig` does not declare. A repo whose config
+    // carries no plugin block is the honest default, and a test that needs
+    // one seeds exactly that block.
+    configDocument: overrides.configDocument ?? {},
     names,
     accountId,
     clients,
@@ -344,7 +353,15 @@ export function createFakeModuleLoader(installed: FakeInstalledPackage[]): Modul
 export interface FakePluginSpec {
   packageName: string;
   namespace: string;
-  plugin: Plugin;
+  /**
+   * `Plugin<unknown>` rather than bare `Plugin` (which is `Plugin<never>`),
+   * so a fixture can declare a real `validateConfig` - its return type is
+   * `TConfig`, and nothing inhabits `never` to return. This is the same
+   * widening `runPlugin` performs on a discovered plugin, and it takes
+   * nothing away: a bare `Plugin` still assigns to it (`never` is assignable
+   * to `unknown`, and every method-declared member is bivariant).
+   */
+  plugin: Plugin<unknown>;
   /** Resolved as the CLI's own bundled dependency rather than the consumer's. */
   bundled?: boolean;
   /**

@@ -7,7 +7,7 @@ import {
   createNodeTerminal,
   deriveNames,
   findRepoRoot,
-  parseConfig,
+  parseConfigDocument,
   StateStore,
   type AwsClients,
   type FileSystem,
@@ -29,6 +29,19 @@ export interface OpsContext {
   /** True for the shared preview stack (host-routed, per-PR prefixes). */
   preview: boolean;
   config: OpsConfig;
+  /**
+   * The environment's config file exactly as parsed, before `OpsConfig`'s
+   * merge and validation - every top-level key the document carries, a
+   * plugin's own block included. `OpsConfig` has no index signature, so this
+   * is the only typed route to `config[plugin.configKey]` (see
+   * `blogwright-core`'s `parseConfigDocument`).
+   *
+   * CLI-side ONLY, and deliberately absent from `PluginContext`: dispatch
+   * reads the DISPATCHED plugin's block off this and hands that one block to
+   * that one plugin (`resolvePluginConfig`, `plugins.ts`), so no plugin ever
+   * sees another plugin's config.
+   */
+  configDocument: Readonly<Record<string, unknown>>;
   names: Names;
   accountId: string;
   clients: AwsClients;
@@ -136,9 +149,20 @@ export async function resolveConfigPath(fs: FileSystem, source: ConfigSource): P
   );
 }
 
-/** Load and parse the first config candidate that exists. Exported for tests. */
-export async function loadConfig(fs: FileSystem, source: ConfigSource): Promise<OpsConfig> {
-  return parseConfig(await fs.readText(await resolveConfigPath(fs, source)));
+/**
+ * Load and parse the first config candidate that exists, returning BOTH
+ * halves `parseConfigDocument` produces: the validated `config` every
+ * built-in command reads, and the `raw` document the dispatch path reads a
+ * plugin's own block out of. The candidate list and its precedence are
+ * unchanged - only the return type widens, so `createContext` can keep the
+ * raw half on {@link OpsContext.configDocument} instead of the file having to
+ * be read and parsed a second time at dispatch. Exported for tests.
+ */
+export async function loadConfig(
+  fs: FileSystem,
+  source: ConfigSource,
+): Promise<{ config: OpsConfig; raw: Readonly<Record<string, unknown>> }> {
+  return parseConfigDocument(await fs.readText(await resolveConfigPath(fs, source)));
 }
 
 /**
@@ -160,7 +184,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
   const logger = createLogger(ports.terminal);
   const agentDir = join(cliPackageDir(), 'agent');
   const root = await findRepoRoot(ports.fs);
-  const config = await loadConfig(ports.fs, {
+  const { config, raw: configDocument } = await loadConfig(ports.fs, {
     env: opts.env,
     root,
     configPath: opts.configPath,
@@ -184,6 +208,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     domain,
     preview: opts.preview ?? false,
     config,
+    configDocument,
     names,
     accountId,
     clients,

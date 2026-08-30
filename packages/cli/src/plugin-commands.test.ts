@@ -634,7 +634,7 @@ describe('toPluginContext', () => {
       },
     });
 
-    const ctx = await toPluginContext(ops, 'demo');
+    const ctx = await toPluginContext(ops, 'demo', {});
 
     expect(ctx.env).toBe(ops.env);
     expect(ctx.domain).toBe(ops.domain);

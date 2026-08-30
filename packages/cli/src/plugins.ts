@@ -71,6 +71,29 @@
  * ordinary `matchAction` precedence (a plugin's own commands win before any
  * generic fallback is even considered) already gives a declared `status`
  * command priority with no boundary check needed here.
+ *
+ * DECISION (task 19, recorded here plainly because task 28 has to reason
+ * about it when pds's config validation moves out of core): a plugin's own
+ * config block is validated for the ONE plugin being DISPATCHED, in the
+ * dispatch path (`runPlugin` calls {@link resolvePluginConfig} below), and
+ * never for every discovered plugin. Two reasons, and neither is taste:
+ *
+ *   - `createContext` (`context.ts`) is the path every built-in command
+ *     takes and it accepts no plugin list, so validating there would have to
+ *     run `discover` on `deploy`, `status` and `bootstrap` - breaking the
+ *     laziness rule (§CLI -> Plugin discovery: a built-in command loads no
+ *     plugin module) that task 10's own test pins. There is no seam in
+ *     `createContext` through which the dispatched plugin ALONE could be
+ *     reached, because at that point no plugin has been chosen yet.
+ *   - Validating every discovered plugin, wherever it happened, would let an
+ *     unrelated plugin's malformed block abort a command that has nothing to
+ *     do with it. A block for a plugin that is not installed is already
+ *     valid and inert - the same contract `pds` has today - and a block for
+ *     an installed plugin that is not the one being run is inert for exactly
+ *     the same reason: nothing reads it.
+ *
+ * The corollary is that `blogwright <plugin> <action>` is the only thing
+ * that reports a bad block, and it reports only its own plugin's.
  */
 
 import { join } from 'node:path';
@@ -78,6 +101,7 @@ import { join } from 'node:path';
 import {
   FileNotFoundError,
   PLUGIN_NAME_PATTERN,
+  pluginBlock,
   validatePlugin,
   type FileSystem,
   type Plugin,
@@ -391,6 +415,67 @@ function resolveNamespaceCollisions(loaded: readonly InstalledPlugin[]): {
   return { installed, failures };
 }
 
+/**
+ * Split the namespace survivors again on the CONFIG KEY each claims: two
+ * installed plugins declaring the same `configKey` are both rejected, naming
+ * both packages and the shared key. §CLI -> Config ownership gives a plugin
+ * ONE top-level key it owns end to end, and two owners cannot both be it -
+ * whichever won would silently be handed the other's block, and
+ * `blogwright <plugin> init` would splice two different plugins' answers
+ * under one key.
+ *
+ * The whole group fails, exactly as a duplicate NAMESPACE group does
+ * (`resolveNamespaceCollisions` above): there is no "first" survivor to
+ * prefer, and the arriving order is an implementation detail of two
+ * `dependencies` maps. Reported as `failures` entries rather than a thrown
+ * error, per the module comment's collect-versus-throw rule - a colliding
+ * pair must not take `blogwright deploy`, or any unrelated plugin, down with
+ * it, and `blogwright plugin list` is where a human sees the collision.
+ *
+ * Runs AFTER the namespace pass, over its survivors, so a pair that collides
+ * on BOTH its name and its key is reported once - against the name, which is
+ * the collision an operator hits first.
+ *
+ * A plugin declaring no `configKey` at all owns nothing to collide over and
+ * is never grouped: it always survives.
+ */
+function rejectDuplicateConfigKeys(loaded: readonly InstalledPlugin[]): {
+  survivors: InstalledPlugin[];
+  failures: PluginLoadFailure[];
+} {
+  const byKey = new Map<string, InstalledPlugin[]>();
+  for (const entry of loaded) {
+    const key = entry.plugin.configKey;
+    // A plugin owning no key owns nothing to collide over, so it is never
+    // grouped and always survives.
+    if (key === undefined) continue;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(entry);
+    else byKey.set(key, [entry]);
+  }
+
+  const failures: PluginLoadFailure[] = [];
+  const rejected = new Set<string>();
+  for (const [key, entries] of byKey) {
+    if (entries.length === 1) continue;
+    const packageNames = entries.map((entry) => entry.packageName).sort();
+    for (const packageName of packageNames) {
+      rejected.add(packageName);
+      failures.push({
+        packageName,
+        reason:
+          `config key "${key}" is claimed by more than one installed plugin: ` +
+          `${packageNames.join(', ')} - a plugin owns exactly one top-level config key, and no ` +
+          'two plugins may own the same one',
+      });
+    }
+  }
+
+  // Filtered rather than re-accumulated, so survivors arrive in the order
+  // they were discovered in rather than in the grouping map's.
+  return { survivors: loaded.filter((entry) => !rejected.has(entry.packageName)), failures };
+}
+
 /** The generic action name `init?(io)` contributors would otherwise collide with - see {@link rejectDeclaredInitCollisions}. */
 const GENERIC_INIT_ACTION = 'init';
 
@@ -515,15 +600,71 @@ export async function discover(
   const initCollisions = rejectDeclaredInitCollisions(loaded);
   const lifecycleCollisions = rejectDeclaredLifecycleCollisions(initCollisions.survivors);
   const collisions = resolveNamespaceCollisions(lifecycleCollisions.survivors);
+  const configKeys = rejectDuplicateConfigKeys(collisions.installed);
   failures.push(
     ...initCollisions.failures,
     ...lifecycleCollisions.failures,
     ...collisions.failures,
+    ...configKeys.failures,
   );
 
   // `plugins` is derived from `installed` here, at the single point both are
   // built, so no later change can leave the two disagreeing about which
   // plugins survived the collision passes.
-  const installed = collisions.installed;
+  const installed = configKeys.survivors;
   return { plugins: installed.map((entry) => entry.plugin), installed, failures };
+}
+
+/**
+ * Resolve the config block ONE plugin owns into the value the dispatcher puts
+ * on `ctx.pluginConfig` - `runPlugin`'s single call, made for the plugin
+ * being DISPATCHED and no other (see the module comment's task-19 DECISION
+ * for why the scope is one plugin rather than every discovered one).
+ *
+ * The block is read off the RAW config document (`OpsContext.configDocument`,
+ * `context.ts`), never off `OpsConfig`, which has no index signature to reach
+ * a plugin's key through. `pluginBlock` returning `unknown` and the plugin's
+ * own `validateConfig` narrowing it is the sanctioned boundary: the very next
+ * step after the read validates it.
+ *
+ * The validator IS called when the plugin's key is ABSENT from the document,
+ * with `undefined`. That is the whole point of it: a validator is the only
+ * thing that can turn an absent block into the plugin's own defaults, and a
+ * repo that installs a plugin without writing its block is a valid,
+ * documented configuration. Handing `{}` straight through instead would put a
+ * block on `ctx.pluginConfig` that never went through the plugin's own
+ * defaulting - typed as total, `undefined` at runtime in every defaulted
+ * field - and nothing downstream could catch it, because the dispatcher
+ * erases `TConfig` (`Plugin<unknown>`, `PluginContext<unknown>`).
+ *
+ * `{}` is returned ONLY where there is no validator to call: a plugin that
+ * declares no `configKey` (a `Plugin<never>`, which cannot read
+ * `pluginConfig` at all) or no `validateConfig` - probed with `typeof ===
+ * 'function'`, the way this module and `plugin-commands.ts` both probe the
+ * `init` contributor, because core's `validatePlugin` type-checks neither
+ * member. `pluginConfig` is a required member, so `undefined` is not an
+ * option there - DEVELOPMENT.md's no-null rule.
+ *
+ * A validator's own rejection is re-raised with the plugin's name and the key
+ * in front of it and the plugin's message VERBATIM behind it, so an operator
+ * reading `blogwright analytics bootstrap`'s failure learns which plugin
+ * refused which key without the plugin having to name itself in every message
+ * it writes. It propagates - never swallowed, never downgraded to a warning -
+ * and exits non-zero through `bin.ts`'s error path.
+ */
+export function resolvePluginConfig(
+  plugin: Plugin<unknown>,
+  configDocument: Readonly<Record<string, unknown>>,
+): unknown {
+  const { configKey } = plugin;
+  if (configKey === undefined || typeof plugin.validateConfig !== 'function') return {};
+  const block = pluginBlock(configDocument, configKey);
+  try {
+    return plugin.validateConfig(block);
+  } catch (err) {
+    throw new Error(
+      `plugin "${plugin.name}" rejected the "${configKey}" config block: ${(err as Error).message}`,
+      { cause: err },
+    );
+  }
 }

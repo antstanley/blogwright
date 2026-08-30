@@ -595,6 +595,23 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *`createContext` is an untested composition root, and one regression in it
+  is silent.* Raised by task 19's gate 2026-08-30, which measured it rather
+  than inferring it: mutating `context.ts:211` to `configDocument: {}` passes
+  `pnpm typecheck` **and all 926 repo tests**. In production that failure is
+  not loud - an operator's `"analytics": {"namespace": "marketing"}` would run
+  on `namespace: "web"` with no message anywhere, which is the
+  config-silently-ignored shape rather than a crash.
+  It is a pre-existing structural limit, not something task 19 introduced:
+  `createContext` builds real AWS clients through `createClients` and calls
+  `sts.getAccountId()`, and `ContextOptions` carries no `clients` seam, so the
+  function cannot be exercised without network. Every other link in that chain
+  IS mutation-pinned, and the dispatch fixtures reproduce those two lines over
+  the real `loadConfig` - which is why the gate discharged the obligation.
+  Decide whether `ContextOptions` should gain a client/transport seam. That is
+  a design change rather than a test fix, and it would make roughly a dozen
+  currently-unreachable lines testable; the first assertion owed if it lands is
+  that `configDocument` carries the raw document.
 - *Nothing reports a dropped record.* Raised by task 42's implementation
   2026-08-30. `mapRecord` returns a `reason` naming the column and field that
   failed, and the transform handler discards it: a dropped record becomes a
