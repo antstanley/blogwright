@@ -13,11 +13,27 @@
  * modules or globals").
  */
 
-import { colors, createScriptedTerminal, stripColors, type ResourceNode } from 'blogwright-core';
+import {
+  AwsError,
+  colors,
+  createScriptedTerminal,
+  stripColors,
+  type Microvm,
+  type ResourceNode,
+  type S3Object,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { readNodeStatus, status } from './commands.js';
+import {
+  assertNoScopedState,
+  destroy,
+  previewTeardown,
+  readNodeStatus,
+  status,
+} from './commands.js';
 import type { OpsContext } from './context.js';
+import { destroyGraph } from './graph.js';
+import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
 import { createTestContext } from './test-support.js';
 
@@ -232,5 +248,413 @@ describe('readNodeStatus', () => {
 
     expect(info).toEqual([]);
     expect(warn).toEqual([]);
+  });
+});
+
+/** One S3 object at `key`, with every other field a value the guard never reads. */
+function s3Object(key: string): S3Object {
+  return { key, size: 0, lastModified: undefined, etag: undefined };
+}
+
+/*
+ * `assertNoScopedState` is the guard `destroy` (below) runs before
+ * `destroyGraph(buildNodes(ctx), ctx)` - see its own doc comment for why:
+ * scoping changes a state object's KEY, not the bucket, so the site's own
+ * bucket node would otherwise empty a plugin's `state/<env>.<scope>.json`
+ * along with everything else, orphaning every resource it records. These
+ * tests pin it directly against a recording S3 client - task 16's own
+ * definition of done asks that the refusal be asserted on the CLIENT, not
+ * merely on the raised message.
+ */
+describe('assertNoScopedState', () => {
+  function s3ListingContext(
+    objects: S3Object[],
+    env = 'production',
+  ): { ctx: OpsContext; calls: string[] } {
+    const calls: string[] = [];
+    const ctx = createTestContext({
+      env,
+      names: { bucket: 'my-bucket' },
+      clients: {
+        s3: {
+          listObjects: async (bucket, prefix) => {
+            calls.push(`list ${bucket} ${prefix}`);
+            return objects;
+          },
+        },
+      },
+    });
+    return { ctx, calls };
+  }
+
+  it('resolves and lists exactly the "state/" prefix when only the site\'s own state object exists', async () => {
+    const { ctx, calls } = s3ListingContext([s3Object('state/production.json')]);
+
+    await expect(assertNoScopedState(ctx)).resolves.toBeUndefined();
+    expect(calls).toEqual(['list my-bucket state/']);
+  });
+
+  it('resolves when the bucket has no state objects at all (a not-yet-bootstrapped environment)', async () => {
+    const { ctx, calls } = s3ListingContext([]);
+
+    await expect(assertNoScopedState(ctx)).resolves.toBeUndefined();
+    expect(calls).toEqual(['list my-bucket state/']);
+  });
+
+  it('refuses, naming the scope and its own teardown verb, when one scoped state object exists', async () => {
+    const { ctx, calls } = s3ListingContext([
+      s3Object('state/production.json'),
+      s3Object('state/production.analytics.json'),
+    ]);
+
+    await expect(assertNoScopedState(ctx)).rejects.toThrow(
+      /analytics.*run `blogwright analytics destroy production --yes` first/s,
+    );
+    // The guard itself never issues anything but the one listing call.
+    expect(calls).toEqual(['list my-bucket state/']);
+  });
+
+  it('names every scope, sorted, when more than one plugin still has state', async () => {
+    const { ctx } = s3ListingContext([
+      s3Object('state/production.json'),
+      s3Object('state/production.pds.json'),
+      s3Object('state/production.analytics.json'),
+    ]);
+
+    let message = '';
+    await assertNoScopedState(ctx).catch((err: unknown) => {
+      message = (err as Error).message;
+    });
+    expect(message).toContain('run `blogwright analytics destroy production --yes` first');
+    expect(message).toContain('run `blogwright pds destroy production --yes` first');
+    // Deterministic order regardless of the listing's own order.
+    expect(message.indexOf('analytics')).toBeLessThan(message.indexOf('pds'));
+  });
+
+  it('ignores an object for a different environment under the same prefix', async () => {
+    const { ctx, calls } = s3ListingContext([s3Object('state/staging.analytics.json')]);
+
+    await expect(assertNoScopedState(ctx)).resolves.toBeUndefined();
+    expect(calls).toEqual(['list my-bucket state/']);
+  });
+
+  /*
+   * The remedy has to carry the ENVIRONMENT, not just the scope. A plugin
+   * command resolves its own environment as `values.env ?? envPositional ??
+   * DEFAULT_ENV` with `DEFAULT_ENV = 'production'` (`plugin-commands.ts`), so
+   * an env-less `blogwright analytics destroy --yes` targets production
+   * wherever it is printed. Against a refusal on any other environment that
+   * is the wrong stack: at best it loads empty state and removes nothing,
+   * leaving the operator stuck in this very refusal; at worst it tears down
+   * the live production one. `preview` is the case that is ALWAYS wrong,
+   * because `runPreview` builds `env: 'preview'` unconditionally
+   * (`cli.ts`) - it can never coincide with the default.
+   *
+   * These assertions pin the WHOLE command, so dropping `${ctx.env}` back out
+   * of the interpolation fails them; asserting only that the scope is named
+   * would pass on the broken form just as well as on the fixed one.
+   */
+  it("names the environment being torn down, not the plugin verb's production default", async () => {
+    const { ctx } = s3ListingContext([s3Object('state/preview.analytics.json')], 'preview');
+
+    let message = '';
+    await assertNoScopedState(ctx).catch((err: unknown) => {
+      message = (err as Error).message;
+    });
+    expect(message).toContain('run `blogwright analytics destroy preview --yes` first');
+    // The env-less form would silently mean production, which belongs
+    // nowhere in a refusal raised over the preview environment.
+    expect(message).not.toContain('production');
+  });
+});
+
+/**
+ * A full, empty-state run of `buildNodes(ctx)`'s production graph through
+ * `destroy` - not a fake node set, because the guard's own definition of
+ * done requires the SITE verb's real call sequence, unchanged apart from
+ * the guard's own `listObjects`. With state empty (the default
+ * `createTestContext`), every node whose `delete()` is conditioned on a
+ * recorded output (the microvm image, the OAC, the distribution) skips its
+ * AWS call entirely - only the unconditional deletes below actually fire.
+ */
+function fullDestroyContext(
+  scopedObjects: S3Object[],
+  opts: {
+    /** `preview: true` on the context - the shape `previewTeardown` runs against. */
+    preview?: boolean;
+    /** Raised by `listObjects` instead of answering, e.g. a bucket already deleted. */
+    listFailure?: Error;
+    /** Raised by the bucket node's own `deletePrefix`, as a missing bucket really would. */
+    deletePrefixFailure?: Error;
+    /** Environment name; the state key the store deletes is derived from it. */
+    env?: string;
+  } = {},
+): { ctx: OpsContext; calls: string[] } {
+  const calls: string[] = [];
+  const ctx = createTestContext({
+    env: opts.env ?? 'production',
+    preview: opts.preview ?? false,
+    names: { bucket: 'my-bucket' },
+    ports: { terminal: createScriptedTerminal({ interactive: false }) },
+    clients: {
+      s3: {
+        listObjects: async (bucket, prefix) => {
+          calls.push(`s3.listObjects ${bucket} ${prefix}`);
+          if (opts.listFailure) throw opts.listFailure;
+          return scopedObjects;
+        },
+        deletePrefix: async (bucket, prefix) => {
+          calls.push(`s3.deletePrefix ${bucket} ${prefix}`);
+          if (opts.deletePrefixFailure) throw opts.deletePrefixFailure;
+          return 0;
+        },
+        deleteBucket: async (bucket) => {
+          calls.push(`s3.deleteBucket ${bucket}`);
+        },
+        putObject: async (bucket, key) => {
+          calls.push(`s3.putObject ${key}`);
+        },
+        deleteObject: async (bucket, key) => {
+          calls.push(`s3.deleteObject ${key}`);
+        },
+      },
+      logs: {
+        deleteLogGroup: async (name) => {
+          calls.push(`logs.deleteLogGroup ${name}`);
+        },
+      },
+      logsUsEast1: {
+        deleteLogGroup: async (name) => {
+          calls.push(`logsUsEast1.deleteLogGroup ${name}`);
+        },
+        findDeliveryIdBySource: async () => undefined,
+        deleteDeliverySource: async () => {
+          calls.push('logsUsEast1.deleteDeliverySource');
+        },
+        deleteDeliveryDestination: async () => {
+          calls.push('logsUsEast1.deleteDeliveryDestination');
+        },
+      },
+      iam: {
+        deleteRole: async (name) => {
+          calls.push(`iam.deleteRole ${name}`);
+        },
+      },
+      cloudfront: {
+        deleteFunction: async (name) => {
+          calls.push(`cloudfront.deleteFunction ${name}`);
+        },
+      },
+      microvms: {
+        listMicrovms: async (): Promise<Microvm[]> => [],
+      },
+    },
+  });
+  return { ctx, calls };
+}
+
+describe('destroy', () => {
+  it('refuses without --yes and makes no client call at all', async () => {
+    const { ctx, calls } = fullDestroyContext([]);
+
+    await expect(destroy(ctx, { yes: false })).rejects.toThrow(
+      'refusing to destroy "production" without --yes',
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses while a plugin state object exists, issuing no delete at all', async () => {
+    const { ctx, calls } = fullDestroyContext([
+      s3Object('state/production.json'),
+      s3Object('state/production.analytics.json'),
+    ]);
+
+    await expect(destroy(ctx, { yes: true })).rejects.toThrow(
+      'run `blogwright analytics destroy production --yes` first',
+    );
+    // The guard's own listing is the ONLY call this run makes - in
+    // particular, no deletePrefix/deleteBucket/deleteObject: the bucket
+    // (and the plugin's own state object living in it) is untouched.
+    expect(calls).toEqual(['s3.listObjects my-bucket state/']);
+  });
+
+  it('proceeds exactly as before the guard when no scoped state object exists', async () => {
+    const { ctx, calls } = fullDestroyContext([s3Object('state/production.json')]);
+
+    await destroy(ctx, { yes: true });
+
+    // The guard's listing is the one call the guard itself adds, first;
+    // every call after it is `destroy`'s own pre-existing sequence -
+    // microvm listing, then each node's delete (in reverse dependency
+    // order) interleaved with the state save after each, then the site's
+    // own state object deleted last.
+    expect(calls[0]).toBe('s3.listObjects my-bucket state/');
+    expect(calls.at(-1)).toBe('s3.deleteObject state/production.json');
+    // The graph's own deletes genuinely ran - the guard did not swallow them.
+    expect(calls).toContain('s3.deletePrefix my-bucket '); // bucketNode.delete's deletePrefix(bucket, '')
+    expect(calls).toContain('s3.deleteBucket my-bucket');
+    expect(calls).toContain(`iam.deleteRole ${ctx.names.buildRole}`);
+    expect(calls).toContain(`iam.deleteRole ${ctx.names.execRole}`);
+    expect(calls).toContain(`logs.deleteLogGroup ${ctx.names.microvmLogGroup}`);
+    expect(calls).toContain(`logsUsEast1.deleteLogGroup ${ctx.names.cloudfrontLogGroup}`);
+    expect(calls).toContain(`cloudfront.deleteFunction ${ctx.names.prefix}-router`);
+    expect(calls).toContain('logsUsEast1.deleteDeliverySource');
+    expect(calls).toContain('logsUsEast1.deleteDeliveryDestination');
+    // Every production node, and no plugin node - the guard neither adds
+    // nor removes any of the site's own graph.
+    expect(buildNodes(ctx)).toHaveLength(11);
+  });
+
+  /*
+   * The recovery path: a teardown interrupted after the bucket node ran
+   * leaves an environment whose bucket is gone but whose roles, log groups,
+   * CloudFront function and delivery trio are not. `listObjects` does NOT
+   * swallow a 404 the way `getObjectText` does, so a guard that let
+   * `NoSuchBucket` propagate would refuse to clean any of them up - causing
+   * exactly the orphaning it exists to prevent. See `assertNoScopedState`'s
+   * doc comment for the decision.
+   */
+  function bucketGone(): AwsError {
+    return new AwsError({
+      service: 's3',
+      code: 'NoSuchBucket',
+      message: 'The specified bucket does not exist',
+      statusCode: 404,
+    });
+  }
+
+  it('treats an already-deleted bucket as no scoped state, and still tears down every non-bucket resource', async () => {
+    // Faithful to the real thing: with the bucket gone, its own node's
+    // `deletePrefix` fails too - and always did, guard or no guard. What
+    // must not change is everything that happens BEFORE it.
+    const { ctx, calls } = fullDestroyContext([], {
+      listFailure: bucketGone(),
+      deletePrefixFailure: bucketGone(),
+    });
+
+    await expect(destroy(ctx, { yes: true })).rejects.toThrow('NoSuchBucket');
+
+    // The eight non-bucket resources are gone - the pre-guard outcome,
+    // restored. (The bucket node is last in reverse dependency order, so
+    // its failure comes after all of them.)
+    expect(calls).toContain(`iam.deleteRole ${ctx.names.buildRole}`);
+    expect(calls).toContain(`iam.deleteRole ${ctx.names.execRole}`);
+    expect(calls).toContain(`logs.deleteLogGroup ${ctx.names.microvmLogGroup}`);
+    expect(calls).toContain(`logsUsEast1.deleteLogGroup ${ctx.names.cloudfrontLogGroup}`);
+    expect(calls).toContain(`cloudfront.deleteFunction ${ctx.names.prefix}-router`);
+    expect(calls).toContain('logsUsEast1.deleteDeliverySource');
+    expect(calls).toContain('logsUsEast1.deleteDeliveryDestination');
+    // The guard ran first and got out of the way, rather than aborting ahead
+    // of `clearRunningMicrovms`.
+    expect(calls[0]).toBe('s3.listObjects my-bucket state/');
+    expect(calls.at(-1)).toBe('s3.deletePrefix my-bucket ');
+  });
+
+  it('still propagates a listing failure that is NOT a missing bucket, deleting nothing', async () => {
+    // A denied (or throttled) listing says nothing about whether scoped
+    // state exists, so it must not be read as "clear" - only a not-found is.
+    const denied = new AwsError({
+      service: 's3',
+      code: 'AccessDenied',
+      message: 'Access Denied',
+      statusCode: 403,
+    });
+    const { ctx, calls } = fullDestroyContext([], { listFailure: denied });
+
+    await expect(destroy(ctx, { yes: true })).rejects.toThrow('AccessDenied');
+    expect(calls).toEqual(['s3.listObjects my-bucket state/']);
+  });
+
+  it('propagates a 404 that is not a missing bucket, rather than reading it as "no scoped state"', async () => {
+    // The clear-the-guard path matches `NoSuchBucket` specifically, not
+    // `AwsError`'s broad `isNotFound` - which is equally true of `NoSuchKey`
+    // and of ANY 404. A non-AWS, S3-compatible endpoint (`--endpoint`)
+    // answering a listing with a spurious 404 must not be read as an empty
+    // bucket: that would let the teardown empty a bucket whose plugin state
+    // object is alive, which is precisely what the guard exists to stop.
+    const spurious404 = new AwsError({
+      service: 's3',
+      code: 'NoSuchKey',
+      message: 'The specified key does not exist',
+      statusCode: 404,
+    });
+    const { ctx, calls } = fullDestroyContext([], { listFailure: spurious404 });
+
+    await expect(destroy(ctx, { yes: true })).rejects.toThrow('NoSuchKey');
+    expect(calls).toEqual(['s3.listObjects my-bucket state/']);
+  });
+});
+
+/*
+ * `previewTeardown` is the site teardown's own graph over the preview
+ * environment's bucket - the same `destroyGraph(buildNodes(ctx), ctx)`, the
+ * same `bucketNode().delete()` emptying every prefix - so a plugin
+ * bootstrapped against the preview environment is orphaned by it in exactly
+ * the way `destroy` above is guarded against. These pin the guard on the
+ * SIBLING verb, on the client rather than on a printed message.
+ */
+describe('previewTeardown', () => {
+  const PREVIEW_ENV = 'preview';
+
+  function previewContext(scopedObjects: S3Object[]): { ctx: OpsContext; calls: string[] } {
+    return fullDestroyContext(scopedObjects, { preview: true, env: PREVIEW_ENV });
+  }
+
+  it('refuses without --yes and makes no client call at all', async () => {
+    const { ctx, calls } = previewContext([]);
+
+    await expect(previewTeardown(ctx, { yes: false })).rejects.toThrow(
+      'refusing to tear down the preview stack without --yes',
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses while a plugin state object exists, issuing no delete at all', async () => {
+    const { ctx, calls } = previewContext([
+      s3Object(`state/${PREVIEW_ENV}.json`),
+      s3Object(`state/${PREVIEW_ENV}.analytics.json`),
+    ]);
+
+    // Caught rather than matched, so the ONE run below is the only one this
+    // test performs - the call assertion at the end depends on it.
+    let message = '';
+    await previewTeardown(ctx, { yes: true }).catch((err: unknown) => {
+      message = (err as Error).message;
+    });
+
+    // The remedy names THIS environment. `previewTeardown` always runs with
+    // `env: 'preview'`, while a plugin's own `destroy` falls back to
+    // `DEFAULT_ENV = 'production'` - so the env-less form printed here would
+    // point the operator at the production stack. This is the one case where
+    // the default can never accidentally be right. See `assertNoScopedState`.
+    expect(message).toContain(`run \`blogwright analytics destroy ${PREVIEW_ENV} --yes\` first`);
+    expect(message).not.toContain('production');
+    // The guard's own listing is the ONLY call this run makes. No
+    // deletePrefix/deleteBucket/deleteObject in particular: the preview
+    // bucket - and the plugin's own state object inside it - is untouched.
+    expect(calls).toEqual(['s3.listObjects my-bucket state/']);
+  });
+
+  it('adds exactly one listObjects at the head and nothing else when no plugin state exists', async () => {
+    // Proven by EQUIVALENCE, not by inspection: run the un-guarded body
+    // (`clearRunningMicrovms` -> `destroyGraph(buildNodes(ctx))` ->
+    // `store.delete()`, exactly what `previewTeardown` does after the guard)
+    // against an identical recording context, then require the guarded
+    // verb's calls to be that same sequence with one listing prepended.
+    const baseline = previewContext([]);
+    expect(await clearRunningMicrovms(baseline.ctx)).toBe(true);
+    await destroyGraph(buildNodes(baseline.ctx), baseline.ctx);
+    await baseline.ctx.store.delete();
+
+    const { ctx, calls } = previewContext([s3Object(`state/${PREVIEW_ENV}.json`)]);
+    await previewTeardown(ctx, { yes: true });
+
+    expect(calls).toEqual(['s3.listObjects my-bucket state/', ...baseline.calls]);
+    // Not a vacuous comparison: the preview graph genuinely tore itself down.
+    expect(calls).toContain('s3.deleteBucket my-bucket');
+    expect(calls.at(-1)).toBe(`s3.deleteObject state/${PREVIEW_ENV}.json`);
+    // The preview graph, unchanged by the guard: the production eleven plus
+    // the wildcard DNS record and the preview GitHub OIDC role.
+    expect(buildNodes(ctx)).toHaveLength(13);
   });
 });

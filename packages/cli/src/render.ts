@@ -77,6 +77,46 @@ export function renderStatusTree(entries: StatusEntry[]): string[] {
   });
 }
 
+/**
+ * Leveled-logger surface {@link logStatusEntries} reports through - both the
+ * CLI's own `Logger` (`packages/cli/src/logger.ts`) and core's
+ * `PluginLogger` (`blogwright-core`'s `plugin.ts`) satisfy it structurally,
+ * so this module needs neither type imported.
+ */
+export interface StatusLogger {
+  info(msg: string): void;
+  warn(msg: string): void;
+}
+
+/**
+ * Report `entries` through `logger`, choosing the pretty tree ({@link
+ * renderStatusTree}) on an interactive terminal or the plain, CI-stable form
+ * otherwise: a `present`/`missing` line via `logger.info`, or a `read
+ * failed` line via `logger.warn` for an entry whose `read()` threw. Shared
+ * by the CLI's own `status` command (`commands.ts`) and a plugin's generic
+ * `status` verb (`plugin-commands.ts`), so the two never carry two
+ * near-identical copies of the same render branch.
+ */
+export function logStatusEntries(
+  entries: StatusEntry[],
+  pretty: boolean,
+  logger: StatusLogger,
+): void {
+  if (pretty) {
+    for (const line of renderStatusTree(entries)) logger.info(line);
+    return;
+  }
+  // The plain form is the stable contract for CI logs and agents.
+  for (const entry of entries) {
+    if (entry.state === 'error') {
+      logger.warn(`${entry.title}: read failed (${entry.detail})`);
+      continue;
+    }
+    const mark = entry.state === 'present' ? colors.green('present') : colors.yellow('missing');
+    logger.info(`  ${mark}  ${entry.title} ${entry.detail ? colors.dim(entry.detail) : ''}`);
+  }
+}
+
 export interface HistoryEntry {
   hash: string;
   status: 'succeeded' | 'failed';

@@ -14,7 +14,7 @@ import { cliPackageDir, type ContextOptions, type OpsContext } from './context.j
 import { initSite } from './init.js';
 import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
-import { runPlugin } from './plugin-commands.js';
+import { genericLifecycleActions, runPlugin } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { Ports } from './ports.js';
 
@@ -81,12 +81,27 @@ type PluginFailure = DiscoveryResult['failures'][number];
  * `summary` (§CLI → Plugin dispatch: "`blogwright --help` appends one
  * section per discovered plugin, built from its `description` and its
  * commands' `summary` fields").
+ *
+ * Then the generic lifecycle verbs the plugin answers -
+ * `genericLifecycleActions` (`plugin-commands.ts`), which returns them only
+ * for a plugin contributing `nodes`, and never one the plugin declares
+ * itself (already listed above). Built from the SAME source the dispatcher
+ * builds its synthetic command from, so `--help` cannot advertise a verb
+ * `runPlugin` would refuse, nor hide one it answers: a nodes-only plugin
+ * declares no commands at all, and listing `plugin.commands` alone rendered
+ * it here as a bare description line with nothing under it while all three
+ * verbs worked.
  */
 function renderPluginSection(plugin: Plugin): string {
   const commandLines = plugin.commands.map(
     (command) => `    ${command.action} - ${command.summary}`,
   );
-  return [`  ${plugin.name} - ${plugin.description}`, ...commandLines].join('\n');
+  const lifecycleLines = genericLifecycleActions(plugin).map(
+    (command) => `    ${command.action} - ${command.summary}`,
+  );
+  return [`  ${plugin.name} - ${plugin.description}`, ...commandLines, ...lifecycleLines].join(
+    '\n',
+  );
 }
 
 /**

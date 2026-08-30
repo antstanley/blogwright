@@ -251,6 +251,35 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
 }
 
 /**
+ * The single S3 read every dispatched plugin command now makes: the load of
+ * the plugin's own SCOPED state object (`toPluginContext`,
+ * `plugin-commands.ts`), answered with `undefined` - a fresh, empty state.
+ *
+ * Deliberately NOT a blanket `getObjectText: async () => undefined`. That
+ * would loosen {@link createTestContext}'s reject-everything default for
+ * every key in every context built with it, including the site's own
+ * `state/<env>.json` - and a regression re-pointing a plugin's store back
+ * at the site's key would then read as a perfectly ordinary empty state
+ * instead of failing. Only a key of the scoped SHAPE
+ * (`state/<env>.<plugin>.json` - three dot-separated parts, where the
+ * site's own key has two) is answered here; every other key still fails
+ * fast at the transport with the same message it would have before.
+ */
+export function scopedStateOnlyS3(): {
+  getObjectText: (bucket: string, key: string) => Promise<string | undefined>;
+} {
+  return {
+    getObjectText: async (bucket, key) => {
+      if (/^state\/[^./]+\.[^./]+\.json$/.test(key)) return undefined;
+      throw new Error(
+        `unexpected S3 read in test: getObjectText(${bucket}, ${key}) - only a plugin's own ` +
+          'scoped state key is defaulted; override clients.s3 on createTestContext for anything else',
+      );
+    },
+  };
+}
+
+/**
  * Fixtures shared by `cli.test.ts`'s "generic plugin dispatch" tests and
  * `plugin-commands.test.ts` - both owned by task 10, which is why they share
  * ONE definition here rather than each carrying its own copy.

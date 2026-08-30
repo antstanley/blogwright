@@ -1,4 +1,4 @@
-import { colors, findRepoRoot, type ResourceNode } from 'blogwright-core';
+import { AwsError, colors, findRepoRoot, type ResourceNode, type S3Object } from 'blogwright-core';
 import { syncAfterDeploy } from 'blogwright-pds';
 
 import type { OpsContext } from './context.js';
@@ -15,8 +15,8 @@ import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import {
   formatDuration,
+  logStatusEntries,
   renderHistoryTable,
-  renderStatusTree,
   renderSummary,
   type StatusEntry,
   type SummaryRow,
@@ -50,11 +50,130 @@ export async function bootstrap(ctx: OpsContext): Promise<void> {
   if (typeof domain === 'string') ctx.logger.info(`Site will be served at https://${domain}`);
 }
 
+/**
+ * The prefix every state object - scoped or not - is filed under
+ * (`StateStore`, `packages/core/src/state.ts`). Not exported from core, so
+ * mirrored here rather than reached for; the guard below only ever reads
+ * this prefix, never constructs a key to write.
+ */
+const STATE_PREFIX = 'state/';
+
+/** The site's own unscoped state key - the one object under `STATE_PREFIX` the guard below must never treat as a plugin's. */
+function siteStateKey(env: string): string {
+  return `${STATE_PREFIX}${env}.json`;
+}
+
+/**
+ * Every plugin scope with a `state/<env>.<scope>.json` object present under
+ * `STATE_PREFIX`, derived from a listing rather than the plugin registry -
+ * so {@link assertNoScopedState} holds even for a plugin that has since
+ * been uninstalled. Sorted, so the guard's message is deterministic
+ * regardless of the order S3 lists objects in.
+ */
+function scopedStateScopes(env: string, objects: readonly { key: string }[]): string[] {
+  const prefix = `${STATE_PREFIX}${env}.`;
+  const site = siteStateKey(env);
+  const scopes = objects
+    .map((o) => o.key)
+    .filter((key) => key !== site && key.startsWith(prefix) && key.endsWith('.json'))
+    .map((key) => key.slice(prefix.length, -'.json'.length));
+  return [...new Set(scopes)].sort();
+}
+
+/**
+ * Refuse to destroy the site while any plugin's own state object still
+ * exists in the bucket - §State → Scoped state stores' "`blogwright
+ * destroy` therefore refuses while any `state/<env>.<plugin>.json` exists".
+ *
+ * A scope changes the state object's KEY, not the bucket it lives in
+ * (`StateStore`, `packages/core/src/state.ts`) - a scoped and an unscoped
+ * store for the same environment are constructed over the very same
+ * `names.bucket` - and the site's own bucket node empties every prefix
+ * before deleting the bucket (`deletePrefix(ctx.names.bucket, '')`,
+ * `nodes.ts`'s `bucketNode().delete()`). Without this guard, a site
+ * teardown deletes `state/<env>.<scope>.json` while every resource it
+ * records lives on: the plugin's next `destroy` then loads empty state,
+ * every node's `read()` returns false, and nothing is removed - the
+ * plugin's resources are silently orphaned.
+ *
+ * Reads the bucket, not the plugin registry, so the refusal holds even for
+ * a plugin that has since been uninstalled. Runs inside the teardown verbs
+ * themselves, not `createContext` - so no other command pays for the extra
+ * `listObjects` call and plugin discovery stays lazy - and ahead of
+ * `clearRunningMicrovms`/`destroyGraph` in each, so a refusal has zero side
+ * effects: nothing is terminated, nothing is deleted.
+ *
+ * BOTH teardown verbs call it: `destroy` (below) and `previewTeardown`,
+ * which runs the very same `destroyGraph(buildNodes(ctx), ctx)` over the
+ * very same `bucketNode().delete()` and so empties the preview stack's
+ * bucket - including a `state/<env>.<scope>.json` a plugin bootstrapped
+ * against that environment - in exactly the same way. Nothing about the
+ * orphaning above is specific to the site's own environment, so nothing
+ * about the guard is either.
+ *
+ * A MISSING BUCKET IS TREATED AS CLEAR, not as an error. `listObjects` does
+ * not swallow a 404 the way `getObjectText` does, so an environment whose
+ * bucket a previous (interrupted) teardown already deleted would otherwise
+ * fail here with a raw `NoSuchBucket` before a single non-bucket resource -
+ * roles, log groups, the CloudFront function, the delivery trio - had been
+ * cleaned up, on precisely the recovery path an operator reaches for after
+ * an interrupted teardown. A bucket that is gone holds no state object at
+ * all, scoped or otherwise, so there is nothing to protect and every reason
+ * to let the teardown finish: refusing here would CAUSE the orphaning this
+ * guard exists to prevent. Only `NoSuchBucket` is treated this way - every
+ * other failure (denied, throttled, a network fault) still propagates,
+ * because those say nothing about whether scoped state exists.
+ *
+ * Exported - like `readNodeStatus` above - so a test can pin its outcomes
+ * directly against a recording S3 client, rather than only through a full
+ * `destroy()` run over the entire production graph.
+ */
+export async function assertNoScopedState(ctx: OpsContext): Promise<void> {
+  let objects: S3Object[];
+  try {
+    objects = await ctx.clients.s3.listObjects(ctx.names.bucket, STATE_PREFIX);
+  } catch (err) {
+    // No bucket, no state objects - see this function's doc comment. Matched
+    // on the bucket's own error code rather than the broad `isNotFound`,
+    // which is equally true of `NoSuchKey` and of ANY 404 (`AwsError`,
+    // `packages/core/src/aws/errors.ts`): a spurious 404 from a non-AWS,
+    // S3-compatible endpoint (`--endpoint`) would otherwise read as "no
+    // scoped state" and let the teardown empty the bucket over a plugin's
+    // live state object - the exact orphaning this guard exists to prevent.
+    // Every other failure propagates, which ends the teardown safely rather
+    // than deleting past the guard.
+    if (err instanceof AwsError && err.code === 'NoSuchBucket') return;
+    throw err;
+  }
+  const scopes = scopedStateScopes(ctx.env, objects);
+  if (scopes.length === 0) return;
+  // The remedy MUST name the environment. `runPlugin` resolves a plugin
+  // command's environment as `values.env ?? envPositional ?? DEFAULT_ENV`
+  // with `DEFAULT_ENV = 'production'` (`plugin-commands.ts`), so an env-less
+  // `blogwright <scope> destroy --yes` silently targets production - always
+  // the wrong environment when this guard fires from `previewTeardown`,
+  // which builds `env: 'preview'` unconditionally (`cli.ts`'s `runPreview`).
+  // Printed against a preview refusal, the env-less form at best loads empty
+  // state and removes nothing, leaving the operator stuck in this same
+  // refusal, and at worst tears down the live production stack. `deriveNames`
+  // keys off `env` alone, so the positional below is the whole fix - and it
+  // covers both callers, because each passes the very environment it is
+  // tearing down.
+  const lines = scopes.map(
+    (scope) => `  - ${scope}: run \`blogwright ${scope} destroy ${ctx.env} --yes\` first`,
+  );
+  throw new Error(
+    `refusing to destroy "${ctx.env}": ${scopes.length} plugin state object(s) still exist in ` +
+      `s3://${ctx.names.bucket}/${STATE_PREFIX}\n${lines.join('\n')}`,
+  );
+}
+
 /** Destroy the full infrastructure graph. */
 export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<void> {
   if (!opts.yes) {
     throw new Error(`refusing to destroy "${ctx.env}" without --yes`);
   }
+  await assertNoScopedState(ctx);
   ctx.logger.info(colors.bold(`Destroying "${ctx.env}"`));
   // Running builder MicroVMs pin the image and make its deletion fail; clear them first
   // (or let the operator cancel and wait for in-flight builds to finish).
@@ -218,6 +337,12 @@ export async function previewList(ctx: OpsContext): Promise<void> {
 /** Tear down the entire shared preview stack. */
 export async function previewTeardown(ctx: OpsContext, opts: { yes: boolean }): Promise<void> {
   if (!opts.yes) throw new Error('refusing to tear down the preview stack without --yes');
+  // The preview stack's teardown is the SITE teardown's graph over the
+  // preview environment's own bucket - same `destroyGraph(buildNodes(ctx))`,
+  // same `bucketNode().delete()` emptying every prefix - so a plugin
+  // bootstrapped against this environment is orphaned here in exactly the
+  // way `destroy` above is guarded against. See `assertNoScopedState`.
+  await assertNoScopedState(ctx);
   ctx.logger.info(colors.bold('Tearing down preview stack'));
   if (!(await clearRunningMicrovms(ctx))) return;
   await destroyGraph(buildNodes(ctx), ctx);
@@ -337,19 +462,6 @@ export async function status(
   nodes: ResourceNode<OpsContext>[] = buildNodes(ctx),
 ): Promise<void> {
   ctx.logger.info(colors.bold(`Status for "${ctx.env}" (bucket ${ctx.names.bucket})`));
-  const pretty = ctx.ports.terminal.isInteractive;
   const entries = await readNodeStatus(nodes, ctx);
-  if (pretty) {
-    for (const line of renderStatusTree(entries)) ctx.logger.info(line);
-    return;
-  }
-  // The plain form is the stable contract for CI logs and agents.
-  for (const entry of entries) {
-    if (entry.state === 'error') {
-      ctx.logger.warn(`${entry.title}: read failed (${entry.detail})`);
-      continue;
-    }
-    const mark = entry.state === 'present' ? colors.green('present') : colors.yellow('missing');
-    ctx.logger.info(`  ${mark}  ${entry.title} ${entry.detail ? colors.dim(entry.detail) : ''}`);
-  }
+  logStatusEntries(entries, ctx.ports.terminal.isInteractive, ctx.logger);
 }

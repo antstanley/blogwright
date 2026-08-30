@@ -58,20 +58,66 @@
  * would additionally require a runnable AWS session before an operator has
  * even finished being asked their plugin's questions - so it deliberately
  * does not.
+ *
+ * TASK 16 - the generic `bootstrap`/`status`/`destroy` lifecycle verbs, and
+ * PRECEDENCE. Like `init`, these three are only ever reached once step 2's
+ * `matchAction` has already failed to match the plugin's own `commands` -
+ * but the precedence differs by verb:
+ *
+ *   - `bootstrap` and `destroy` are ALWAYS the generic verbs. A plugin may
+ *     not import the CLI (§CLI → Plugin dispatch), and so cannot run the
+ *     engine (`applyGraph`/`destroyGraph`, `graph.ts`) itself - there is no
+ *     way for a plugin's own `bootstrap`/`destroy` command to do what these
+ *     verbs need to do. A plugin declaring either as one of its own
+ *     `commands` is therefore rejected at discovery, naming the plugin and
+ *     the colliding action - `plugins.ts`'s `rejectDeclaredLifecycleCollisions`,
+ *     beside `rejectDeclaredInitCollisions` in the same collision pass (see
+ *     that module's DECISION note) - so `matchAction` never has a real
+ *     `bootstrap`/`destroy` command to match against in the first place.
+ *   - `status` is the generic verb ONLY UNLESS the plugin declares its own -
+ *     `read()` lives on the plugin's own nodes, no engine call is needed,
+ *     so there is nothing stopping a plugin from implementing `status`
+ *     itself (pds's `secret status` is a precedent for a plugin owning its
+ *     own status reporting). A declared `status` command is therefore left
+ *     alone: `matchAction` already matches it in step 2, and the generic
+ *     verb below is never reached for that plugin.
+ *
+ * All three are further gated on `plugin.nodes` being declared at all
+ * (`genericLifecycleCommand`, below): a plugin with no `nodes` contributor
+ * gains none of the three, and asking for one falls through to the same
+ * unknown-action refusal every other unmatched action gets - it is not a
+ * special case, because `genericLifecycleCommand` returns `undefined` for
+ * exactly that plugin, the same way an undeclared `init` contributor leaves
+ * `runGenericInit` unreached above.
+ *
+ * Each of the three runs the CLI's own engine - `applyGraph`, `destroyGraph`
+ * (`graph.ts`) and `readNodeStatus` (`commands.ts`) - over `plugin.nodes(ctx)`
+ * against a context built by `toPluginContext` (below), which by this task
+ * re-points `store`/`state`/`save()` at a `StateStore` scoped to the
+ * plugin's own name (`state/<env>.<plugin>.json`) rather than the site's.
+ * `destroy` additionally refuses without `--yes`, mirroring the site verb's
+ * own contract (`commands.ts`'s `destroy`), and deletes the scoped state
+ * object itself once `destroyGraph` has torn down every node - mirroring
+ * `commands.ts`'s own `destroy`/`previewTeardown`, both of which call
+ * `ctx.store.delete()` right after `destroyGraph`.
  */
 
 import {
+  colors,
   findRepoRoot,
   parseConfig,
+  StateStore,
   type ConfigBlockEntry as PluginConfigBlockEntry,
   type FileSystem,
   type Plugin,
   type PluginCommand,
   type PluginContext,
   type PluginInitIo,
+  type ResourceNode,
   type Terminal,
 } from 'blogwright-core';
 
+import { readNodeStatus } from './commands.js';
 import { renderConfigBlock, spliceConfigBlock } from './config-block.js';
 import {
   cliPackageDir,
@@ -79,10 +125,12 @@ import {
   type ContextOptions,
   type OpsContext,
 } from './context.js';
+import { applyGraph, destroyGraph } from './graph.js';
 import { ask } from './init.js';
 import type { Logger } from './logger.js';
 import type { Ports } from './ports.js';
 import { discover } from './plugins.js';
+import { logStatusEntries } from './render.js';
 
 /** The default environment every built-in command falls back to. */
 // Also the default `--env` in `cli.ts`'s option table; kept here because the
@@ -185,22 +233,27 @@ function matchAction(
  * Render a plugin's available actions, one per line, for an unknown-action
  * refusal.
  *
- * Includes the generic `init` when the plugin contributes one, because a
- * contributor-only plugin declares NO commands: listing `plugin.commands`
- * alone printed `"demo" actions:` and then nothing at all, while
- * `blogwright demo init` worked perfectly well. A refusal that tells an
- * operator the plugin has no actions, when it has one, is worse than no
- * refusal.
+ * Includes the generic `init` when the plugin contributes one, and the
+ * generic `bootstrap`/`status`/`destroy` lifecycle verbs when it
+ * contributes `nodes` ({@link genericLifecycleActions}), because a plugin
+ * can declare NO commands at all and still answer four of them: listing
+ * `plugin.commands` alone printed `"demo" actions:` and then nothing
+ * whatsoever for a nodes-only plugin, while `blogwright demo bootstrap`
+ * worked perfectly well. A refusal that tells an operator the plugin has no
+ * actions, when it has some, is worse than no refusal.
  */
 function renderActions(plugin: Plugin<unknown>): string {
   const declared = plugin.commands.map((command) => `  ${command.action} - ${command.summary}`);
-  const generic =
+  const init =
     typeof plugin.init === 'function'
       ? [
           `  ${GENERIC_INIT_ACTION} - write this plugin's config block into the environment's config file`,
         ]
       : [];
-  return [`"${plugin.name}" actions:`, ...declared, ...generic].join('\n');
+  const lifecycle = genericLifecycleActions(plugin).map(
+    (command) => `  ${command.action} - ${command.summary}`,
+  );
+  return [`"${plugin.name}" actions:`, ...declared, ...init, ...lifecycle].join('\n');
 }
 
 /**
@@ -210,35 +263,45 @@ function renderActions(plugin: Plugin<unknown>): string {
  * `pluginConfig`, `siteState` or `record`, so a bare assignment is
  * `TS2739`. This function supplies exactly those three - plus the
  * two-member `ports` `PluginPorts` narrows the CLI's six-member `Ports`
- * to - and passes every other member through unchanged. No cast, no `any`,
- * anywhere in it.
+ * to, and the plugin's own scoped `store`/`state`/`save()` (below) - and
+ * passes every other member through unchanged. No cast, no `any`, anywhere
+ * in it.
  *
  * `pluginConfig` is `{}` until task 19 reads it from the plugin's own
  * `validateConfig` over `configDocument[plugin.configKey]`; no plugin
  * declares `configKey` before then, so nothing reads `pluginConfig` as
  * anything but the empty object the no-null rule requires in its place.
- * This function has no `plugin: Plugin<unknown>` parameter yet because
- * nothing in it needs one - both later extensions do, and are expected to
- * EXTEND this function rather than recreate it: task 16 needs `plugin.name`
- * to build the scoped `StateStore` (see below), and task 19 needs
- * `plugin.configKey`/`plugin.validateConfig` for `pluginConfig`. Add the
- * parameter when the first of the two lands, not before.
  *
  * `siteState` is `ops.state` passed through as the read-only view the SPI
- * promises, and `record` writes into `ops.state.resources` directly.
- * CRITICALLY, `store`, `state` and `save()` are STILL the site's own, byte
- * for byte - task 16 is what re-points all three at a `StateStore` scoped
- * to the plugin's own name. The compiler will not catch this: `OpsContext`'s
- * `store`/`state`/`save()` typecheck straight through as `PluginContext`'s
- * of the same names with no error, because the TYPES happen to line up even
- * though the STORAGE they point at does not yet. Until task 16 lands, every
- * one of the three state surfaces this function builds reads and writes the
- * SITE's own `state/<env>.json` - which is exactly why nothing between this
- * task and task 16 may call a plugin's `nodes(ctx)` against a context this
- * function built: doing so would silently record a plugin's resources into
- * the site's own state document instead of a scoped one.
+ * promises - a plugin reads the site's own recorded outputs through it (the
+ * analytics log-delivery node reads the site's CloudFront distribution
+ * through it), but never writes it. It is deliberately NOT the scoped load
+ * below: overwriting it would leave a plugin unable to see the site's own
+ * outputs at all.
+ *
+ * `store`, `state` and `save()` are the ONE thing this function gets that a
+ * bare assignment from `OpsContext` would not: a `StateStore` scoped to
+ * `pluginName` (`state/<env>.<pluginName>.json`, `StateStore`'s fourth
+ * constructor argument - `packages/core/src/state.ts`), its own freshly
+ * loaded `OpsState`, and a `save()` that persists THAT state through THAT
+ * store - never the site's own `state/<env>.json`. This is why the function
+ * is `async` where a straight field-for-field adaptation would not need to
+ * be: building the plugin's own `state` requires awaiting the scoped
+ * store's `load()`. Before this existed (tasks 10-15), `OpsContext`'s
+ * `store`/`state`/`save()` typechecked straight through as `PluginContext`'s
+ * of the same names with no error - the TYPES lined up even though the
+ * STORAGE did not - which is why nothing before this task may call a
+ * plugin's `nodes(ctx)`: doing so would have silently recorded a plugin's
+ * resources into the site's own state document instead of its own, and
+ * `record`, below, closes exactly that gap by writing into the scoped
+ * `state.resources` rather than the site's.
  */
-export function toPluginContext(ops: OpsContext): PluginContext<unknown> {
+export async function toPluginContext(
+  ops: OpsContext,
+  pluginName: string,
+): Promise<PluginContext<unknown>> {
+  const store = new StateStore(ops.clients.s3, ops.names.bucket, ops.env, pluginName);
+  const state = await store.load();
   return {
     env: ops.env,
     domain: ops.domain,
@@ -251,13 +314,15 @@ export function toPluginContext(ops: OpsContext): PluginContext<unknown> {
     ports: { fs: ops.ports.fs, terminal: ops.ports.terminal },
     tags: ops.tags,
     logger: ops.logger,
-    store: ops.store,
-    state: ops.state,
+    store,
+    state,
     siteState: ops.state,
     record: (nodeId, outputs) => {
-      ops.state.resources[nodeId] = outputs;
+      state.resources[nodeId] = outputs;
     },
-    save: ops.save,
+    save: async () => {
+      await store.save(state);
+    },
   };
 }
 
@@ -354,6 +419,152 @@ async function runGenericInit(
 }
 
 /**
+ * The three action names that are always generic UNLESS gated out - see
+ * this module's TASK 16 PRECEDENCE section. Kept as a named constant, the
+ * same way `GENERIC_INIT_ACTION` is, though nothing outside this module
+ * needs to spell any of the three: `plugins.ts`'s `rejectDeclaredLifecycleCollisions`
+ * (which cares about two of them, never `status`) keeps its own literal set
+ * rather than importing this one, for the same reason `GENERIC_INIT_ACTION`
+ * is mirrored rather than shared - see that module's own DECISION note.
+ *
+ * The map carries each verb's SUMMARY beside its name because two places
+ * need it and they must not drift: `genericLifecycleCommand` (below) hands
+ * it to the synthetic `PluginCommand` it dispatches, and
+ * {@link genericLifecycleActions} hands the same string to both listings
+ * that advertise the verb (`renderActions` here, `renderPluginSection` in
+ * `cli.ts`). A verb whose listed summary disagreed with the one it
+ * dispatches under would be its own small lie.
+ */
+const GENERIC_LIFECYCLE_ACTIONS: ReadonlyMap<string, string> = new Map([
+  ['bootstrap', "reconcile this plugin's resources"],
+  ['status', "show this plugin's resource status"],
+  ['destroy', "tear down this plugin's resources"],
+]);
+
+/** `--yes` rendered by `serialiseFlags`, above - what `genericLifecycleCommand`'s `destroy` reads back out of `args` to decide whether to refuse. */
+const YES_FLAG = '--yes';
+
+/**
+ * Reconcile `plugin.nodes(ctx)` with the CLI's own engine - `applyGraph`
+ * (`graph.ts`) - against the plugin's own scoped state. Mirrors
+ * `commands.ts`'s own `bootstrap`, one context type narrower.
+ */
+async function runGenericBootstrap(
+  plugin: Plugin<unknown>,
+  nodesOf: (ctx: PluginContext<unknown>) => ResourceNode[],
+  ctx: PluginContext<unknown>,
+): Promise<void> {
+  ctx.logger.info(colors.bold(`Bootstrapping "${plugin.name}" for "${ctx.env}"`));
+  await applyGraph<PluginContext<unknown>>(nodesOf(ctx), ctx);
+  ctx.logger.ok(`bootstrap complete for "${plugin.name}" in "${ctx.env}"`);
+}
+
+/**
+ * Read `plugin.nodes(ctx)`'s live status via `commands.ts`'s `readNodeStatus`
+ * - the same read loop the CLI's own `status` command runs - and render it
+ * through the same interactive/plain branch (`render.ts`'s `logStatusEntries`,
+ * shared with `commands.ts`'s `status` so neither carries its own copy of
+ * that branch).
+ */
+async function runGenericStatus(
+  plugin: Plugin<unknown>,
+  nodesOf: (ctx: PluginContext<unknown>) => ResourceNode[],
+  ctx: PluginContext<unknown>,
+): Promise<void> {
+  ctx.logger.info(colors.bold(`Status for "${plugin.name}" in "${ctx.env}"`));
+  const entries = await readNodeStatus<PluginContext<unknown>>(nodesOf(ctx), ctx);
+  logStatusEntries(entries, ctx.ports.terminal.isInteractive, ctx.logger);
+}
+
+/**
+ * Tear down `plugin.nodes(ctx)` via the CLI's own engine - `destroyGraph`
+ * (`graph.ts`) - then delete the plugin's own scoped state object, mirroring
+ * `commands.ts`'s own `destroy`/`previewTeardown` (both call
+ * `ctx.store.delete()` right after `destroyGraph`). Refuses without `--yes`,
+ * the same contract `commands.ts`'s own `destroy` raises
+ * (`refusing to destroy "<env>" without --yes`), naming the plugin too so
+ * the refusal is unambiguous about which teardown was refused.
+ */
+async function runGenericDestroy(
+  plugin: Plugin<unknown>,
+  nodesOf: (ctx: PluginContext<unknown>) => ResourceNode[],
+  ctx: PluginContext<unknown>,
+  yes: boolean,
+): Promise<void> {
+  if (!yes) {
+    throw new Error(`refusing to destroy "${plugin.name}" in "${ctx.env}" without --yes`);
+  }
+  ctx.logger.info(colors.bold(`Destroying "${plugin.name}" in "${ctx.env}"`));
+  await destroyGraph<PluginContext<unknown>>(nodesOf(ctx), ctx);
+  await ctx.store.delete();
+  ctx.logger.ok(`destroyed "${plugin.name}" in "${ctx.env}"`);
+}
+
+/**
+ * Build a synthetic `PluginCommand` for one of the three generic lifecycle
+ * actions, so `runPlugin` can hand it to the exact same dispatch plumbing
+ * (env resolution, context build, `command.run(ctx, args)`) a plugin's own
+ * declared commands go through, rather than duplicating that plumbing for a
+ * second time here. `undefined` when `action` is not one of the three
+ * ({@link GENERIC_LIFECYCLE_ACTIONS}), or when `plugin` declares no `nodes`
+ * contributor at all - the single gate all three verbs share, per this
+ * module's TASK 16 PRECEDENCE section - so `runPlugin` needs no separate
+ * check for either case: both fall straight through to the ordinary
+ * unknown-action refusal.
+ */
+function genericLifecycleCommand(
+  plugin: Plugin<unknown>,
+  action: string | undefined,
+): PluginCommand<unknown> | undefined {
+  const nodesOf = plugin.nodes;
+  if (!nodesOf || action === undefined) return undefined;
+  const summary = GENERIC_LIFECYCLE_ACTIONS.get(action);
+  if (summary === undefined) return undefined;
+  switch (action) {
+    case 'bootstrap':
+      return { action, summary, run: async (ctx) => runGenericBootstrap(plugin, nodesOf, ctx) };
+    case 'status':
+      return { action, summary, run: async (ctx) => runGenericStatus(plugin, nodesOf, ctx) };
+    default: // 'destroy' - GENERIC_LIFECYCLE_ACTIONS has exactly these three members.
+      return {
+        action,
+        summary,
+        run: async (ctx, args) => runGenericDestroy(plugin, nodesOf, ctx, args.includes(YES_FLAG)),
+      };
+  }
+}
+
+/**
+ * The generic lifecycle verbs `plugin` actually answers, as `{ action,
+ * summary }` pairs, for the two places that LIST a plugin's actions: the
+ * unknown-action refusal ({@link renderActions}, below) and `--help`
+ * (`cli.ts`'s `renderPluginSection`). Exported for the second of those;
+ * both must list exactly what {@link genericLifecycleCommand} would
+ * dispatch, or the listing advertises a verb the dispatcher refuses (or,
+ * worse, hides one that works - the state this function was added to fix,
+ * where a nodes-only plugin's refusal printed a heading and nothing at
+ * all).
+ *
+ * Gated on `plugin.nodes` exactly as `genericLifecycleCommand` is, so a
+ * plugin with no `nodes` contributor advertises none of the three. A verb
+ * the plugin declares ITSELF is omitted here rather than listed twice: only
+ * `status` can be declared (`bootstrap`/`destroy` are rejected at
+ * discovery, `plugins.ts`'s `rejectDeclaredLifecycleCollisions`), and its
+ * own command already appears in the caller's declared-command lines -
+ * where `matchAction`'s precedence means that is the one that actually
+ * runs.
+ */
+export function genericLifecycleActions(
+  plugin: Plugin<unknown>,
+): { action: string; summary: string }[] {
+  if (!plugin.nodes) return [];
+  const declared = new Set(plugin.commands.map((command) => command.action));
+  return [...GENERIC_LIFECYCLE_ACTIONS]
+    .filter(([action]) => !declared.has(action))
+    .map(([action, summary]) => ({ action, summary }));
+}
+
+/**
  * Handle `blogwright <command> <action> [env] [args]` once `command` has
  * failed the `KNOWN_COMMANDS` membership test - i.e. it is either an
  * installed plugin's namespace or entirely unknown.
@@ -425,14 +636,13 @@ export async function runPlugin(
   // style bans.
   const plugin: Plugin<unknown> = found;
 
-  const match = matchAction(plugin.commands, rest);
+  let match = matchAction(plugin.commands, rest);
   if (!match) {
     // The generic `init` action - only reached because no declared command
     // matched. A plugin with its own `init` command never gets here for
     // that action (matchAction already returned it above); a plugin with
-    // neither a command nor a contributor falls through to the same unknown
-    // action refusal every other unmatched action gets, which already
-    // reports the action unavailable and lists what the plugin does have.
+    // neither a command nor a contributor falls through toward the generic
+    // lifecycle check below, and from there to the unknown-action refusal.
     if (rest[0] === GENERIC_INIT_ACTION && typeof plugin.init === 'function') {
       return runGenericInit(
         plugin,
@@ -445,9 +655,18 @@ export async function runPlugin(
         ports.fs,
       );
     }
-    logger.error(`unknown ${plugin.name} action: ${rest[0] ?? '(none)'}`);
-    logger.info(renderActions(plugin));
-    return 1;
+    // The generic `bootstrap`/`status`/`destroy` lifecycle verbs - see this
+    // module's TASK 16 PRECEDENCE section. Wrapped as a synthetic
+    // single-word `ActionMatch` so it falls through the SAME env
+    // resolution/context build/`run(ctx, args)` plumbing every declared
+    // command already uses below, rather than a second copy of it here.
+    const generic = genericLifecycleCommand(plugin, rest[0]);
+    if (!generic) {
+      logger.error(`unknown ${plugin.name} action: ${rest[0] ?? '(none)'}`);
+      logger.info(renderActions(plugin));
+      return 1;
+    }
+    match = { command: generic, wordCount: 1 };
   }
 
   const afterAction = rest.slice(match.wordCount);
@@ -463,6 +682,6 @@ export async function runPlugin(
     ports: { terminal, fs: ports.fs, loader: ports.loader },
   });
 
-  await match.command.run(toPluginContext(ctx), args);
+  await match.command.run(await toPluginContext(ctx, plugin.name), args);
   return 0;
 }

@@ -7,6 +7,26 @@
 **Produces:** `analytics-error-bucket`, `analytics-firehose-role` and `analytics-firehose-stream` in `packages/analytics/src/nodes.ts` - a us-east-1 bucket for failed records, a delivery role holding exactly four concretely-scoped grants and declaring a dependency on each node whose recorded output those grants interpolate, and a stream writing the Iceberg destination through the transform, whose `read` surfaces the delivery state `analytics status` reports
 **Pointers:** `packages/analytics/src/nodes.ts` (tasks 48–50 - the node module this appends to and the recorded ARNs it reads), `packages/analytics/src/nodes.test.ts` (tasks 48–50 - the transport-mocked suite this extends), `packages/analytics/src/aws/firehose.ts` (task 34 - create/describe/delete delivery stream and tagging), `packages/analytics/src/aws/clients.ts` (task 38 - `createAnalyticsClients(ctx)`, which also carries the us-east-1 `S3Client` the error bucket needs), `packages/core/src/aws/iam.ts:45,84,128` (`ensureRole`, `putRolePolicy`, `deleteRole`), `packages/cli/src/nodes.ts:119-148` (`applyBuildRolePolicy` - the multi-statement inline policy with one concrete `Resource` per statement, including the `:129-131` comment on a grant that is not implied), `packages/cli/src/nodes.ts:180-216` (`applyExecRolePolicy` - the create/update-shared policy helper shape), `packages/cli/src/nodes.ts:24-26` (`logGroupArn` - deriving a scoped ARN from account and region), `packages/core/src/config.ts:333-345` (`Names` - read for the `<env>-<siteName>` prefix the error bucket's name follows; `names.bucket` is the site's own bucket and is deliberately NOT the error prefix's target), `packages/cli/src/nodes.ts:702-707` (`pollUntil` over a settling resource - the precedent if the stream needs to reach `ACTIVE` before dependants use it), [the assumption stating why the plugin owns its own us-east-1 error bucket](../../../changes/2026-07-26-analytics_plugin.md) (§Assumptions, the `S3DestinationConfiguration.BucketARN` bullet)
 
+> **ROUTED FINDING - added 2026-08-30 from task 34's verification gate.**
+> This task's DoD requires attempting `UpdateDestination` before falling back to
+> replacement, but that operation is NOT on the `FirehoseClient` task 34 landed -
+> correctly, since task 34's DoD and the change spec's client surface both name
+> exactly four operations. Two fields it needs are also dropped by
+> `DeliveryStreamStatus`: `VersionId` (AWS requires the current version id to
+> update a destination) and `Destinations[].DestinationId`.
+> **Resolution: this task widens the client.** Add `updateDestination` and carry
+> those two fields through, rather than restating the reconcile as
+> delete-and-recreate. Replacement cascades - a new stream carries a new ARN, so
+> the CloudFront log delivery task 53 builds would have to be repointed, and
+> records in flight during the gap are lost. `UpdateDestination` avoids both.
+> Follow task 34's established shape when you do: verify every body key against
+> the AWS reference BEFORE writing, because transport tests assert the body the
+> implementation itself constructs and cannot catch a wrong key; and note that
+> every Firehose exception is HTTP 400, so `code` is the only usable signal (no
+> `statusCode` limb, unlike the s3tables client).
+> The change spec's "four operations" line is then stale - it is recorded in
+> plan.md's open questions for task 58's closure pass.
+
 ## Steps
 
 - [ ] Add `analytics-error-bucket` ahead of the role: a plain S3 bucket in `us-east-1` for Firehose's failed-record output, created through the plugin bundle's us-east-1 `S3Client` (task 38 - core's `S3Client` built over `ctx.clients.signingUsEast1`, never `ctx.clients.s3`, which signs in `config.region`), named from the same `<env>-<siteName>` derivation the other analytics resources use. It is NOT the site's environment bucket: `S3DestinationConfiguration.BucketARN` matches `arn:.*:s3:::[\w\.\-]{1,255}` - an S3 ARN carries no region, so the API can neither express nor reject a cross-region bucket, and Firehose's cross-region documentation covers only HTTP endpoint destinations. Resting the pipeline on undocumented behaviour is the thing this node avoids.

@@ -30,6 +30,7 @@ import {
   createFakeModuleLoader,
   createTestContext,
   makeFakePlugin,
+  scopedStateOnlyS3,
   type FakePluginSpec,
   type RecordedRun,
 } from './test-support.js';
@@ -117,6 +118,13 @@ function testContextFactory(terminal: ScriptedTerminal): {
       env: opts.env,
       ports: opts.ports,
       logger: createLogger(terminal),
+      // Every dispatched plugin command now runs through `toPluginContext`,
+      // which loads the plugin's own scoped store - a call the tests below
+      // that dispatch a command, but don't care about state, never asked
+      // for. `scopedStateOnlyS3` answers that ONE key shape with a fresh,
+      // empty state and leaves every other read at `createTestContext`'s
+      // own reject-everything default.
+      clients: { s3: scopedStateOnlyS3() },
     });
     contexts.push(ctx);
     return ctx;
@@ -319,6 +327,64 @@ Plugins:
 
   zzz - the zzz plugin
     sync - sync zzz
+`,
+    ]);
+  });
+
+  it('lists the generic lifecycle verbs under a plugin that contributes nodes, and none under one that does not', async () => {
+    // The three verbs are conditional on `plugin.nodes` at dispatch
+    // (`genericLifecycleCommand`, `plugin-commands.ts`), so the listing must
+    // be conditional on exactly the same thing: `gadget` answers none of
+    // them and must advertise none, while `widget` answers all three -
+    // including `hollow`, which declares no commands at all and rendered
+    // here as a bare description line with nothing under it.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const gadget: Plugin = {
+      name: 'gadget',
+      description: 'manage gadgets',
+      commands: [{ action: 'poke', summary: 'poke gadgets', run: async () => undefined }],
+    };
+    const widget: Plugin = { ...WIDGET_PLUGIN, nodes: () => [] };
+    const hollow: Plugin = {
+      name: 'hollow',
+      description: 'contributes nodes and nothing else',
+      commands: [],
+      nodes: () => [],
+    };
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-gadget', namespace: 'gadget', plugin: gadget },
+      { packageName: 'blogwright-hollow', namespace: 'hollow', plugin: hollow },
+      { packageName: 'blogwright-widget', namespace: 'widget', plugin: widget },
+    ]);
+
+    const code = await main(
+      ['--help'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    // Hand-typed rather than built from the module's own constant, the same
+    // way EXPECTED_USAGE is - a summary that drifts from the one the verb
+    // dispatches under must fail here.
+    expect(terminal.writes).toEqual([
+      `${EXPECTED_USAGE}
+Plugins:
+
+  gadget - manage gadgets
+    poke - poke gadgets
+
+  hollow - contributes nodes and nothing else
+    bootstrap - reconcile this plugin's resources
+    status - show this plugin's resource status
+    destroy - tear down this plugin's resources
+
+  widget - manage widgets
+    sync - sync widgets
+    bootstrap - reconcile this plugin's resources
+    status - show this plugin's resource status
+    destroy - tear down this plugin's resources
 `,
     ]);
   });
@@ -829,6 +895,10 @@ describe('main - generic plugin dispatch', () => {
         env: opts.env,
         ports: opts.ports,
         logger: createLogger(terminal),
+        // `toPluginContext` loads the plugin's own scoped store - see
+        // `testContextFactory`'s own doc comment above for why this default
+        // is needed once a command actually dispatches.
+        clients: { s3: scopedStateOnlyS3() },
       });
     };
 
@@ -923,10 +993,10 @@ describe('main - generic plugin dispatch', () => {
 });
 
 describe('toPluginContext', () => {
-  it('adapts an OpsContext with no cast, supplying pluginConfig/siteState/record on top of it', () => {
-    const ops = createTestContext({ env: 'staging' });
+  it('adapts an OpsContext with no cast, supplying pluginConfig/siteState/record and scoping store/state/save to the plugin', async () => {
+    const ops = createTestContext({ env: 'staging', clients: { s3: scopedStateOnlyS3() } });
 
-    const ctx = toPluginContext(ops);
+    const ctx = await toPluginContext(ops, 'demo');
 
     expect(ctx.env).toBe(ops.env);
     expect(ctx.domain).toBe(ops.domain);
@@ -935,16 +1005,19 @@ describe('toPluginContext', () => {
     expect(ctx.clients).toBe(ops.clients);
     expect(ctx.logger).toBe(ops.logger);
     expect(ctx.pluginConfig).toEqual({});
-    // Pre-task-16: both state surfaces still read the SITE's own store -
-    // see toPluginContext's doc comment on why nothing may call
-    // `plugin.nodes` against a context built this way before task 16.
+    // siteState is the SITE's own state, passed straight through, read-only.
     expect(ctx.siteState).toBe(ops.state);
-    expect(ctx.state).toBe(ops.state);
-    expect(ctx.store).toBe(ops.store);
-    expect(ctx.save).toBe(ops.save);
+    // store/state/save are scoped to the plugin's own name - genuinely
+    // distinct objects from the site's own, not merely type-compatible with
+    // it. See `plugin-commands.test.ts`'s own `toPluginContext` describe
+    // block for the test that pins the exact scoped state key.
+    expect(ctx.store).not.toBe(ops.store);
+    expect(ctx.state).not.toBe(ops.state);
+    expect(ctx.save).not.toBe(ops.save);
 
     ctx.record('some-node', { arn: 'arn:aws:s3:::example' });
-    expect(ops.state.resources['some-node']).toEqual({ arn: 'arn:aws:s3:::example' });
+    expect(ctx.state.resources['some-node']).toEqual({ arn: 'arn:aws:s3:::example' });
+    expect(ops.state.resources['some-node']).toBeUndefined();
   });
 });
 

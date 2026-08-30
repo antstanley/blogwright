@@ -595,6 +595,18 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *The analytics change spec names four Firehose operations; task 51 needs a
+  fifth.* Raised by task 34's gate 2026-08-30. §Analytics plugin → Its own
+  service clients scopes `FirehoseClient` to create/describe/delete/tagging,
+  and task 34 implemented exactly that and nothing else. But task 51's DoD
+  requires `UpdateDestination` before falling back to replacement, which also
+  needs `VersionId` and `Destinations[].DestinationId` - neither carried by the
+  domain status type. Routed to task 51 to widen the client, because
+  replacement cascades: a new stream ARN forces repointing task 53's CloudFront
+  log delivery and loses records in flight. That leaves the spec's client
+  surface stale by one operation. Task 58's closure pass should correct it -
+  a change spec is allowed to describe the future, but not to describe a
+  narrower client than the one that shipped.
 - *`parseError` never reads response headers.* Raised by task 33's gate
   2026-08-30, which confirmed it against the live S3 Tables endpoint rather
   than from documentation. `packages/core/src/aws/signer.ts:177-197` takes a

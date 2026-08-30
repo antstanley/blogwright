@@ -60,11 +60,17 @@
  * rather than a thrown error. §CLI → Plugin lifecycle adds the sibling rule
  * for `bootstrap`/`destroy` (always generic; a plugin may never declare
  * either, full stop - no "unless paired with a contributor" nuance, since
- * there is no bootstrap/destroy contributor to pair with). Task 16 extends
- * `rejectDeclaredInitCollisions` (or adds a sibling function called from the
- * same place in `discover`, below) with that rule, so every declared-action
+ * there is no bootstrap/destroy contributor to pair with). Task 16 adds
+ * `rejectDeclaredLifecycleCollisions` below, a sibling function called from
+ * the same place in `discover`, with that rule, so every declared-action
  * collision rejection greps to this one module instead of splitting across
- * whichever of the two tasks happened to land first.
+ * whichever of the two tasks happened to land first. `status` is deliberately
+ * NOT part of that rule: a plugin may declare its own `status` command
+ * freely - `read()` lives on the plugin's own nodes, so no engine call is
+ * required the way `bootstrap`/`destroy` need one - and `plugin-commands.ts`'s
+ * ordinary `matchAction` precedence (a plugin's own commands win before any
+ * generic fallback is even considered) already gives a declared `status`
+ * command priority with no boundary check needed here.
  */
 
 import { join } from 'node:path';
@@ -393,6 +399,53 @@ function rejectDeclaredInitCollisions(loaded: readonly LoadedPlugin[]): {
 }
 
 /**
+ * The two action names §CLI → Plugin lifecycle reserves for the CLI's own
+ * generic engine (`applyGraph`/`destroyGraph`, `packages/cli/src/graph.ts`)
+ * - see {@link rejectDeclaredLifecycleCollisions}. `status` is excluded on
+ * purpose; see that function's doc comment.
+ */
+const RESERVED_LIFECYCLE_ACTIONS = new Set(['bootstrap', 'destroy']);
+
+/**
+ * Reject a plugin that declares `bootstrap` or `destroy` as one of its own
+ * `commands`. Unlike the `init` collision above, there is no contributor
+ * either could pair with that would make the collision conditional: a
+ * plugin may not import the CLI and so cannot run `applyGraph`/
+ * `destroyGraph` itself, which is exactly what `bootstrap`/`destroy` need to
+ * do - so declaring either is rejected outright, full stop. `status` is
+ * deliberately absent from {@link RESERVED_LIFECYCLE_ACTIONS}: a plugin MAY
+ * declare its own `status` command, because reading a resource's existence
+ * (`node.read(ctx)`) needs no engine call, and `plugin-commands.ts`'s
+ * ordinary `matchAction` precedence already lets a declared `status` win
+ * over the generic one with no boundary check required.
+ */
+function rejectDeclaredLifecycleCollisions(loaded: readonly LoadedPlugin[]): {
+  survivors: LoadedPlugin[];
+  failures: PluginLoadFailure[];
+} {
+  const survivors: LoadedPlugin[] = [];
+  const failures: PluginLoadFailure[] = [];
+  for (const entry of loaded) {
+    const collision = entry.plugin.commands.find((command) =>
+      RESERVED_LIFECYCLE_ACTIONS.has(command.action),
+    );
+    if (collision) {
+      failures.push({
+        packageName: entry.packageName,
+        reason:
+          `${entry.packageName} declares a "${collision.action}" command - "bootstrap" and ` +
+          '"destroy" are always the generic lifecycle verbs, run by the CLI\'s own engine over ' +
+          "this plugin's nodes(ctx), because a plugin cannot run that engine itself; declare a " +
+          'different action name',
+      });
+      continue;
+    }
+    survivors.push(entry);
+  }
+  return { survivors, failures };
+}
+
+/**
  * Discover every installed plugin reachable from `repoRoot` (the consuming
  * repo) and `cliPackageDir` (the CLI's own package directory, from
  * {@link cliPackageDir} in `context.ts`). Never throws for a candidate-level
@@ -425,9 +478,14 @@ export async function discover(
     }
   }
 
-  const actionCollisions = rejectDeclaredInitCollisions(loaded);
-  const collisions = resolveNamespaceCollisions(actionCollisions.survivors);
-  failures.push(...actionCollisions.failures, ...collisions.failures);
+  const initCollisions = rejectDeclaredInitCollisions(loaded);
+  const lifecycleCollisions = rejectDeclaredLifecycleCollisions(initCollisions.survivors);
+  const collisions = resolveNamespaceCollisions(lifecycleCollisions.survivors);
+  failures.push(
+    ...initCollisions.failures,
+    ...lifecycleCollisions.failures,
+    ...collisions.failures,
+  );
 
   return { plugins: collisions.plugins, failures };
 }
