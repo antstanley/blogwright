@@ -16,8 +16,13 @@ import {
 } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { validateAnalyticsConfig, type AnalyticsConfig } from './config.js';
-import { analyticsNamespaceNode, analyticsTableBucketNode, analyticsTableNode } from './nodes.js';
+import { resolveAnalyticsConfig, validateAnalyticsConfig, type AnalyticsConfig } from './config.js';
+import {
+  analyticsCatalogIntegrationNode,
+  analyticsNamespaceNode,
+  analyticsTableBucketNode,
+  analyticsTableNode,
+} from './nodes.js';
 
 const ENV = 'test';
 const SITE_NAME = 'example';
@@ -41,6 +46,29 @@ const TABLE = 'page_views';
 const TABLE_ARN = `${TABLE_BUCKET_ARN}/table/60d1f8a2`;
 
 const HOST = 'https://s3tables.us-east-1.amazonaws.com';
+
+/** The one Glue catalog AWS's S3 Tables integration creates per account and Region. */
+const CATALOG = 's3tablescatalog';
+const CATALOG_ARN = `arn:aws:glue:us-east-1:${ACCOUNT_ID}:catalog/${CATALOG}`;
+
+/**
+ * The S3 Tables resource the federation is registered over. Spelled out here
+ * rather than derived from the module under test, and deliberately NOT
+ * {@link TABLE_BUCKET_ARN}: the integration covers every table bucket in the
+ * account and Region, which is the whole reason two environments can share it.
+ */
+const FEDERATION_SOURCE = `arn:aws:s3tables:us-east-1:${ACCOUNT_ID}:bucket/*`;
+
+/** The same wildcard over a different account - a federation this account must not adopt. */
+const OTHER_ACCOUNT_SOURCE = 'arn:aws:s3tables:us-east-1:210987654321:bucket/*';
+
+const GLUE_HOST = 'https://glue.us-east-1.amazonaws.com';
+
+/** Glue is AWS-JSON: every operation is `POST /`, told apart by `x-amz-target`. */
+const GLUE_ENDPOINT = `${GLUE_HOST}/`;
+
+/** A second environment in the SAME account, sharing the account-scoped federation. */
+const OTHER_ENV = 'production';
 
 /** One request the transport saw, in the form the assertions below read it. */
 interface RecordedRequest {
@@ -106,6 +134,57 @@ function failure(status: number, exception: string, message: string): RawRespons
 /** The reply S3 Tables sends for a resource that does not exist. */
 function notFound(): RawResponse {
   return failure(404, 'NotFoundException', 'The specified resource does not exist.');
+}
+
+/**
+ * The failure shape Glue puts on the wire, which is not the one S3 Tables uses
+ * (see {@link failure}). Glue is AWS-JSON 1.1, so the exception name travels in
+ * the body's `__type` and core's `parseError` reads it into `AwsError.code` -
+ * which is why `glue.ts` narrows on core's `isNotFound`/`isAlreadyExists`
+ * unmodified while its S3 Tables sibling has to narrow on the status. Every
+ * documented Glue exception is HTTP 400 except `InternalServiceException`, so
+ * the status never separates them.
+ */
+function glueFailure(status: number, code: string, message: string): RawResponse {
+  const text = JSON.stringify({ __type: code, Message: message });
+  return {
+    statusCode: status,
+    headers: {},
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/**
+ * `GetCatalog`'s reply for a catalog that does not exist - and, unavoidably,
+ * the same reply it gives when the catalog exists but the S3 Tables source it
+ * federates does not. Telling those two apart is what the node's read-back
+ * after `CreateCatalog` is for.
+ */
+function entityNotFound(): RawResponse {
+  return glueFailure(400, 'EntityNotFoundException', 'Entity Not Found');
+}
+
+/** A `GetCatalog` success body in the service's own shape, wrapping `catalog`. */
+function catalogBody(catalog: Record<string, unknown>): Record<string, unknown> {
+  return { Catalog: { Name: CATALOG, CatalogId: CATALOG, ...catalog } };
+}
+
+/** The `FederatedCatalog` member of a catalog federated over `source`. */
+function federatedOver(source: string): Record<string, unknown> {
+  return { Identifier: source, ConnectionName: 'aws:s3tables' };
+}
+
+/** The reply for this account's own, correctly federated `s3tablescatalog`. */
+function existingFederation(): RawResponse {
+  return ok(
+    catalogBody({ ResourceArn: CATALOG_ARN, FederatedCatalog: federatedOver(FEDERATION_SOURCE) }),
+  );
+}
+
+/** The `x-amz-target` of each recorded request, which is how a Glue operation is named. */
+function targets(requests: RecordedRequest[]): (string | undefined)[] {
+  return requests.map((request) => request.headers['x-amz-target']);
 }
 
 /**
@@ -539,5 +618,219 @@ describe('region pinning and name resolution', () => {
     expect(requests[0]?.body).toStrictEqual({ name: analytics.tableBucket });
     expect(requests[1]?.body).toStrictEqual({ namespace: [analytics.namespace] });
     expect(requests[2]?.body).toMatchObject({ name: analytics.table });
+  });
+});
+
+describe('analytics-catalog-integration', () => {
+  const ADOPTED = {
+    'analytics-catalog-integration': {
+      name: CATALOG,
+      sourceIdentifier: FEDERATION_SOURCE,
+      arn: CATALOG_ARN,
+    },
+  };
+
+  it("hangs off analytics-table and assigns to the SPI's own ResourceNode[]", () => {
+    const node = analyticsCatalogIntegrationNode();
+    expect(node.id).toBe('analytics-catalog-integration');
+    expect(node.dependsOn).toStrictEqual(['analytics-table']);
+    const nodes: ResourceNode[] = [node];
+    expect(nodes[0]?.id).toBe('analytics-catalog-integration');
+  });
+
+  it('names the integration as shared, account-and-region scoped state where an operator sees it', async () => {
+    // Both halves of the same requirement: `analytics bootstrap` prints the
+    // title through `applyGraph` and the create line through the node itself,
+    // and an operator has to be able to tell from either that this resource is
+    // not their environment's own.
+    const node = analyticsCatalogIntegrationNode();
+    expect(node.title).toContain(CATALOG);
+    expect(node.title).toContain('account-and-region scoped');
+    expect(node.title).toContain('shared');
+
+    const steps: string[] = [];
+    const { ctx } = makeContext([ok({}), existingFederation()]);
+    await node.create({
+      ...ctx,
+      logger: { ...NOOP_LOGGER, step: (msg) => steps.push(msg) },
+    });
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toContain('account-and-region scoped');
+    expect(steps[0]).toContain(FEDERATION_SOURCE);
+  });
+
+  it('reads false without throwing when no federation exists, recording nothing', async () => {
+    const { ctx, requests } = makeContext([entityNotFound()]);
+    await expect(analyticsCatalogIntegrationNode().read(ctx)).resolves.toBe(false);
+    expect(onlyRequest(requests).url).toBe(GLUE_ENDPOINT);
+    expect(targets(requests)).toStrictEqual(['AWSGlue.GetCatalog']);
+    expect(onlyRequest(requests).body).toStrictEqual({ CatalogId: CATALOG });
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it('creates the federation over every table bucket in the account, then reads it back', async () => {
+    const { ctx, requests } = makeContext([ok({}), existingFederation()]);
+    await analyticsCatalogIntegrationNode().create(ctx);
+    expect(targets(requests)).toStrictEqual(['AWSGlue.CreateCatalog', 'AWSGlue.GetCatalog']);
+    // The account-and-region wildcard, not this environment's table bucket:
+    // the catalog federates every bucket in the account, which is what lets a
+    // second environment adopt the same one.
+    expect(requests[0]?.body).toMatchObject({
+      Name: CATALOG,
+      CatalogInput: { FederatedCatalog: { Identifier: FEDERATION_SOURCE } },
+    });
+    expect(requests[0]?.body).not.toMatchObject({
+      CatalogInput: { FederatedCatalog: { Identifier: TABLE_BUCKET_ARN } },
+    });
+    expect(ctx.state.resources).toStrictEqual(ADOPTED);
+  });
+
+  it('adopts an existing federation and issues no CreateCatalog', async () => {
+    const { ctx, requests } = makeContext([existingFederation()]);
+    await expect(analyticsCatalogIntegrationNode().read(ctx)).resolves.toBe(true);
+    // Asserted as the whole call log rather than as "no error": a create that
+    // went out and was swallowed as a duplicate would leave this list longer.
+    expect(targets(requests)).toStrictEqual(['AWSGlue.GetCatalog']);
+    expect(ctx.state.resources).toStrictEqual(ADOPTED);
+  });
+
+  it('adopts a federation whose body carries no catalog ARN without recording an empty one', async () => {
+    // `normalizeCatalog` falls back to `''` when the body omits `ResourceArn`,
+    // and an empty string recorded under `arn` reads downstream as a real one.
+    const { ctx } = makeContext([
+      ok(catalogBody({ FederatedCatalog: federatedOver(FEDERATION_SOURCE) })),
+    ]);
+    await expect(analyticsCatalogIntegrationNode().read(ctx)).resolves.toBe(true);
+    expect(ctx.state.resources).toStrictEqual({
+      'analytics-catalog-integration': { name: CATALOG, sourceIdentifier: FEDERATION_SOURCE },
+    });
+  });
+
+  it('refuses a same-named catalog that carries no federation at all', async () => {
+    // `CatalogInput` has no required members, so a `CreateCatalog` that omitted
+    // `FederatedCatalog` leaves an empty catalog of the right name behind. A
+    // successful lookup is therefore not evidence of a federation.
+    const { ctx, requests } = makeContext([ok(catalogBody({ ResourceArn: CATALOG_ARN }))]);
+    await expect(analyticsCatalogIntegrationNode().read(ctx)).rejects.toThrow(
+      /is not a federated catalog/,
+    );
+    expect(targets(requests)).toStrictEqual(['AWSGlue.GetCatalog']);
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it("refuses a catalog federated over some other account's table buckets", async () => {
+    const { ctx } = makeContext([
+      ok(
+        catalogBody({
+          ResourceArn: CATALOG_ARN,
+          FederatedCatalog: federatedOver(OTHER_ACCOUNT_SOURCE),
+        }),
+      ),
+    ]);
+    await expect(analyticsCatalogIntegrationNode().read(ctx)).rejects.toThrow(OTHER_ACCOUNT_SOURCE);
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it('fails loudly when the federation is still unreadable after CreateCatalog reported success', async () => {
+    // The routed finding, end to end, and the reason `create` reads back at all.
+    // `GetCatalog` answers `EntityNotFoundException` both for a catalog that is
+    // absent and for one whose own S3 Tables source is absent, so a federation
+    // broken at its source reads as "no catalog" and `create` runs;
+    // `createCatalogFederation` then swallows
+    // `FederatedResourceAlreadyExistsException`, because a second environment
+    // genuinely does have to adopt what is already there. Delete the read-back
+    // and this reconcile converges green on a federation wired to nothing, with
+    // Firehose routing every record to the error bucket as the first symptom.
+    const { ctx, requests } = makeContext([
+      glueFailure(
+        400,
+        'FederatedResourceAlreadyExistsException',
+        'Federated resource already exists',
+      ),
+      entityNotFound(),
+    ]);
+    await expect(analyticsCatalogIntegrationNode().create(ctx)).rejects.toThrow(
+      /never wired to "arn:aws:s3tables:us-east-1:\d+:bucket\/\*"/,
+    );
+    expect(targets(requests)).toStrictEqual(['AWSGlue.CreateCatalog', 'AWSGlue.GetCatalog']);
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it('records nothing when the read-back after CreateCatalog throws', async () => {
+    // Pins the ORDER of the two writes in `create`, and pins it the opposite way
+    // round from `analytics-table`. There the identity is recorded BEFORE the
+    // follow-up lookup, so a crash still leaves the table in state for `destroy`
+    // to remove. Here `delete` removes nothing, so an early record protects
+    // nothing - while an entry under this node's id is the claim that the
+    // pipeline has a verified catalog to read through, which is exactly what has
+    // not been established yet. Move the `output` call above the lookup and this
+    // fails.
+    //
+    // 403 rather than a 5xx, as elsewhere in this file - though here the retry
+    // budget is not even in play: Glue's lookup is a `POST`, and core's signer
+    // retries a non-idempotent method only on a network-level failure
+    // (`packages/core/src/aws/signer.ts`). The request count below pins that.
+    const { ctx, requests } = makeContext([
+      ok({}),
+      glueFailure(
+        403,
+        'AccessDeniedException',
+        'User is not authorized to perform: glue:GetCatalog',
+      ),
+    ]);
+    await expect(analyticsCatalogIntegrationNode().create(ctx)).rejects.toThrow(
+      /getCatalogFederation/,
+    );
+    expect(requests).toHaveLength(2);
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it('lets a second environment in the same account adopt the same federation, creating nothing', async () => {
+    // Convergence, which is the point of the whole node. Two environments, one
+    // account: both derive the same account-and-region wildcard, both find the
+    // one catalog, and neither issues a CreateCatalog for the other to fight
+    // with.
+    const staging = makeContext([existingFederation()]);
+    const other = makeContext([existingFederation()]);
+    const production: PluginContext<AnalyticsConfig> = { ...other.ctx, env: OTHER_ENV };
+
+    // The two contexts really are different environments - their table buckets
+    // differ, which is what would make a per-bucket federation unadoptable.
+    expect(resolveAnalyticsConfig(production).tableBucket).not.toBe(
+      resolveAnalyticsConfig(staging.ctx).tableBucket,
+    );
+
+    await expect(analyticsCatalogIntegrationNode().read(staging.ctx)).resolves.toBe(true);
+    await expect(analyticsCatalogIntegrationNode().read(production)).resolves.toBe(true);
+
+    expect(targets(staging.requests)).toStrictEqual(['AWSGlue.GetCatalog']);
+    expect(targets(other.requests)).toStrictEqual(['AWSGlue.GetCatalog']);
+    expect(staging.ctx.state.resources).toStrictEqual(ADOPTED);
+    expect(production.state.resources).toStrictEqual(ADOPTED);
+  });
+
+  it('issues no Glue call at all when the whole node set is torn down', async () => {
+    // `destroyGraph` calls every node's `delete` in reverse topological order
+    // (`packages/cli/src/graph.ts`), so the catalog node's runs first. The engine
+    // lives in the CLI package, which this one cannot import, so the reverse walk
+    // is spelled out here; the three S3 Tables deletes are what keep the sweep
+    // from being vacuous - they prove the loop ran and the transport was
+    // recording while the Glue call log stayed empty.
+    const nodes = [
+      analyticsTableBucketNode(),
+      analyticsNamespaceNode(),
+      analyticsTableNode(),
+      analyticsCatalogIntegrationNode(),
+    ];
+    const { ctx, requests } = makeContext([notFound(), notFound(), notFound()]);
+    for (const node of [...nodes].reverse()) {
+      await expect(node.delete(ctx)).resolves.toBeUndefined();
+    }
+    expect(requests.filter((request) => request.url.startsWith(GLUE_HOST))).toStrictEqual([]);
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toStrictEqual([
+      `DELETE ${HOST}/tables/${ENCODED_BUCKET_ARN}/${NAMESPACE}/${TABLE}`,
+      `DELETE ${HOST}/namespaces/${ENCODED_BUCKET_ARN}/${NAMESPACE}`,
+      `DELETE ${HOST}/buckets/${ENCODED_BUCKET_ARN}`,
+    ]);
   });
 });

@@ -3,10 +3,12 @@
  * CloudFront-logs-to-Iceberg pipeline is built from and nothing else: the
  * site's own bucket, distribution and log group stay in the CLI's graph
  * (`packages/cli/src/nodes.ts`) and are never touched from here. This module
- * carries the first three - the S3 Tables bucket, the namespace inside it, and
- * the `page_views` table - chained `analytics-table-bucket` ->
- * `analytics-namespace` -> `analytics-table` through `dependsOn`. The remaining
- * nine of the spec's twelve are appended to this module as later tasks land,
+ * carries the first four - the S3 Tables bucket, the namespace inside it, the
+ * `page_views` table, and the Glue federation Firehose reads that table
+ * through - chained `analytics-table-bucket` -> `analytics-namespace` ->
+ * `analytics-table` -> `analytics-catalog-integration` through `dependsOn`. The
+ * remaining eight of the spec's twelve are appended to this module as later
+ * tasks land,
  * and a later `buildAnalyticsNodes(ctx)` returns the assembled set to the SPI's
  * `Plugin.nodes`; nothing here assembles or reconciles anything itself.
  *
@@ -40,6 +42,7 @@
 import type { PluginContext, ResourceNode, ResourceOutputs } from 'blogwright-core';
 
 import { createAnalyticsClients } from './aws/clients.js';
+import type { CatalogFederation, GlueClient } from './aws/glue.js';
 import type {
   IcebergSchemaField,
   IcebergTableSchema,
@@ -72,6 +75,27 @@ const NAMESPACE_NODE = 'analytics-namespace';
 /** The `analytics-table` node id. */
 const TABLE_NODE = 'analytics-table';
 
+/** The `analytics-catalog-integration` node id. */
+const CATALOG_NODE = 'analytics-catalog-integration';
+
+/**
+ * The Glue catalog the S3 Tables integration registers itself under. The one
+ * name in this module that carries neither the environment nor the site, and
+ * deliberately: AWS's integration procedure creates exactly one catalog called
+ * `s3tablescatalog` per account and Region, and every S3 Tables table in the
+ * account is reached through it. A per-environment name derived here would not
+ * buy a second, private integration - it would create a catalog the S3 Tables
+ * integration itself never populates.
+ */
+const CATALOG_NAME = 's3tablescatalog';
+
+/**
+ * The bucket segment of {@link federationSource}: the wildcard naming every
+ * table bucket in the account and Region rather than this environment's one.
+ * Named rather than inlined so it does not read as a stray character in an ARN.
+ */
+const ALL_TABLE_BUCKETS = '*';
+
 /**
  * The region every resource in this graph is created in - see the module
  * comment. This constant is *not* what enforces the pin: `aws/clients.ts`
@@ -84,9 +108,10 @@ const TABLE_NODE = 'analytics-table';
  * reads the region back out of the SigV4 `Authorization` header, so it catches
  * the *clients* drifting off the pin - but it is blind to this constant, and
  * stays green if only this string changes, because a signed region is not an
- * ARN. What catches that is every assertion that spells a bucket ARN out - the
- * recorded request URLs and the recorded outputs: setting this to `eu-west-1`
- * reddens twelve of them while the credential-scope test passes.
+ * ARN. What catches that is every assertion that spells an S3 Tables bucket ARN
+ * out - the recorded request URLs, the recorded outputs, and the account-wide
+ * wildcard the catalog federation is registered over: setting this to
+ * `eu-west-1` reddens nineteen tests while the credential-scope test passes.
  */
 const ANALYTICS_REGION = 'us-east-1';
 
@@ -152,6 +177,15 @@ function s3tables(ctx: AnalyticsContext): S3TablesClient {
 }
 
 /**
+ * The plugin's own Glue client, built the same way {@link s3tables} is and for
+ * the same reason: core's bundle enumerates no `glue` service at all, and the
+ * one it does expose signs in `config.region`.
+ */
+function glue(ctx: AnalyticsContext): GlueClient {
+  return createAnalyticsClients(ctx).glue;
+}
+
+/**
  * The table bucket's ARN, in the fixed
  * `arn:aws:s3tables:<region>:<accountId>:bucket/<name>` form. Derived rather
  * than read back from the API because `getTableBucket` is ARN-keyed with no
@@ -166,7 +200,20 @@ function s3tables(ctx: AnalyticsContext): S3TablesClient {
  * the test for it.
  */
 function tableBucketArn(ctx: AnalyticsContext): string {
-  return `arn:aws:s3tables:${ANALYTICS_REGION}:${ctx.accountId}:bucket/${resolveAnalyticsConfig(ctx).tableBucket}`;
+  return s3TablesBucketArn(ctx, resolveAnalyticsConfig(ctx).tableBucket);
+}
+
+/**
+ * An S3 Tables bucket ARN, in the fixed
+ * `arn:aws:s3tables:<region>:<accountId>:bucket/<bucket>` form - the one place
+ * that form is spelled. {@link tableBucketArn} passes this environment's bucket
+ * name and {@link federationSource} passes {@link ALL_TABLE_BUCKETS}; the two
+ * have to agree on everything left of the last segment, because the catalog
+ * federation is checked against the wildcard form of the very ARN the table
+ * bucket is created under.
+ */
+function s3TablesBucketArn(ctx: AnalyticsContext, bucket: string): string {
+  return `arn:aws:s3tables:${ANALYTICS_REGION}:${ctx.accountId}:bucket/${bucket}`;
 }
 
 /**
@@ -246,6 +293,86 @@ function recordNamespace(ctx: AnalyticsContext): void {
   const out = output(ctx, NAMESPACE_NODE);
   out.name = resolveAnalyticsConfig(ctx).namespace;
   out.tableBucketArn = tableBucketArn(ctx);
+}
+
+/**
+ * The S3 Tables resource the catalog federates: **every** table bucket in this
+ * account and Region, which is what AWS's own integration procedure registers
+ * and what makes the catalog shared rather than this environment's own.
+ *
+ * Passing {@link tableBucketArn} here instead would look tidier and would break
+ * the one thing this node exists to get right. A federation registered against
+ * one environment's bucket is not one the next environment can adopt: staging
+ * would find a catalog federating production's bucket, and either adopt a
+ * federation that does not cover its own table or try to register a second one
+ * under the same account-scoped name. Every environment in the account derives
+ * this identical string, which is why two of them converge on one catalog
+ * instead of fighting over it.
+ */
+function federationSource(ctx: AnalyticsContext): string {
+  return s3TablesBucketArn(ctx, ALL_TABLE_BUCKETS);
+}
+
+/**
+ * The federation's source, checked against the one this account's pipeline has
+ * to be federated on - and a throw when it is not.
+ *
+ * This is the check that stops a successful *lookup* from standing in for a
+ * working *federation*. `EntityNotFoundException` is documented on both of
+ * `GlueClient`'s operations and means two different things. On `GetCatalog` it
+ * is "no such catalog" - but a **source-level** miss answers with it too (the
+ * S3 Tables resource the catalog federates does not exist, typically a wrong
+ * ARN), and `getCatalogFederation` maps both to `undefined`. So a federation
+ * that is broken at its source reads as one that is absent; `create` then runs,
+ * and `createCatalogFederation` swallows `FederatedResourceAlreadyExistsException`
+ * because a second environment genuinely must adopt what is there. Left
+ * unchecked the reconcile converges silently: `analytics bootstrap` reports the
+ * integration green over a federation that was never wired to a bucket, and the
+ * first symptom is Firehose routing every record to the error bucket.
+ *
+ * `CatalogFederation.sourceIdentifier` is what closes it, and is a required key
+ * of type `string | undefined` for this reason: it is `undefined` exactly when
+ * the catalog carries no `FederatedCatalog` at all, so a same-named catalog
+ * that is not federated, or is federated somewhere else, is distinguishable
+ * from this plugin's own. Both of the node's paths run through here - an
+ * adopted catalog is verified before it is recorded, and a created one is read
+ * back and verified rather than assumed - so no path records this node as
+ * satisfied on a catalog whose source was never checked.
+ *
+ * Only the source is checked, not `connectionName`. The source ARN is what
+ * decides whether the federation covers this account's table buckets; a catalog
+ * federating exactly those buckets through some connection other than
+ * `aws:s3tables` is not a state AWS's integration can produce, so a second
+ * condition would be a second way to fail with nothing new caught.
+ */
+function verifiedSource(ctx: AnalyticsContext, federation: CatalogFederation): string {
+  const source = federationSource(ctx);
+  if (federation.sourceIdentifier === source) return source;
+  const found =
+    federation.sourceIdentifier === undefined
+      ? 'is not a federated catalog'
+      : `federates "${federation.sourceIdentifier}"`;
+  throw new Error(
+    `Glue catalog "${federation.name}" ${found}, so it is not the S3 Tables integration this pipeline reads through - it has to federate "${source}". Adopting it would point Firehose at a catalog with no table behind it. Remove or rename that catalog, or enable the S3 Tables integration for this account and Region.`,
+  );
+}
+
+/**
+ * Record the adopted federation - after {@link verifiedSource} has passed, and
+ * never before it. {@link output} writes an entry into
+ * `state/<env>.analytics.json`, and an entry under this node's id is the claim
+ * that the pipeline has a catalog to read the table through, so it must not
+ * outlive the check that the catalog is the right one.
+ */
+function recordCatalogIntegration(ctx: AnalyticsContext, federation: CatalogFederation): void {
+  const source = verifiedSource(ctx, federation);
+  const out = output(ctx, CATALOG_NODE);
+  out.name = federation.name;
+  out.sourceIdentifier = source;
+  // The same guard `analytics-table` puts on its ARN, for the same reason:
+  // `normalizeCatalog` falls back to `''` for a body carrying no `ResourceArn`,
+  // and an empty string recorded under `arn` reads downstream as a real one.
+  if (federation.resourceArn) out.arn = federation.resourceArn;
 }
 
 /** The S3 Tables bucket every analytics table lives in. */
@@ -347,6 +474,85 @@ export function analyticsTableNode(): AnalyticsNode {
     async delete(ctx) {
       const analytics = resolveAnalyticsConfig(ctx);
       await s3tables(ctx).deleteTable(tableBucketArn(ctx), analytics.namespace, analytics.table);
+    },
+  };
+}
+
+/**
+ * The Glue `s3tablescatalog` federation Firehose reads the `page_views` table
+ * through - **the one node in this graph that adopts shared state rather than
+ * owning it.**
+ *
+ * The integration is account-and-region scoped: a single catalog federates
+ * every S3 Tables bucket in the account and Region (see
+ * {@link federationSource}), so staging, production and anything else in the
+ * account that enabled the S3 Tables integration all read through the same one.
+ * Both halves of this node's behaviour follow from that. `read` adopts an
+ * existing federation instead of creating a second one, so a second environment
+ * converges on what is already there; `delete` removes nothing, so tearing one
+ * environment down leaves every other environment's pipeline intact.
+ *
+ * It depends on `analytics-table` rather than on the bucket even though the
+ * federation covers the account rather than any one table. Two reasons: the
+ * whole table chain is then in place before anything is federated, so
+ * `CreateCatalog`'s own `EntityNotFoundException` - which on that operation
+ * means the federated entity is missing, not the catalog - cannot fire merely
+ * because the bucket had not been created yet; and `destroyGraph` reverses the
+ * order, so this node's `delete` is reached first, before the table it was
+ * enabled for is removed.
+ */
+export function analyticsCatalogIntegrationNode(): AnalyticsNode {
+  return {
+    id: CATALOG_NODE,
+    dependsOn: [TABLE_NODE],
+    title: `Glue ${CATALOG_NAME} federation (shared - account-and-region scoped, ${ANALYTICS_REGION})`,
+    async read(ctx) {
+      const federation = await glue(ctx).getCatalogFederation(CATALOG_NAME);
+      // Absent: `create` runs, and either creates the federation or adopts one
+      // that appeared in between. A wrongly-federated or non-federated catalog
+      // of this name is NOT absent - it fails inside `recordCatalogIntegration`
+      // rather than falling through to a create that would be swallowed as a
+      // duplicate.
+      if (federation === undefined) return false;
+      recordCatalogIntegration(ctx, federation);
+      return true;
+    },
+    async create(ctx) {
+      const client = glue(ctx);
+      const source = federationSource(ctx);
+      ctx.logger.step(
+        `enabling the ${CATALOG_NAME} Glue federation over ${source} - account-and-region scoped, shared with every other environment in this account and never removed by a teardown`,
+      );
+      await client.createCatalogFederation(CATALOG_NAME, source);
+      // Read back rather than assume. `createCatalogFederation` resolves both
+      // when it created the federation and when one already existed - which is
+      // what a second environment hits, deliberately - so its resolution says
+      // nothing about what is now in the account. And the lookup that returned
+      // "absent" just before it is exactly the shape a source-level
+      // `EntityNotFoundException` takes, so this is the only place the two can
+      // be told apart. See {@link verifiedSource}.
+      const created = await client.getCatalogFederation(CATALOG_NAME);
+      if (created === undefined) {
+        throw new Error(
+          `the ${CATALOG_NAME} Glue federation is still not readable after CreateCatalog reported success. GetCatalog answers EntityNotFoundException both for a missing catalog and for a federation whose own source is missing, so this is a catalog that was never wired to "${source}" rather than one that was just created - check that the S3 Tables integration is enabled for this account in ${ANALYTICS_REGION}.`,
+        );
+      }
+      recordCatalogIntegration(ctx, created);
+    },
+    async delete() {
+      // Deliberately inert, and the only `delete` in this graph that is.
+      // `destroyGraph` calls every node's `delete` on teardown
+      // (`packages/cli/src/graph.ts`), so anything written here would run on
+      // every `analytics destroy`. The federation is account-and-region scoped
+      // shared state: removing it while tearing down staging would leave
+      // production's delivery stream with no catalog to write its Iceberg table
+      // through, so production would go on accepting CloudFront logs and route
+      // every record into its error bucket - with nothing in staging's output,
+      // or production's, saying what had been taken away. The rule core already
+      // states for the account-global OIDC provider it likewise never removes
+      // (`packages/core/src/aws/iam.ts`, "Account-global; never deleted here").
+      // `GlueClient` exposes no delete operation at all, which is the other half
+      // of the guard: there is nothing here to call by accident.
     },
   };
 }

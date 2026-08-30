@@ -28,17 +28,17 @@
 
 ## Steps
 
-- [ ] Write `analytics-catalog-integration` with `dependsOn: ['analytics-table']`, creating the Glue `s3tablescatalog` federation that Firehose reads the table through, via the plugin bundle's `glue` client.
-- [ ] Implement `read` as adoption: an integration that already exists - created by this environment or another - satisfies the node and is recorded into the plugin's scoped state, so `create` never runs a second time.
-- [ ] Implement `delete` as a no-op, with a comment stating why: the federation is account-and-region scoped shared state, and deleting it during one environment's teardown would break every other environment's pipeline.
-- [ ] Write the node's `title` and its create log line to say the integration is account-and-region scoped, so an operator reading `analytics bootstrap` output can tell it is shared rather than per-environment.
-- [ ] Extend `packages/analytics/src/nodes.test.ts`: an absent integration creates one; an existing integration is adopted with no create call; a second-environment context over the same account observes no create; and a destroy over the whole node set issues no Glue call at all.
+- [x] Write `analytics-catalog-integration` with `dependsOn: ['analytics-table']`, creating the Glue `s3tablescatalog` federation that Firehose reads the table through, via the plugin bundle's `glue` client.
+- [x] Implement `read` as adoption: an integration that already exists - created by this environment or another - satisfies the node and is recorded into the plugin's scoped state, so `create` never runs a second time.
+- [x] Implement `delete` as a no-op, with a comment stating why: the federation is account-and-region scoped shared state, and deleting it during one environment's teardown would break every other environment's pipeline.
+- [x] Write the node's `title` and its create log line to say the integration is account-and-region scoped, so an operator reading `analytics bootstrap` output can tell it is shared rather than per-environment.
+- [x] Extend `packages/analytics/src/nodes.test.ts`: an absent integration creates one; an existing integration is adopted with no create call; a second-environment context over the same account observes no create; and a destroy over the whole node set issues no Glue call at all.
 
 ## Definition of done
 
-- [ ] `analytics-catalog-integration` depends on `analytics-table` and creates the Glue `s3tablescatalog` federation that Firehose reads the table through, reaching AWS only through the plugin bundle's `glue` client.
-- [ ] `read()` treats an already-existing integration as satisfied (adopt, not create) and `delete()` is a no-op - both asserted directly, plus a test asserting a destroy over the node set issues no Glue call at all.
-- [ ] A second-environment test asserts convergence: with the integration already present, `create` is never invoked, so two environments never fight over it and tearing one down never breaks the other.
-- [ ] The node's `title` and its create log line state that the integration is account-and-region scoped, so `analytics bootstrap` output shows it is shared rather than per-environment, and a comment on the node explains why `delete` is a no-op (shared account-scoped state) rather than paraphrasing the code.
-- [ ] Meets the repo definition of done (see plan.md baseline).
-- [ ] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run nodes --reporter=verbose` inside `packages/analytics`; confirm the destroy case asserts an empty Glue call log rather than an absent error, and read the node's `delete` body to confirm the comment states the consequence for the other environment.
+- [x] `analytics-catalog-integration` depends on `analytics-table` and creates the Glue `s3tablescatalog` federation that Firehose reads the table through, reaching AWS only through the plugin bundle's `glue` client.
+- [x] `read()` treats an already-existing integration as satisfied (adopt, not create) and `delete()` is a no-op - both asserted directly, plus a test asserting a destroy over the node set issues no Glue call at all.
+- [x] A second-environment test asserts convergence: with the integration already present, `create` is never invoked, so two environments never fight over it and tearing one down never breaks the other.
+- [x] The node's `title` and its create log line state that the integration is account-and-region scoped, so `analytics bootstrap` output shows it is shared rather than per-environment, and a comment on the node explains why `delete` is a no-op (shared account-scoped state) rather than paraphrasing the code.
+- [x] Meets the repo definition of done (see plan.md baseline).
+- [x] Reviewable: run `pnpm --filter blogwright-analytics exec vitest run nodes --reporter=verbose` inside `packages/analytics`; confirm the destroy case asserts an empty Glue call log rather than an absent error, and read the node's `delete` body to confirm the comment states the consequence for the other environment.
