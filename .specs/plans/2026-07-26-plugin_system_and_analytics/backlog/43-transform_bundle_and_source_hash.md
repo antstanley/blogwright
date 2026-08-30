@@ -7,6 +7,22 @@
 **Produces:** a single-file ESM bundle of the transform produced by the package's `build` script, plus a build-time manifest carrying a source hash that is byte-stable across runs and changes on any source byte, and an exported zip key derived from it for task 50's function node
 **Pointers:** `packages/build-agent/rolldown.config.ts` (the two-entry config to follow: `platform: 'node'` keeping `node:` builtins external, `format: 'esm'`, `codeSplitting: false`), `packages/build-agent/src/agent-hash.ts:32-59` (`agentSourceHash` - the collect/sort/digest shape, the non-test filter at `:12`, the codepoint sort at `:49`, and the config/manifest inputs at `:43-47`), `packages/build-agent/src/write-manifest.ts` (the build step that stamps `dist/agent-manifest.json` and the reason it exists), `packages/build-agent/package.json:6-12` (`"build": "rolldown -c && node dist/write-manifest.js"`), `packages/analytics/package.json:19-24` (the `build` script this task rewrites), `.oxlintrc.json:71-84` (the `no-restricted-imports` override list the manifest writer's `node:fs` use must join)
 
+> **ROUTED FINDING - added 2026-08-30 from task 42's implementation.**
+> Task 42 deliberately left the **composition root** open. `handler.ts` exports
+> `createTransformHandler(secrets, env)`, a factory - it does NOT export a
+> ready-bound `handler`, and it constructs no `SecretsManagerClient`. That is
+> forced by task 42's own DoD, whose grep forbids `fetch(` and `@aws-sdk`
+> anywhere under `transform/`, and by the port being a **type-only** import of
+> core so the bundle carries no client, signer or transport.
+> So this task (or task 50's node) owns the two-line entry file that constructs
+> the real us-east-1 client and calls the factory. Check what the Lambda's
+> configured handler path actually resolves to before bundling - a bundle whose
+> entry exports a factory rather than a handler fails at invoke time with an
+> AWS-side error, not a build error, and every record would land in the error
+> bucket with nothing in this repo reporting it.
+> Note also `SALT_SECRET_NAME_ENV` is exported so exactly one spelling of the
+> environment variable exists; task 50 sets it. Do not re-spell it here.
+
 ## Steps
 
 - [ ] Add `rolldown` to `packages/analytics` devDependencies in the same commit that rewrites the build script to invoke it. Task 32 fixed devDependencies to the pds four (`@types/node`, `oxlint`, `typescript`, `vitest`), so without this `pnpm build` fails on a missing binary and `pnpm knip` flags the script's binary. `packages/build-agent/package.json` carries rolldown as a devDependency for exactly this reason.

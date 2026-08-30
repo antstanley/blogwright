@@ -595,6 +595,21 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *Nothing reports a dropped record.* Raised by task 42's implementation
+  2026-08-30. `mapRecord` returns a `reason` naming the column and field that
+  failed, and the transform handler discards it: a dropped record becomes a
+  `ProcessingFailed` entry with no diagnosis anywhere. That is the
+  blank-dashboard-with-no-error signature this plan has nearly shipped three
+  times, arriving by omission rather than by defect - an operator whose
+  CloudFront format changes sees the table stop filling and has nothing to read.
+  A CloudWatch line per drop is the cheapest defence, and task 41's landed
+  assertion that a drop reason carries neither the viewer IP nor any fragment of
+  it makes logging the reason safe in a way it would not have been a week ago.
+  It is a spec decision rather than an implementation one - the change spec's
+  §Record transformation does not say - so it was correctly not invented by the
+  implementer. Decide before task 58 closes the stream, and note the volume
+  question: one line per dropped record is fine at this scale and is not fine at
+  every scale, so a sampled or aggregated form may be the right answer.
 - *The dependency table missed a real edge between tasks 16 and 52.* Found
   2026-08-30 at merge time, not by either task's gate. Task 16 added
   call-sequence assertions to `packages/cli/src/commands.test.ts` pinning
