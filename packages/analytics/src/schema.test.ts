@@ -96,7 +96,7 @@ describe('CLOUDFRONT_RECORD_FIELDS', () => {
 
   it('selects the millisecond-epoch timestamp field, the only source for event_time and day', () => {
     // Written as a literal rather than through schema.ts's TIMESTAMP_MS_FIELD,
-    // which is deliberately unexported: what matters is that this exact field
+    // which the transform now imports: what matters is that this exact field
     // name is selected, and comparing the constant against the list it is
     // spliced into would hold no matter what the constant said. Drop the field
     // from DERIVATION_ONLY_FIELDS and event_time - a required column - and the

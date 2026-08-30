@@ -118,12 +118,13 @@ export const VIEWER_IP_FIELD = 'c-ip';
  * The CloudFront millisecond-epoch timestamp field. Selected so the
  * transform can derive both `event_time` and the `day` partition from it;
  * because it feeds two columns rather than renaming into one, it has no
- * entry in `FIELD_TO_COLUMN` either. Not exported: no current consumer
- * needs the bare constant - task 40's transform is the first that will, and
- * should add `export` back beside its own import when it does, rather than
- * this task exporting it speculatively.
+ * entry in `FIELD_TO_COLUMN` either. Exported for its one consumer,
+ * `transform/map-record.ts`, which reads the field off the record and must
+ * not spell its name a second time - the field name is not a valid column
+ * name, so a divergence between the two spellings would silently stop
+ * filling `event_time` and `day`.
  */
-const TIMESTAMP_MS_FIELD = 'timestamp(ms)';
+export const TIMESTAMP_MS_FIELD = 'timestamp(ms)';
 
 /**
  * Selected CloudFront fields that feed a `DERIVED_COLUMNS` entry instead of
