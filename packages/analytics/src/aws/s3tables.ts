@@ -1,5 +1,7 @@
 import { AwsError, type ServiceDescriptor, type SigningClient } from 'blogwright-core';
 
+import { rethrowWithContext } from './errors.js';
+
 /**
  * Amazon S3 Tables control-plane client - create/get/delete for table buckets,
  * namespaces and tables (the `s3tables` API, REST-JSON). It lives in
@@ -207,36 +209,6 @@ function buildIcebergMetadata(schema: IcebergTableSchema): { iceberg: IcebergMet
  */
 function isAlreadyExists(err: unknown): err is AwsError {
   return err instanceof AwsError && (err.isAlreadyExists || err.statusCode === 409);
-}
-
-/** Strip the `AwsError` constructor's own `${service}: ${code} - … (HTTP ${statusCode})` framing back to the underlying AWS message, so a context-prefixed rethrow does not repeat it. */
-function stripAwsFraming(err: AwsError): string {
-  const prefix = `${err.service}: ${err.code} - `;
-  const suffix = ` (HTTP ${err.statusCode})`;
-  let message = err.message;
-  if (message.startsWith(prefix)) message = message.slice(prefix.length);
-  if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
-  return message;
-}
-
-/**
- * Rethrow a failure that was not the expected not-found/already-exists case as an
- * `AwsError` naming the operation and the offending bucket/namespace/table
- * identifier, preserving the original `code`, `statusCode` and `requestId` so
- * `isNotFound`/`isAlreadyExists` still narrow it downstream. A non-`AwsError`
- * (e.g. a network-level failure) passes through unchanged.
- */
-function rethrowWithContext(err: unknown, operation: string, resource: string): never {
-  if (err instanceof AwsError) {
-    throw new AwsError({
-      service: err.service,
-      code: err.code,
-      statusCode: err.statusCode,
-      requestId: err.requestId,
-      message: `${operation} "${resource}": ${stripAwsFraming(err)}`,
-    });
-  }
-  throw err;
 }
 
 /** S3 Tables control-plane client, over the shared SigV4 transport. */

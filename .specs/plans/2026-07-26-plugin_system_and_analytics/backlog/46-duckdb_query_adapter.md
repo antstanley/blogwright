@@ -7,6 +7,32 @@
 **Produces:** `packages/analytics/src/adapters/duckdb-query.ts` - the real `AnalyticsQuery`, attaching the S3 Tables catalog read-only with credentials injected from a `CredentialProvider`, translating every DuckDB error into a repo `Error` naming the query and the attach target, with `@duckdb/node-api` confined to this package
 **Pointers:** `packages/analytics/src/adapters/duckdb-query.ts` (new - the only module in the repo that may import `@duckdb/node-api`, until task 61 adds `adapters/duckdb-ingest.ts` beside it), `packages/analytics/src/adapters/duckdb-query.test.ts` (new - the credential-injection and error-translation tests), `packages/analytics/src/ports.ts` (task 45 - the `AnalyticsQuery` interface this implements), `packages/core/src/aws/credentials.ts:9,19,44` (`CredentialProvider`, `createCredentialProvider`, `staticCredentials` - the provider chain and the fixed-credentials test helper), `packages/core/src/adapters/node-fs.ts` (the adapter-shape precedent: vendor surface in, repo `Error` out), `packages/core/src/aws/errors.ts` (`AwsError` - the error-translation vocabulary adapters raise in), `packages/analytics/package.json:25-28` (the dependency list `@duckdb/node-api` joins)
 
+> **ROUTED FINDING - added 2026-08-30 from task 45's implementation.**
+> Two things task 45 deliberately left for this task.
+> **1. The relation name is your contract to bind.** SQL binds values, not
+> identifiers, so task 45 could not splice the configured
+> `<namespace>.<table>` into its definitions without committing the exact
+> interpolation that module exists to forbid. Every definition therefore reads
+> one relation, exported as `PAGE_VIEWS_RELATION`. This adapter holds the
+> context and so `resolveAnalyticsConfig(ctx)` - bind that name to the
+> configured triple here. Do not reach around task 44's `ENV_DERIVED` seal to
+> get the bucket; take the resolver.
+> **2. The SQL has never been executed.** There is no adapter before this task,
+> so DuckDB dialect correctness is entirely unverified: `FILTER (WHERE ...)`,
+> `sum(...) OVER ()`, and `CAST($from AS DATE)` against a DATE column are all
+> unexercised. Treat "the query set compiles" as no evidence at all, and
+> execute every one of the seven against a real table with real rows. In
+> particular verify the unique-visitors query returns per-day counts plus their
+> sum, because a dialect difference there fails by returning a plausible
+> number rather than an error - and the whole point of that query's shape is
+> that a cross-day `COUNT(DISTINCT)` is uncomputable under daily salt rotation.
+> **3. One specific dialect risk already spotted.** Task 45's gate flagged the
+> bare `$include_bots` in `($include_bots OR NOT coalesce(is_bot, false))` -
+> DuckDB may require `CAST($include_bots AS BOOLEAN)` for a bound parameter in
+> boolean position. Check it first; it appears in several definitions, and a
+> failure there would look like a type error at query time rather than anything
+> the query set's own tests could have caught.
+
 ## Steps
 
 - [ ] Add `@duckdb/node-api` to `packages/analytics/package.json` dependencies only, and confirm it appears in no other package's manifest.

@@ -7,6 +7,23 @@
 **Produces:** `packages/analytics/src/transform/handler.ts` - the Lambda entry point that decodes each Firehose record from base64, maps it through `mapRecord`, and returns `Ok` with the re-encoded row or `ProcessingFailed`, per record, with `recordId` echoed unchanged and no AWS SDK or network call anywhere in it
 **Pointers:** `packages/analytics/src/transform/handler.ts` (new - the Lambda entry point and the Firehose envelope types), `packages/analytics/src/transform/handler.test.ts` (new - the per-record and batch assertions), `packages/analytics/src/transform/map-record.ts` (task 40 - `mapRecord` and its droppable result, the only decision the handler forwards), `packages/analytics/src/transform/visitor-key.ts` (task 41 - the salt derivation the handler must feed from the record's own day, not a wall clock), `packages/build-agent/src/server.ts` (the precedent for an edge entry point whose domain logic lives in separately tested pure modules)
 
+> **ROUTED FINDING - added 2026-08-30 from task 41's implementation.**
+> `mapRecord(record, saltSecret)` now takes the **secret**, not a salt. Do not
+> hoist salt derivation to the batch: the day a record's salt must match comes
+> from that record's own `timestamp(ms)`, and a Firehose buffer straddles
+> midnight routinely, so one salt chosen per invocation is the wrong day's for
+> every record on the far side of it - producing keys that silently fail to join
+> with either day's.
+> `dailySalt` and `visitorKey` **throw** on an empty secret, day, IP or salt,
+> deliberately: an unsalted digest that looks protected is worse than a failed
+> batch, because the table stores `user_agent` in the clear beside the key and
+> an unsalted SHA-256 of an IPv4 address is a lookup table (2^32 addresses). So
+> when you fail the batch on a bad secret read, do NOT wrap the mapping in a
+> blanket try/catch - that converts those throws into silently dropped records
+> and routes everything to the error bucket, which is the exact
+> blank-dashboard-with-no-error signature this plan has already nearly shipped
+> three times. Let them propagate and fail the batch loudly.
+
 ## Steps
 
 - [ ] Read the long-lived root secret from Secrets Manager ONCE at cold start and cache it for the life of the execution environment; derive the per-record salt with `dailySalt(secret, record.day)` (task 41) rather than re-reading anything. The secret's name arrives as an environment variable set by task 50's function node. Caching matters for cost as well as latency: reading per invocation would be roughly 43,000 `GetSecretValue` calls a month at a 60-second Firehose buffer, more than half the price of the secret itself for no benefit.

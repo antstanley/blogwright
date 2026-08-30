@@ -1,5 +1,7 @@
 import { AwsError, type ServiceDescriptor, type SigningClient } from 'blogwright-core';
 
+import { rethrowWithContext } from './errors.js';
+
 /**
  * AWS Glue Data Catalog client, cut down to the one thing this plugin needs: the
  * `s3tablescatalog` federation Firehose writes the `page_views` table through.
@@ -147,36 +149,6 @@ function normalizeCatalog(out: GetCatalogResponse, fallbackName: string): Catalo
     sourceIdentifier: catalog?.FederatedCatalog?.Identifier,
     connectionName: catalog?.FederatedCatalog?.ConnectionName,
   };
-}
-
-/** Strip the `AwsError` constructor's own `${service}: ${code} - … (HTTP ${statusCode})` framing back to the underlying AWS message, so a context-prefixed rethrow does not repeat it. */
-function stripAwsFraming(err: AwsError): string {
-  const prefix = `${err.service}: ${err.code} - `;
-  const suffix = ` (HTTP ${err.statusCode})`;
-  let message = err.message;
-  if (message.startsWith(prefix)) message = message.slice(prefix.length);
-  if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
-  return message;
-}
-
-/**
- * Rethrow a failure that was not the expected not-found/already-exists case as an
- * `AwsError` naming the operation and the offending catalog, preserving the original
- * `code`, `statusCode` and `requestId` so `isNotFound`/`isAlreadyExists` still narrow
- * it downstream. A non-`AwsError` (e.g. a network-level failure) passes through
- * unchanged.
- */
-function rethrowWithContext(err: unknown, operation: string, catalogName: string): never {
-  if (err instanceof AwsError) {
-    throw new AwsError({
-      service: err.service,
-      code: err.code,
-      statusCode: err.statusCode,
-      requestId: err.requestId,
-      message: `${operation} "${catalogName}": ${stripAwsFraming(err)}`,
-    });
-  }
-  throw err;
 }
 
 /**

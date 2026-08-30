@@ -21,6 +21,16 @@ export interface ClientBundleOptions {
 export interface AwsClients {
   region: string;
   signing: SigningClient;
+  /**
+   * The us-east-1 signer, exposed so a plugin can build clients for services
+   * core does not enumerate over the credentials, endpoint override and
+   * transport the host already resolved - a `SigningClient`'s region is fixed
+   * at construction and both of those are private, so a hand-built one would
+   * re-resolve credentials and ignore a transport a test injected. Core builds
+   * no additional client from it: `logsUsEast1`, `acm`, `cloudfront` and
+   * `route53` below are the only ones it signs for.
+   */
+  signingUsEast1: SigningClient;
   s3: S3Client;
   sts: StsClient;
   iam: IamClient;
@@ -50,12 +60,14 @@ export function createClients(opts: ClientBundleOptions): AwsClients {
     ...(opts.transport ? { transport: opts.transport } : {}),
   };
   const signing = new SigningClient({ region: opts.region, ...base });
-  // ACM for CloudFront must be us-east-1 regardless of the primary region.
+  // ACM for CloudFront must be us-east-1 regardless of the primary region; the
+  // same signer is handed out as `signingUsEast1` for plugin-supplied services.
   const usEast1 = new SigningClient({ region: 'us-east-1', ...base });
 
   return {
     region: opts.region,
     signing,
+    signingUsEast1: usEast1,
     s3: new S3Client(signing),
     sts: new StsClient(signing),
     iam: new IamClient(signing),

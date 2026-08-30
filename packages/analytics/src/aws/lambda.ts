@@ -1,5 +1,7 @@
 import { AwsError, type ServiceDescriptor, type SigningClient } from 'blogwright-core';
 
+import { rethrowWithContext } from './errors.js';
+
 /**
  * AWS Lambda control-plane client for the *standard* function API - create, get,
  * update (code and configuration) and delete for the one function this plugin owns,
@@ -302,36 +304,6 @@ function configurationBody(input: FunctionConfigurationInput): object {
  */
 function isFunctionAlreadyExists(err: unknown): err is AwsError {
   return err instanceof AwsError && (err.isAlreadyExists || err.statusCode === 409);
-}
-
-/** Strip the `AwsError` constructor's own `${service}: ${code} - … (HTTP ${statusCode})` framing back to the underlying AWS message, so a context-prefixed rethrow does not repeat it. */
-function stripAwsFraming(err: AwsError): string {
-  const prefix = `${err.service}: ${err.code} - `;
-  const suffix = ` (HTTP ${err.statusCode})`;
-  let message = err.message;
-  if (message.startsWith(prefix)) message = message.slice(prefix.length);
-  if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
-  return message;
-}
-
-/**
- * Rethrow a failure that was not the expected not-found/already-exists case as an
- * `AwsError` naming the operation and the offending function, preserving the original
- * `code`, `statusCode` and `requestId` so `isNotFound` and this module's own
- * `isFunctionAlreadyExists` still narrow it downstream. A non-`AwsError` (e.g. a
- * network-level failure) passes through unchanged.
- */
-function rethrowWithContext(err: unknown, operation: string, functionName: string): never {
-  if (err instanceof AwsError) {
-    throw new AwsError({
-      service: err.service,
-      code: err.code,
-      statusCode: err.statusCode,
-      requestId: err.requestId,
-      message: `${operation} "${functionName}": ${stripAwsFraming(err)}`,
-    });
-  }
-  throw err;
 }
 
 /** AWS Lambda function client, over the shared SigV4 transport. */

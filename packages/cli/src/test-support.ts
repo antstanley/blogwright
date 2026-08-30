@@ -90,6 +90,10 @@ function testClients(region: string, overrides: ClientOverrides): AwsClients {
   return {
     ...base,
     signing: overrideClient(base.signing, overrides.signing),
+    // Enumerated like every other member rather than left to spread from
+    // `...base`: `ClientOverrides` derives from `keyof AwsClients`, so an
+    // override for it would typecheck and then be silently discarded.
+    signingUsEast1: overrideClient(base.signingUsEast1, overrides.signingUsEast1),
     s3: overrideClient(base.s3, overrides.s3),
     sts: overrideClient(base.sts, overrides.sts),
     iam: overrideClient(base.iam, overrides.iam),

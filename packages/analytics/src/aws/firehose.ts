@@ -5,6 +5,8 @@ import {
   type SigningClient,
 } from 'blogwright-core';
 
+import { rethrowWithContext } from './errors.js';
+
 /**
  * Amazon Data Firehose control-plane client - create/describe/delete and tagging
  * for the one delivery stream this plugin owns (the `firehose` API, AWS JSON 1.1).
@@ -218,36 +220,6 @@ function formatFailure(failure: FailureDescriptionResponse | undefined): string 
  */
 function isStreamAlreadyExists(err: unknown): err is AwsError {
   return err instanceof AwsError && (err.isAlreadyExists || err.code === 'ResourceInUseException');
-}
-
-/** Strip the `AwsError` constructor's own `${service}: ${code} - … (HTTP ${statusCode})` framing back to the underlying AWS message, so a context-prefixed rethrow does not repeat it. */
-function stripAwsFraming(err: AwsError): string {
-  const prefix = `${err.service}: ${err.code} - `;
-  const suffix = ` (HTTP ${err.statusCode})`;
-  let message = err.message;
-  if (message.startsWith(prefix)) message = message.slice(prefix.length);
-  if (message.endsWith(suffix)) message = message.slice(0, -suffix.length);
-  return message;
-}
-
-/**
- * Rethrow a failure that was not the expected not-found/already-exists case as an
- * `AwsError` naming the operation and the offending stream, preserving the original
- * `code`, `statusCode` and `requestId` so `isNotFound` and this module's own
- * `isStreamAlreadyExists` still narrow it downstream. A non-`AwsError` (e.g. a
- * network-level failure) passes through unchanged.
- */
-function rethrowWithContext(err: unknown, operation: string, streamName: string): never {
-  if (err instanceof AwsError) {
-    throw new AwsError({
-      service: err.service,
-      code: err.code,
-      statusCode: err.statusCode,
-      requestId: err.requestId,
-      message: `${operation} "${streamName}": ${stripAwsFraming(err)}`,
-    });
-  }
-  throw err;
 }
 
 /** Encode `ResourceTags` as the service's `[{ Key, Value }]` tag list. */
