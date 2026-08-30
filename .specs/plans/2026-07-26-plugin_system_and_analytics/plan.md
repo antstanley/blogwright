@@ -84,7 +84,20 @@ key.
   typecheck, and each package's build tsconfig excludes its test files, so a
   type error in a `*.test.ts` passes `build`, `test`, `lint`, `oxfmt` and `knip`
   and reddens CI on the first push. Task 06 shipped exactly that and its gate
-  caught it. User-facing changes ship a changeset. Task files add only
+  caught it. User-facing changes ship a changeset.
+- **`pnpm knip` is a signal, not an obstacle.** Added 2026-08-30 after three
+  tasks independently answered it the same wrong way. When knip reports an
+  export or a dependency with no consumer, the honest answers are: delete it;
+  do not export it yet, and let the task that first needs it add the `export`
+  beside its own consumer; or add a scoped `ignoreExports`/`ignoreDependencies`
+  entry with a comment naming the task that will consume it. What is NOT an
+  answer is manufacturing a consumer - a test that only mentions the symbol, a
+  type-annotation-only line, or production code written to be imported. Task 06
+  shipped `const calls: PackageManagerCall[] = packages.calls;`, task 32 shipped
+  a module-load validation later proved surplus by negative control, and task 39
+  shipped two assertions that cannot fail. Each made the gate green while
+  removing exactly the signal it exists to give. A verifier that finds an
+  assertion which cannot fail should treat it as a defect, not a style note. Task files add only
   task-specific acceptance on top.
 
 ---
