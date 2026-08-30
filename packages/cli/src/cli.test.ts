@@ -9,7 +9,14 @@
  * tasks have a regression net.
  */
 
-import { createScriptedTerminal, findRepoRoot, type ScriptedTerminal } from 'blogwright-core';
+import {
+  createMemoryFileSystem,
+  createNodeFileSystem,
+  createScriptedTerminal,
+  findRepoRoot,
+  type Plugin,
+  type ScriptedTerminal,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { main, type ContextFactory, type DiscoveryPortsFactory } from './cli.js';
@@ -17,10 +24,12 @@ import { cliPackageDir, loadConfig, type ContextOptions, type OpsContext } from 
 import { RESERVED_COMMANDS } from './known-commands.js';
 import { createLogger } from './logger.js';
 import { toPluginContext } from './plugin-commands.js';
+import type { ModuleLoader } from './ports.js';
 import {
   buildDiscoveryPorts,
   createTestContext,
   makeFakePlugin,
+  type FakePluginSpec,
   type RecordedRun,
 } from './test-support.js';
 
@@ -115,28 +124,272 @@ function testContextFactory(terminal: ScriptedTerminal): {
 }
 
 /**
- * A `DiscoveryPortsFactory` that throws if called - for every test below
- * that dispatches a built-in command and must never reach plugin dispatch
- * at all. Stronger than asserting a loader's call log stayed empty: it
- * fails the instant `runPlugin` is reached, rather than relying on
- * `findRepoRoot`/`discover` also behaving in a way that keeps the loader
- * unreached (see the "never touches the ModuleLoader..." test below for the
- * one case that still checks the loader directly, on `main`'s explicit
- * request from that section of the task).
+ * A `DiscoveryPortsFactory` that throws if called - used below for the
+ * `status` dispatch, a fully built-in command whose path never reaches
+ * `runPlugin` or any USAGE print site, so discovery must never run at all.
  */
 const unreachableDiscoveryPorts: DiscoveryPortsFactory = () => {
   throw new Error('unexpected: discovery ports built for a command that should never reach it');
 };
 
+/**
+ * A `ModuleLoader` that throws if any method is called - for the
+ * "discovery cannot even start" tests below, where `findRepoRoot` or
+ * `discover`'s own `package.json` read fails before `ports.loader` is ever
+ * touched at all.
+ */
+const neverLoader: ModuleLoader = {
+  resolve: async () => {
+    throw new Error('unexpected: ModuleLoader.resolve called before discovery could reach it');
+  },
+  packageJsonPathFor: async () => {
+    throw new Error(
+      'unexpected: ModuleLoader.packageJsonPathFor called before discovery could reach it',
+    );
+  },
+  load: async () => {
+    throw new Error('unexpected: ModuleLoader.load called before discovery could reach it');
+  },
+};
+
+/**
+ * One discovered plugin shared by the "help reflects installed plugins"
+ * tests below: a single namespace, a single command, nothing else -
+ * `makeFakePlugin`'s four-action "fake" plugin (used by the dispatch tests
+ * above) is deliberately not reused here, because those assertions are
+ * about action MATCHING, not about what `--help` renders from a plugin's
+ * `description`/`summary` fields.
+ */
+const WIDGET_PLUGIN: Plugin = {
+  name: 'widget',
+  description: 'manage widgets',
+  commands: [{ action: 'sync', summary: 'sync widgets', run: async () => undefined }],
+};
+
+/**
+ * `EXPECTED_USAGE` with `WIDGET_PLUGIN`'s section appended, exactly as
+ * `buildHelp` (`cli.ts`) is specified to render it - the plugin's
+ * `description` as a header, one line per command built from `action` and
+ * `summary`. Hand-typed independently of `cli.ts`'s own rendering code, the
+ * same way `EXPECTED_USAGE` itself is independent of the live `USAGE`
+ * constant, so a rendering bug in `buildHelp` cannot pass by construction.
+ */
+const EXPECTED_HELP_WITH_WIDGET = `${EXPECTED_USAGE}
+Plugins:
+
+  widget - manage widgets
+    sync - sync widgets
+`;
+
+/**
+ * Wrap a `buildDiscoveryPorts` result with one additional BROKEN candidate:
+ * `brokenPackageName` resolves and loads fine, but its default export is
+ * `{}` - no `name`, `description` or `commands` - so `validatePlugin`
+ * (`blogwright-core`) rejects it and `discover` reports a `failures` entry
+ * instead of a `plugins` one, the same outcome `plugins.test.ts` proves
+ * against the real validator in "reports a failure ... when the default
+ * export fails validatePlugin". `packageJsonPathFor`/`resolve`/`load` for
+ * every OTHER specifier still delegate to `base.loader` unchanged.
+ */
+async function withBrokenPlugin(
+  base: { fs: Awaited<ReturnType<typeof buildDiscoveryPorts>>['fs']; loader: ModuleLoader },
+  brokenPackageName: string,
+): Promise<{ fs: typeof base.fs; loader: ModuleLoader }> {
+  const repoRoot = await findRepoRoot(base.fs);
+  const packageJsonPath = `/pkgs/${brokenPackageName}/package.json`;
+  const entryPath = `/pkgs/${brokenPackageName}/index.js`;
+  await base.fs.writeText(
+    packageJsonPath,
+    JSON.stringify({ name: brokenPackageName, blogwright: { plugin: 'broken' } }),
+  );
+  const repoPackageJsonPath = `${repoRoot}/package.json`;
+  const repoPkg = JSON.parse(await base.fs.readText(repoPackageJsonPath)) as {
+    dependencies?: Record<string, string>;
+  };
+  await base.fs.writeText(
+    repoPackageJsonPath,
+    JSON.stringify({
+      ...repoPkg,
+      dependencies: { ...repoPkg.dependencies, [brokenPackageName]: '1.0.0' },
+    }),
+  );
+
+  const loader: ModuleLoader = {
+    resolve: async (specifier, fromDir) =>
+      specifier === brokenPackageName
+        ? { found: true, path: entryPath }
+        : base.loader.resolve(specifier, fromDir),
+    packageJsonPathFor: async (specifier, fromDir) =>
+      specifier === brokenPackageName
+        ? { found: true, path: packageJsonPath }
+        : base.loader.packageJsonPathFor(specifier, fromDir),
+    load: async (path) => (path === entryPath ? { default: {} } : base.loader.load(path)),
+  };
+  return { fs: base.fs, loader };
+}
+
 describe('main - help and error surface', () => {
-  it('prints USAGE and exits 0 for --help', async () => {
+  it('runs discovery, and with no plugins installed prints USAGE byte-identical to the task-07 pin, exiting 0 for --help', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    let discoveryPortsCalls = 0;
+    const makeDiscoveryPorts: DiscoveryPortsFactory = () => {
+      discoveryPortsCalls += 1;
+      return { fs, loader };
+    };
+
+    const code = await main(
+      ['--help'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      makeDiscoveryPorts,
+    );
+
+    expect(code).toBe(0);
+    // Byte-identical to today's USAGE: the pin every plugin-section change
+    // in this task must keep passing, per task 07 and this task's own DoD.
+    expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+    expect(terminal.errors).toEqual([]);
+    // Discovery genuinely ran for --help, not merely "did not crash" -
+    // `unreachableDiscoveryPorts` above would have thrown had `main` never
+    // called `makeDiscoveryPorts` at all.
+    expect(discoveryPortsCalls).toBe(1);
+  });
+
+  it('runs discovery and prints USAGE byte-identical to the task-07 pin, exiting 1 for a bare invocation', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+    let discoveryPortsCalls = 0;
+    const makeDiscoveryPorts: DiscoveryPortsFactory = () => {
+      discoveryPortsCalls += 1;
+      return { fs, loader };
+    };
+
+    const code = await main(
+      [],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      makeDiscoveryPorts,
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+    expect(discoveryPortsCalls).toBe(1);
+  });
+
+  it('appends one section per discovered plugin to --help, ordered by plugin name regardless of dependency/discovery order', async () => {
+    // `blogwright-a-pkg` sorts FIRST among dependency names (and so is
+    // resolved and loaded first) yet declares the plugin named "zzz";
+    // `blogwright-z-pkg` sorts and loads SECOND yet declares "aaa". If
+    // `buildHelp` rendered sections in discovery order rather than sorting
+    // by `Plugin.name`, this would render "zzz" before "aaa" - the opposite
+    // of what is asserted below.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const aaaPlugin: Plugin = {
+      name: 'aaa',
+      description: 'the aaa plugin',
+      commands: [{ action: 'sync', summary: 'sync aaa', run: async () => undefined }],
+    };
+    const zzzPlugin: Plugin = {
+      name: 'zzz',
+      description: 'the zzz plugin',
+      commands: [{ action: 'sync', summary: 'sync zzz', run: async () => undefined }],
+    };
+    const specs: FakePluginSpec[] = [
+      { packageName: 'blogwright-a-pkg', namespace: 'zzz', plugin: zzzPlugin },
+      { packageName: 'blogwright-z-pkg', namespace: 'aaa', plugin: aaaPlugin },
+    ];
+    const { fs, loader } = await buildDiscoveryPorts(specs);
+
+    const code = await main(
+      ['--help'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([
+      `${EXPECTED_USAGE}
+Plugins:
+
+  aaa - the aaa plugin
+    sync - sync aaa
+
+  zzz - the zzz plugin
+    sync - sync zzz
+`,
+    ]);
+  });
+
+  it("leaves a working plugin's section rendered when another plugin fails to load, surfacing the failure with no stack trace", async () => {
+    const goodPlugin: Plugin = {
+      name: 'good',
+      description: 'a good plugin',
+      commands: [{ action: 'sync', summary: 'sync it', run: async () => undefined }],
+    };
+    const terminal = createScriptedTerminal({ interactive: false });
+    const base = await buildDiscoveryPorts([
+      { packageName: 'blogwright-good', namespace: 'good', plugin: goodPlugin },
+    ]);
+    const { fs, loader } = await withBrokenPlugin(base, 'blogwright-broken');
+
+    const code = await main(
+      ['--help'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([
+      `${EXPECTED_USAGE}
+Plugins:
+
+  good - a good plugin
+    sync - sync it
+
+Plugins that failed to load:
+  blogwright-broken: plugin package "blogwright-broken"'s Plugin.name is required - the CLI namespace it claims, e.g. "analytics"
+`,
+    ]);
+  });
+
+  it('renders the same discovered-plugin help at the unknown-command fallback inside KNOWN_COMMANDS (`blogwright plugin`, not yet dispatched)', async () => {
+    // `plugin` is in `KNOWN_COMMANDS` (reserved for task 17's `blogwright
+    // plugin list`/`add`/`remove`) but `main`'s switch has no case for it
+    // yet, so a bare `blogwright plugin` falls to the switch's own
+    // `default:` - one of the five USAGE print sites this task wires.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const base = await buildDiscoveryPorts([
+      { packageName: 'blogwright-widget', namespace: 'widget', plugin: WIDGET_PLUGIN },
+    ]);
+
+    const code = await main(
+      ['plugin'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => base,
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown command: plugin']);
+    expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_WIDGET]);
+  });
+
+  it('falls back to plain USAGE (not a crash) when --help runs outside any discoverable repo, exiting 0', async () => {
+    // An EMPTY memory fs has no `.git`/`.jj` anywhere above `process.cwd()`,
+    // so `findRepoRoot` throws before `discover` is ever reached - exactly
+    // what running `blogwright --help` in a freshly created empty directory
+    // looks like. `--help` must still answer with today's USAGE rather than
+    // surfacing that internal failure and refusing to print anything.
     const terminal = createScriptedTerminal({ interactive: false });
 
     const code = await main(
       ['--help'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
-      unreachableDiscoveryPorts,
+      () => ({ fs: createMemoryFileSystem(), loader: neverLoader }),
     );
 
     expect(code).toBe(0);
@@ -144,18 +397,78 @@ describe('main - help and error surface', () => {
     expect(terminal.errors).toEqual([]);
   });
 
-  it('prints USAGE and exits 1 for a bare invocation', async () => {
+  it('falls back to plain USAGE outside any discoverable repo for a bare invocation too, exiting 1', async () => {
     const terminal = createScriptedTerminal({ interactive: false });
 
     const code = await main(
       [],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
-      unreachableDiscoveryPorts,
+      () => ({ fs: createMemoryFileSystem(), loader: neverLoader }),
     );
 
     expect(code).toBe(1);
     expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+  });
+
+  it('falls back to plain USAGE when --help runs inside a repo with no root package.json yet, exiting 0', async () => {
+    // A repo before its first `npm init`: the `.jj` marker `findRepoRoot`
+    // needs is present, but `<repoRoot>/package.json` is not - the second
+    // regression the D1 review reproduced against the built binary (`.git`
+    // present, no root `package.json`).
+    const terminal = createScriptedTerminal({ interactive: false });
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    const fs = createMemoryFileSystem({ [`${repoRoot}/.jj`]: '' });
+
+    const code = await main(
+      ['--help'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader: neverLoader }),
+    );
+
+    expect(code).toBe(0);
+    expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+    expect(terminal.errors).toEqual([]);
+  });
+
+  it('falls back to plain USAGE inside a repo with no root package.json for a bare invocation too, exiting 1', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    const fs = createMemoryFileSystem({ [`${repoRoot}/.jj`]: '' });
+
+    const code = await main(
+      [],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader: neverLoader }),
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+  });
+
+  it('does NOT swallow a malformed root package.json - an unrelated discovery failure still propagates out of --help rather than being papered over', async () => {
+    // Proves the D1 fix's guard is narrow: it tolerates a MISSING
+    // package.json (the "nothing set up yet" precondition above) but a
+    // present, unparseable one is an actual defect worth surfacing, not a
+    // reason to quietly fall back to USAGE. Without the `isMissingPackageJsonError`/
+    // `isNoRepoRootError` narrowing (i.e. if `helpText` swallowed every
+    // `Error` from `findRepoRoot`/`discover`), this would resolve to
+    // `EXPECTED_USAGE` instead of rejecting.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    const fs = createMemoryFileSystem({
+      [`${repoRoot}/.jj`]: '',
+      [`${repoRoot}/package.json`]: 'not valid json {',
+    });
+
+    await expect(
+      main(['--help'], fixedTerminal(terminal), testContextFactory(terminal).makeContext, () => ({
+        fs,
+        loader: neverLoader,
+      })),
+    ).rejects.toThrow(/failed to parse .*package\.json as JSON/);
   });
 
   it('reports an unrecognised first positional as neither a built-in nor an installed plugin, and exits 1', async () => {
@@ -485,14 +798,15 @@ describe('toPluginContext', () => {
 });
 
 describe('main - pds dispatch', () => {
-  it('exits 1 with "unknown pds action: (none)" when no action is given', async () => {
+  it('exits 1 with "unknown pds action: (none)" when no action is given, running discovery to build the USAGE it prints', async () => {
     const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
 
     const code = await main(
       ['pds'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
-      unreachableDiscoveryPorts,
+      () => ({ fs, loader }),
     );
 
     expect(code).toBe(1);
@@ -500,19 +814,74 @@ describe('main - pds dispatch', () => {
     expect(terminal.writes).toEqual([EXPECTED_USAGE]);
   });
 
-  it('exits 1 with "unknown pds action: bogus" for an unrecognised action', async () => {
+  it('exits 1 with "unknown pds action: bogus" for an unrecognised action, running discovery to build the USAGE it prints', async () => {
     const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
 
     const code = await main(
       ['pds', 'bogus'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
-      unreachableDiscoveryPorts,
+      () => ({ fs, loader }),
     );
 
     expect(code).toBe(1);
     expect(terminal.errors).toEqual(['✗ unknown pds action: bogus']);
     expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+  });
+
+  it("appends a discovered plugin's section to the USAGE an unknown pds action prints - deliberately wired so `blogwright pds bogus` never loses a plugin's help once task 26 strips the static pds block", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-widget', namespace: 'widget', plugin: WIDGET_PLUGIN },
+    ]);
+
+    const code = await main(
+      ['pds', 'bogus'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown pds action: bogus']);
+    expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_WIDGET]);
+  });
+});
+
+describe('main - preview dispatch', () => {
+  it('exits 1 with "unknown preview action: bogus", running discovery to build the USAGE it prints', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
+
+    const code = await main(
+      ['preview', 'bogus'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown preview action: bogus']);
+    expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+  });
+
+  it("appends a discovered plugin's section to the USAGE an unknown preview action prints", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-widget', namespace: 'widget', plugin: WIDGET_PLUGIN },
+    ]);
+
+    const code = await main(
+      ['preview'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown preview action: (none)']);
+    expect(terminal.writes).toEqual([EXPECTED_HELP_WITH_WIDGET]);
   });
 });
 
