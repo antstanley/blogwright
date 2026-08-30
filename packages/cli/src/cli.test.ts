@@ -1,21 +1,28 @@
 /**
- * Dispatch-level tests for `main`. `main` takes its terminal and context
- * factories as parameters (see cli.ts's `TerminalFactory` and
- * `ContextFactory`), so these drive it with `createScriptedTerminal` and a
- * stub over `createTestContext` - never a module mock, never disk or AWS
+ * Dispatch-level tests for `main`. `main` takes its terminal, context and
+ * discovery-ports factories as parameters (see cli.ts's `TerminalFactory`,
+ * `ContextFactory` and `DiscoveryPortsFactory`), so these drive it with
+ * `createScriptedTerminal`, a stub over `createTestContext`, and a map-backed
+ * `{ fs, loader }` pair - never a module mock, never real disk or AWS
  * (DEVELOPMENT.md: "tests substitute at the port"). They pin today's help,
  * unknown-command, `pds`, and `status` behaviour so later dispatch-rebuild
  * tasks have a regression net.
  */
 
-import { createScriptedTerminal, type ScriptedTerminal } from 'blogwright-core';
+import { createScriptedTerminal, findRepoRoot, type ScriptedTerminal } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { main, type ContextFactory } from './cli.js';
-import type { OpsContext } from './context.js';
+import { main, type ContextFactory, type DiscoveryPortsFactory } from './cli.js';
+import { cliPackageDir, loadConfig, type ContextOptions, type OpsContext } from './context.js';
 import { RESERVED_COMMANDS } from './known-commands.js';
 import { createLogger } from './logger.js';
-import { createTestContext } from './test-support.js';
+import { toPluginContext } from './plugin-commands.js';
+import {
+  buildDiscoveryPorts,
+  createTestContext,
+  makeFakePlugin,
+  type RecordedRun,
+} from './test-support.js';
 
 /**
  * An independent copy of the `USAGE` constant at cli.ts:11-63, pinned
@@ -107,6 +114,20 @@ function testContextFactory(terminal: ScriptedTerminal): {
   return { makeContext, contexts };
 }
 
+/**
+ * A `DiscoveryPortsFactory` that throws if called - for every test below
+ * that dispatches a built-in command and must never reach plugin dispatch
+ * at all. Stronger than asserting a loader's call log stayed empty: it
+ * fails the instant `runPlugin` is reached, rather than relying on
+ * `findRepoRoot`/`discover` also behaving in a way that keeps the loader
+ * unreached (see the "never touches the ModuleLoader..." test below for the
+ * one case that still checks the loader directly, on `main`'s explicit
+ * request from that section of the task).
+ */
+const unreachableDiscoveryPorts: DiscoveryPortsFactory = () => {
+  throw new Error('unexpected: discovery ports built for a command that should never reach it');
+};
+
 describe('main - help and error surface', () => {
   it('prints USAGE and exits 0 for --help', async () => {
     const terminal = createScriptedTerminal({ interactive: false });
@@ -115,6 +136,7 @@ describe('main - help and error surface', () => {
       ['--help'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
+      unreachableDiscoveryPorts,
     );
 
     expect(code).toBe(0);
@@ -125,24 +147,331 @@ describe('main - help and error surface', () => {
   it('prints USAGE and exits 1 for a bare invocation', async () => {
     const terminal = createScriptedTerminal({ interactive: false });
 
-    const code = await main([], fixedTerminal(terminal), testContextFactory(terminal).makeContext);
+    const code = await main(
+      [],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      unreachableDiscoveryPorts,
+    );
 
     expect(code).toBe(1);
     expect(terminal.writes).toEqual([EXPECTED_USAGE]);
   });
 
-  it('prints "unknown command" plus USAGE and exits 1 for an unrecognised command', async () => {
+  it('reports an unrecognised first positional as neither a built-in nor an installed plugin, and exits 1', async () => {
+    // Task 10 replaces the old "unknown command: x" + USAGE pair with plugin
+    // dispatch: `frobnicate` is neither a built-in nor `plugin`, so it falls
+    // through to `runPlugin`, which runs discovery (finding nothing, here)
+    // before reporting the name unclaimed. This is the task-07 pin, updated
+    // deliberately rather than deleted (see plugin-commands.ts's
+    // `runPlugin` for the message this now asserts) -
+    //   OLD: '✗ unknown command: frobnicate' + [EXPECTED_USAGE]
+    //   NEW: the message below, with no USAGE print at all (task 11 is what
+    //        wires a USAGE-equivalent print site back in for plugin dispatch,
+    //        if it ever does - see that task's pointer on cli.ts:119 being
+    //        deliberately absent from its print-site list).
     const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([]);
 
     const code = await main(
       ['frobnicate'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
     );
 
     expect(code).toBe(1);
-    expect(terminal.errors).toEqual(['✗ unknown command: frobnicate']);
-    expect(terminal.writes).toEqual([EXPECTED_USAGE]);
+    expect(terminal.errors).toEqual([
+      '✗ no built-in command or installed plugin claims "frobnicate" - run ' +
+        '`blogwright plugin list` to see what is installed',
+    ]);
+    expect(terminal.writes).toEqual([]);
+  });
+});
+
+describe('main - generic plugin dispatch', () => {
+  it('dispatches a single-word action with no trailing environment, defaulting to "production"', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+
+    const code = await main(
+      ['fake', 'sync'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.action).toBe('sync');
+    expect(calls[0]?.ctx.env).toBe('production');
+    expect(calls[0]?.args).toEqual([]);
+  });
+
+  it('dispatches a single-word action with a trailing environment positional', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+
+    const code = await main(
+      ['fake', 'sync', 'staging'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.ctx.env).toBe('staging');
+    // The environment positional is consumed, never forwarded as a data arg.
+    expect(calls[0]?.args).toEqual([]);
+  });
+
+  it('dispatches a multi-word action ("secret status") by declaration, not by positional shifting, with a trailing environment', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+
+    const code = await main(
+      ['fake', 'secret', 'status', 'staging'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    // Matched the two-word "secret status", not the bare "secret" - proven
+    // by the action recorded AND by "status" never appearing in args/env.
+    expect(calls[0]?.action).toBe('secret status');
+    expect(calls[0]?.ctx.env).toBe('staging');
+    expect(calls[0]?.args).toEqual([]);
+  });
+
+  it('lets --env override a positional environment', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+
+    const code = await main(
+      ['fake', 'sync', 'staging', '--env', 'canary'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.ctx.env).toBe('canary');
+    expect(calls[0]?.args).toEqual([]);
+  });
+
+  it('passes flag values through to run() - the --identifier and --yes shapes task 29 depends on - positively, not merely absence of a refusal', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+
+    const code = await main(
+      ['fake', 'secret', 'status', '--identifier', 'alice.example', '--yes'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.action).toBe('secret status');
+    expect(calls[0]?.ctx.env).toBe('production');
+    expect(calls[0]?.args).toEqual(['--identifier', 'alice.example', '--yes']);
+  });
+
+  it('dispatches a plugin bundled with the CLI even when the consumer package.json names only "blogwright"', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts(
+      [
+        {
+          packageName: 'blogwright-fake',
+          namespace: 'fake',
+          plugin: makeFakePlugin(calls),
+          bundled: true,
+        },
+      ],
+      { consumerDeps: { blogwright: '^1.0.0' } },
+    );
+
+    const code = await main(
+      ['fake', 'sync'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    // Resolved from the CLI's own directory - never from the consumer root,
+    // which declares no blogwright-* dependency at all.
+    expect(
+      loader.packageJsonPathForCalls.some(
+        (call) => call.specifier === 'blogwright-fake' && call.fromDir === cliPackageDir(),
+      ),
+    ).toBe(true);
+  });
+
+  it('dispatches an action with a positional environment even when only THAT environment has a config file (no config/production.jsonc, no ops.config.jsonc) - regression', async () => {
+    // Pins the fix for a real bug an earlier, provisional-context version of
+    // `runPlugin` had: it built a throwaway OpsContext for a GUESSED
+    // environment (production, absent --env) purely to reach ports for
+    // discovery, before the real environment (the "staging" positional
+    // here) was ever read. On a repo configured for staging only, that
+    // guess made `loadConfig` throw `no config found for environment
+    // "production"` - naming an environment the operator never asked for.
+    // This test drives `main` through a `makeContext` that reproduces
+    // `createContext`'s REAL ordering (config loaded, and able to throw,
+    // before any AWS client is built) rather than `createTestContext`'s
+    // bypass - `createTestContext` never calls `loadConfig` at all, so it
+    // cannot reproduce this failure mode.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+    const repoRoot = await findRepoRoot(fs);
+    await fs.writeText(`${repoRoot}/config/staging.jsonc`, JSON.stringify({ siteName: 'example' }));
+
+    const makeContext = async (opts: ContextOptions): Promise<OpsContext> => {
+      await loadConfig(fs, { env: opts.env, root: repoRoot, configPath: opts.configPath });
+      return createTestContext({
+        env: opts.env,
+        ports: opts.ports,
+        logger: createLogger(terminal),
+      });
+    };
+
+    const code = await main(
+      ['fake', 'sync', 'staging'],
+      fixedTerminal(terminal),
+      makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.ctx.env).toBe('staging');
+  });
+
+  it('reports an unknown plugin name, naming `blogwright plugin list`, and exits 1', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin([]) },
+    ]);
+
+    const code = await main(
+      ['ghost', 'sync'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual([
+      '✗ no built-in command or installed plugin claims "ghost" - run ' +
+        '`blogwright plugin list` to see what is installed',
+    ]);
+  });
+
+  it('reports an unknown action inside a known plugin, listing its declared actions, and exits 1', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin([]) },
+    ]);
+
+    const code = await main(
+      ['fake', 'bogus'],
+      fixedTerminal(terminal),
+      testContextFactory(terminal).makeContext,
+      () => ({ fs, loader }),
+    );
+
+    expect(code).toBe(1);
+    expect(terminal.errors).toEqual(['✗ unknown fake action: bogus']);
+    expect(terminal.writes).toEqual([
+      [
+        '"fake" actions:',
+        '  sync - sync it',
+        '  secret - show secret (bare, should never win over "secret status")',
+        '  secret status - show secret status',
+        '  secret delete - delete the secret',
+      ].join('\n'),
+    ]);
+  });
+
+  it('never touches the ModuleLoader for deploy, status or bootstrap - discovery stays lazy for every built-in', async () => {
+    // Two independent signals, both required to stay zero: `makeDiscoveryPorts`
+    // itself must never be invoked (the direct proof that `runPlugin` was
+    // never reached), and the fake `ModuleLoader` it would have handed back
+    // must show no calls either (the task's own requested assertion).
+    // (Verified: this test fails when `!KNOWN_COMMANDS.has(command)` in
+    // cli.ts is hoisted/replaced so every command falls through to
+    // `runPlugin`.)
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin([]) },
+    ]);
+    let discoveryPortsCalls = 0;
+    const makeDiscoveryPorts: DiscoveryPortsFactory = () => {
+      discoveryPortsCalls += 1;
+      return { fs, loader };
+    };
+    const { makeContext } = testContextFactory(terminal);
+
+    for (const command of ['deploy', 'status', 'bootstrap']) {
+      await main([command], fixedTerminal(terminal), makeContext, makeDiscoveryPorts).catch(
+        () => undefined,
+      );
+    }
+
+    expect(discoveryPortsCalls).toBe(0);
+    expect(loader.resolveCalls).toEqual([]);
+    expect(loader.packageJsonPathForCalls).toEqual([]);
+    expect(loader.loadCalls).toEqual([]);
+  });
+});
+
+describe('toPluginContext', () => {
+  it('adapts an OpsContext with no cast, supplying pluginConfig/siteState/record on top of it', () => {
+    const ops = createTestContext({ env: 'staging' });
+
+    const ctx = toPluginContext(ops);
+
+    expect(ctx.env).toBe(ops.env);
+    expect(ctx.domain).toBe(ops.domain);
+    expect(ctx.names).toBe(ops.names);
+    expect(ctx.accountId).toBe(ops.accountId);
+    expect(ctx.clients).toBe(ops.clients);
+    expect(ctx.logger).toBe(ops.logger);
+    expect(ctx.pluginConfig).toEqual({});
+    // Pre-task-16: both state surfaces still read the SITE's own store -
+    // see toPluginContext's doc comment on why nothing may call
+    // `plugin.nodes` against a context built this way before task 16.
+    expect(ctx.siteState).toBe(ops.state);
+    expect(ctx.state).toBe(ops.state);
+    expect(ctx.store).toBe(ops.store);
+    expect(ctx.save).toBe(ops.save);
+
+    ctx.record('some-node', { arn: 'arn:aws:s3:::example' });
+    expect(ops.state.resources['some-node']).toEqual({ arn: 'arn:aws:s3:::example' });
   });
 });
 
@@ -154,6 +483,7 @@ describe('main - pds dispatch', () => {
       ['pds'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
+      unreachableDiscoveryPorts,
     );
 
     expect(code).toBe(1);
@@ -168,6 +498,7 @@ describe('main - pds dispatch', () => {
       ['pds', 'bogus'],
       fixedTerminal(terminal),
       testContextFactory(terminal).makeContext,
+      unreachableDiscoveryPorts,
     );
 
     expect(code).toBe(1);
@@ -181,7 +512,12 @@ describe('main - status dispatch', () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const { makeContext, contexts } = testContextFactory(terminal);
 
-    const code = await main(['status'], fixedTerminal(terminal), makeContext);
+    const code = await main(
+      ['status'],
+      fixedTerminal(terminal),
+      makeContext,
+      unreachableDiscoveryPorts,
+    );
 
     expect(code).toBe(0);
     const ctx = contexts[0];

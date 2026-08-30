@@ -8,6 +8,8 @@ import type { ContextOptions, OpsContext } from './context.js';
 import { initSite } from './init.js';
 import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
+import { runPlugin } from './plugin-commands.js';
+import type { Ports } from './ports.js';
 
 const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
 
@@ -76,10 +78,24 @@ export type TerminalFactory = (opts: { plain: boolean }) => Terminal;
  */
 export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
 
+/**
+ * Builds the `fs`/`loader` ports plugin dispatch needs for discovery -
+ * BEFORE any environment is known and therefore before any `OpsContext`
+ * exists at all. `bin.ts` defaults this to the real Node adapters
+ * (`createNodeFileSystem`/`createNodeModuleLoader`), mirroring the `init`
+ * branch below, which already constructs a `FileSystem` directly with no
+ * context; tests supply a map-backed pair instead. Declared as a required
+ * parameter, not defaulted inside this module, for the same reason
+ * `ContextFactory` is: the composition root (`bin.ts`) is the only place
+ * real adapters get constructed.
+ */
+export type DiscoveryPortsFactory = () => Pick<Ports, 'fs' | 'loader'>;
+
 export async function main(
   argv: string[],
   makeTerminal: TerminalFactory,
   makeContext: ContextFactory,
+  makeDiscoveryPorts: DiscoveryPortsFactory,
 ): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -118,9 +134,20 @@ export async function main(
     return runPds(positionals, values, terminal, logger, makeContext);
   }
   if (!KNOWN_COMMANDS.has(command)) {
-    logger.error(`unknown command: ${command}`);
-    logger.info(USAGE);
-    return 1;
+    // Not a built-in and not `plugin` itself: the only remaining possibility
+    // is an installed plugin's namespace. `runPlugin` runs discovery itself
+    // (built-in commands below never call `makeDiscoveryPorts` or trigger
+    // it) and reports an unknown plugin or action on its own, so there is no
+    // further fallback here.
+    return runPlugin(
+      command,
+      positionals.slice(1),
+      values,
+      terminal,
+      logger,
+      makeContext,
+      makeDiscoveryPorts(),
+    );
   }
 
   // Positional layout: rollback/logs take <hash> first, then optional env.

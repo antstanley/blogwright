@@ -12,24 +12,31 @@ import { join } from 'node:path';
 import {
   createClients,
   createMemoryFileSystem,
+  createNodeFileSystem,
   deriveNames,
   emptyState,
+  findRepoRoot,
   mergeConfig,
   staticCredentials,
   StateStore,
   type AwsClients,
+  type FileSystem,
   type Names,
   type OpsConfig,
   type OpsState,
+  type Plugin,
+  type PluginCommand,
+  type PluginContext,
   type Terminal,
   type Transport,
 } from 'blogwright-core';
 
-import type { OpsContext } from './context.js';
+import { cliPackageDir, type OpsContext } from './context.js';
 import type { Logger } from './logger.js';
 import type {
   AddPackageOptions,
   ModuleLoader,
+  ModuleResolution,
   PackageManager,
   PackageManagerName,
   PingBuilder,
@@ -240,5 +247,164 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     store: new StateStore(clients.s3, names.bucket, env),
     logger: { ...NOOP_LOGGER, ...overrides.logger },
     save: overrides.save ?? (async () => undefined),
+  };
+}
+
+/**
+ * Fixtures shared by `cli.test.ts`'s "generic plugin dispatch" tests and
+ * `plugin-commands.test.ts` - both owned by task 10, which is why they share
+ * ONE definition here rather than each carrying its own copy.
+ * `plugins.test.ts` (task 08/09, not owned by this task) keeps its own,
+ * near-identical `createFakeModuleLoader` - left alone deliberately.
+ */
+
+/** One installed package a fake `ModuleLoader` can resolve, keyed by `(specifier, fromDir)`. */
+interface FakeInstalledPackage {
+  specifier: string;
+  fromDir: string;
+  packageJsonPath: string;
+  entryPath: string;
+  module: unknown;
+}
+
+/**
+ * A map-backed `ModuleLoader` fake, keyed by `(specifier, fromDir)` pairs,
+ * recording every call so a laziness test can assert none were made.
+ */
+export function createFakeModuleLoader(installed: FakeInstalledPackage[]): ModuleLoader & {
+  readonly resolveCalls: { specifier: string; fromDir: string }[];
+  readonly packageJsonPathForCalls: { specifier: string; fromDir: string }[];
+  readonly loadCalls: string[];
+} {
+  const resolveCalls: { specifier: string; fromDir: string }[] = [];
+  const packageJsonPathForCalls: { specifier: string; fromDir: string }[] = [];
+  const loadCalls: string[] = [];
+
+  function find(specifier: string, fromDir: string): FakeInstalledPackage | undefined {
+    return installed.find((pkg) => pkg.specifier === specifier && pkg.fromDir === fromDir);
+  }
+
+  return {
+    resolveCalls,
+    packageJsonPathForCalls,
+    loadCalls,
+    async resolve(specifier, fromDir): Promise<ModuleResolution> {
+      resolveCalls.push({ specifier, fromDir });
+      const pkg = find(specifier, fromDir);
+      return pkg ? { found: true, path: pkg.entryPath } : { found: false };
+    },
+    async packageJsonPathFor(specifier, fromDir): Promise<ModuleResolution> {
+      packageJsonPathForCalls.push({ specifier, fromDir });
+      const pkg = find(specifier, fromDir);
+      return pkg ? { found: true, path: pkg.packageJsonPath } : { found: false };
+    },
+    async load(path): Promise<unknown> {
+      loadCalls.push(path);
+      const pkg = installed.find((candidate) => candidate.entryPath === path);
+      if (!pkg) throw new Error(`fake loader: no module registered at ${path}`);
+      return pkg.module;
+    },
+  };
+}
+
+/** One fake plugin package to seed into a discovery fixture built by {@link buildDiscoveryPorts}. */
+export interface FakePluginSpec {
+  packageName: string;
+  namespace: string;
+  plugin: Plugin;
+  /** Resolved as the CLI's own bundled dependency rather than the consumer's. */
+  bundled?: boolean;
+}
+
+/**
+ * Build a `{ fs, loader }` pair `discover`/`runPlugin` can run against with
+ * no real disk or module resolution, for every fake plugin in `specs`.
+ *
+ * `discover`'s two-source union resolves the consumer's dependencies from
+ * the repo root and the CLI's own bundled dependencies from
+ * `cliPackageDir()` (`plugins.ts`'s module comment) - both REAL, absolute
+ * paths this dev checkout resolves to, not test constants - so `runPlugin`'s
+ * own (non-injectable) `findRepoRoot`/`cliPackageDir()` calls land on
+ * exactly the paths seeded here. `repoRoot` is learned the same way
+ * `plugins.test.ts`'s integration block does: by running the REAL adapter
+ * once against this actual checkout, purely to read off the constant - the
+ * fixture's `fs`/`loader` returned below stay entirely in-memory. The
+ * returned `fs` is a live, writable `FileSystem` (via `writeText`), so a
+ * test can layer additional fixture files - e.g. a config file for one
+ * environment - onto it after the fact.
+ */
+export async function buildDiscoveryPorts(
+  specs: FakePluginSpec[],
+  extra: { consumerDeps?: Record<string, string> } = {},
+): Promise<{ fs: FileSystem; loader: ReturnType<typeof createFakeModuleLoader> }> {
+  const repoRoot = await findRepoRoot(createNodeFileSystem());
+  const cliDir = cliPackageDir();
+  const consumerDeps: Record<string, string> = { ...extra.consumerDeps };
+  const cliDeps: Record<string, string> = {};
+  const files: Record<string, string> = {
+    // A `.jj` marker at the repo root only - `findRepoRoot`'s walk-up must
+    // not find one anywhere between the real `process.cwd()` and here, or it
+    // would stop short of the value `discover` is seeded to expect.
+    [`${repoRoot}/.jj`]: '',
+  };
+  const installed: FakeInstalledPackage[] = [];
+
+  for (const spec of specs) {
+    const fromDir = spec.bundled ? cliDir : repoRoot;
+    (spec.bundled ? cliDeps : consumerDeps)[spec.packageName] = '1.0.0';
+    const pkgDir = `/pkgs/${spec.packageName}`;
+    files[`${pkgDir}/package.json`] = JSON.stringify({
+      name: spec.packageName,
+      blogwright: { plugin: spec.namespace },
+    });
+    installed.push({
+      specifier: spec.packageName,
+      fromDir,
+      packageJsonPath: `${pkgDir}/package.json`,
+      entryPath: `${pkgDir}/index.js`,
+      module: { default: spec.plugin },
+    });
+  }
+
+  files[`${repoRoot}/package.json`] = JSON.stringify({ dependencies: consumerDeps });
+  files[`${cliDir}/package.json`] = JSON.stringify({ dependencies: cliDeps });
+
+  return { fs: createMemoryFileSystem(files), loader: createFakeModuleLoader(installed) };
+}
+
+/** One recorded invocation of a fake plugin command's `run`. */
+export interface RecordedRun {
+  action: string;
+  ctx: PluginContext<unknown>;
+  args: string[];
+}
+
+/**
+ * A fake plugin named "fake" declaring four actions - `sync` (single-word),
+ * a bare `secret` and the two-word `secret status`/`secret delete` - so
+ * dispatch tests can prove the longest declared action wins (`secret
+ * status` over the bare `secret`) rather than a positional-shifting guess.
+ * Every command pushes its invocation onto `calls` instead of doing
+ * anything, so a test can assert exactly what `run` received.
+ */
+export function makeFakePlugin(calls: RecordedRun[]): Plugin {
+  function recordingCommand(action: string, summary: string): PluginCommand {
+    return {
+      action,
+      summary,
+      run: async (ctx, args) => {
+        calls.push({ action, ctx, args });
+      },
+    };
+  }
+  return {
+    name: 'fake',
+    description: 'a fake plugin for dispatch tests',
+    commands: [
+      recordingCommand('sync', 'sync it'),
+      recordingCommand('secret', 'show secret (bare, should never win over "secret status")'),
+      recordingCommand('secret status', 'show secret status'),
+      recordingCommand('secret delete', 'delete the secret'),
+    ],
   };
 }

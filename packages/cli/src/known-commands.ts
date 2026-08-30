@@ -63,6 +63,7 @@ export const KNOWN_COMMANDS = new Set([
   'history',
   'logs',
   'status',
+  'plugin',
 ]);
 
 export const RESERVED_COMMANDS: ReadonlySet<string> = new Set([
