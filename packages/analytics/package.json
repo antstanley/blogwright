@@ -23,7 +23,8 @@
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.4",
-    "blogwright-core": "workspace:*"
+    "blogwright-core": "workspace:*",
+    "fflate": "^0.8.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

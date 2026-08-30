@@ -44,6 +44,9 @@ importers:
       blogwright-core:
         specifier: workspace:*
         version: link:../core
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
     devDependencies:
       '@types/node':
         specifier: ^26.1.0
