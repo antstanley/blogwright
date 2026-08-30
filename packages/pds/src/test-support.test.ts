@@ -1,3 +1,4 @@
+import type { PdsConfig } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { createTestContext } from './test-support.js';
@@ -11,6 +12,15 @@ describe('createTestContext', () => {
     expect(ctx.config.paths.publicDir).toBe('public'); // defaults survive
     ctx.logger.info('silent by default');
     expect(() => createTestContext({ config: { siteName: 'Bad Name' } })).toThrow(/siteName/);
+  });
+
+  it('resolves a default secretName for a pds block that omits it', () => {
+    // Cast, not a widened override type: secretName may genuinely be absent
+    // here despite PdsConfig declaring it required today, once core stops
+    // applying its own default (task 27) - see config.test.ts for the same
+    // reasoning.
+    const ctx = createTestContext({ config: { pds: { name: 'Ant' } as PdsConfig } });
+    expect(ctx.config.pds?.secretName).toBe('example/atproto');
   });
 
   it('wires an isolated in-memory filesystem port', async () => {

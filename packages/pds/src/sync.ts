@@ -7,6 +7,7 @@ import {
   type PdsConfig,
 } from 'blogwright-core';
 
+import { resolvePdsSecretName, type ResolvedPdsConfig } from './config.js';
 import { listPublishablePosts, type PostMeta } from './content.js';
 import type { PdsContext } from './context.js';
 import { postPath, tidFromPath } from './rkey.js';
@@ -47,11 +48,19 @@ export interface SyncSummary {
   orphans: string[];
 }
 
-export function requirePdsConfig(ctx: PdsContext): PdsConfig {
-  if (!ctx.config.pds) {
+/**
+ * The site's `pds` block with `secretName` resolved to its final value - the
+ * explicit config value, or the `<siteName>/atproto` default when absent.
+ * Every pds command reaches its config through here rather than
+ * `ctx.config.pds` directly, so `secretName` stays a required `string` even
+ * once core stops applying the default itself.
+ */
+export function requirePdsConfig(ctx: PdsContext): ResolvedPdsConfig {
+  const pds = ctx.config.pds;
+  if (!pds) {
     throw new Error('config has no "pds" section - add it to config/production.jsonc');
   }
-  return ctx.config.pds;
+  return { ...pds, secretName: resolvePdsSecretName(pds, ctx.config.siteName) };
 }
 
 /** Read the atproto.json site file; undefined when the site has not been initialised. */

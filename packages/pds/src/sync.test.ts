@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 
-import { createNodeFileSystem } from 'blogwright-core';
+import { createNodeFileSystem, type PdsConfig } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import type { PdsContext } from './context.js';
@@ -10,6 +10,7 @@ import {
   DOCUMENT_COLLECTION,
   PUBLICATION_COLLECTION,
   documentRecord,
+  requirePdsConfig,
   syncDocuments,
   syncPds,
   syncPublication,
@@ -56,6 +57,38 @@ const POSTS = [
   { slug: 'hello-world', title: 'Hello', description: 'First.', pubDate: new Date('2026-06-20') },
   { slug: 'second', title: 'Second', description: 'More.', pubDate: new Date('2026-06-28') },
 ];
+
+describe('requirePdsConfig', () => {
+  // `createTestContext` resolves `secretName` itself (test-support.test.ts),
+  // so building a block through it would never exercise requirePdsConfig's
+  // own resolution. Setting `ctx.config.pds` directly afterwards, bypassing
+  // that, isolates it - the same reasoning config.test.ts casts through for
+  // resolvePdsSecretName: secretName may genuinely be absent from a raw
+  // config despite PdsConfig declaring it required today, until core stops
+  // applying its own default (task 27).
+  function ctxWithPds(pds: PdsConfig | undefined): PdsContext {
+    const ctx = createTestContext({ config: { siteName: 'my-site' } });
+    ctx.config.pds = pds;
+    return ctx;
+  }
+
+  it('resolves the default "<siteName>/atproto" secretName when absent', () => {
+    const ctx = ctxWithPds({ name: 'Ant Stanley' } as PdsConfig);
+    expect(requirePdsConfig(ctx).secretName).toBe('my-site/atproto');
+  });
+
+  it('returns an explicit secretName unchanged', () => {
+    const ctx = ctxWithPds({ name: 'Ant Stanley', secretName: 'custom/name' });
+    expect(requirePdsConfig(ctx).secretName).toBe('custom/name');
+  });
+
+  it('throws when the config has no "pds" section', () => {
+    const ctx = ctxWithPds(undefined);
+    expect(() => requirePdsConfig(ctx)).toThrow(
+      'config has no "pds" section - add it to config/production.jsonc',
+    );
+  });
+});
 
 describe('syncDocuments', () => {
   it('creates every record on first run and none on the second', async () => {

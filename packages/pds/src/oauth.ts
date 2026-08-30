@@ -15,9 +15,9 @@ import {
   type Jwk,
   type NodeSavedState,
 } from '@atproto/oauth-client-node';
-import type { PdsConfig } from 'blogwright-core';
 
 import { clientMetadata, clientMetadataUrl, jwksDocument, jwksUrl } from './client-metadata.js';
+import type { ResolvedPdsConfig } from './config.js';
 import type { PdsContext } from './context.js';
 import { loadPdsSecret, sessionStoreForSecret, type PdsSecret } from './secret.js';
 import { requirePdsConfig } from './sync.js';
@@ -30,7 +30,7 @@ function requireDomain(ctx: PdsContext): string {
   return ctx.domain;
 }
 
-function requireClientKey(secret: PdsSecret, pds: PdsConfig): Jwk {
+function requireClientKey(secret: PdsSecret, pds: ResolvedPdsConfig): Jwk {
   if (!secret.clientKey) {
     throw new Error(
       `secret "${pds.secretName}" has no OAuth client key - run \`blogwright pds keygen\``,

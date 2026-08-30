@@ -14,6 +14,18 @@
 
 import type { PdsConfig } from 'blogwright-core';
 
+/**
+ * A `pds` config block whose `secretName` has been resolved: never absent,
+ * regardless of whether core's own `PdsConfig` still requires it (today) or
+ * makes it optional once core stops defaulting it. `requirePdsConfig`
+ * (`sync.ts`) returns this - built from {@link resolvePdsSecretName} - so
+ * every call site downstream keeps a total type on `secretName` with no
+ * cast and no `!`.
+ */
+export interface ResolvedPdsConfig extends PdsConfig {
+  secretName: string;
+}
+
 /** Characters permitted in a Secrets Manager secret name. */
 const SECRET_NAME_PATTERN = /^[\w/+=.@-]+$/;
 

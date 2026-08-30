@@ -21,6 +21,7 @@ import {
   type Transport,
 } from 'blogwright-core';
 
+import { resolvePdsSecretName } from './config.js';
 import type { PdsContext, PdsLogger } from './context.js';
 
 export interface TestContextOverrides {
@@ -91,10 +92,16 @@ export async function removeTempDir(dir: string): Promise<void> {
  * Build a complete PdsContext for tests. Defaults: env "test", site "example",
  * config merged over DEFAULT_CONFIG, a fresh in-memory FileSystem, a silent
  * terminal, a secrets client that fails fast until overridden, and a silent
- * logger.
+ * logger. A `pds` block's `secretName` is resolved here too - the same
+ * `<siteName>/atproto` default `requirePdsConfig` applies - so a test that
+ * omits it still gets a context whose `config.pds.secretName` is set, even
+ * once core stops defaulting it.
  */
 export function createTestContext(overrides: TestContextOverrides = {}): PdsContext {
   const config = mergeConfig({ siteName: 'example', ...overrides.config });
+  if (config.pds) {
+    config.pds = { ...config.pds, secretName: resolvePdsSecretName(config.pds, config.siteName) };
+  }
   return {
     env: overrides.env ?? 'test',
     domain: overrides.domain,
