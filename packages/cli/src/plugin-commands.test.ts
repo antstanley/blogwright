@@ -32,6 +32,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { main, type PackageManagerFactory } from './cli.js';
+import { destroy } from './commands.js';
 import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from './context.js';
 import { createLogger } from './logger.js';
 import { buildNodes } from './nodes.js';
@@ -1319,6 +1320,62 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
     // assertion above is not vacuous.
     expect(keys).toContain(`build/agent/agent-${AGENT_HASH}.zip`);
   });
+
+  /*
+   * TASK 54's half of the same property, at the size the analytics plugin
+   * actually is. The case above proves it for one plugin node; this one
+   * proves the site's graph is unchanged by a plugin contributing TWELVE,
+   * which is the shape an operator will really have installed - and it
+   * names the ids, so a `buildNodes` that started consulting discovery
+   * would be caught by what it gained rather than only by a count.
+   */
+  it('leaves buildNodes returning the site ids alone with a twelve-node plugin installed, and provisions none of the twelve', async () => {
+    const run = newGraphRun();
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-analytics',
+        namespace: 'analytics',
+        plugin: makeAnalyticsGraphPlugin(run),
+      },
+    ]);
+    await fs.writeText('/agent/Dockerfile', 'FROM scratch');
+    await fs.writeText('/agent/server.js', 'export default 1;');
+    await fs.writeText('/agent/agent-manifest.json', JSON.stringify({ hash: AGENT_HASH }));
+
+    // Really installed, really contributing twelve nodes: a `buildNodes` that
+    // consulted discovery would find them here.
+    const discovered = await discover(await realRepoRoot(), cliPackageDir(), { fs, loader });
+    expect(discovered.plugins.map((plugin) => plugin.name)).toEqual(['analytics']);
+    expect(typeof discovered.plugins[0]?.nodes).toBe('function');
+    expect(ANALYTICS_GRAPH).toHaveLength(12);
+
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { ctx, keys } = siteContext(fs);
+
+    const code = await main(
+      ['bootstrap'],
+      () => terminal,
+      async () => ctx,
+      () => ({ fs, loader }),
+      unreachablePackages,
+    );
+
+    expect(code).toBe(0);
+    // The site's graph is exactly the site's own, named rather than counted.
+    const siteIds = buildNodes(ctx).map((node) => node.id);
+    for (const node of ANALYTICS_GRAPH) {
+      expect(siteIds).not.toContain(node.id);
+      expect(ctx.state.resources[node.id]).toBeUndefined();
+    }
+    // ...and not one of the twelve was provisioned.
+    expect(run.created).toEqual([]);
+    expect(run.world.size).toBe(0);
+    // Every state object the run touched is the site's own, and there was at
+    // least one - never `state/production.analytics.json`.
+    const stateKeys = keys.filter((key) => key.startsWith('state/'));
+    expect(stateKeys.length).toBeGreaterThan(0);
+    expect([...new Set(stateKeys)]).toEqual(['state/production.json']);
+  });
 });
 
 /**
@@ -2325,5 +2382,389 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
         'name (`analytics`, installed as `blogwright-analytics`), a `blogwright-` package name, ' +
         'or a scoped package name (`@scope/thing`)',
     ]);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * TASK 54 - the engine-level half of the analytics plugin's twelve-node graph.
+ *
+ * `blogwright-analytics` cannot be imported here (the CLI does not depend on
+ * it, and `pluginDependencyNames` would turn even a devDependency into a
+ * bundled discovery candidate), and the plugin cannot import this package
+ * either. So the task's properties are split, and the split is real rather
+ * than a duplication:
+ *
+ *   - `packages/analytics/src/commands.test.ts` owns the SET - the twelve ids,
+ *     the edges, and that every title states the `us-east-1` pin - against the
+ *     real `buildAnalyticsNodes`.
+ *   - This file owns the ENGINE - that `applyGraph`/`destroyGraph` reconcile a
+ *     twelve-node plugin against its own scoped state key, print a
+ *     `create <title>` line per node, and refuse a `destroy` without `--yes` -
+ *     against the stand-in below.
+ *
+ * The two compose into the task's region requirement: the engine is proved to
+ * print every node's title, and the titles are proved to carry the pin, so the
+ * pin reaches an operator's bootstrap output. Neither half asserts it alone,
+ * and neither is the other restated.
+ *
+ * {@link ANALYTICS_GRAPH} mirrors the real graph's ids, edges and titles. It is
+ * a stand-in and says so: what it has to be faithful about is the SHAPE the
+ * engine walks (twelve nodes, four chains, the joins between them), because
+ * that is what `topoSort` is being run over here.
+ * ------------------------------------------------------------------------- */
+
+/** The plugin namespace the stand-in claims, so the site teardown's refusal names the real remedy. */
+const ANALYTICS_NAMESPACE = 'analytics';
+
+/**
+ * The analytics graph as the engine sees it: id, edges, title. Copied from
+ * `packages/analytics/src/nodes.ts`'s twelve factories rather than imported,
+ * because importing it is what this package must not do.
+ */
+const ANALYTICS_GRAPH: { id: string; dependsOn: string[]; title: string }[] = [
+  { id: 'analytics-table-bucket', dependsOn: [], title: 'S3 Tables bucket (us-east-1)' },
+  {
+    id: 'analytics-namespace',
+    dependsOn: ['analytics-table-bucket'],
+    title: 'S3 Tables namespace (us-east-1)',
+  },
+  { id: 'analytics-table', dependsOn: ['analytics-namespace'], title: 'Iceberg table (us-east-1)' },
+  {
+    id: 'analytics-catalog-integration',
+    dependsOn: ['analytics-table'],
+    title: 'Glue s3tablescatalog federation (shared - account-and-region scoped, us-east-1)',
+  },
+  {
+    id: 'analytics-salt-secret',
+    dependsOn: [],
+    title: 'visitor_key salt secret (us-east-1 - created once, never replaced, kept on teardown)',
+  },
+  {
+    id: 'analytics-transform-role',
+    dependsOn: ['analytics-salt-secret'],
+    title:
+      'IAM transform execution role (global - IAM is not regional; it serves the us-east-1 pipeline)',
+  },
+  {
+    id: 'analytics-transform-function',
+    dependsOn: ['analytics-transform-role'],
+    title: 'Record-transform Lambda (us-east-1)',
+  },
+  {
+    id: 'analytics-error-bucket',
+    dependsOn: [],
+    title: 'Firehose failed-record bucket (us-east-1)',
+  },
+  {
+    id: 'analytics-firehose-role',
+    dependsOn: ['analytics-error-bucket', 'analytics-table', 'analytics-transform-function'],
+    title:
+      'IAM Firehose delivery role (global - IAM is not regional; it serves the us-east-1 pipeline)',
+  },
+  {
+    id: 'analytics-firehose-stream',
+    dependsOn: [
+      'analytics-firehose-role',
+      'analytics-table',
+      'analytics-catalog-integration',
+      'analytics-transform-function',
+    ],
+    title: 'Firehose delivery stream (us-east-1)',
+  },
+  {
+    id: 'analytics-log-destination',
+    dependsOn: ['analytics-firehose-stream'],
+    title: 'CloudWatch delivery destination (us-east-1)',
+  },
+  {
+    id: 'analytics-log-delivery',
+    dependsOn: ['analytics-log-destination'],
+    title: 'CloudFront log delivery to the analytics stream (us-east-1)',
+  },
+];
+
+/** What one run of the twelve-node stand-in observed, for the ordering assertions. */
+interface GraphRun {
+  /** The resources that exist, by node id - the stand-in's "AWS". */
+  readonly world: Set<string>;
+  /** Node ids in the order `applyGraph` created them. */
+  readonly created: string[];
+  /** Node ids in the order `destroyGraph` deleted them. */
+  readonly deleted: string[];
+}
+
+function newGraphRun(existing: string[] = []): GraphRun {
+  return { world: new Set(existing), created: [], deleted: [] };
+}
+
+/**
+ * A plugin contributing {@link ANALYTICS_GRAPH} and declaring no commands of
+ * its own - which is the analytics plugin's own situation for these two verbs:
+ * `bootstrap` and `destroy` are rejected at discovery if declared, so the
+ * generic ones are the only ones that can answer.
+ */
+function makeAnalyticsGraphPlugin(run: GraphRun): Plugin {
+  return {
+    name: ANALYTICS_NAMESPACE,
+    description: 'a twelve-node stand-in for the analytics plugin',
+    commands: [],
+    nodes: () =>
+      ANALYTICS_GRAPH.map((node) => ({
+        id: node.id,
+        dependsOn: node.dependsOn,
+        title: node.title,
+        read: async () => run.world.has(node.id),
+        create: async (ctx: PluginContext<unknown>) => {
+          run.world.add(node.id);
+          run.created.push(node.id);
+          ctx.record(node.id, { name: node.id });
+        },
+        delete: async () => {
+          run.world.delete(node.id);
+          run.deleted.push(node.id);
+        },
+      })),
+  };
+}
+
+/** Every `create <title>` line the run printed, with the logger's own prefix stripped. */
+function createdTitles(terminal: ReturnType<typeof createScriptedTerminal>): string[] {
+  return terminal.writes.flatMap((line) => {
+    const at = line.indexOf('create ');
+    return at === -1 ? [] : [line.slice(at + 'create '.length)];
+  });
+}
+
+describe("runPlugin - the generic lifecycle verbs over a twelve-node plugin's graph", () => {
+  it('bootstrap reconciles all twelve in dependency order, printing a create line per node, and touches only the scoped state key', async () => {
+    const run = newGraphRun();
+    const { calls, s3 } = recordingS3();
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-analytics',
+        namespace: ANALYTICS_NAMESPACE,
+        plugin: makeAnalyticsGraphPlugin(run),
+      },
+    ]);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal, { s3 });
+
+    const code = await runPlugin(
+      ANALYTICS_NAMESPACE,
+      ['bootstrap'],
+      BASE_VALUES,
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    // Every node ran. `applyGraph` awaits each in turn and `runPlugin` does not
+    // swallow, so a graph that stopped part-way could not reach a 0 here.
+    expect(run.created).toHaveLength(ANALYTICS_GRAPH.length);
+    expect(new Set(run.world)).toEqual(new Set(ANALYTICS_GRAPH.map((node) => node.id)));
+
+    // `topoSort` accepted the set - neither its unknown-dependency error nor
+    // its cycle error was raised - and the order it produced really is a
+    // dependency order: every edge is honoured in the sequence the creates ran.
+    const position = new Map(run.created.map((id, index) => [id, index]));
+    for (const node of ANALYTICS_GRAPH) {
+      for (const dep of node.dependsOn) {
+        expect(position.get(dep)).toBeLessThan(position.get(node.id) as number);
+      }
+    }
+
+    // The region statement reaches the operator, carried by the titles the
+    // GENERIC verb prints. This plugin declares no `bootstrap` of its own -
+    // it may not - so there is no other line it could have come from.
+    const titles = createdTitles(terminal);
+    expect(titles.sort()).toEqual(ANALYTICS_GRAPH.map((node) => node.title).sort());
+    for (const title of titles) {
+      expect(title).toContain('us-east-1');
+    }
+
+    // One load building the plugin context, then one save per node - the
+    // scoped key, and only the scoped key.
+    expect(calls[0]).toEqual({ op: 'get', key: 'state/production.analytics.json' });
+    expect(calls.filter((call) => call.op === 'put')).toHaveLength(ANALYTICS_GRAPH.length);
+    expect([...new Set(calls.map((call) => call.key))]).toEqual([
+      'state/production.analytics.json',
+    ]);
+  });
+
+  it('destroy --yes tears all twelve down in reverse dependency order, then deletes the scoped state object', async () => {
+    const run = newGraphRun(ANALYTICS_GRAPH.map((node) => node.id));
+    const { calls, s3 } = recordingS3();
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-analytics',
+        namespace: ANALYTICS_NAMESPACE,
+        plugin: makeAnalyticsGraphPlugin(run),
+      },
+    ]);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal, { s3 });
+
+    const code = await runPlugin(
+      ANALYTICS_NAMESPACE,
+      ['destroy'],
+      { ...BASE_VALUES, yes: true },
+      terminal,
+      createLogger(terminal),
+      makeContext,
+      { fs, loader },
+    );
+
+    expect(code).toBe(0);
+    expect(run.world.size).toBe(0);
+    expect(run.deleted).toHaveLength(ANALYTICS_GRAPH.length);
+
+    // Reverse dependency order: a node is deleted before everything it depends
+    // on, which is what stops a role going before the function that assumes it.
+    const position = new Map(run.deleted.map((id, index) => [id, index]));
+    for (const node of ANALYTICS_GRAPH) {
+      for (const dep of node.dependsOn) {
+        expect(position.get(node.id)).toBeLessThan(position.get(dep) as number);
+      }
+    }
+
+    expect(calls.filter((call) => call.op === 'put')).toHaveLength(ANALYTICS_GRAPH.length);
+    expect(calls.at(-1)).toEqual({ op: 'delete', key: 'state/production.analytics.json' });
+    expect([...new Set(calls.map((call) => call.key))]).toEqual([
+      'state/production.analytics.json',
+    ]);
+  });
+
+  it("destroy without --yes refuses in the site verb's own shape, deletes none of the twelve and writes no state", async () => {
+    const run = newGraphRun(ANALYTICS_GRAPH.map((node) => node.id));
+    const { calls, s3 } = recordingS3();
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-analytics',
+        namespace: ANALYTICS_NAMESPACE,
+        plugin: makeAnalyticsGraphPlugin(run),
+      },
+    ]);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal, { s3 });
+
+    await expect(
+      runPlugin(
+        ANALYTICS_NAMESPACE,
+        ['destroy'],
+        BASE_VALUES,
+        terminal,
+        createLogger(terminal),
+        makeContext,
+        { fs, loader },
+      ),
+    ).rejects.toThrow('refusing to destroy "analytics" in "production" without --yes');
+
+    // The SAME shape as the site's own verb, compared against the site verb's
+    // real message rather than against a literal restating it: both open
+    // `refusing to destroy "<name>"` and both close `without --yes`, so the two
+    // refusals stay one contract even if the wording moves.
+    const site = createTestContext({ env: 'production' });
+    const siteRefusal = await destroy(site, { yes: false }).catch((err: unknown) => String(err));
+    expect(siteRefusal).toContain('refusing to destroy "production"');
+    expect(siteRefusal).toContain('without --yes');
+
+    // Nothing torn down, and nothing written: the refusal precedes
+    // `destroyGraph` and the scoped `store.delete()` entirely.
+    expect(run.deleted).toEqual([]);
+    expect(run.world.size).toBe(ANALYTICS_GRAPH.length);
+    expect(calls).toEqual([{ op: 'get', key: 'state/production.analytics.json' }]);
+  });
+});
+
+/**
+ * TASK 54's negative space on the SITE's teardown: `blogwright destroy --yes`
+ * removes none of the plugin's twelve, because task 16's guard
+ * (`assertNoScopedState`, `commands.ts`) refuses for as long as
+ * `state/<env>.analytics.json` exists.
+ *
+ * The state object is not seeded by hand: the plugin's own generic `bootstrap`
+ * writes it, through `runPlugin`, into the same bucket the site teardown then
+ * lists. That is what makes the case a proof rather than a rehearsal - the
+ * refusal fires on an object the plugin genuinely put there, so a scoping
+ * regression that filed the plugin's state under the site's key would move
+ * BOTH sides and would fail here rather than pass.
+ */
+describe("the site's own destroy, with a bootstrapped twelve-node plugin", () => {
+  /**
+   * One bucket, shared by the plugin's scoped store and the site teardown's
+   * `listObjects`. `deletes` is recorded separately from the object map because
+   * the assertion is that the refusal issues NO delete at all - not merely that
+   * the state object survived.
+   */
+  function sharedBucket(): {
+    deletes: string[];
+    objects: Map<string, string>;
+    s3: NonNullable<NonNullable<TestContextOverrides['clients']>['s3']>;
+  } {
+    const objects = new Map<string, string>();
+    const deletes: string[] = [];
+    return {
+      objects,
+      deletes,
+      s3: {
+        getObjectText: async (_bucket, key) => objects.get(key),
+        putObject: async (_bucket, key, body) => {
+          objects.set(key, typeof body === 'string' ? body : '');
+        },
+        deleteObject: async (_bucket, key) => {
+          deletes.push(key);
+          objects.delete(key);
+        },
+        listObjects: async (_bucket, prefix) =>
+          [...objects.keys()]
+            .filter((key) => key.startsWith(prefix))
+            .map((key) => ({ key, size: 0, lastModified: undefined, etag: undefined })),
+      },
+    };
+  }
+
+  it('refuses naming `blogwright analytics destroy production --yes`, issues no delete, and leaves all twelve standing', async () => {
+    const run = newGraphRun();
+    const bucket = sharedBucket();
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-analytics',
+        namespace: ANALYTICS_NAMESPACE,
+        plugin: makeAnalyticsGraphPlugin(run),
+      },
+    ]);
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal, { s3: bucket.s3 });
+
+    // Arrange, through the real verb: the plugin's twelve exist and its scoped
+    // state object is in the bucket.
+    expect(
+      await runPlugin(
+        ANALYTICS_NAMESPACE,
+        ['bootstrap'],
+        BASE_VALUES,
+        terminal,
+        createLogger(terminal),
+        makeContext,
+        { fs, loader },
+      ),
+    ).toBe(0);
+    expect(run.world.size).toBe(ANALYTICS_GRAPH.length);
+    expect([...bucket.objects.keys()]).toEqual(['state/production.analytics.json']);
+
+    const site = createTestContext({ env: 'production', clients: { s3: bucket.s3 } });
+
+    await expect(destroy(site, { yes: true })).rejects.toThrow(
+      'blogwright analytics destroy production --yes',
+    );
+
+    // The refusal precedes every mutation: no delete was issued at all, the
+    // plugin's state object is intact, and its twelve resources still exist.
+    expect(bucket.deletes).toEqual([]);
+    expect([...bucket.objects.keys()]).toEqual(['state/production.analytics.json']);
+    expect(run.deleted).toEqual([]);
+    expect(run.world.size).toBe(ANALYTICS_GRAPH.length);
   });
 });

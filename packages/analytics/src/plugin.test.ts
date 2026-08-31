@@ -51,6 +51,7 @@ import { describe, expect, it } from 'vitest';
 import { backfill, dashboard, status } from './commands.js';
 import { resolveAnalyticsConfig, validateAnalyticsConfig, type AnalyticsConfig } from './config.js';
 import * as analyticsModule from './index.js';
+import { buildAnalyticsNodes } from './nodes.js';
 import analyticsPlugin from './plugin.js';
 
 /** This package's own `package.json` - the file CLI discovery reads the manifest field from. */
@@ -82,6 +83,9 @@ const RESERVED_ACTIONS = ['bootstrap', 'destroy', 'init'];
 
 /** The actions this plugin declares, in table order. */
 const DECLARED_ACTIONS = ['status', 'dashboard', 'backfill'];
+
+/** The node count the change spec's §Analytics pipeline -> Resource nodes table states. */
+const ANALYTICS_NODE_COUNT = 12;
 
 /** `renderPluginSection` (`packages/cli/src/cli.ts`) indents an action line by four spaces. */
 const HELP_LINE_INDENT = 4;
@@ -262,14 +266,21 @@ describe('the command table', () => {
     expect(analyticsPlugin.configKey).toBe('analytics');
   });
 
-  it('contributes no nodes yet, so the generic lifecycle verbs stay gated off until task 54', () => {
+  it('contributes the node graph, which is the single gate all three generic lifecycle verbs share', () => {
     // `genericLifecycleCommand`/`genericLifecycleActions`
     // (`packages/cli/src/plugin-commands.ts`) both return nothing for a
-    // plugin with no `nodes`, so `analytics bootstrap`/`destroy` are neither
-    // answered nor advertised while this holds. Task 54 wires
-    // `buildAnalyticsNodes` and flips this assertion. `analytics status` is
-    // answered either way, because it is declared rather than generic.
-    expect(analyticsPlugin.nodes).toBeUndefined();
+    // plugin with no `nodes`, so `analytics bootstrap`/`destroy` were
+    // neither answered nor advertised until task 54 wired this. `analytics
+    // status` is answered either way, because it is declared rather than
+    // generic.
+    //
+    // Identity, not merely presence, and for `validateConfig`'s reason one
+    // block down: a wrapper could filter or re-order the set on its way to
+    // the engine and no other assertion in this file would see it. The set
+    // itself - the twelve ids, their edges and their titles - belongs to
+    // `commands.test.ts`, which owns the graph-shape suite.
+    expect(analyticsPlugin.nodes).toBe(buildAnalyticsNodes);
+    expect(buildAnalyticsNodes()).toHaveLength(ANALYTICS_NODE_COUNT);
   });
 
   it('points each action at its named body in commands.ts', () => {

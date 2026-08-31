@@ -42,15 +42,30 @@
  * `analytics destroy --yes`, which is generic: its refusal without `--yes`
  * is `runGenericDestroy`'s, and its summary is the CLI's own.
  *
- * **`nodes` is not declared yet.** Task 54 assembles `buildAnalyticsNodes`
- * and wires it to `nodes(ctx)`. Until it does, `genericLifecycleCommand` and
- * `genericLifecycleActions` (`packages/cli/src/plugin-commands.ts`) both
- * gate on `plugin.nodes` being declared at all, so `analytics bootstrap` and
- * `analytics destroy` are not answered and are not advertised in
- * `blogwright --help`; `analytics status` is answered anyway, because it is
- * declared here rather than generic. That is the correct intermediate state:
- * the generic verbs would otherwise reconcile an empty graph and report
- * success having provisioned nothing.
+ * **`nodes` is declared, and declaring it is what turns the generic verbs
+ * on.** `genericLifecycleCommand` and `genericLifecycleActions`
+ * (`packages/cli/src/plugin-commands.ts`) both gate all three generic verbs
+ * on `plugin.nodes` being declared at all, so before task 54 wired
+ * {@link buildAnalyticsNodes} to it, `analytics bootstrap` and `analytics
+ * destroy` were neither answered nor advertised in `blogwright --help`.
+ * They are both now, and `analytics status` still runs the declared command
+ * above rather than the generic verb, because a declared action wins.
+ *
+ * The property `nodes` carries is not just "twelve nodes": it is that the
+ * CLI's engine reconciles them against the store `toPluginContext` scoped to
+ * this plugin's name, `state/<env>.analytics.json` - never the site's
+ * `state/<env>.json`. `blogwright bootstrap` therefore provisions none of
+ * these twelve (the site's `buildNodes` does not consult discovery), and
+ * `blogwright destroy --yes` removes none of them, because
+ * `assertNoScopedState` (`packages/cli/src/commands.ts`) refuses the site
+ * teardown for as long as that scoped object exists and names
+ * `blogwright analytics destroy <env> --yes` as the way through.
+ *
+ * The builder itself is passed by reference - `nodes: buildAnalyticsNodes`,
+ * no wrapper. The array is not shared: each call builds a fresh one. There is
+ * nothing for a wrapper to do either, because the set does not vary with
+ * the context, and re-ordering it here would only hide that the order the
+ * builder returns is already a topological one.
  *
  * **`validateConfig` is task 44's validator, bound - not wrapped.** The
  * property below is `validateAnalyticsConfig` itself. That matters twice
@@ -71,6 +86,7 @@ import type { ConfigBlockEntry, Plugin, PluginInitIo } from 'blogwright-core';
 
 import { backfill, dashboard, status } from './commands.js';
 import { validateAnalyticsConfig, type AnalyticsConfig } from './config.js';
+import { buildAnalyticsNodes } from './nodes.js';
 
 /**
  * The CLI namespace this plugin claims (`blogwright analytics <action>`),
@@ -224,6 +240,7 @@ const analyticsPlugin: Plugin<AnalyticsConfig> = {
   configKey: ANALYTICS_NAMESPACE,
   validateConfig: validateAnalyticsConfig,
   init: askAnalyticsBlock,
+  nodes: buildAnalyticsNodes,
   commands: [
     {
       action: 'status',

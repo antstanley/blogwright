@@ -20,9 +20,9 @@
  * joining it to the site's log source - runs `analytics-log-destination` ->
  * `analytics-log-delivery` and hangs off the stream. All four are wired through
  * `dependsOn`, and a node depends on every node whose recorded ARN it
- * interpolates. A later `buildAnalyticsNodes(ctx)` returns the assembled set to
- * the SPI's `Plugin.nodes`; nothing here assembles or reconciles anything
- * itself.
+ * interpolates. {@link buildAnalyticsNodes} at the foot of this module returns
+ * the assembled set, and `plugin.ts` hands it to the SPI's `Plugin.nodes`;
+ * assembling an array is all it does - nothing here reconciles anything.
  *
  * **The delivery source the last chain hangs off is the site's, and this module
  * only ever reads it.** AWS permits exactly one delivery source per
@@ -40,7 +40,13 @@
  * enforced in exactly one place, `aws/clients.ts`, which builds every client
  * over the host's `signingUsEast1` signer; no node here picks a region for a
  * request. {@link ANALYTICS_REGION} below is the same region as *text*, needed
- * only because an ARN spells its region out.
+ * only because an ARN spells its region out and because every node `title`
+ * states the pin, so the bootstrap output an operator reads carries it. Ten of
+ * the twelve titles state it as the region they are created in; the two IAM
+ * role nodes state it as the pipeline they serve, because IAM is global and
+ * "created in us-east-1" is not a property a role has (§Region pinning says so
+ * in as many words) - a title claiming otherwise would be the pin stated
+ * falsely rather than stated.
  *
  * The nodes are core's {@link ResourceNode} over {@link PluginContext}, so the
  * CLI's own engine (`topoSort`/`applyGraph`/`destroyGraph`,
@@ -181,7 +187,10 @@ const ALL_TABLE_BUCKETS = '*';
  * does that, by building every client over `ctx.clients.signingUsEast1`. It
  * exists because an ARN carries its region as text and `SigningClient` does
  * not expose the region it signs in, so a node that has to name an ARN has to
- * name the region too. Two different tests in `nodes.test.ts` pin the two
+ * name the region too - and, since task 54, because every node's `title` states
+ * the pin out loud, which is how `applyGraph`'s `create <title>` lines carry
+ * the divergence from `config.region` into the bootstrap output an operator
+ * reads. Two different tests in `nodes.test.ts` pin the two
  * halves and they are not interchangeable. The credential-scope assertion
  * ("signs every call against us-east-1 while config.region says otherwise")
  * reads the region back out of the SigV4 `Authorization` header, so it catches
@@ -1171,7 +1180,7 @@ export function analyticsTransformRoleNode(): AnalyticsNode {
   return {
     id: TRANSFORM_ROLE_NODE,
     dependsOn: [SALT_SECRET_NODE],
-    title: 'IAM transform execution role',
+    title: `IAM transform execution role (global - IAM is not regional; it serves the ${ANALYTICS_REGION} pipeline)`,
     async read(ctx) {
       const name = transformRoleName(ctx);
       const arn = await ctx.clients.iam.getRoleArn(name);
@@ -2143,7 +2152,7 @@ export function analyticsFirehoseRoleNode(): AnalyticsNode {
   return {
     id: FIREHOSE_ROLE_NODE,
     dependsOn: [ERROR_BUCKET_NODE, TABLE_NODE, TRANSFORM_FUNCTION_NODE],
-    title: 'IAM Firehose delivery role',
+    title: `IAM Firehose delivery role (global - IAM is not regional; it serves the ${ANALYTICS_REGION} pipeline)`,
     async read(ctx) {
       const name = firehoseRoleName(ctx);
       const arn = await ctx.clients.iam.getRoleArn(name);
@@ -2849,7 +2858,7 @@ export function analyticsLogDeliveryNode(): AnalyticsNode {
   return {
     id: LOG_DELIVERY_NODE,
     dependsOn: [LOG_DESTINATION_NODE],
-    title: 'CloudFront log delivery to the analytics stream',
+    title: `CloudFront log delivery to the analytics stream (${ANALYTICS_REGION})`,
     async read(ctx) {
       // AWS, not state, and for a reason the state cannot cover: this
       // delivery lives on a source two stacks share, so it can go missing
@@ -2929,4 +2938,60 @@ export function analyticsLogDeliveryNode(): AnalyticsNode {
       await clearPluginDeliveries(ctx);
     },
   };
+}
+
+/**
+ * The plugin's twelve resource nodes, assembled in the order the change spec's
+ * §Analytics pipeline → Resource nodes table lists them. This is what
+ * `Plugin.nodes` (`plugin.ts`) hands the CLI's generic `analytics bootstrap`
+ * and `analytics destroy` verbs, and it is the whole of what this package
+ * contributes to a reconcile: the engine that walks them - `topoSort`,
+ * `applyGraph`, `destroyGraph` - is the CLI's own and is never reimplemented
+ * here.
+ *
+ * **The returned order is itself a topological order**, and that is a property
+ * of this array rather than a coincidence of the table's layout: every node's
+ * `dependsOn` names only nodes that appear EARLIER in it. That is worth stating
+ * because it is exactly the witness `topoSort`'s two failure modes are the
+ * absence of - a dependency naming a node outside the set, and a cycle - so a
+ * test that checks it has proved the set passes `topoSort` without running a
+ * second copy of `topoSort` to find out. `applyGraph` sorts the array again
+ * regardless and does not rely on the order it arrives in; nothing here may
+ * assume the reconcile follows this sequence, only that this sequence is a
+ * legal one.
+ *
+ * **No `ctx` parameter, deliberately.** The SPI declares `nodes?(ctx)` and the
+ * CLI calls it with one, so this function is assignable to it as written - a
+ * zero-argument function satisfies a one-argument signature. None of the twelve
+ * factories needs a context to be *built*: each reads `ctx` inside `read`,
+ * `create`, `update` and `delete`, when the reconcile is actually running. A
+ * parameter accepted and ignored here would be an unused binding and, worse, a
+ * claim that the SET varies with the context - it does not, and `analytics
+ * status` and `analytics destroy` both depend on it not doing so. (The plan's
+ * task 54 spells this function `buildAnalyticsNodes(ctx)`; the argument is what
+ * changed, not the wiring.)
+ *
+ * A fresh array of fresh nodes on every call, matching `buildNodes`
+ * (`packages/cli/src/nodes.ts`): a node object carries no state between
+ * reconciles, and two calls in one process must not share one.
+ */
+export function buildAnalyticsNodes(): AnalyticsNode[] {
+  return [
+    // The table chain.
+    analyticsTableBucketNode(),
+    analyticsNamespaceNode(),
+    analyticsTableNode(),
+    analyticsCatalogIntegrationNode(),
+    // The transform chain.
+    analyticsSaltSecretNode(),
+    analyticsTransformRoleNode(),
+    analyticsTransformFunctionNode(),
+    // The delivery chain.
+    analyticsErrorBucketNode(),
+    analyticsFirehoseRoleNode(),
+    analyticsFirehoseStreamNode(),
+    // The vended-delivery chain.
+    analyticsLogDestinationNode(),
+    analyticsLogDeliveryNode(),
+  ];
 }

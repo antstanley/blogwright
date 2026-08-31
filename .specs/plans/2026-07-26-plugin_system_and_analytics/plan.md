@@ -1039,6 +1039,71 @@ task 59, whose role rewrite is what its warning backs.
   and the same decision the class-member bullet above asks for - a CI grep, or
   knowingly accepting the gap in the definition-of-done baseline - should
   answer for interface members in the same breath.
+- *A step's own check can be unfalsifiable in the opposite direction: a grep
+  that matches its own documentation.* Found by task 54's gate 2026-08-31, and
+  it is the mirror image of the assertion-that-cannot-fail this baseline
+  already names. Task 54's step 7 asks that
+  `grep -rn "topoSort\|applyGraph\|destroyGraph" packages/analytics/src/`
+  return nothing, as proof no second engine entered the package. It returned
+  30+ matches at the tip *before* task 54 touched anything, and 49 after -
+  every one a comment correctly explaining that the CLI's engine is what walks
+  these nodes, several of them load-bearing (the node-ordering comments cite
+  `topoSort`'s alphabetical zero-indegree drain to say why an edge exists).
+  The check could not pass while the code was correctly documented, and could
+  not fail for the reason it exists.
+  It was replaced, in the task file and beside the original, with the two
+  halves of the property it was reaching for: no
+  `(function|const) (topoSort|applyGraph|destroyGraph)` in
+  `packages/analytics/src/`, and no `from 'blogwright'` there either - the
+  trailing quote load-bearing, since `from 'blogwright` also matches all 29
+  legitimate `blogwright-core` imports. Both held before the task and hold
+  after.
+  The general lesson is worth a decision: a grep over source text cannot
+  distinguish a definition from a mention, so "no X exists here" is only
+  checkable as "nothing here DEFINES X" plus "nothing here IMPORTS the module
+  that does". Three other tasks in this plan carry absence-greps of the same
+  shape; each should be read for whether prose can satisfy it.
+- *Task 54's DoD names a parameter its function does not take, and its step 2
+  asks for a statement §Region pinning forbids.* Both found by task 54's
+  implementation 2026-08-31, and both were resolved in the direction of the
+  spec rather than the task, with the divergence recorded rather than hidden.
+  The DoD spells the builder `buildAnalyticsNodes(ctx)`; it ships as
+  `buildAnalyticsNodes()`. A zero-argument function is assignable to the SPI's
+  `nodes?(ctx)`, none of the twelve factories needs a context to be *built*
+  (each reads `ctx` inside `read`/`create`/`update`/`delete`), and an accepted
+  and ignored parameter would be both an unused binding under `no-unused-vars`
+  and a claim that the SET varies with the context - which `analytics status`
+  and `analytics destroy` both depend on it not doing.
+  Step 2 asks that *every* node title state the `us-east-1` pin. Ten do, as
+  the region they are created in. The two IAM role nodes state it as the
+  pipeline they serve, because §Region pinning says in as many words that
+  "a role is a global resource, so 'created in us-east-1' is not a property it
+  has". A title claiming otherwise would be the pin stated falsely, which is
+  worse than not stating it; the DoD's real requirement - that `us-east-1`
+  appear in the captured bootstrap output, carried by the titles - is met by
+  all twelve either way.
+  Neither is a defect in the shipped code; both are places a validator reading
+  the task literally would report a miss. Worth deciding whether a task's DoD
+  may be amended by its implementer when the spec it implements contradicts
+  it, or whether the divergence note is the whole remedy.
+- *Every one of a task's `file:line` pointers had drifted, and the rate is now
+  measured a second time.* Task 54's Pointers cite eight `file:line` anchors.
+  Resolved by content at the tip 2026-08-31, **seven of the eight had moved**:
+  `graph.ts:18-55` (`topoSort` is at `:29-66`), its unknown-dependency error
+  cited at `:29` (it is at `:40`), its cycle error at `:53` (`:64`),
+  `graph.ts:58-86` (`applyGraph` is at `:69-100`), the `create ${node.title}`
+  line at `:70` (`:84`), `graph.ts:89-100` (`destroyGraph` is at `:103`),
+  `commands.ts:54-57` (`destroy` is at `:196`, its refusal at `:198`),
+  `nodes.ts:1053-1087` (`buildNodes` is at `:1123`). Only
+  `core/src/state.ts:17` lands near its target rather than on it - three
+  lines off, `stateKey` being at `:20`; the original bullet said "within a
+  line", which the gate corrected. Every construct named still exists under its own
+  name, so every pointer resolved by symbol in seconds and none by line.
+  This is the same finding the cross-file-citation bullet above records for
+  comments, measured in a different artefact class: plan pointers rot at the
+  same rate for the same reason, and nothing recomputes or checks them either.
+  Both measurements now agree at roughly four in five. If the convention
+  changes for comments it should change here in the same edit.
 
 - *The pds migration spec's merge-plan steps 1 and 2 are not applicable, and
   they are not the same case as the plugin-system spec's step 1.* Recorded by
@@ -1459,3 +1524,37 @@ never-failing fake counts as no evidence at all.
   release than" would have caught it - the table's `Edge kind` column already
   distinguishes `build`, `contract`, `review` and `data`, and a `release` kind
   would have made task 59 unschedulable until task 30 landed.
+
+- **A sixth assertion that cannot fail, and a second silently no-op mutation -
+  both found by a gate re-running the implementer's own sweep.** Task 54's gate
+  ran 24 mutations rather than accepting the implementer's 14, and two of its
+  results are worth keeping.
+
+  The dominated assertion: `expect(calls.filter(c => c.url.includes(SITE_STATE_KEY))).toEqual([])`
+  appears in both analytics state-isolation cases and is never independently
+  exercised - every mutation that would falsify it trips an earlier `expect` in
+  the same test first. The property it names is true and is proved elsewhere in
+  the same case, so nothing is lost; what is lost is the assertion's *evidence
+  value*, which is nil. This is the sixth such assertion this build has found
+  and the second by domination specifically. The lesson is narrower than "write
+  fewer assertions": **an assertion placed after a stronger one in the same test
+  can never be the thing that fails, so it proves nothing and should be read as
+  documentation.** Move it to its own case or accept it is prose.
+
+  The no-op mutation: the gate injected a site-state `PUT` into
+  `analyticsErrorBucketNode.create` and scored it SURVIVED - but the fixture's
+  `HEAD 200` makes `read` report the bucket present, so `create` never runs. The
+  file changed; the code did not execute. This is the second occurrence in this
+  build of the same harness failure, and the first was found the same way. The
+  guard that catches it is not "check the file changed" - that passed here - but
+  **"check the mutated line executed"**: a mutation on a branch the fixture never
+  takes is indistinguishable from a mutation that survived. The gate re-targeted
+  to a node that genuinely takes the create path and it killed immediately.
+
+  A third result is worth recording for the opposite reason. Mutating
+  `applyGraph` to skip `topoSort` SURVIVED the `plugin-commands` slice, because
+  the twelve-node stand-in array is *already* topological, so both orders satisfy
+  every edge. Against the full CLI suite it dies in `graph.test.ts`. The property
+  was owned all along, just not by the slice the `Reviewable:` line names - which
+  is the same shape as this build's three `Reviewable:` filter defects, one layer
+  down: a narrowed test command can make a real property look unowned.
