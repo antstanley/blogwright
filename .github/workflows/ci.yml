@@ -20,7 +20,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm typecheck
+      # Deliberately NOT UTC. A zip's DOS timestamp is local time, so a mtime
+      # fixed in UTC fell below fflate's 1980 floor everywhere west of
+      # Greenwich - `bootstrap`, `deploy` and `analytics bootstrap` all threw
+      # for most of the Americas while this suite stayed green, because it ran
+      # at TZ=UTC, the one setting where the bug is invisible. Seven analytics
+      # tests already covered the path; only the zone was wrong. A western zone
+      # is the strictly better default: it catches the negative-offset class,
+      # and the whole suite is zone-robust (verified across UTC, New York,
+      # Kiritimati and Kolkata).
       - run: pnpm test
+        env:
+          TZ: America/New_York
       - run: pnpm lint
       # Scope lives in .oxfmtrc.json (ignorePatterns), so a bare `.` is safe:
       # it formats TypeScript and JavaScript and skips prose, generated files,

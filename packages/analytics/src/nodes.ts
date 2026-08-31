@@ -71,6 +71,7 @@ import { join } from 'node:path';
 import {
   AwsError,
   pollUntil,
+  REPRODUCIBLE_ZIP_MTIME,
   type DeliveryOutputFormat,
   type DeliverySummary,
   type LogsClient,
@@ -742,13 +743,18 @@ const MAX_INLINE_ZIP_BYTES = 50 * 1024 * 1024;
 
 /**
  * The fixed timestamp every entry in the deployment package carries, so the
- * same bundle bytes always produce the same zip bytes -
- * `packageAndUploadAgent`'s `mtime` (`packages/cli/src/agent-package.ts:53`)
- * and the same reason: a zip stamped with the current time would differ on
- * every build, and the deployment decision has to turn on task 43's source
- * hash rather than on whether two archives happen to compare equal.
+ * same bundle bytes always produce the same zip bytes - `packageAndUploadAgent`
+ * uses the same one, for the same reason: a zip stamped with the current time
+ * would differ on every build, and the deployment decision has to turn on task
+ * 43's source hash rather than on whether two archives happen to compare equal.
+ *
+ * That sentence was false until this constant moved to core. The value here was
+ * `new Date('1980-01-01T00:00:00Z')`, which a zip encodes as *local* time: it
+ * threw `date not in range 1980-2099` west of Greenwich, and where it did not
+ * throw it produced different bytes per zone - the opposite of the guarantee
+ * claimed above. See {@link REPRODUCIBLE_ZIP_MTIME}.
  */
-const ZIP_MTIME = new Date('1980-01-01T00:00:00Z');
+const ZIP_MTIME = REPRODUCIBLE_ZIP_MTIME;
 
 /** The deflate level `packageAndUploadAgent` uses. */
 const ZIP_LEVEL = 6;

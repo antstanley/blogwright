@@ -1,5 +1,29 @@
 import { isRetryable } from './aws/errors.js';
 
+/**
+ * The fixed timestamp every reproducible zip in this repo stamps its entries
+ * with, so identical input bytes always produce identical archive bytes.
+ *
+ * **Constructed from local parts on purpose, and the obvious `Date.UTC` form is
+ * a bug.** A zip's DOS timestamp is *local* time, and `fflate` reads it with
+ * `getFullYear()`/`getMonth()`/`getDate()`, so a `Date` fixed in UTC lands on a
+ * different local date in every zone. Two things follow, and this repo shipped
+ * both:
+ *
+ * - `new Date('1980-01-01T00:00:00Z')` is 1979-12-31 local anywhere west of
+ *   Greenwich, and `fflate` throws `date not in range 1980-2099` outright -
+ *   so `blogwright bootstrap`, `deploy` and `analytics bootstrap` all failed
+ *   for most of the Americas while passing in CI, which runs `TZ=UTC`.
+ * - Even where it did not throw, the encoded timestamp differed by zone, so
+ *   the archive was *not* reproducible - the property the constant exists to
+ *   provide. The crash was hiding that.
+ *
+ * A local-constructed 1980-01-02 is 1980-01-02 in every zone by construction:
+ * in range everywhere, and byte-identical everywhere. The second of January
+ * rather than the first so that no offset can push it below the 1980 floor.
+ */
+export const REPRODUCIBLE_ZIP_MTIME = new Date(1980, 0, 2);
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

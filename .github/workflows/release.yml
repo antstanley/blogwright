@@ -110,6 +110,18 @@ jobs:
         run: |
           set -euo pipefail
           : > "${RUNNER_TEMP}/staged.log"
+          # npm publishes to `latest` unless told otherwise - prerelease
+          # versions included. Without this, approving a staged 0.4.0-beta.0
+          # would make the beta the default `npm install blogwright` for every
+          # user. Derive the dist-tag from the version instead: 1.2.3-beta.4
+          # ships under `beta`, 1.2.3 under `latest`.
+          if [[ "${VERSION}" == *-* ]]; then
+            PRERELEASE="${VERSION#*-}"
+            DIST_TAG="${PRERELEASE%%.*}"
+          else
+            DIST_TAG=latest
+          fi
+          echo "publishing under dist-tag: ${DIST_TAG}"
           stage() {
             local dir="$1" name="$2" tarball="$3"
             if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
@@ -125,12 +137,22 @@ jobs:
             # 2>&1 because npm splits notices onto stderr, and this must not
             # depend on which stream carries the result line.
             npm stage publish --provenance --access public --ignore-scripts \
+              --tag "${DIST_TAG}" \
               "${RUNNER_TEMP}/${tarball}" 2>&1 | tee -a "${RUNNER_TEMP}/staged.log"
           }
+          # Order is dependency order EXCEPT that blogwright-analytics goes
+          # last, and that exception is deliberate. `stage` runs under
+          # `set -euo pipefail`, so the first failure aborts the whole step and
+          # everything after it goes unstaged. blogwright-analytics has never
+          # been published, and npm trusted publishing is configured per
+          # existing package - so it is the one most likely to fail here, and
+          # staged third it would take `blogwright` (the package users install)
+          # down with it, leaving core and pds staged at the new version while
+          # the CLI stayed behind. Last, it can only cost itself.
           stage packages/core blogwright-core "blogwright-core-${VERSION}.tgz"
           stage packages/pds blogwright-pds "blogwright-pds-${VERSION}.tgz"
-          stage packages/analytics blogwright-analytics "blogwright-analytics-${VERSION}.tgz"
           stage packages/cli blogwright "blogwright-${VERSION}.tgz"
+          stage packages/analytics blogwright-analytics "blogwright-analytics-${VERSION}.tgz"
 
       # Reads the ids back out of the publish output rather than calling
       # `npm stage list`, which cannot authenticate here: setup-node writes
