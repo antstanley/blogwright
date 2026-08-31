@@ -4,7 +4,7 @@
  * beside, and the one derivation of the zip key that hash produces.
  *
  * This is step 5 of
- * [§Implementation notes](../../../.specs/changes/2026-07-26-analytics_plugin.md) -
+ * [§Implementation notes](../../../.specs/changes/merged/2026-07-26-analytics_plugin.md) -
  * "The hash keys the uploaded zip so identical source never redeploys the
  * function" - and it exists as its own module so `nodes.ts` (task 50) consumes
  * a derivation rather than restating a key format. A key spelled twice is a key

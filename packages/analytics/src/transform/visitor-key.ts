@@ -1,7 +1,7 @@
 /**
  * `visitor_key`: how a page view is attributed to a visitor without the table
  * ever holding a value that identifies one. This is step 3 of
- * [§Record transformation](../../../../.specs/changes/2026-07-26-analytics_plugin.md):
+ * [§Record transformation](../../../../.specs/changes/merged/2026-07-26-analytics_plugin.md):
  * the viewer IP is replaced by a SHA-256 digest over the IP, the user agent
  * and a secret daily salt, and the raw address is written to no column.
  *

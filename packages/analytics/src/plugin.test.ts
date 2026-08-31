@@ -292,17 +292,16 @@ describe('the command table', () => {
     expect(runners.get('backfill')).toBe(backfill);
   });
 
-  it('refuses from each body that has not landed yet, naming the task that lands it', async () => {
-    // `dashboard` and `status` are deliberately absent from this list: tasks 56
-    // and 55 landed their bodies, so neither refuses any more - one starts a
-    // listener, the other reads the twelve nodes - and `commands.test.ts`
-    // drives both. The table entries above still point at them, which is the
-    // half of task 47's contract this file keeps pinning. `backfill` is the
-    // one still owed, and this assertion is what will fail when task 61 lands
-    // it, rather than leaving a stale refusal behind.
-    await expect(backfill()).rejects.toThrow(
-      'blogwright analytics backfill is not implemented yet - task 61 lands this command',
-    );
+  it('has a landed body behind every declared action - none of the three refuses as unimplemented', () => {
+    // Task 47 declared all three actions with two bodies still owed, and this
+    // assertion was its refusal check. Tasks 55, 56 and 61 landed them, so
+    // what is left to pin is that no body is a placeholder: each takes the
+    // context its own suite drives it with rather than the zero arguments a
+    // `pendingAction` stub took. `commands.test.ts` and `backfill.test.ts`
+    // drive the three for real; a stale refusal would fail there, not here.
+    for (const run of [status, dashboard, backfill]) {
+      expect(run.length).toBeGreaterThan(0);
+    }
   });
 
   it('gives the plugin and every action a one-line summary that fits a `blogwright --help` line', () => {

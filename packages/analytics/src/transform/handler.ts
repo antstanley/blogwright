@@ -1,7 +1,7 @@
 /**
  * The Firehose transform Lambda's envelope: the batch handler that wraps
  * `mapRecord`. This is step 5 of
- * [§Record transformation](../../../../.specs/changes/2026-07-26-analytics_plugin.md) -
+ * [§Record transformation](../../../../.specs/changes/merged/2026-07-26-analytics_plugin.md) -
  * "drops records the schema cannot accept, emitting them to the Firehose error
  * prefix rather than failing the batch" - plus the cold-start secret read step
  * 3 calls for.

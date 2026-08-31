@@ -1,6 +1,6 @@
 # Change: Analytics plugin - CloudFront logs to Iceberg, with a local dashboard
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes, dashboard and a one-shot backfill action) + packages/core (delivery-configuration parameters on the existing `LogsClient`) + packages/cli (two guards on the shared log-delivery node)
+**Status:** Merged · **Date:** 2026-07-26 · **Merged:** 2026-08-31 · **Owner:** Ant Stanley · **Target:** new package `blogwright-analytics` (its own service clients, nodes, dashboard and a one-shot backfill action) + packages/core (delivery-configuration parameters on the existing `LogsClient`) + packages/cli (two guards on the shared log-delivery node)
 
 A new plugin, `blogwright-analytics`, adds traffic analytics to a blogwright
 site. It taps the CloudFront access logs blogwright already delivers, routes
@@ -16,7 +16,7 @@ and provisioned by `blogwright analytics bootstrap`.
 
 A blogwright site produces CloudFront access logs today, delivered to a
 CloudWatch log group by the vended-log-delivery trio in
-[`nodes.ts:713`](../../packages/cli/src/nodes.ts). CloudWatch Logs is the wrong
+[`nodes.ts:713`](../../../packages/cli/src/nodes.ts). CloudWatch Logs is the wrong
 store for this data: querying it means Logs Insights scans priced per GB, the
 retention window is a blunt instrument (`retention.cloudfrontDays`), and there
 is no way to aggregate across months or join a request to the page it hit. An
@@ -28,7 +28,7 @@ part already exists. CloudFront permits exactly one *delivery source* per
 distribution - blogwright already owns it - but that one source may fan out to
 many *deliveries*. Adding a second delivery to a new destination is therefore
 additive: the existing CloudWatch delivery is untouched, and
-[`LogsClient`](../../packages/core/src/aws/logs.ts) already implements most of
+[`LogsClient`](../../../packages/core/src/aws/logs.ts) already implements most of
 the calls involved.
 
 ---
@@ -39,13 +39,13 @@ the calls involved.
 |---|---|
 | *(none - no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
 | *(none - no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
-| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build; the pnpm row's "workspace of four packages" becomes five |
-| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` and `AnalyticsIngest` ports join the ports table |
-| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Assumptions | The four-package-split assumption names `blogwright-analytics` as the second instance of its own feature-package exception |
+| [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build; the pnpm row's "workspace of four packages" becomes five |
+| [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` and `AnalyticsIngest` ports join the ports table |
+| [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Assumptions | The four-package-split assumption names `blogwright-analytics` as the second instance of its own feature-package exception |
 
-Depends on [`2026-07-26-cli_plugin_system.md`](2026-07-26-cli_plugin_system.md)
+Depends on [`2026-07-26-cli_plugin_system.md`](../2026-07-26-cli_plugin_system.md)
 and, for SPI confidence, on
-[`2026-07-26-migrate_pds_to_plugin_system.md`](2026-07-26-migrate_pds_to_plugin_system.md).
+[`2026-07-26-migrate_pds_to_plugin_system.md`](../2026-07-26-migrate_pds_to_plugin_system.md).
 
 ---
 
@@ -111,28 +111,28 @@ and, for SPI confidence, on
 
 > AWS permits exactly one delivery source per distribution, so the site's
 > delivery and the plugin's necessarily share one - and the site's node owns it.
-> `logDeliveryNode` ([`nodes.ts:713`](../../packages/cli/src/nodes.ts)) gains two
+> `logDeliveryNode` ([`nodes.ts:713`](../../../packages/cli/src/nodes.ts)) gains two
 > guards so the shared source cannot be torn out from under the plugin:
 >
 > - **`delete()` refuses to remove the delivery source** when
 >   `deliveriesForSource` returns any delivery other than its own, failing with a
 >   message naming `blogwright analytics destroy`. Today it deletes one delivery
->   found by `.find()` ([`logs.ts:131`](../../packages/core/src/aws/logs.ts)) and
+>   found by `.find()` ([`logs.ts:131`](../../../packages/core/src/aws/logs.ts)) and
 >   then the source; with the analytics delivery still attached AWS rejects the
 >   delete, and `deleteDeliverySource` catches only `isNotFound`
->   ([`logs.ts:164-171`](../../packages/core/src/aws/logs.ts)), so whatever the
+>   ([`logs.ts:164-171`](../../../packages/core/src/aws/logs.ts)), so whatever the
 >   error code, `blogwright destroy` throws partway through teardown. The guard
 >   turns that into an early, actionable refusal and does not depend on the code
 >   AWS returns.
 > - **The `ConflictException` retry deletes only the site's own delivery id, and
 >   refuses outright while the source carries a delivery the site does not own.**
 >   Today it iterates `deliveriesForSource` and deletes every delivery
->   ([`nodes.ts:751-761`](../../packages/cli/src/nodes.ts)) before rewiring -
+>   ([`nodes.ts:751-761`](../../../packages/cli/src/nodes.ts)) before rewiring -
 >   which silently removes the analytics delivery while the plugin's scoped state
 >   still records it as `configured`, so `analytics status` reports healthy and
 >   log delivery has stopped. Scoping the delivery deletion is not sufficient on
 >   its own, and this is the half that is easy to miss: the retry then calls
->   `deleteDeliverySource` ([`nodes.ts:758`](../../packages/cli/src/nodes.ts))
+>   `deleteDeliverySource` ([`nodes.ts:758`](../../../packages/cli/src/nodes.ts))
 >   unconditionally, which is the very call the first guard exists to prevent, on
 >   the one path that guard does not cover. With the plugin's delivery still
 >   attached AWS rejects it, `deleteDeliverySource` catches only `isNotFound`, and
@@ -147,12 +147,12 @@ and, for SPI confidence, on
 >
 > Both guards have to tell the site's delivery from the plugin's, and neither
 > lookup the CLI has can express that: `deliveriesForSource`
-> ([`logs.ts:139`](../../packages/core/src/aws/logs.ts)) returns bare ids, and
+> ([`logs.ts:139`](../../../packages/core/src/aws/logs.ts)) returns bare ids, and
 > `findDeliveryIdBySource` returns whichever AWS lists first. So
 > `deliveriesForSource` returns each delivery's destination ARN alongside its
 > id - `DescribeDeliveries` already carries the field - and the site's node
 > matches on `names.deliveryDestination`. The retry loop
-> ([`nodes.ts:753-757`](../../packages/cli/src/nodes.ts)) is its only caller, so
+> ([`nodes.ts:753-757`](../../../packages/cli/src/nodes.ts)) is its only caller, so
 > the widening moves with the guards that need it rather than ahead of them.
 >
 > Both are site-graph changes that the analytics plugin depends on but does not
@@ -175,7 +175,7 @@ and, for SPI confidence, on
 > for the site's region. The salt secret is where that matters and would
 > otherwise be missed - `ctx.clients.secrets` is constructed over the
 > primary-region signer
-> ([`clients.ts:68`](../../packages/core/src/clients.ts)), so reusing it would
+> ([`clients.ts:68`](../../../packages/core/src/clients.ts)), so reusing it would
 > put the secret in `config.region` while the transform Lambda that reads it and
 > the role ARN that grants `secretsmanager:GetSecretValue` on it are both
 > `us-east-1`. The plugin constructs its own `SecretsManagerClient` over
@@ -185,11 +185,11 @@ and, for SPI confidence, on
 > us-east-1 by construction, so neither weakens the rule. `ctx.clients.iam`
 > serves the two IAM roles: IAM is in `GLOBAL_SERVICES`, so it signs us-east-1
 > whatever the site's region is and `canonicalHost` returns `iam.amazonaws.com`
-> ([`endpoint.ts:36,43,65-66`](../../packages/core/src/aws/endpoint.ts)) - and a
+> ([`endpoint.ts:36,43,65-66`](../../../packages/core/src/aws/endpoint.ts)) - and a
 > role is a global resource, so "created in us-east-1" is not a property it has.
 > `ctx.clients.logsUsEast1` serves the delivery nodes and is pinned to us-east-1
 > in core for the same CloudFront quirk this pipeline inherits
-> ([`clients.ts:28-33`](../../packages/core/src/clients.ts)). Building either
+> ([`clients.ts:28-33`](../../../packages/core/src/clients.ts)). Building either
 > over `signingUsEast1` would change nothing on the wire and would duplicate a
 > client that already exists.
 
@@ -240,8 +240,8 @@ and, for SPI confidence, on
 > `x-forwarded-for` - are never selected, so they never reach Firehose, the
 > transform, or the table. This governs the analytics delivery only: the site's
 > existing CloudWatch delivery is created with no `recordFields`
-> ([`logs.ts:114`](../../packages/core/src/aws/logs.ts),
-> [`nodes.ts:732`](../../packages/cli/src/nodes.ts)), so AWS's default field
+> ([`logs.ts:114`](../../../packages/core/src/aws/logs.ts),
+> [`nodes.ts:732`](../../../packages/cli/src/nodes.ts)), so AWS's default field
 > list - which includes both - still applies to the CloudWatch copy. Narrowing
 > that is a separate change to the site's node, not this one. The viewer IP is
 > selected for the analytics delivery because the transform needs it to derive
@@ -258,7 +258,7 @@ and, for SPI confidence, on
 > already writes - `names.cloudfrontLogGroup`, created in us-east-1 by the
 > site graph and bounded by `retention.cloudfrontDays` - through core's
 > existing `LogsClient.filterEvents`
-> ([`logs.ts:71`](../../packages/core/src/aws/logs.ts)) over
+> ([`logs.ts:71`](../../../packages/core/src/aws/logs.ts)) over
 > `ctx.clients.logsUsEast1`: no new client and no new core operation. Each
 > event runs through the same field mapping, `visitor_key` derivation and drop
 > rules as the transform Lambda - a historical day's salt is derivable because
@@ -327,11 +327,18 @@ and, for SPI confidence, on
 >
 > - `S3TablesClient` - REST-JSON: create/get/delete for table buckets,
 >   namespaces, and tables.
-> - `FirehoseClient` - create/describe/delete delivery stream, and tagging.
+> - `FirehoseClient` - create/describe/update-destination/delete delivery
+>   stream, and tagging. The update is the Decision *The stream is created
+>   `AppendOnly`*'s first branch: the stream node attempts
+>   `UpdateDestination` and falls back to replacing the stream when the
+>   service rejects it, so the client needs the operation and the two
+>   fields it takes (`VersionId` and the current `DestinationId`). This
+>   block said four operations until the merge; the fifth is corrected
+>   here rather than left describing a narrower client than shipped.
 > - `GlueClient` - the catalog federation create and lookup.
 > - `LambdaClient` - create/get/update/delete function and its configuration.
 >   This is the standard Lambda API, distinct from
->   [`MicrovmsClient`](../../packages/core/src/aws/microvms.ts), which shares the
+>   [`MicrovmsClient`](../../../packages/core/src/aws/microvms.ts), which shares the
 >   host and signing name but addresses the `/2025-09-09/` MicroVM paths.
 >
 > Four is the count of *new* clients, not of clients in the plugin's bundle.
@@ -377,7 +384,7 @@ and, for SPI confidence, on
 
 > DuckDB is given credentials explicitly rather than resolving its own. The
 > plugin resolves them through blogwright's existing provider chain
-> ([`credentials.ts`](../../packages/core/src/aws/credentials.ts)) and passes
+> ([`credentials.ts`](../../../packages/core/src/aws/credentials.ts)) and passes
 > them into DuckDB's secret, so one credential source serves the whole CLI and
 > a session that works for `deploy` works for the dashboard.
 
@@ -407,7 +414,7 @@ and, for SPI confidence, on
 > - `dashboard.port` - local port; defaults to `4317`.
 >
 > Every derived default carries the environment, matching `deriveNames`'
-> `<env>-<siteName>` prefix ([`config.ts:352`](../../packages/core/src/config.ts)).
+> `<env>-<siteName>` prefix ([`config.ts:352`](../../../packages/core/src/config.ts)).
 > Without it two environments would write into one Iceberg table and
 > `blogwright analytics destroy --yes` in staging would run `DeleteTableBucket`
 > against production's data - scoped state (`state/<env>.analytics.json`) would
@@ -593,8 +600,8 @@ rather than create when it already exists.
    resource nodes, the AWS clients, and the CLI surface, once they exist.
 2. Fold `AnalyticsConfig` and `PageView` into the canonical schema.
 3. Add Vite/SvelteKit to the toolchain table and `AnalyticsQuery` to the ports
-   table in [DEVELOPMENT.md](../../DEVELOPMENT.md).
-4. Correct the two places [DEVELOPMENT.md](../../DEVELOPMENT.md) counts the
+   table in [DEVELOPMENT.md](../../../DEVELOPMENT.md).
+4. Correct the two places [DEVELOPMENT.md](../../../DEVELOPMENT.md) counts the
    workspace: the pnpm toolchain row's "workspace of four packages under
    `packages/`", and the Assumption that "the four-package split (core / cli /
    pds / build-agent) is stable". `packages/analytics` is picked up by
@@ -617,7 +624,7 @@ rather than create when it already exists.
   fails with an actionable message when they are absent.
 - One delivery source may carry multiple deliveries to different destination
   types. The CloudFront documentation states this and
-  `deliveriesForSource` ([`logs.ts:139`](../../packages/core/src/aws/logs.ts))
+  `deliveriesForSource` ([`logs.ts:139`](../../../packages/core/src/aws/logs.ts))
   already returns a list; the site's existing CloudWatch delivery is expected to
   survive the addition untouched, and a test asserts it.
 - The Firehose error bucket is created by the plugin in `us-east-1`, not reused
@@ -745,7 +752,7 @@ rather than create when it already exists.
 - *`blogwright-analytics` joins the fixed changeset group.* **It versions in
   lockstep with the CLI.** `blogwright plugin add` installs the plugin at the
   running CLI's own version, and the group at
-  [`.changeset/config.json:5`](../../.changeset/config.json) today is
+  [`.changeset/config.json:5`](../../../.changeset/config.json) today is
   `["blogwright", "blogwright-core", "blogwright-pds"]` - without adding the
   package, `blogwright-analytics@<cli version>` would never exist on the
   registry and the documented install path would fail. Joining the group is the

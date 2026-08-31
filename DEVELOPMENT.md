@@ -83,6 +83,7 @@ Existing ports are the model for new ones:
 | `ModuleLoader`              | `cli/src/ports.ts`            | `createNodeModuleLoader` (`cli/src/adapters/node-module-loader.ts`) | fail-fast fake via `createTestContext` `ports.loader` overrides |
 | `PackageManager`            | `cli/src/ports.ts`            | `createProcessPackageManager` (`cli/src/adapters/process-package-manager.ts`) | `createRecordingPackageManager` (`cli/src/test-support.ts`), passed as `main`'s `PackageManagerFactory` |
 | `AnalyticsQuery`            | `analytics/src/ports.ts`      | `createDuckDbAnalyticsQuery` (`analytics/src/adapters/duckdb-query.ts`) | `createFixtureAnalyticsQuery` (`analytics/src/fixture-query.ts`), fixture-backed |
+| `AnalyticsIngest`           | `analytics/src/ports.ts`      | `createDuckDbAnalyticsIngest` (`analytics/src/adapters/duckdb-ingest.ts`) | `createRecordingAnalyticsIngest` (`analytics/src/fixture-ingest.ts`), recording |
 
 Conventions:
 

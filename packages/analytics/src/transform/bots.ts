@@ -1,6 +1,6 @@
 /**
  * `is_bot`: the user-agent heuristic behind step 4 of
- * [§Record transformation](../../../../.specs/changes/2026-07-26-analytics_plugin.md).
+ * [§Record transformation](../../../../.specs/changes/merged/2026-07-26-analytics_plugin.md).
  *
  * A matched record is **flagged, never dropped**. `is_bot` is a column and
  * every dashboard query takes a bot-inclusion flag, so a wrong match costs a

@@ -3,7 +3,7 @@
  * `day` partition, the CloudFront standard-logging (v2) fields the delivery
  * selects, and the mapping between the two. The transform Lambda, the table
  * node and the delivery node all read these constants instead of restating
- * them - see [§Table schema](../../../.specs/changes/2026-07-26-analytics_plugin.md).
+ * them - see [§Table schema](../../../.specs/changes/merged/2026-07-26-analytics_plugin.md).
  *
  * Why this file is worth being careful with: Firehose matches incoming JSON
  * keys to Iceberg column names **exactly** and silently discards any field

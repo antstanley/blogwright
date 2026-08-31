@@ -1,6 +1,6 @@
 # Plan: Plugin system and analytics
 
-**Status:** In progress · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin - CloudFront logs to Iceberg](../../changes/2026-07-26-analytics_plugin.md)
+**Status:** In progress · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin - CloudFront logs to Iceberg](../../changes/merged/2026-07-26-analytics_plugin.md)
 
 Land three linked change specs as one dependency-ordered graph of 62 tasks: an
 internal plugin SPI in `blogwright-core` with discovery and generic dispatch in
@@ -38,7 +38,7 @@ key.
   [2026-07-26-migrate_pds_to_plugin_system.md](../../changes/2026-07-26-migrate_pds_to_plugin_system.md)
   contributes the pds manifest, plugin export, context narrowing, config
   ownership, the core-config removal, the dispatch removal, and the post-deploy
-  sync. [2026-07-26-analytics_plugin.md](../../changes/2026-07-26-analytics_plugin.md)
+  sync. [2026-07-26-analytics_plugin.md](../../changes/merged/2026-07-26-analytics_plugin.md)
   contributes the analytics namespace and commands, the pipeline shape, region
   pinning, record transformation, table schema, the twelve resource nodes, the
   plugin's own four AWS service clients, `LogsClient` delivery configuration,
@@ -1380,6 +1380,79 @@ task 59, whose role rewrite is what its warning backs.
   operator is not left to infer it. The site's `retention.cloudfrontDays` still
   governs the CloudWatch copy, which is the retention an operator has today.
 
+- *The analytics change spec is merged, and its two open questions move here
+  because the spec no longer has a pending home for them.* Carried at task 61,
+  2026-08-31, when the spec was flipped to `Merged` and moved to
+  [`changes/merged/2026-07-26-analytics_plugin.md`](../../changes/merged/2026-07-26-analytics_plugin.md).
+  The first is record expiry, which the *Analytics scope left open by its spec*
+  bullet above already states in full and which nothing in this task changes.
+  The second has had no bullet of its own until now: **the Glue
+  `s3tablescatalog` federation is account-and-region scoped while everything
+  else the plugin owns is per-environment**, so two environments of one site
+  share it, its node adopts rather than creates, and its `delete()` is a no-op.
+  Is adopt-and-never-delete the right contract, or should the last environment
+  torn down remove it? Neither is free: deleting it breaks any other
+  environment still using it, and never deleting it leaves an account-level
+  resource behind after `blogwright analytics destroy --yes` has removed
+  everything else. The Glue API this package speaks exposes no delete
+  operation at all, so answering "yes, delete it" is also a client change.
+  Owner: the spec's owner, since it is a product decision rather than an
+  implementation one.
+- *A backfill reads a log group whose field list nobody chose, and the spec
+  assumes it matches the one the analytics delivery selects.* Found by task
+  61's implementation 2026-08-31, and it is the one place the identical-row
+  property could be true in the tests and false in production.
+  §Backfill of historical logs says a CloudWatch event "runs through the same
+  field mapping" as the Firehose path, and `mapRecord` reads CloudFront fields
+  by name - `timestamp(ms)`, `cs(User-Agent)`, `x-host-header`. The analytics
+  delivery selects exactly those, because `schema.ts` hands
+  `CLOUDFRONT_RECORD_FIELDS` to `createDelivery`. **The site's CloudWatch
+  delivery selects nothing at all** (`packages/cli/src/nodes.ts`'s
+  `logDeliveryNode` passes no `recordFields`, which §Table schema records and
+  relies on for a different reason), so its records carry AWS's default field
+  set under AWS's own spelling of those names. Whether that default includes
+  `timestamp(ms)` and `asn`, and whether it spells the user agent
+  `cs(User-Agent)`, is not verifiable offline and was not verified by this
+  plan; if it diverges, every backfilled record drops on a required column.
+  The implementation does not paper over it: a day's unmappable events are
+  counted and the first drop reason is reported per day, naming the column and
+  the CloudFront field behind it, so an operator sees the mismatch instead of
+  an empty table. The open decision is whether to close it properly - narrow
+  the site's own delivery to an explicit field list, which is a change to the
+  site's node the analytics spec explicitly puts out of its own scope, or have
+  the backfill map the default names too, which forks the mapping the property
+  depends on. Deliberately neither, here.
+- *`packages/analytics/src/adapters/**` is still missing from the root
+  `.oxlintrc.json` `no-restricted-imports` override, and task 61 did not widen
+  it either.* Routed to task 61 from task 46 and adjudicated 2026-08-31 rather
+  than acted on. The override covers `packages/core/src/adapters/**` and
+  `packages/cli/src/adapters/**`; analytics' absence looks like an oversight
+  from when the package had no adapters rather than a deliberate exclusion.
+  Task 61 added two modules under that directory and needed no filesystem
+  access from either - the DuckDB session reaches S3 Tables over the network
+  and writes no local file - so widening the list would have relaxed a rule
+  with no consumer to prove the relaxation was right, and nothing would fail
+  if it were wrong. It is left as it stands, with the reason recorded, so the
+  next task that genuinely needs `node:fs` under `packages/analytics/src/adapters/`
+  finds the question already framed rather than rediscovering task 46's
+  workaround. Task 46's own workaround is untouched.
+- *A change spec's merge moves the file, and forty-five other files cite it by
+  path.* Observed by task 61 at the analytics spec's merge, 2026-08-31. Moving
+  `2026-07-26-analytics_plugin.md` into `changes/merged/` broke every relative
+  link to it: ten doc comments under `packages/analytics/src/`, two in this
+  plan, one in the plugin-system change spec, and thirty-seven across the
+  plan's own `backlog/` and `done/` task files. All forty-five were re-pointed
+  by one mechanical path substitution and every link then resolved, but the
+  cost is a diff touching thirty archived task records for a reason that has
+  nothing to do with them. Two of the three specs are still pending, so this
+  happens twice more.
+  This is the *link* half of the citation problem the bullets above measure for
+  line numbers, and it fails differently: a stale line number silently misleads,
+  while a moved file's link is dead and a reader knows it. Worth deciding
+  whether a change spec should be linked through a stable path that survives its
+  own merge - an index entry in `.specs/README.md`, say, rather than the file -
+  so that merging a spec is an edit to one file instead of forty-six.
+
 ---
 
 ## Decisions settled after the review
@@ -1785,3 +1858,25 @@ never-failing fake counts as no evidence at all.
   moved with it: routed at task 20, again at task 30, declined at task 58, and
   each time landing in no definition of done. It is now a checkable line in task
   60 rather than a fifth routing into prose.
+
+- **The last unowned property in the build was in the idempotency bound, and its
+  comment had already argued for it.** Task 61's gate found that flipping
+  `includeBots: true` to `false` in `rowsAlreadyIn` survives all 793 tests. The
+  shipped value is right and the code says why in a doc comment - "a day holding
+  nothing but bot traffic is an occupied day" - but nothing held it there. With
+  `false`, such a day counts as empty and is re-inserted on every run, which is
+  the exact duplication the whole idempotency design exists to prevent. Closed at
+  merge: the counting fake now records the `includeBots` each occupancy read
+  carried, and one assertion pins every read to `true`. Mutation confirmed - the
+  new test is the only failure, `expected [false,…] to deeply equal [true,…]`,
+  and the revert is byte-identical.
+
+  What makes it worth recording is the shape rather than the bug. **A doc comment
+  that argues for a value is the strongest possible signal that no test enforces
+  it** - the author wrote the paragraph precisely because the choice is
+  non-obvious and reversible, which is the same reason it needs an assertion. A
+  sweep for comments of that form ("bound explicitly rather than", "on purpose",
+  "deliberately") would find the remaining ones cheaply. Seven assertions that
+  could not fail, and now one property that had no assertion at all, have been
+  found in this build; this is the first found by reading what the code says
+  about itself rather than by mutating what it does.

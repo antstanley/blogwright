@@ -49,6 +49,44 @@ answers only the queries this package defines by name - the seven the dashboard 
 `status-codes`, `cache-hit-ratio`) plus the `row-count` that `analytics status` reads.
 It never executes SQL supplied over its socket, and it binds loopback only.
 
+### `blogwright analytics backfill [env]` - optional, one-shot
+
+A sixth action, deliberately not in the table above, because it is not part of
+the steady state. Firehose only carries what CloudFront produced after its
+delivery existed; `backfill` is the hand-run pull of the history that came
+before it, and once it has run there is no reason to run it again.
+
+It reads the CloudWatch log group the site's own delivery already writes -
+`/<siteName>/<env>/cloudfront`, bounded by `retention.cloudfrontDays` - and
+maps every event through the same code the transform Lambda runs, so a record
+produces the same `page_views` row whichever path carried it, `visitor_key`
+included: the day's salt is `HMAC-SHA256(secret, day)` over the same stored
+secret, so a historical day's salt is derivable and the raw IP is no more
+stored here than it is there.
+
+**It cannot double-count, and not by de-duplicating.** The
+`analytics-log-delivery` node records the UTC day it first created the
+delivery, once and never again, and the backfill inserts only whole days
+*strictly before* that day - Firehose received nothing before its delivery
+existed, so the two paths never write the same day. Within that range each day
+is one transaction, a day the table already holds rows for is skipped, and a
+row whose own `day` is not the day being written is not inserted. So a re-run
+inserts nothing, and a run that crashed resumes where it stopped.
+
+The boundary day itself is never backfilled. Up to one day of history at the
+seam is lost, which is the accepted precision limit rather than an oversight:
+buying it back would mean comparing rows, and comparing rows is the thing this
+design does not do.
+
+The command refuses, before it calls AWS at all, when the plugin's state
+carries no delivery record - run `blogwright analytics bootstrap <env>` first -
+and also when it carries a delivery with no recorded day, which is what a state
+file that lost the key looks like. There is no default in that case: assuming
+"everything" would insert days Firehose has already delivered and double every
+row in them, so the command says what to supply instead. Its report names every
+day it inserted, every day it skipped and why, and the boundary day it left
+alone.
+
 ## Everything is created in us-east-1
 
 Every resource this plugin owns is created in `us-east-1` regardless of `config.region`,

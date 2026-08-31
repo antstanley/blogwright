@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [52-cli_shared_delivery_source_guards-certificate.md](52-cli_shared_delivery_source_guards-certificate.md)
 
-**Implements:** [2026-07-26-analytics_plugin.md §CloudFront log delivery → Two guards on the site's node (Modify)](../../../changes/2026-07-26-analytics_plugin.md) and [2026-07-26-cli_plugin_system.md §CLI → Plugin lifecycle (Add)](../../../changes/2026-07-26-cli_plugin_system.md) (a site node deletes only what it created)
+**Implements:** [2026-07-26-analytics_plugin.md §CloudFront log delivery → Two guards on the site's node (Modify)](../../../changes/merged/2026-07-26-analytics_plugin.md) and [2026-07-26-cli_plugin_system.md §CLI → Plugin lifecycle (Add)](../../../changes/2026-07-26-cli_plugin_system.md) (a site node deletes only what it created)
 **Depends on:** 37
 **Produces:** `deliveriesForSource` returns each delivery's destination ARN alongside its id, and on that `logDeliveryNode` refuses to remove a delivery source that carries deliveries it does not own - in `delete()` AND in its `ConflictException` retry, which additionally deletes only the site's own delivery - so the analytics delivery survives both `blogwright destroy` and a bootstrap self-heal
 

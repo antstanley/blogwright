@@ -2,7 +2,7 @@
  * `mapRecord`: one CloudFront standard-logging (v2) record in, one `page_views`
  * row out - or a droppable result naming the column that could not be filled
  * and the CloudFront field behind it. This is all five steps of
- * [§Record transformation](../../../../.specs/changes/2026-07-26-analytics_plugin.md):
+ * [§Record transformation](../../../../.specs/changes/merged/2026-07-26-analytics_plugin.md):
  * rename each selected field to its column, derive `event_time` and the `day`
  * partition from `timestamp(ms)`, replace the viewer IP with `visitor_key`,
  * set `is_bot` from the user agent, and drop what the schema cannot accept.

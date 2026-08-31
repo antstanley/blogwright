@@ -2,12 +2,10 @@
  * The bodies behind the three actions `plugin.ts` declares, and **the
  * plugin's composition root**. The command TABLE is written once, in
  * `plugin.ts`, and no later task edits it; each action's behaviour lands here
- * instead - `status` and `dashboard` below, `backfill` at task 61 (whose body
- * lives in `backfill.ts` and is called from the stub here). Until then it
- * raises naming the task that fills it in, so an operator who reaches it gets
- * a sentence rather than a silent no-op, and so `plugin.commands` is complete
- * and dispatchable from the moment the manifest field makes this package
- * discoverable.
+ * instead - `status` and `dashboard` below in full, and `backfill` as the
+ * three lines that construct its two adapters, its logic living in
+ * `backfill.ts`. All three are dispatchable from the moment the manifest field
+ * makes this package discoverable.
  *
  * A body takes exactly the parameters it needs. `PluginCommand.run(ctx, args)`
  * accepts a narrower function - a zero-argument function is assignable to it,
@@ -15,14 +13,21 @@
  * never changes the table in `plugin.ts`.
  *
  * **Composition root** means one thing concretely: this is the only module in
- * the package that constructs the DuckDB adapter and the only one that
- * resolves credentials, exactly as `packages/cli/src/context.ts` is for the
- * CLI's own adapters. Every module below it - the server, the named query
- * set, the data shaping - is handed the `AnalyticsQuery` *port* and can name
- * no vendor at all. Both commands that reach the table construct that adapter
- * on their own line here: `dashboard` hands it to the server it starts, and
- * `status` takes it as a defaulted parameter, which is what lets a test drive
- * the whole command over the fixture-backed fake without patching a module.
+ * the package that constructs a DuckDB adapter and the only one that resolves
+ * credentials, exactly as `packages/cli/src/context.ts` is for the CLI's own
+ * adapters. Every module below it - the server, the named query set, the data
+ * shaping, the backfill - is handed a *port* and can name no vendor at all.
+ * All three commands that reach the table construct their adapters on their
+ * own line here: `dashboard` hands one to the server it starts, and `status`
+ * and `backfill` take theirs as defaulted parameters, which is what lets a
+ * test drive the whole command over a fake without patching a module.
+ *
+ * `backfill` is the only one that constructs two of them, and they are not
+ * interchangeable: its occupancy count crosses `AnalyticsQuery`, whose attach
+ * is read-only, and its insert crosses `AnalyticsIngest`, whose attach is not.
+ * One writable session answering both would be shorter and would put the
+ * dashboard's own read path one refactor away from a connection that can
+ * write.
  *
  * `bootstrap` and `destroy` are deliberately absent from this module as well
  * as from the table: they are always the CLI's generic lifecycle verbs, run
@@ -33,8 +38,10 @@ import { fileURLToPath } from 'node:url';
 
 import { colors, createCredentialProvider, type PluginContext } from 'blogwright-core';
 
+import { createDuckDbAnalyticsIngest } from './adapters/duckdb-ingest.js';
 import { createDuckDbAnalyticsQuery } from './adapters/duckdb-query.js';
 import type { DeliveryState } from './aws/firehose.js';
+import { type BackfillPorts, runBackfill } from './backfill.js';
 import { type AnalyticsConfig, resolveAnalyticsConfig } from './config.js';
 import { buildAnalyticsNodes, FIREHOSE_STREAM_NODE } from './nodes.js';
 import type { AnalyticsQuery } from './ports.js';
@@ -51,17 +58,6 @@ const STOP_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
 /** One of {@link STOP_SIGNALS}. */
 type StopSignal = (typeof STOP_SIGNALS)[number];
-
-/**
- * Raise for an action whose body has not landed yet, naming the plan task
- * that lands it. One helper rather than two literals, so the sentence
- * shape is identical for both.
- */
-function pendingAction(action: string, task: number): never {
-  throw new Error(
-    `blogwright analytics ${action} is not implemented yet - task ${task} lands this command`,
-  );
-}
 
 /**
  * One node's presence, as {@link readNodeEntries} collected it. The same three
@@ -256,7 +252,7 @@ async function logRowCount(
  *
  * **It takes the whole `PluginContext`, not a `Pick` of it.** Every other
  * consumer in this package narrows (`DashboardCommandContext`,
- * `DuckDbQueryContext`, `AnalyticsConfigContext`), and this one cannot: it
+ * `DuckDbSessionContext`, `AnalyticsConfigContext`), and this one cannot: it
  * hands `ctx` to `read()` on each of the plugin's own nodes, and a node is a
  * `ResourceNode<PluginContext<AnalyticsConfig>>`, so the narrowest type that
  * type-checks is the SPI context entire. A `Pick` listing its fifteen required members
@@ -294,7 +290,7 @@ export async function status(
 /**
  * The slice of a plugin context {@link dashboard} reads, taken as a `Pick` of
  * core's own `PluginContext` rather than a restatement of it, the way
- * `DuckDbQueryContext` and `AnalyticsConfigContext` already are: the members
+ * `DuckDbSessionContext` and `AnalyticsConfigContext` already are: the members
  * cannot drift from the SPI, any `PluginContext<AnalyticsConfig>` satisfies
  * it, and a test builds the six it needs instead of the SPI's sixteen.
  */
@@ -386,8 +382,28 @@ export async function dashboard(ctx: DashboardCommandContext): Promise<void> {
 /**
  * `analytics backfill`: the optional, one-shot, idempotent pull of history
  * that predates the Firehose delivery, from the site's CloudWatch log group
- * into the table. Never part of the steady-state pipeline.
+ * into the table. Never part of the steady-state pipeline. What it does is
+ * `backfill.ts`'s; what this line owns is the two adapters it does it through.
+ *
+ * `ports` is a defaulted parameter for the reason `status`'s `query` is: every
+ * real call site passes nothing and gets the composition root's adapters, and
+ * a test hands it a recording pair instead of patching a module. Constructing
+ * either adapter touches neither the network nor the native library - both
+ * open their connection inside the first statement - so the command's refusal
+ * when the plugin's state carries no delivery bound still happens before
+ * anything is opened.
+ *
+ * `args` is accepted and unused: the host calls `run(ctx, args)` for every
+ * declared command and this one takes no arguments of its own - the
+ * environment is a positional the dispatcher has already consumed.
  */
-export async function backfill(): Promise<void> {
-  pendingAction('backfill', 61);
+export async function backfill(
+  ctx: PluginContext<AnalyticsConfig>,
+  _args: string[] = [],
+  ports: BackfillPorts = {
+    query: createDuckDbAnalyticsQuery({ ctx, credentials: createCredentialProvider({}) }),
+    ingest: createDuckDbAnalyticsIngest({ ctx, credentials: createCredentialProvider({}) }),
+  },
+): Promise<void> {
+  await runBackfill(ctx, ports);
 }

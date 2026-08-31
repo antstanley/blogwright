@@ -7,9 +7,9 @@
  * that the fixed relation is bound to the configured triple, and that no
  * vendor error object ever leaves the module.
  *
- * The second runs the *real* DuckDB - through the adapter's own
+ * The second runs the *real* DuckDB - through the session module's own
  * {@link connectDuckDb}, so this file names no vendor package and DuckDB stays
- * confined to `duckdb-query.ts` - against a local `page_views` table with real
+ * confined to `duckdb-session.ts` - against a local `page_views` table with real
  * rows, and executes all seven of `queries.ts`' definitions over it. That half
  * exists because task 45 could not: there was no adapter then, so
  * `FILTER (WHERE ...)`, `sum(...) OVER ()`, `CAST($from AS DATE)` against a
@@ -35,15 +35,15 @@ import {
   type QueryParams,
   queryDefinition,
 } from '../queries.js';
+import { bindPageViewsRelation, createDuckDbAnalyticsQuery } from './duckdb-query.js';
 import {
-  bindPageViewsRelation,
+  type DuckDbBindings,
   connectDuckDb,
-  createDuckDbAnalyticsQuery,
   type DuckDbConnect,
   type DuckDbConnection,
-  type DuckDbQueryContext,
+  type DuckDbSessionContext,
   pageViewsRelation,
-} from './duckdb-query.js';
+} from './duckdb-session.js';
 
 /** Credentials with a session token, the shape an SSO or assumed-role session resolves to. */
 const CREDENTIALS = {
@@ -70,7 +70,7 @@ const RANGE = { from: '2026-08-01', to: '2026-08-03' };
 function contextFor(
   site: { env: string; siteName: string; region?: string },
   raw: unknown = {},
-): DuckDbQueryContext {
+): DuckDbSessionContext {
   return {
     env: site.env,
     config: parseConfig(
@@ -84,7 +84,7 @@ function contextFor(
 /** One statement the adapter issued, with whatever it bound to it. */
 interface RecordedStatement {
   readonly sql: string;
-  readonly bindings: Readonly<Record<string, string | boolean>>;
+  readonly bindings: DuckDbBindings;
 }
 
 /** A recording `connect` seam, plus what it saw. */

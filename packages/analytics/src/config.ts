@@ -46,7 +46,7 @@
  *
  * Pure data and pure functions only: no `node:` builtin, no vendor SDK, no
  * `fetch`. See [the change spec's §Configuration → The `analytics`
- * block](../../../.specs/changes/2026-07-26-analytics_plugin.md).
+ * block](../../../.specs/changes/merged/2026-07-26-analytics_plugin.md).
  */
 
 import type { PluginContext } from 'blogwright-core';

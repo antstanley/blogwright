@@ -50,7 +50,7 @@ into it.
 Companion change specs:
 [`2026-07-26-migrate_pds_to_plugin_system.md`](2026-07-26-migrate_pds_to_plugin_system.md)
 (the second consumer that validates this SPI) and
-[`2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) (the first
+[`2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md) (the first
 plugin that ships outside the CLI). Both depend on this change.
 
 ---

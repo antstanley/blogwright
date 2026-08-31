@@ -24,8 +24,9 @@ spec set is created here later, that page moves to `development-guidelines.md`.
 Pending proposals live under [`changes/`](changes/); merged history under
 [`changes/merged/`](changes/merged/).
 
-Pending - three linked proposals, landing in this order. Each entry names the task
-that flips it, so what is left is not read as an oversight:
+Pending - two of three linked proposals, landing in this order. The third, the
+analytics plugin, is merged below. Each entry names the task that flips it, so what
+is left is not read as an oversight:
 
 1. [An internal plugin system for the CLI](changes/2026-07-26-cli_plugin_system.md)
    (proposed 2026-07-26) - plugin SPI in `blogwright-core`, discovery by a
@@ -47,18 +48,19 @@ that flips it, so what is left is not read as an oversight:
    drops its pds branch (task 59, which must ship a release later than task 30's
    migration note) and §`bootstrap` warns while plugin state exists (task 60).
    Task 60 is blocked behind that release rather than unstarted.
-3. [Analytics plugin - CloudFront logs to Iceberg, with a local dashboard](changes/2026-07-26-analytics_plugin.md)
-   (proposed 2026-07-26) - a second CloudFront log delivery into Firehose, a
-   record-transform Lambda, an Iceberg table in S3 Tables, and a local
-   SvelteKit/DuckDB dashboard. Installed with `blogwright plugin add analytics`.
-   **Flipped at task 61.** Its §Backfill of historical logs block is outstanding:
-   `blogwright analytics backfill` is declared and reports that it is not
-   available yet. Merge-plan steps 3-4 (the DEVELOPMENT.md toolchain, ports and
-   workspace-count edits) are done; steps 1-2 are recorded as not-applicable,
-   there being no canonical spec pages or schema to fold into.
 
 Merged:
 
+- [Analytics plugin - CloudFront logs to Iceberg, with a local dashboard](changes/merged/2026-07-26-analytics_plugin.md)
+  (merged 2026-08-31, at task 61) - a second CloudFront log delivery into Firehose,
+  a record-transform Lambda, an Iceberg table in S3 Tables, a local SvelteKit/DuckDB
+  dashboard, and the optional one-shot `analytics backfill`. Installed with
+  `blogwright plugin add analytics`. Merge-plan steps 3-4 (the DEVELOPMENT.md
+  toolchain, ports and workspace-count edits) landed at task 58 and steps 5-6 here;
+  steps 1-2 are recorded as not-applicable, there being no canonical spec pages or
+  schema to fold into. Its two open questions - row expiry on an Iceberg table you
+  create, and whether the shared Glue catalog integration should ever be deleted -
+  are carried in the plan's own Assumptions and open questions.
 - [Persist node outputs when create() fails partway](changes/merged/2026-07-22-persist_partial_bootstrap_state.md)
   (merged 2026-07-22) - state saves on the failure path; identity outputs are
   recorded before secondary mutations.

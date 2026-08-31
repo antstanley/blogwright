@@ -166,8 +166,14 @@ export const FIREHOSE_STREAM_NODE = 'analytics-firehose-stream';
 /** The `analytics-log-destination` node id. */
 const LOG_DESTINATION_NODE = 'analytics-log-destination';
 
-/** The `analytics-log-delivery` node id. */
-const LOG_DELIVERY_NODE = 'analytics-log-delivery';
+/**
+ * The `analytics-log-delivery` node id. Exported for `backfill.ts`, which
+ * reads {@link CREATED_DAY_KEY} out of this node's recorded outputs: the
+ * backfill's idempotency bound and the node that writes it must name the same
+ * state entry, and a second spelling of the id is the one way that could stop
+ * being true without anything noticing.
+ */
+export const LOG_DELIVERY_NODE = 'analytics-log-delivery';
 
 /**
  * The Glue catalog the S3 Tables integration registers itself under. The one
@@ -2458,8 +2464,14 @@ const SITE_DISTRIBUTION_NODE = 'cloudfront-distribution';
  * lost this key leaves task 61 with no bound and an actionable refusal. That
  * is the loud direction, and it is preferred to today's date, which would be a
  * bound that moved later.
+ *
+ * Exported since task 61, which reads it. It was deliberately module-private
+ * while nothing consumed it - an exported constant with no consumer is what
+ * `pnpm knip` catches - but a private constant restated in its reader is worse
+ * than an exported one: the two spellings would have to agree and nothing
+ * would check that they did.
  */
-const CREATED_DAY_KEY = 'createdDay';
+export const CREATED_DAY_KEY = 'createdDay';
 
 /** `YYYY-MM-DD` - the leading characters of an ISO-8601 timestamp that are its UTC day. */
 const ISO_DAY_LENGTH = 10;

@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [40-transform_field_mapping-certificate.md](40-transform_field_mapping-certificate.md)
 
-**Implements:** [2026-07-26-analytics_plugin.md §Analytics pipeline → Record transformation](../../../changes/2026-07-26-analytics_plugin.md) (steps 1, 2 and 5 of the transform: map each CloudFront field name to its column name, derive `event_time` from `timestamp(ms)` and the partition day from it, and drop records the schema cannot accept)
+**Implements:** [2026-07-26-analytics_plugin.md §Analytics pipeline → Record transformation](../../../changes/merged/2026-07-26-analytics_plugin.md) (steps 1, 2 and 5 of the transform: map each CloudFront field name to its column name, derive `event_time` from `timestamp(ms)` and the partition day from it, and drop records the schema cannot accept)
 **Depends on:** 39
 **Produces:** `mapRecord` in `packages/analytics/src/transform/map-record.ts` - a pure function turning one CloudFront access-log record into a `page_views` row or a droppable result naming the missing field, with `event_time` and `day` derived in UTC and covered by day-rollover boundary tests
 **Pointers:** `packages/analytics/src/transform/map-record.ts` (new - the pure mapper), `packages/analytics/src/transform/map-record.test.ts` (new - fixed-input/fixed-output and boundary tests), `packages/analytics/src/schema.ts` (task 39 - `PAGE_VIEWS_COLUMNS`, `FIELD_TO_COLUMN`, `DERIVED_COLUMNS`, the `PageView` row type this consumes), `packages/analytics/vitest.config.ts:8` (the `include` glob - unchanged, `src/**/*.test.ts` already covers the transform), `packages/build-agent/src/build.ts` (the precedent for a bundled module tree - note it lives under `src/`, which is why the transform does too)

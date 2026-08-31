@@ -2,7 +2,7 @@
  * The fixed set of named, parameterised queries this package answers from -
  * never SQL supplied by a client. Seven of them are the dashboard's panels;
  * see [the change spec's §Analytics dashboard → Local
- * server](../../../.specs/changes/2026-07-26-analytics_plugin.md). The eighth,
+ * server](../../../.specs/changes/merged/2026-07-26-analytics_plugin.md). The eighth,
  * {@link ROW_COUNT_QUERY}, serves `analytics status`, and is here for the same
  * reason the other seven are: a command reaches the table through the
  * `AnalyticsQuery` port, and the port takes a name from this set, never a

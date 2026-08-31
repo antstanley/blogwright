@@ -5,7 +5,7 @@
  * nodes - is reached only through {@link createDashboardServer}, so a reviewer
  * who wants to know what a browser can make this package do reads this file
  * and stops. See [the change spec's §Analytics dashboard → Local
- * server](../../../.specs/changes/2026-07-26-analytics_plugin.md).
+ * server](../../../.specs/changes/merged/2026-07-26-analytics_plugin.md).
  *
  * **Loopback, always.** The listener binds {@link LOOPBACK_ADDRESS} - a named
  * constant, never `0.0.0.0` and never a wildcard - because the dashboard reads

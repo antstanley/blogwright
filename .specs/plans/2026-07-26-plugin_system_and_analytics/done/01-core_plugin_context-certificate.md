@@ -49,7 +49,7 @@ names (a file location, a test result, or an execution trace) - not by assertion
 
 - **O2 - The load-bearing fields are justified, and every export is documented.**
   - *Claim:* `names`, `accountId` and `siteState` carry doc comments naming their real consumers (task 53's log-delivery node reading `names.deliverySource` and the site's recorded distribution outputs; the analytics IAM roles reading the account id), and every exported symbol in the module has a doc comment.
-  - *Evidence to collect:* read every `export` in `packages/core/src/plugin.ts` and confirm each is preceded by a `/** … */` block; confirm `packages/core/src/config.ts:343` really declares `deliverySource` and that the comment names it; confirm `.specs/changes/2026-07-26-analytics_plugin.md` §Analytics pipeline → Shape states the plugin reads `ctx.names.deliverySource`.
+  - *Evidence to collect:* read every `export` in `packages/core/src/plugin.ts` and confirm each is preceded by a `/** … */` block; confirm `packages/core/src/config.ts:343` really declares `deliverySource` and that the comment names it; confirm `.specs/changes/merged/2026-07-26-analytics_plugin.md` §Analytics pipeline → Shape states the plugin reads `ctx.names.deliverySource`.
   - *Status:* SATISFIED - all four exports carry `/** … */` (`PluginLogger:20-24`, `PluginPorts:33-41`,
     `SiteState:47-59`, `PluginContext:64-74`) and the module opens with an ownership comment
     (`:1-13`), meeting DEVELOPMENT.md:245-250 ("Public exports of `blogwright-core` … carry doc
