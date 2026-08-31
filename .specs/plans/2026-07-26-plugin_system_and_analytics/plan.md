@@ -668,7 +668,19 @@ task 59, whose role rewrite is what its warning backs.
   So this is not a residue of the migration; it is the steady state of the
   convention. If four in five are wrong in an untouched file, the citations are
   not load-bearing documentation, they are decoration that occasionally
-  misleads. The cheap fix is to name symbols and let a reader grep.- *`plugin list` and `plugin remove` contradict each other for a bundled
+  misleads. The cheap fix is to name symbols and let a reader grep.
+  **And it is not confined to old code.** Task 59 found
+  `packages/analytics/src/nodes.ts` - written entirely during this plan, over
+  four tasks - carrying about fifteen cross-file line citations into
+  `packages/cli/src/nodes.ts`, with the two spot-checked already drifted: `:830`,
+  cited as a `dependsOn: []` precedent, is a closing brace, and `:713-719`,
+  cited as stating a discipline, is mid-doc-comment about something else. Task
+  59 established it did not cause that drift (its hunks are all at line 878 or
+  below; every citation points above 830), so the target simply moved under
+  them while they were being written.
+  That is the decisive observation: freshly-authored citations into an actively
+  edited file are stale on arrival, because nothing recomputes them and nothing
+  checks them. The convention does not decay slowly - it does not work.- *`plugin list` and `plugin remove` contradict each other for a bundled
   plugin.* Found by task 26's verification gate 2026-08-31, on the real binary.
   This is the first commit at which `plugin list` reports a plugin the CLI
   **bundles** rather than one the repo installed. `blogwright plugin list`

@@ -7,7 +7,7 @@ import {
   type PdsConfig,
 } from 'blogwright-core';
 
-import { resolvePdsSecretName, type ResolvedPdsConfig } from './config.js';
+import { NO_PDS_SECTION_MESSAGE, resolvePdsSecretName, type ResolvedPdsConfig } from './config.js';
 import { listPublishablePosts, type PostMeta } from './content.js';
 import type { PdsContext } from './context.js';
 import { postPath, tidFromPath } from './rkey.js';
@@ -54,11 +54,17 @@ export interface SyncSummary {
  * Every pds command reaches its config through here rather than
  * `ctx.config.pds` directly, so `secretName` stays a required `string` even
  * once core stops applying the default itself.
+ *
+ * The absent-block refusal is {@link NO_PDS_SECTION_MESSAGE}, shared with
+ * `validatePdsConfig` (`config.ts`) rather than spelled out twice: since the
+ * host validates a plugin's block at dispatch, the validator now refuses an
+ * absent block BEFORE any command reaches this function, and the two
+ * refusals are the same situation. A copy here would let them drift.
  */
 export function requirePdsConfig(ctx: PdsContext): ResolvedPdsConfig {
   const pds = ctx.config.pds;
   if (!pds) {
-    throw new Error('config has no "pds" section - add it to config/production.jsonc');
+    throw new Error(NO_PDS_SECTION_MESSAGE);
   }
   return { ...pds, secretName: resolvePdsSecretName(pds, ctx.config.siteName) };
 }

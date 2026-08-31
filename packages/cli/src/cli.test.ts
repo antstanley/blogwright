@@ -1398,40 +1398,45 @@ ${ALL_PDS_LINES.map((line) => `    ${line}`).join('\n')}
   });
 
   /*
-   * A KNOWN DEFECT THIS TASK WIDENS, PINNED THE WAY TASK 26 PINNED ITS OWN.
+   * THE DEFECT TASK 29 PINNED HERE, CLOSED BY TASK 28. Updated in place, as
+   * that pin's own note asked - not deleted, because the message an operator
+   * gets on this path is exactly what the pin exists to hold still.
    *
-   * `validatePdsConfig` (`packages/pds/src/config.ts`) dereferences its
-   * argument without a guard, so `validatePdsConfig(undefined)` throws a
-   * bare `TypeError`. Task 19's dispatch calls `validateConfig` with
-   * `undefined` whenever a plugin's block is absent - deliberately, so a
-   * plugin's own defaults can apply - and `resolvePluginConfig` wraps
-   * whatever comes out. Before this task that was reachable only through
-   * `blogwright plugin remove pds`. It is now reachable from every
-   * `blogwright pds <action>` on a repo that has not configured the block
-   * yet, which is an ordinary first-run state.
+   * Task 29 made `blogwright pds <action>` route through generic dispatch,
+   * which validates the plugin's own block first, calling `validateConfig`
+   * with `undefined` when the document carries no block (task 19's contract,
+   * so a plugin with derivable defaults can supply them). `validatePdsConfig`
+   * then dereferenced that `undefined` and the wrapper presented a bare
+   * `TypeError: Cannot read properties of undefined (reading 'name')` as the
+   * plugin's reason for refusing the config.
    *
-   * The regression is in the MESSAGE, not the outcome: all six commands
-   * already refused without a block, but through
-   * `requirePdsConfig`'s `config has no "pds" section - add it to
-   * config/production.jsonc`, which says what to do. What an operator sees
-   * now is asserted below, exactly as it is. TASK 28 OWNS THE FIX and this
-   * case is expected to fail there - update it to the message that
-   * replaces this one; do not delete it.
+   * The outcome was never in question - all six commands already refused
+   * without a block - only the sentence. It is now `requirePdsConfig`'s own,
+   * raised by the validator at dispatch instead of by the command: an absent
+   * block is an ordinary first-run state, so it names the missing section and
+   * where to add it, where a MALFORMED block still names the offending key
+   * (`context.test.ts`, `pds config validation timing`).
    */
-  it('leaks a TypeError from the plugin validator when the repo has no pds block yet (task 28)', async () => {
-    const { run } = await dispatchPds(['pds', 'keygen'], { configDocument: {} });
+  it('names the missing section when the repo has no pds block yet (task 28)', async () => {
+    const { run, calls } = await dispatchPds(['pds', 'keygen'], { configDocument: {} });
 
     const err = await run.then(
       () => undefined,
       (caught: unknown) => caught,
     );
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toMatch(/^plugin "pds" rejected the "pds" config block: /);
-    // The leak itself: a raw property-access failure, not a validator's own
-    // refusal. `requirePdsConfig`'s friendly message never gets a chance to
-    // run, because dispatch validates the block before the command does.
-    expect((err as Error).cause).toBeInstanceOf(TypeError);
-    expect((err as Error).message).not.toContain('config has no "pds" section');
+    expect((err as Error).message).toBe(
+      'plugin "pds" rejected the "pds" config block: ' +
+        'config has no "pds" section - add it to config/production.jsonc',
+    );
+    // A validator's own refusal, not a property-access failure: the `cause`
+    // is the Error `validatePdsConfig` threw, and nothing in the chain is a
+    // TypeError any more.
+    expect((err as Error).cause).toBeInstanceOf(Error);
+    expect((err as Error).cause).not.toBeInstanceOf(TypeError);
+    // Still refused before the command runs - the outcome the message change
+    // had to leave alone.
+    expect(calls).toEqual([]);
   });
 });
 

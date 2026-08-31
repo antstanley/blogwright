@@ -13,7 +13,7 @@ import {
   type ResourceNode,
   type ResourceOutputs,
 } from 'blogwright-core';
-import type { PdsContext } from 'blogwright-pds';
+import pdsPlugin, { type PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -815,5 +815,266 @@ describe('plugin config validation', () => {
     expect(loader.resolveCalls).toEqual([]);
     expect(loader.packageJsonPathForCalls).toEqual([]);
     expect(loader.loadCalls).toEqual([]);
+  });
+});
+
+/**
+ * The settled dispatch-time validation of the `pds` block, pinned from both
+ * ends - task 28, over the divergence the change spec's §Upgrading a deployed
+ * stack item 5 records.
+ *
+ * Task 19 settled WHERE a plugin's block is validated: in the dispatch path,
+ * for the plugin being dispatched and no other, never in `createContext`.
+ * Task 27 then deleted core's own `pds` checks, so this plugin's validator is
+ * the only one left. Together those two facts produce a divergence an
+ * operator can see: `bootstrap`, `deploy` and `status` load no plugin, so
+ * they now ACCEPT a `pds` block core would once have rejected for every
+ * command, and `blogwright pds <action>` is where it is rejected instead -
+ * with core's original message strings.
+ *
+ * These use the REAL bundled plugin: `validateConfig` and `nodes` are the
+ * shipped functions (only the six commands' `run` bodies are replaced with
+ * recorders), so what is exercised here is `validatePdsConfig` itself and not
+ * a fixture standing in for it.
+ */
+describe('pds config validation timing', () => {
+  /** A block core once rejected for a blank `name`. */
+  const BLANK_NAME = '{"siteName": "example", "pds": {"name": "   "}}';
+  /** A block core once rejected for a plaintext handle resolver. */
+  const HTTP_RESOLVER =
+    '{"siteName": "example", "pds": {"name": "Example", "handleResolver": "http://resolver"}}';
+  /** A block that is valid today and must stay valid. */
+  const VALID =
+    '{"siteName": "example", "pds": {"name": "Example", "secretName": "example/atproto"}}';
+  /** A repo that has never written the block - an ordinary first-run state. */
+  const NO_BLOCK = '{"siteName": "example"}';
+
+  /** The wrapper `resolvePluginConfig` puts in front of a plugin's own message. */
+  const REFUSED = 'plugin "pds" rejected the "pds" config block: ';
+
+  /**
+   * The bundled plugin with recording `run`s. Every other member - crucially
+   * `validateConfig` - is the real one.
+   */
+  function recordingPdsPlugin(calls: RecordedRun[]): Plugin<unknown> {
+    return {
+      ...pdsPlugin,
+      commands: pdsPlugin.commands.map((command) => ({
+        action: command.action,
+        summary: command.summary,
+        run: async (ctx, args) => {
+          calls.push({ action: command.action, ctx, args });
+        },
+      })),
+    };
+  }
+
+  /**
+   * Seed `blogwright-pds` as the CLI's OWN bundled dependency plus a
+   * `config/production.jsonc` holding `configText`, and record every context
+   * `main` builds through the real `loadConfig`. The `contexts` array is what
+   * proves a built-in command ACCEPTED a block: a context only exists if
+   * config parsing produced one.
+   */
+  async function buildPdsFixture(configText: string) {
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-pds',
+        namespace: 'pds',
+        plugin: recordingPdsPlugin(calls),
+        bundled: true,
+      },
+    ]);
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    await fs.writeText(`${repoRoot}/config/production.jsonc`, configText);
+
+    const terminal = createScriptedTerminal({ interactive: false });
+    const contexts: OpsContext[] = [];
+    const s3Keys: string[] = [];
+    let discoveryPortsCalls = 0;
+
+    const makeContext: ContextFactory = async (opts) => {
+      const { config, raw } = await loadConfig(fs, {
+        env: opts.env,
+        root: repoRoot,
+        configPath: opts.configPath,
+      });
+      const ctx = createTestContext({
+        env: opts.env,
+        ports: opts.ports,
+        logger: createLogger(terminal),
+        config,
+        configDocument: raw,
+        clients: { sts: recordingSts([]), s3: recordingS3(s3Keys) },
+      });
+      contexts.push(ctx);
+      return ctx;
+    };
+    const makeDiscoveryPorts: DiscoveryPortsFactory = () => {
+      discoveryPortsCalls += 1;
+      return { fs, loader };
+    };
+
+    /** Run `main` and answer with whatever it threw, or `undefined` on success. */
+    async function failure(argv: string[]): Promise<unknown> {
+      return main(argv, () => terminal, makeContext, makeDiscoveryPorts, unreachablePackages).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+    }
+
+    return {
+      calls,
+      contexts,
+      loader,
+      failure,
+      s3Keys,
+      main: (argv: string[]) =>
+        main(argv, () => terminal, makeContext, makeDiscoveryPorts, unreachablePackages),
+      discoveryPortsCalls: () => discoveryPortsCalls,
+    };
+  }
+
+  it('parses a malformed `pds` block without complaint - nothing on the built-in path validates it', async () => {
+    // `loadConfig` is the single place every built-in command's config is
+    // parsed. Both halves are asserted: the block survives onto `OpsConfig`
+    // exactly as written (no defaulted `secretName` re-appearing) and onto
+    // the raw document the dispatch path reads it back out of.
+    const fs = createMemoryFileSystem({
+      '/repo/config/production.jsonc': BLANK_NAME,
+      '/repo/config/staging.jsonc': HTTP_RESOLVER,
+    });
+
+    const blank = await loadConfig(fs, { env: 'production', root: ROOT });
+    expect(blank.config.pds).toEqual({ name: '   ' });
+    expect(blank.raw['pds']).toEqual({ name: '   ' });
+
+    const resolver = await loadConfig(fs, { env: 'staging', root: ROOT });
+    expect(resolver.config.pds).toEqual({ name: 'Example', handleResolver: 'http://resolver' });
+    expect(resolver.raw['pds']).toEqual({ name: 'Example', handleResolver: 'http://resolver' });
+  });
+
+  it('lets `bootstrap`, `deploy` and `status` run on a malformed block, loading no plugin module', async () => {
+    // The divergence itself, from the accepting end. Each command builds its
+    // context - which is what ACCEPTING the block means, since a rejection
+    // would happen inside `loadConfig` and no context would exist at all -
+    // and no `ModuleLoader` call is made, so the only validator that could
+    // reject it never ran. The `pds` dispatch case below is the positive
+    // control for the three empty loader recorders: the same loader fills
+    // them the moment a plugin is dispatched.
+    const fixture = await buildPdsFixture(BLANK_NAME);
+
+    const outcomes = new Map<string, string | undefined>();
+    for (const command of ['bootstrap', 'deploy', 'status']) {
+      const err = await fixture.failure([command]);
+      outcomes.set(command, err === undefined ? undefined : String(err));
+    }
+
+    // `status` runs to completion on a block core would have rejected for
+    // every command - the sharpest form of "accepted", and the assertion
+    // that fails first if anything starts validating the block early again.
+    expect(outcomes.get('status')).toBeUndefined();
+    // `bootstrap` and `deploy` reach past config into work this fixture does
+    // not stand up (a rejecting AWS transport; the real repo root) - so their
+    // failures are non-empty, and the check below is not vacuous for them.
+    expect(outcomes.get('bootstrap')).toBeTruthy();
+    expect(outcomes.get('deploy')).toBeTruthy();
+    for (const [, error] of outcomes) {
+      expect(error ?? '').not.toContain('config.pds');
+      expect(error ?? '').not.toContain('rejected the "pds" config block');
+    }
+
+    expect(fixture.contexts).toHaveLength(3);
+    for (const ctx of fixture.contexts) {
+      expect(ctx.config.pds).toEqual({ name: '   ' });
+    }
+    expect(fixture.discoveryPortsCalls()).toBe(0);
+    expect(fixture.loader.resolveCalls).toEqual([]);
+    expect(fixture.loader.packageJsonPathForCalls).toEqual([]);
+    expect(fixture.loader.loadCalls).toEqual([]);
+  });
+
+  it("rejects the same blank `name` on `blogwright pds <action>`, with core's original message", async () => {
+    const fixture = await buildPdsFixture(BLANK_NAME);
+
+    const err = await fixture.failure(['pds', 'keygen']);
+
+    expect((err as Error).message).toBe(`${REFUSED}config.pds.name is required`);
+    // Nothing ran and nothing was reached: validation precedes both the
+    // command and the scoped-state load the dispatch does for it. The valid
+    // block below is the control - the same recorder fills there.
+    expect(fixture.calls).toEqual([]);
+    expect(fixture.s3Keys).toEqual([]);
+    // The control for the three empty loader recorders above - dispatching a
+    // plugin DOES drive the loader.
+    expect(fixture.loader.loadCalls.length).toBeGreaterThan(0);
+  });
+
+  it("rejects an http:// handleResolver on `blogwright pds <action>`, with core's original message", async () => {
+    const fixture = await buildPdsFixture(HTTP_RESOLVER);
+
+    const err = await fixture.failure(['pds', 'keygen']);
+
+    expect((err as Error).message).toBe(
+      `${REFUSED}config.pds.handleResolver must be https, got "http://resolver"`,
+    );
+    expect(fixture.calls).toEqual([]);
+  });
+
+  it('names the missing section, not a key inside it, when the repo has no `pds` block at all', async () => {
+    // ABSENT is not MALFORMED. The host calls the validator with `undefined`
+    // here, and this is the sentence `requirePdsConfig` has always raised -
+    // the one a bare `(raw ?? {})` guard would have replaced with
+    // `config.pds.name is required`, which tells a first-run operator to fix
+    // a key in a block they never wrote.
+    const fixture = await buildPdsFixture(NO_BLOCK);
+
+    const err = await fixture.failure(['pds', 'keygen']);
+
+    expect((err as Error).message).toBe(
+      `${REFUSED}config has no "pds" section - add it to config/production.jsonc`,
+    );
+    expect((err as Error).message).not.toContain('config.pds.name is required');
+    expect((err as Error).cause).toBeInstanceOf(Error);
+    expect((err as Error).cause).not.toBeInstanceOf(TypeError);
+    expect(fixture.calls).toEqual([]);
+  });
+
+  it('still dispatches a VALID block through to the command, on the same path', async () => {
+    // The other direction of "no config valid today becomes invalid": the
+    // three cases above would all pass against a validator that refused
+    // everything.
+    const fixture = await buildPdsFixture(VALID);
+
+    expect(await fixture.main(['pds', 'keygen'])).toBe(0);
+    expect(fixture.calls.map((call) => call.action)).toEqual(['keygen']);
+    // The control for the empty recorder in the rejecting cases above: a
+    // dispatch that gets through loads the plugin's own scoped state.
+    expect(fixture.s3Keys).toEqual(['state/production.pds.json']);
+    expect(fixture.calls[0]?.ctx.pluginConfig).toEqual({
+      name: 'Example',
+      secretName: 'example/atproto',
+    });
+  });
+
+  it('accepts the malformed block on the built-in path even where it is dispatch-rejected', async () => {
+    // The two halves against ONE block, so the divergence is asserted as a
+    // single fact rather than inferred from two fixtures: `status` completes
+    // its context build on the http:// resolver that `pds keygen` refuses.
+    const fixture = await buildPdsFixture(HTTP_RESOLVER);
+
+    const builtIn = await fixture.failure(['status']);
+    const dispatched = await fixture.failure(['pds', 'keygen']);
+
+    // `status` completes - it never looked at the resolver.
+    expect(builtIn).toBeUndefined();
+    expect(fixture.contexts[0]?.config.pds).toEqual({
+      name: 'Example',
+      handleResolver: 'http://resolver',
+    });
+    expect((dispatched as Error).message).toBe(
+      `${REFUSED}config.pds.handleResolver must be https, got "http://resolver"`,
+    );
   });
 });
