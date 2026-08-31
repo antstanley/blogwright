@@ -22,6 +22,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { resolveAnalyticsConfig, validateAnalyticsConfig, type AnalyticsConfig } from './config.js';
 import {
   analyticsCatalogIntegrationNode,
+  analyticsErrorBucketNode,
+  analyticsFirehoseRoleNode,
+  analyticsFirehoseStreamNode,
   analyticsNamespaceNode,
   analyticsSaltSecretNode,
   analyticsTableBucketNode,
@@ -2000,5 +2003,1010 @@ describe('tearing the transform chain down', () => {
       `POST ${IAM_ENDPOINT}`,
     ]);
     expect(actions(requests.slice(1))).toStrictEqual(['ListRolePolicies']);
+  });
+});
+
+/** `<env>-<siteName>-analytics-errors`, the bucket name `nodes.ts` derives off `ctx.names.prefix`. */
+const ERROR_BUCKET = `${PREFIX}-analytics-errors`;
+
+/** An S3 bucket ARN carries no region and no generated id, so this is a pure derivation. */
+const ERROR_BUCKET_ARN = `arn:aws:s3:::${ERROR_BUCKET}`;
+
+const FIREHOSE_ROLE = `${PREFIX}-analytics-firehose-role`;
+const FIREHOSE_ROLE_ARN = `arn:aws:iam::${ACCOUNT_ID}:role/${FIREHOSE_ROLE}`;
+
+const STREAM = `${PREFIX}-analytics-firehose`;
+const STREAM_ARN = `arn:aws:firehose:us-east-1:${ACCOUNT_ID}:deliverystream/${STREAM}`;
+
+/** The service-generated id of the stream's one destination - not derivable, only readable. */
+const DESTINATION_ID = 'destinationId-000000000001';
+
+/**
+ * The Glue catalog Firehose reaches this environment's table through: the
+ * **child** catalog the S3 Tables integration creates per table bucket. Spelled
+ * out here rather than derived from the module under test, and deliberately not
+ * {@link CATALOG_ARN}, which is the account-wide federation root one level
+ * above it - the form `CatalogConfiguration.CatalogARN`'s own prose names holds
+ * no S3 Tables table at all.
+ */
+const FEDERATED_CATALOG_ARN = `arn:aws:glue:us-east-1:${ACCOUNT_ID}:catalog/${CATALOG}/${TABLE_BUCKET}`;
+
+/** The five Glue resources the delivery role's catalog grant names, spelled out independently. */
+const GLUE_GRANT_RESOURCES = [
+  `arn:aws:glue:us-east-1:${ACCOUNT_ID}:catalog`,
+  `arn:aws:glue:us-east-1:${ACCOUNT_ID}:catalog/${CATALOG}`,
+  `arn:aws:glue:us-east-1:${ACCOUNT_ID}:catalog/${CATALOG}/${TABLE_BUCKET}`,
+  `arn:aws:glue:us-east-1:${ACCOUNT_ID}:database/${CATALOG}/${TABLE_BUCKET}/${NAMESPACE}`,
+  `arn:aws:glue:us-east-1:${ACCOUNT_ID}:table/${CATALOG}/${TABLE_BUCKET}/${NAMESPACE}/${TABLE}`,
+];
+
+/** Firehose is AWS-JSON: every operation is `POST /`, told apart by `x-amz-target`. */
+const FIREHOSE_HOST = 'https://firehose.us-east-1.amazonaws.com';
+const FIREHOSE_ENDPOINT = `${FIREHOSE_HOST}/`;
+
+/** S3 is the one service in this file addressed by path rather than by target. */
+const S3_HOST = 'https://s3.us-east-1.amazonaws.com';
+
+/** The one error prefix both of Firehose's error surfaces share. */
+const ERROR_PREFIX = 'firehose-errors/';
+
+/**
+ * The failure shape Firehose puts on the wire - AWS-JSON 1.1, so the exception
+ * name travels in the body's `__type` and reaches `AwsError.code`. Every
+ * documented Firehose exception is HTTP 400, `ResourceNotFoundException`
+ * included, so the status separates nothing and these replies say 400 throughout.
+ */
+function firehoseFailure(code: string, message: string): RawResponse {
+  const text = JSON.stringify({ __type: code, message });
+  return {
+    statusCode: 400,
+    headers: {},
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/** `DescribeDeliveryStream`'s reply for a stream that does not exist. */
+function noSuchStream(): RawResponse {
+  return firehoseFailure('ResourceNotFoundException', 'Firehose stream not found');
+}
+
+/** A `DescribeDeliveryStream` success body, in the service's own nesting. */
+function streamDescription(
+  status: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    DeliveryStreamDescription: {
+      DeliveryStreamName: STREAM,
+      DeliveryStreamARN: STREAM_ARN,
+      DeliveryStreamStatus: status,
+      DeliveryStreamType: 'DirectPut',
+      VersionId: '1',
+      HasMoreDestinations: false,
+      Destinations: [
+        { DestinationId: DESTINATION_ID, IcebergDestinationDescription: { AppendOnly: true } },
+      ],
+      ...extra,
+    },
+  };
+}
+
+/** One `Destinations` entry carrying a given live `AppendOnly` flag. */
+function destinationWith(appendOnly: boolean): Record<string, unknown>[] {
+  return [
+    { DestinationId: DESTINATION_ID, IcebergDestinationDescription: { AppendOnly: appendOnly } },
+  ];
+}
+
+/** The failure shape S3 puts on the wire: REST-XML, with the code in an `<Error><Code>` element. */
+function s3Failure(status: number, code: string): RawResponse {
+  const text = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>${code}</Code><Message>${code}</Message></Error>`;
+  return {
+    statusCode: status,
+    headers: {},
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/** S3's reply for a bucket that does not exist. */
+function noSuchBucket(): RawResponse {
+  return s3Failure(404, 'NoSuchBucket');
+}
+
+/** A 2xx S3 reply with nothing in it - what every bucket-level PUT and DELETE answers. */
+function s3Done(): RawResponse {
+  return encode('');
+}
+
+/** A `ListObjectsV2` reply listing `keys`, or an empty bucket when none are given. */
+function listing(keys: string[] = []): RawResponse {
+  const contents = keys
+    .map((key) => `<Contents><Key>${key}</Key><Size>10</Size></Contents>`)
+    .join('');
+  return encode(
+    `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`,
+  );
+}
+
+/** Record what `analytics-error-bucket` records, so its two readers have an ARN to interpolate. */
+function withErrorBucket(
+  ctx: PluginContext<AnalyticsConfig>,
+  arn: string = ERROR_BUCKET_ARN,
+): PluginContext<AnalyticsConfig> {
+  ctx.record('analytics-error-bucket', { name: ERROR_BUCKET, arn });
+  return ctx;
+}
+
+/** Record what `analytics-table` records - the ARN only `GetTable` can supply. */
+function withTable(
+  ctx: PluginContext<AnalyticsConfig>,
+  arn: string = TABLE_ARN,
+): PluginContext<AnalyticsConfig> {
+  ctx.record('analytics-table', { name: TABLE, arn });
+  return ctx;
+}
+
+/** Record what `analytics-transform-function` records, so the grant and the processor name it. */
+function withTransformFunction(
+  ctx: PluginContext<AnalyticsConfig>,
+  arn: string = TRANSFORM_FUNCTION_ARN,
+): PluginContext<AnalyticsConfig> {
+  ctx.record('analytics-transform-function', { name: TRANSFORM_FUNCTION, arn });
+  return ctx;
+}
+
+/** Record what `analytics-firehose-role` records, so the stream has a role to name. */
+function withFirehoseRole(
+  ctx: PluginContext<AnalyticsConfig>,
+  arn: string = FIREHOSE_ROLE_ARN,
+): PluginContext<AnalyticsConfig> {
+  ctx.record('analytics-firehose-role', { name: FIREHOSE_ROLE, arn });
+  return ctx;
+}
+
+/** The three recorded outputs `analytics-firehose-role`'s policy interpolates. */
+function withRoleDependencies(ctx: PluginContext<AnalyticsConfig>): PluginContext<AnalyticsConfig> {
+  return withTransformFunction(withTable(withErrorBucket(ctx)));
+}
+
+/** The three recorded outputs `analytics-firehose-stream`'s destination interpolates. */
+function withStreamDependencies(
+  ctx: PluginContext<AnalyticsConfig>,
+): PluginContext<AnalyticsConfig> {
+  return withTransformFunction(withErrorBucket(withFirehoseRole(ctx)));
+}
+
+/** Record what a live stream's `read` records, so `update` has a flag and a version to compare. */
+function withRecordedStream(
+  ctx: PluginContext<AnalyticsConfig>,
+  overrides: ResourceOutputs = {},
+): PluginContext<AnalyticsConfig> {
+  ctx.record('analytics-firehose-stream', {
+    name: STREAM,
+    arn: STREAM_ARN,
+    state: 'active',
+    versionId: '3',
+    destinationId: DESTINATION_ID,
+    appendOnly: false,
+    ...overrides,
+  });
+  return ctx;
+}
+
+/** One statement of a parsed inline policy document. */
+interface PolicyStatement {
+  Effect: string;
+  Action: string[];
+  Resource: string | string[];
+}
+
+/** The statements of the inline policy an IAM `PutRolePolicy` request carried. */
+function policyStatements(request: RecordedRequest): PolicyStatement[] {
+  const document = JSON.parse(formBody(request)['PolicyDocument'] ?? '') as {
+    Version: string;
+    Statement: PolicyStatement[];
+  };
+  expect(document.Version).toBe('2012-10-17');
+  return document.Statement;
+}
+
+/**
+ * The one statement whose every action is on `service` - the capability, found
+ * by what it grants rather than by its position in the list, so reordering the
+ * document does not silently move an assertion onto a different grant.
+ */
+function capability(statements: PolicyStatement[], service: string): PolicyStatement {
+  const matched = statements.filter((statement) =>
+    statement.Action.every((action) => action.startsWith(`${service}:`)),
+  );
+  if (matched.length !== 1) {
+    throw new Error(
+      `expected exactly one ${service} statement, found ${matched.length} in ${JSON.stringify(statements)}`,
+    );
+  }
+  return matched[0] as PolicyStatement;
+}
+
+/** Every `Resource` in a policy document, flattened - a statement may name one ARN or several. */
+function policyResources(statements: PolicyStatement[]): string[] {
+  return statements.flatMap((statement) =>
+    Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource],
+  );
+}
+
+describe('the analytics delivery graph', () => {
+  it('chains error-bucket -> firehose-role -> firehose-stream', () => {
+    expect(analyticsErrorBucketNode().id).toBe('analytics-error-bucket');
+    expect(analyticsErrorBucketNode().dependsOn).toStrictEqual([]);
+
+    // The role's three edges are the three nodes whose recorded ARNs its four
+    // grants interpolate. `topoSort` drains zero-indegree nodes alphabetically
+    // (`packages/cli/src/graph.ts:35-38`), and here the accident does NOT save
+    // it: `analytics-firehose-role` sorts before `analytics-transform-function`,
+    // so with `dependsOn: []` the policy would be written with an unrecorded
+    // function ARN interpolated - a wrong permission, never an error.
+    expect(analyticsFirehoseRoleNode().id).toBe('analytics-firehose-role');
+    expect(analyticsFirehoseRoleNode().dependsOn).toStrictEqual([
+      'analytics-error-bucket',
+      'analytics-table',
+      'analytics-transform-function',
+    ]);
+
+    // The stream's role edge is the spec's own rule - its
+    // `IcebergDestinationConfiguration` interpolates the role's recorded ARN -
+    // and it carries `analytics-error-bucket` transitively, completing the
+    // error-bucket -> firehose-role -> firehose-stream chain. Without it the
+    // ordering would survive only on `…-role` sorting before `…-stream`.
+    expect(analyticsFirehoseStreamNode().id).toBe('analytics-firehose-stream');
+    expect(analyticsFirehoseStreamNode().dependsOn).toStrictEqual([
+      'analytics-firehose-role',
+      'analytics-table',
+      'analytics-catalog-integration',
+      'analytics-transform-function',
+    ]);
+  });
+
+  it("is assignable to the SPI's own ResourceNode[], so the CLI engine runs it unchanged", () => {
+    const nodes: ResourceNode[] = [
+      analyticsErrorBucketNode(),
+      analyticsFirehoseRoleNode(),
+      analyticsFirehoseStreamNode(),
+    ];
+    expect(nodes.map((node) => node.id)).toStrictEqual([
+      'analytics-error-bucket',
+      'analytics-firehose-role',
+      'analytics-firehose-stream',
+    ]);
+  });
+});
+
+describe('analytics-error-bucket', () => {
+  it('reads an existing bucket and records its name and derived ARN', async () => {
+    const { ctx, requests } = makeContext([s3Done()]);
+    await expect(analyticsErrorBucketNode().read(ctx)).resolves.toBe(true);
+    expect(onlyRequest(requests).method).toBe('HEAD');
+    expect(onlyRequest(requests).url).toBe(`${S3_HOST}/${ERROR_BUCKET}`);
+    expect(ctx.state.resources['analytics-error-bucket']).toStrictEqual({
+      name: ERROR_BUCKET,
+      arn: ERROR_BUCKET_ARN,
+    });
+  });
+
+  it('reads false without throwing when the bucket is absent, recording nothing', async () => {
+    const { ctx, requests } = makeContext([noSuchBucket()]);
+    await expect(analyticsErrorBucketNode().read(ctx)).resolves.toBe(false);
+    expect(requests).toHaveLength(1);
+    expect(ctx.state.resources['analytics-error-bucket']).toBeUndefined();
+  });
+
+  it('creates the bucket, then tags it and blocks public access', async () => {
+    const { ctx, requests } = makeContext([s3Done(), s3Done(), s3Done()]);
+    await analyticsErrorBucketNode().create(ctx);
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toStrictEqual([
+      `PUT ${S3_HOST}/${ERROR_BUCKET}`,
+      `PUT ${S3_HOST}/${ERROR_BUCKET}?tagging=`,
+      `PUT ${S3_HOST}/${ERROR_BUCKET}?publicAccessBlock=`,
+    ]);
+    // No LocationConstraint body: core's `createBucket` omits it in us-east-1,
+    // and the pinned signer is what puts the request there. A body here would
+    // mean the bucket had been created in `config.region` instead.
+    expect(requests[0]?.body).toBeUndefined();
+    expect(ctx.state.resources['analytics-error-bucket']).toStrictEqual({
+      name: ERROR_BUCKET,
+      arn: ERROR_BUCKET_ARN,
+    });
+  });
+
+  it('records the bucket even when the tagging call after CreateBucket throws', async () => {
+    // Pins the ORDER of the two writes in `create`, `bucketNode`'s ordering
+    // (`packages/cli/src/nodes.ts:56-60`). Move the record below
+    // `applyErrorBucketConfiguration` and this fails: the account then holds a
+    // bucket no state file mentions, so `destroy` walks past it.
+    const { ctx, requests } = makeContext([s3Done(), s3Failure(403, 'AccessDenied')]);
+    await expect(analyticsErrorBucketNode().create(ctx)).rejects.toThrow(/AccessDenied/);
+    expect(requests).toHaveLength(2);
+    expect(ctx.state.resources['analytics-error-bucket']).toStrictEqual({
+      name: ERROR_BUCKET,
+      arn: ERROR_BUCKET_ARN,
+    });
+  });
+
+  it('reapplies the tagging and public-access block on update', async () => {
+    const { ctx, requests } = makeContext([s3Done(), s3Done()]);
+    await analyticsErrorBucketNode().update?.(ctx);
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toStrictEqual([
+      `PUT ${S3_HOST}/${ERROR_BUCKET}?tagging=`,
+      `PUT ${S3_HOST}/${ERROR_BUCKET}?publicAccessBlock=`,
+    ]);
+  });
+
+  it('empties the bucket before removing it, and says how many records it discarded', async () => {
+    const warnings: string[] = [];
+    const { ctx, requests } = makeContext(
+      [
+        s3Done(),
+        listing(['firehose-errors/2026/08/31/one', 'firehose-errors/2026/08/31/two']),
+        s3Done(),
+        s3Done(),
+        s3Done(),
+      ],
+      { warnings },
+    );
+    await expect(analyticsErrorBucketNode().delete(ctx)).resolves.toBeUndefined();
+    expect(requests.map((request) => request.method)).toStrictEqual([
+      'HEAD',
+      'GET',
+      'DELETE',
+      'DELETE',
+      'DELETE',
+    ]);
+    expect(requests[4]?.url).toBe(`${S3_HOST}/${ERROR_BUCKET}`);
+    // The records are the evidence of whatever went wrong, so the teardown says
+    // how much of it went with the bucket rather than removing it silently.
+    expect(warnings.join('\n')).toMatch(/discarded 2 failed-record object/);
+  });
+
+  it('deletes an already-absent bucket without listing it or throwing', async () => {
+    // `deletePrefix` does NOT swallow a 404 - it lists first, and `listObjects`
+    // rethrows - so without the existence check a re-run after a completed
+    // teardown would fail on the half that was already done.
+    const { ctx, requests } = makeContext([noSuchBucket()]);
+    await expect(analyticsErrorBucketNode().delete(ctx)).resolves.toBeUndefined();
+    expect(requests.map((request) => request.method)).toStrictEqual(['HEAD']);
+  });
+
+  it('carries the environment in the bucket name, so two environments never collide', async () => {
+    const { ctx, requests } = makeContext([s3Done()], { env: OTHER_ENV });
+    await analyticsErrorBucketNode().read(ctx);
+    expect(onlyRequest(requests).url).toBe(`${S3_HOST}/${OTHER_ENV}-${SITE_NAME}-analytics-errors`);
+  });
+});
+
+describe('analytics-firehose-role', () => {
+  it('reads an existing role and records its ARN', async () => {
+    const { ctx, requests } = makeContext([existingRole(FIREHOSE_ROLE_ARN)]);
+    await expect(analyticsFirehoseRoleNode().read(ctx)).resolves.toBe(true);
+    expect(actions(requests)).toStrictEqual(['GetRole']);
+    expect(ctx.state.resources['analytics-firehose-role']).toStrictEqual({
+      name: FIREHOSE_ROLE,
+      arn: FIREHOSE_ROLE_ARN,
+    });
+  });
+
+  it('reads false without throwing when the role is absent, recording nothing', async () => {
+    const { ctx } = makeContext([noSuchRole()]);
+    await expect(analyticsFirehoseRoleNode().read(ctx)).resolves.toBe(false);
+    expect(ctx.state.resources['analytics-firehose-role']).toBeUndefined();
+  });
+
+  it('creates the role with the Firehose trust document, then applies its policy', async () => {
+    const { ctx, requests } = makeContext([
+      createdRole(FIREHOSE_ROLE_ARN),
+      iamDone('PutRolePolicy'),
+    ]);
+    await analyticsFirehoseRoleNode().create(withRoleDependencies(ctx));
+
+    expect(actions(requests)).toStrictEqual(['CreateRole', 'PutRolePolicy']);
+    expect(formBody(requests[0] as RecordedRequest)['RoleName']).toBe(FIREHOSE_ROLE);
+    // AWS's own trust document for a Firehose delivery role: one statement, the
+    // firehose service principal, `sts:AssumeRole` and nothing else. Notably NOT
+    // the transform role's document with a swapped principal - that one also
+    // grants `sts:TagSession`, which Firehose never uses.
+    expect(
+      JSON.parse(formBody(requests[0] as RecordedRequest)['AssumeRolePolicyDocument'] ?? ''),
+    ).toStrictEqual({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { Service: 'firehose.amazonaws.com' },
+          Action: ['sts:AssumeRole'],
+        },
+      ],
+    });
+    expect(formBody(requests[1] as RecordedRequest)['PolicyName']).toBe('firehose-delivery');
+    expect(ctx.state.resources['analytics-firehose-role']).toStrictEqual({
+      name: FIREHOSE_ROLE,
+      arn: FIREHOSE_ROLE_ARN,
+    });
+  });
+
+  it('grants exactly four capabilities, each on concrete ARNs and none on a wildcard', async () => {
+    // Enumerated by capability rather than counted, and asserted on the parsed
+    // document rather than on the call: a `Resource: '*'` grants strictly more
+    // than the correct document, so every functional test in this file still
+    // passes with one. This role can read the Glue catalog, write the Iceberg
+    // table, invoke a Lambda and write an S3 bucket - a wildcard on any of the
+    // four would hand it every table, every function or every bucket in the
+    // account, including the other environments' analytics data.
+    const { ctx, requests } = makeContext([
+      createdRole(FIREHOSE_ROLE_ARN),
+      iamDone('PutRolePolicy'),
+    ]);
+    await analyticsFirehoseRoleNode().create(withRoleDependencies(ctx));
+    const statements = policyStatements(requests[1] as RecordedRequest);
+
+    expect(statements).toHaveLength(4);
+
+    expect(capability(statements, 'glue')).toStrictEqual({
+      Effect: 'Allow',
+      Action: [
+        'glue:GetDatabase',
+        'glue:GetDatabases',
+        'glue:GetTable',
+        'glue:GetTables',
+        'glue:UpdateTable',
+      ],
+      // Every level of the federation hierarchy, narrowed to this environment's
+      // own table bucket, namespace and table - AWS's own policy writes the last
+      // three as account-wide wildcards.
+      Resource: GLUE_GRANT_RESOURCES,
+    });
+
+    expect(capability(statements, 's3tables')).toStrictEqual({
+      Effect: 'Allow',
+      Action: [
+        's3tables:GetTableBucket',
+        's3tables:GetNamespace',
+        's3tables:GetTable',
+        's3tables:GetTableData',
+        's3tables:GetTableMetadataLocation',
+        's3tables:PutTableData',
+        's3tables:UpdateTableMetadataLocation',
+      ],
+      // The generated table ARN `analytics-table` recorded, not a re-derived name.
+      Resource: [TABLE_BUCKET_ARN, TABLE_ARN],
+    });
+
+    expect(capability(statements, 'lambda')).toStrictEqual({
+      Effect: 'Allow',
+      Action: ['lambda:InvokeFunction', 'lambda:GetFunctionConfiguration'],
+      // The UNQUALIFIED function ARN task 50 recorded - the exact string the
+      // stream sends as `LambdaArn`. AWS's example writes a `:<version>`-qualified
+      // ARN, which would not match an unqualified invoke.
+      Resource: TRANSFORM_FUNCTION_ARN,
+    });
+
+    expect(capability(statements, 's3')).toStrictEqual({
+      Effect: 'Allow',
+      Action: [
+        's3:AbortMultipartUpload',
+        's3:GetBucketLocation',
+        's3:GetObject',
+        's3:ListBucket',
+        's3:ListBucketMultipartUploads',
+        's3:PutObject',
+      ],
+      // Both ARNs: bucket actions authorise against the bucket and object
+      // actions against the key, and neither matches the other. With only the
+      // bucket named, `PutObject` is denied and every failed record is lost.
+      Resource: [ERROR_BUCKET_ARN, `${ERROR_BUCKET_ARN}/*`],
+    });
+
+    for (const resource of policyResources(statements)) {
+      expect(resource.startsWith('arn:aws:')).toBe(true);
+      expect(resource).not.toBe('*');
+    }
+  });
+
+  it("never names the site's environment bucket anywhere in the policy", async () => {
+    // `ctx.names.bucket` sits in `config.region` while this whole pipeline is
+    // pinned to us-east-1, and an S3 ARN carries no region for the API to reject
+    // the mismatch with. The plugin owns its own error bucket precisely so the
+    // site's is never reached for - and this asserts it on the document, where a
+    // stray `${ctx.names.bucket}` would otherwise be a working grant nobody sees.
+    const { ctx, requests } = makeContext([
+      createdRole(FIREHOSE_ROLE_ARN),
+      iamDone('PutRolePolicy'),
+    ]);
+    await analyticsFirehoseRoleNode().create(withRoleDependencies(ctx));
+    const document = formBody(requests[1] as RecordedRequest)['PolicyDocument'] ?? '';
+    expect(ctx.names.bucket).toBe(`${PREFIX}-${ACCOUNT_ID}`);
+    expect(document).not.toContain(ctx.names.bucket);
+    expect(document).toContain(ERROR_BUCKET_ARN);
+  });
+
+  it.each([
+    ['error bucket', withTransformFunction, withTable, /analytics-error-bucket/],
+    ['table', withErrorBucket, withTransformFunction, /analytics-table/],
+    ['transform function', withErrorBucket, withTable, /analytics-transform-function/],
+  ])(
+    'refuses to write the policy when the %s ARN is not recorded',
+    async (_what, first, second, expected) => {
+      // The guard that holds however the graph is ordered. Without it the policy
+      // would interpolate `undefined` into a live IAM grant: a wrong permission,
+      // written silently, never an error, and one nothing notices until Firehose
+      // starts routing every record to the error bucket.
+      const { ctx, requests } = makeContext([createdRole(FIREHOSE_ROLE_ARN)]);
+      await expect(analyticsFirehoseRoleNode().create(second(first(ctx)))).rejects.toThrow(
+        expected,
+      );
+      // The role was created; the grant was NOT written on nothing.
+      expect(actions(requests)).toStrictEqual(['CreateRole']);
+    },
+  );
+
+  it('refuses to write the policy when the recorded error bucket ARN is empty', async () => {
+    const { ctx, requests } = makeContext([createdRole(FIREHOSE_ROLE_ARN)]);
+    await expect(
+      analyticsFirehoseRoleNode().create(
+        withTransformFunction(withTable(withErrorBucket(ctx, ''))),
+      ),
+    ).rejects.toThrow(/analytics-error-bucket/);
+    expect(actions(requests)).toStrictEqual(['CreateRole']);
+  });
+
+  it('records the role ARN even when the policy PUT throws', async () => {
+    // Pins the order of the two writes in `create`, the ordering
+    // `analytics-transform-role` chose and for the same reason: the role is a
+    // real IAM object the moment `ensureRole` returns, so a crash in the policy
+    // call must still leave it recorded for `delete` to find.
+    const { ctx, requests } = makeContext([
+      createdRole(FIREHOSE_ROLE_ARN),
+      iamFailure(403, 'AccessDenied', 'is not authorized to perform: iam:PutRolePolicy'),
+    ]);
+    await expect(analyticsFirehoseRoleNode().create(withRoleDependencies(ctx))).rejects.toThrow(
+      /AccessDenied/,
+    );
+    expect(requests).toHaveLength(2);
+    expect(ctx.state.resources['analytics-firehose-role']).toStrictEqual({
+      name: FIREHOSE_ROLE,
+      arn: FIREHOSE_ROLE_ARN,
+    });
+  });
+
+  it('reapplies the policy on update, so a recreated table reaches the grant', async () => {
+    const { ctx, requests } = makeContext([iamDone('PutRolePolicy')]);
+    await analyticsFirehoseRoleNode().update?.(withRoleDependencies(ctx));
+    expect(actions(requests)).toStrictEqual(['PutRolePolicy']);
+  });
+
+  it('deletes the role, removing its inline policy first', async () => {
+    const { ctx, requests } = makeContext([
+      rolePolicies(['firehose-delivery']),
+      iamDone('DeleteRolePolicy'),
+      iamDone('DeleteRole'),
+    ]);
+    await expect(analyticsFirehoseRoleNode().delete(ctx)).resolves.toBeUndefined();
+    expect(actions(requests)).toStrictEqual(['ListRolePolicies', 'DeleteRolePolicy', 'DeleteRole']);
+  });
+
+  it('deletes an already-absent role without throwing', async () => {
+    const { ctx, requests } = makeContext([noSuchRole()]);
+    await expect(analyticsFirehoseRoleNode().delete(ctx)).resolves.toBeUndefined();
+    expect(actions(requests)).toStrictEqual(['ListRolePolicies']);
+  });
+});
+
+describe('analytics-firehose-stream', () => {
+  it('reads an existing stream and hydrates the delivery state analytics status reports', async () => {
+    const { ctx, requests } = makeContext([
+      ok(
+        streamDescription('CREATING_FAILED', {
+          VersionId: '2',
+          Destinations: destinationWith(false),
+          FailureDescription: { Type: 'CREATE_KMS_GRANT_FAILED', Details: 'no grant' },
+        }),
+      ),
+    ]);
+    await expect(analyticsFirehoseStreamNode().read(ctx)).resolves.toBe(true);
+    expect(targets(requests)).toStrictEqual(['Firehose_20150804.DescribeDeliveryStream']);
+    // Everything task 55 needs to report health, hydrated by the same `read` the
+    // reconcile runs - so `analytics status` needs no second describe path.
+    expect(ctx.state.resources['analytics-firehose-stream']).toStrictEqual({
+      name: STREAM,
+      arn: STREAM_ARN,
+      state: 'create-failed',
+      versionId: '2',
+      destinationId: DESTINATION_ID,
+      appendOnly: false,
+      failure: 'CREATE_KMS_GRANT_FAILED: no grant',
+    });
+  });
+
+  it('clears a recorded failure once the stream reports healthy again', async () => {
+    // `output` re-records rather than replaces, so a `failure` from a create that
+    // failed on a KMS error would outlive the recovery and `analytics status`
+    // would go on reporting a stream that is fine.
+    const { ctx } = makeContext([
+      ok(
+        streamDescription('CREATING_FAILED', {
+          FailureDescription: { Type: 'CREATE_KMS_GRANT_FAILED', Details: 'no grant' },
+        }),
+      ),
+      ok(streamDescription('ACTIVE')),
+    ]);
+    await analyticsFirehoseStreamNode().read(ctx);
+    expect(ctx.state.resources['analytics-firehose-stream']?.['failure']).toBeDefined();
+    await analyticsFirehoseStreamNode().read(ctx);
+    expect(Object.keys(ctx.state.resources['analytics-firehose-stream'] ?? {})).not.toContain(
+      'failure',
+    );
+  });
+
+  it('reads false without throwing when the stream is absent, recording nothing', async () => {
+    const { ctx, requests } = makeContext([noSuchStream()]);
+    await expect(analyticsFirehoseStreamNode().read(ctx)).resolves.toBe(false);
+    expect(requests).toHaveLength(1);
+    expect(ctx.state.resources['analytics-firehose-stream']).toBeUndefined();
+  });
+
+  it('creates the stream with the Iceberg destination and the transform processor', async () => {
+    const { ctx, requests } = makeContext([
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      ok(streamDescription('CREATING')),
+    ]);
+    await analyticsFirehoseStreamNode().create(withStreamDependencies(ctx));
+
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.CreateDeliveryStream',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    expect(requests[0]?.url).toBe(FIREHOSE_ENDPOINT);
+    expect(requests[0]?.body).toMatchObject({
+      DeliveryStreamName: STREAM,
+      DeliveryStreamType: 'DirectPut',
+      IcebergDestinationConfiguration: {
+        RoleARN: FIREHOSE_ROLE_ARN,
+        // The CHILD catalog for this environment's table bucket, not the
+        // account-wide federation root `analytics-catalog-integration` records.
+        CatalogConfiguration: { CatalogARN: FEDERATED_CATALOG_ARN },
+        S3Configuration: {
+          // The plugin's own us-east-1 bucket. Never `ctx.names.bucket`.
+          BucketARN: ERROR_BUCKET_ARN,
+          RoleARN: FIREHOSE_ROLE_ARN,
+          ErrorOutputPrefix: ERROR_PREFIX,
+        },
+        AppendOnly: true,
+        BufferingHints: { IntervalInSeconds: 900, SizeInMBs: 128 },
+        DestinationTableConfigurationList: [
+          {
+            DestinationDatabaseName: NAMESPACE,
+            DestinationTableName: TABLE,
+            S3ErrorOutputPrefix: ERROR_PREFIX,
+          },
+        ],
+        ProcessingConfiguration: {
+          Enabled: true,
+          Processors: [
+            {
+              Type: 'Lambda',
+              Parameters: [
+                // The ARN task 50 recorded, not a re-derived function name.
+                { ParameterName: 'LambdaArn', ParameterValue: TRANSFORM_FUNCTION_ARN },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(ctx.state.resources['analytics-firehose-stream']).toStrictEqual({
+      name: STREAM,
+      arn: STREAM_ARN,
+      state: 'creating',
+      versionId: '1',
+      destinationId: DESTINATION_ID,
+      appendOnly: true,
+    });
+  });
+
+  it("never names the site's environment bucket in the destination", async () => {
+    const { ctx, requests } = makeContext([
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      ok(streamDescription('CREATING')),
+    ]);
+    await analyticsFirehoseStreamNode().create(withStreamDependencies(ctx));
+    expect(JSON.stringify(requests[0]?.body)).not.toContain(ctx.names.bucket);
+  });
+
+  it('records the stream name even when the describe after create throws', async () => {
+    // `createDeliveryStream` answers with no ARN by design, so hydrating one
+    // takes a second request - and a crash in between must still leave the
+    // stream recorded for `destroy` to remove.
+    const { ctx, requests } = makeContext([
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      firehoseFailure('InternalFailure', 'try again later'),
+    ]);
+    await expect(analyticsFirehoseStreamNode().create(withStreamDependencies(ctx))).rejects.toThrow(
+      /InternalFailure|try again later/,
+    );
+    expect(requests).toHaveLength(2);
+    expect(ctx.state.resources['analytics-firehose-stream']).toStrictEqual({ name: STREAM });
+  });
+
+  it('refuses to create the stream when the delivery role ARN is not recorded', async () => {
+    const { ctx, requests } = makeContext([]);
+    await expect(
+      analyticsFirehoseStreamNode().create(withTransformFunction(withErrorBucket(ctx))),
+    ).rejects.toThrow(/analytics-firehose-role/);
+    // Nothing went out at all: the destination is built before the create call.
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('performs no AWS call at all when the live AppendOnly flag already matches', async () => {
+    const { ctx, requests } = makeContext([]);
+    await analyticsFirehoseStreamNode().update?.(
+      withRecordedStream(withStreamDependencies(ctx), { appendOnly: true }),
+    );
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('updates the destination in place when the recorded AppendOnly flag differs', async () => {
+    // Branch one of the reconcile AWS's own documentation makes necessary: the
+    // considerations page says AppendOnly is settable only at create, the
+    // IcebergDestinationUpdate reference lists it among the fields
+    // UpdateDestination accepts. This is the reading that holds if the reference
+    // is right - and it is tried first because it keeps the stream's ARN.
+    const warnings: string[] = [];
+    const { ctx, requests } = makeContext(
+      [
+        encode(''),
+        ok(streamDescription('ACTIVE', { VersionId: '4', Destinations: destinationWith(true) })),
+      ],
+      { warnings },
+    );
+    await analyticsFirehoseStreamNode().update?.(withRecordedStream(withStreamDependencies(ctx)));
+
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    expect(requests[0]?.body).toMatchObject({
+      DeliveryStreamName: STREAM,
+      // The recorded version, under the key UpdateDestination wants - not the
+      // `VersionId` the describe answered with.
+      CurrentDeliveryStreamVersionId: '3',
+      DestinationId: DESTINATION_ID,
+      IcebergDestinationUpdate: { AppendOnly: true, RoleARN: FIREHOSE_ROLE_ARN },
+    });
+    // The re-read matters: the update bumps VersionId, so a state file holding
+    // the old one would fail the NEXT update on a conflict it did not cause.
+    expect(ctx.state.resources['analytics-firehose-stream']).toMatchObject({
+      versionId: '4',
+      appendOnly: true,
+    });
+    // No replacement happened, so nothing warned about a new ARN.
+    expect(warnings.join('\n')).not.toMatch(/NEW ARN/);
+  });
+
+  it('falls back to replacing the stream when UpdateDestination is refused', async () => {
+    // Branch two: the reading that holds if the considerations page is right.
+    // The fallback is what makes the node correct under either, and it is second
+    // because a replacement gets a new ARN - the CloudFront log delivery has to
+    // be repointed and records in flight are lost.
+    const warnings: string[] = [];
+    const { ctx, requests } = makeContext(
+      [
+        firehoseFailure('InvalidArgumentException', 'AppendOnly cannot be updated'),
+        encode(''),
+        ok({ DeliveryStreamARN: STREAM_ARN }),
+        ok(streamDescription('CREATING', { VersionId: '1', Destinations: destinationWith(true) })),
+      ],
+      { warnings },
+    );
+    await analyticsFirehoseStreamNode().update?.(withRecordedStream(withStreamDependencies(ctx)));
+
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.DeleteDeliveryStream',
+      'Firehose_20150804.CreateDeliveryStream',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    // Which path ran is in the log, so an operator can see it - and the cost of
+    // the path that ran is stated rather than left to be discovered.
+    expect(warnings.join('\n')).toMatch(/UpdateDestination was refused/);
+    expect(warnings.join('\n')).toMatch(/NEW ARN/);
+    expect(ctx.state.resources['analytics-firehose-stream']).toMatchObject({ appendOnly: true });
+  });
+
+  it('does not replace the stream when the re-read after a successful update fails', async () => {
+    // The update LANDED: the stream is configured and keeps its ARN. A transient
+    // failure on the describe that follows it is not a refusal, and must not be
+    // read as one - the replacement path deletes and recreates, which hands out a
+    // NEW ARN, orphans the CloudFront log delivery task 53 points at this stream,
+    // and loses the records in flight, all over a stream that was updated
+    // correctly. `describeDeliveryStream` swallows only the not-found
+    // (`aws/firehose.ts`), so every other failure arrives here.
+    //
+    // Asserted on the recording transport rather than on the log line: it is the
+    // calls that do the damage, and a node that logged the right thing while
+    // issuing a delete would still have destroyed the stream.
+    const warnings: string[] = [];
+    const { ctx, requests } = makeContext(
+      [encode(''), firehoseFailure('LimitExceededException', 'too many requests')],
+      { warnings },
+    );
+    await analyticsFirehoseStreamNode().update?.(withRecordedStream(withStreamDependencies(ctx)));
+
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    expect(warnings.join('\n')).not.toMatch(/UpdateDestination was refused/);
+    expect(warnings.join('\n')).not.toMatch(/NEW ARN/);
+    // The recorded version is now stale - the update bumped it and the re-read
+    // that would have refreshed it failed - so the warning says so and the next
+    // reconcile's `read` re-hydrates it. Stale-but-recoverable beats replaced.
+    expect(ctx.state.resources['analytics-firehose-stream']).toMatchObject({ versionId: '3' });
+    expect(warnings.join('\n')).toMatch(/could not be re-read/);
+  });
+
+  it('replaces the stream when there is no recorded version to update against', async () => {
+    const { ctx, requests } = makeContext([
+      encode(''),
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      ok(streamDescription('CREATING', { Destinations: destinationWith(true) })),
+    ]);
+    await analyticsFirehoseStreamNode().update?.(
+      withRecordedStream(withStreamDependencies(ctx), { versionId: '', destinationId: '' }),
+    );
+    // UpdateDestination is not even attempted: it requires both, and sending an
+    // empty CurrentDeliveryStreamVersionId fails the service's own `[0-9]+`.
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.DeleteDeliveryStream',
+      'Firehose_20150804.CreateDeliveryStream',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+  });
+
+  it('raises rather than reporting success when the replacement races the old stream', async () => {
+    // `createDeliveryStream` swallows ResourceInUseException as "already exists",
+    // which is right for a re-run and wrong straight after a delete - there the
+    // same exception means the OLD stream is still DELETING. Without the check
+    // the reconcile would go green over an account holding no live stream, and
+    // the first symptom would be an empty dashboard.
+    const { ctx } = makeContext([
+      firehoseFailure('InvalidArgumentException', 'AppendOnly cannot be updated'),
+      encode(''),
+      firehoseFailure('ResourceInUseException', 'Firehose stream is DELETING'),
+      ok(streamDescription('DELETING')),
+    ]);
+    await expect(
+      analyticsFirehoseStreamNode().update?.(withRecordedStream(withStreamDependencies(ctx))),
+    ).rejects.toThrow(/still deleting/);
+  });
+
+  it('deletes an already-absent stream without throwing', async () => {
+    const { ctx, requests } = makeContext([noSuchStream()]);
+    await expect(analyticsFirehoseStreamNode().delete(ctx)).resolves.toBeUndefined();
+    expect(targets(requests)).toStrictEqual(['Firehose_20150804.DeleteDeliveryStream']);
+  });
+});
+
+describe('the delivery chain region pin and names', () => {
+  it('signs the bucket, the role and the stream against us-east-1 while config.region says otherwise', async () => {
+    const { ctx, requests } = makeContext([
+      s3Done(),
+      createdRole(FIREHOSE_ROLE_ARN),
+      iamDone('PutRolePolicy'),
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      ok(streamDescription('CREATING')),
+    ]);
+    await analyticsErrorBucketNode().read(ctx);
+    await analyticsFirehoseRoleNode().create(withRoleDependencies(ctx));
+    await analyticsFirehoseStreamNode().create(withStreamDependencies(ctx));
+
+    expect(ctx.config.region).toBe(CONFIG_REGION);
+    expect(requests.map((request) => credentialScope(request.headers))).toStrictEqual([
+      { region: 'us-east-1', service: 's3' },
+      // IAM is global: core's own client already signs us-east-1, so the role is
+      // the one resource in this chain the pin cannot get wrong.
+      { region: 'us-east-1', service: 'iam' },
+      { region: 'us-east-1', service: 'iam' },
+      { region: 'us-east-1', service: 'firehose' },
+      { region: 'us-east-1', service: 'firehose' },
+    ]);
+  });
+
+  it("raises on a derived name over the service's limit, before any call goes out", async () => {
+    // Long enough that the two derived names below overrun, and short enough
+    // that `deriveNames`' own 63-char check on the site bucket does not fire
+    // first - the guard under test is this module's, not core's.
+    const longName = 'a'.repeat(45);
+    const { ctx, requests } = makeContext([], { config: { siteName: longName } });
+    await expect(analyticsErrorBucketNode().read(ctx)).rejects.toThrow(
+      /derived analytics error bucket name .* over AWS's 63-character limit/,
+    );
+    await expect(analyticsFirehoseStreamNode().delete(ctx)).rejects.toThrow(
+      /derived analytics delivery stream name .* over AWS's 64-character limit/,
+    );
+    expect(requests).toStrictEqual([]);
+  });
+});
+
+describe('tearing the delivery chain down', () => {
+  /** The chain in `dependsOn` order; `destroyGraph` walks the reverse. */
+  const CHAIN = [
+    analyticsErrorBucketNode(),
+    analyticsFirehoseRoleNode(),
+    analyticsFirehoseStreamNode(),
+  ];
+
+  async function teardown(replies: RawResponse[]): Promise<RecordedRequest[]> {
+    const { ctx, requests } = makeContext(replies);
+    for (const node of [...CHAIN].reverse()) {
+      await expect(node.delete(ctx)).resolves.toBeUndefined();
+    }
+    return requests;
+  }
+
+  it('removes the stream, then the role, then the bucket', async () => {
+    // The stream has to go first: it assumes the role, and the role's policy is
+    // what lets it write. `destroyGraph` reverses the topological order
+    // (`packages/cli/src/graph.ts`); the engine lives in the CLI package, which
+    // this one cannot import, so the reverse walk is spelled out here.
+    const requests = await teardown([
+      encode(''),
+      rolePolicies(['firehose-delivery']),
+      iamDone('DeleteRolePolicy'),
+      iamDone('DeleteRole'),
+      s3Done(),
+      listing(),
+      s3Done(),
+    ]);
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toStrictEqual([
+      `POST ${FIREHOSE_ENDPOINT}`,
+      `POST ${IAM_ENDPOINT}`,
+      `POST ${IAM_ENDPOINT}`,
+      `POST ${IAM_ENDPOINT}`,
+      `HEAD ${S3_HOST}/${ERROR_BUCKET}`,
+      `GET ${S3_HOST}/${ERROR_BUCKET}?list-type=2&prefix=`,
+      `DELETE ${S3_HOST}/${ERROR_BUCKET}`,
+    ]);
+    expect(targets(requests.slice(0, 1))).toStrictEqual(['Firehose_20150804.DeleteDeliveryStream']);
+    expect(actions(requests.slice(1, 4))).toStrictEqual([
+      'ListRolePolicies',
+      'DeleteRolePolicy',
+      'DeleteRole',
+    ]);
+  });
+
+  it('is re-runnable when the stream is already gone', async () => {
+    // The partial-teardown case: a run that died after the stream delete landed.
+    // The role delete still goes out - a swallowed not-found on the stream must
+    // not abandon the rest of the walk.
+    const requests = await teardown([
+      noSuchStream(),
+      rolePolicies([]),
+      iamDone('DeleteRole'),
+      noSuchBucket(),
+    ]);
+    expect(targets(requests.slice(0, 1))).toStrictEqual(['Firehose_20150804.DeleteDeliveryStream']);
+    expect(actions(requests.slice(1, 3))).toStrictEqual(['ListRolePolicies', 'DeleteRole']);
+    expect(requests[3]?.method).toBe('HEAD');
+  });
+
+  it('is re-runnable when the role is already gone', async () => {
+    const requests = await teardown([encode(''), noSuchRole(), s3Done(), listing(), s3Done()]);
+    expect(actions(requests.slice(1, 2))).toStrictEqual(['ListRolePolicies']);
+    expect(requests.map((request) => request.method)).toStrictEqual([
+      'POST',
+      'POST',
+      'HEAD',
+      'GET',
+      'DELETE',
+    ]);
   });
 });

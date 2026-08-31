@@ -7,6 +7,22 @@
 **Produces:** `analytics-log-destination` and `analytics-log-delivery` in `packages/analytics/src/nodes.ts` - a second delivery hanging off the site's existing delivery source, which the plugin reads but never creates, never repoints and never deletes - with the delivery's creation day recorded once in scoped state, the backfill bound task 61 reads
 **Pointers:** `packages/analytics/src/nodes.ts` (tasks 48–51 - the node module this appends to and the stream ARN it targets), `packages/analytics/src/nodes.test.ts` (tasks 48–51 - the transport-mocked suite this extends), `packages/analytics/src/schema.ts` (task 39 - `CLOUDFRONT_RECORD_FIELDS`, the record-field selection the delivery passes), `packages/core/src/aws/logs.ts:106-112` (`putDeliveryDestination` and task 37's output-format option), `packages/core/src/aws/logs.ts:114-121` (`createDelivery` and task 37's record-fields and delimiter options), `packages/core/src/aws/logs.ts:124-136` (`findDeliveryIdBySource`), `packages/core/src/aws/logs.ts:139-153` (`deliveriesForSource` - the list the survival test reads), `packages/core/src/aws/logs.ts:155-180` (`deleteDelivery`, `deleteDeliverySource`, `deleteDeliveryDestination`), `packages/cli/src/nodes.ts:713-734` (`logDeliveryNode`'s `wire()` - the trio the site owns and the incremental recording at `:717-719`), `packages/cli/src/nodes.ts:743-762` (the `ConflictException` retry, whose `deleteDeliverySource` at `:758` this node must not copy), `packages/cli/src/nodes.ts:763-775` (the teardown-ordering comment and the delivery-before-source order), `packages/cli/src/nodes.test.ts:32-105` (the recording `logsUsEast1` fake and the call-order assertions to follow), `packages/core/src/config.ts:343-344` (`names.deliverySource` and `names.deliveryDestination` - the site's names on `PluginContext`), `packages/core/src/plugin.ts` (task 01 - `SiteState`, the read-only view the distribution ARN is read from)
 
+> **ROUTED FINDING - added 2026-08-31 from task 51's implementation and its gate.**
+> **The Firehose stream can be reported created while still `CREATING`.** Task
+> 51's `createStream` guard rejects only `deleting` and `delete-failed`; there
+> is no `pollUntil` to `ACTIVE`, so `applyGraph` reports the node done over a
+> stream that is not yet accepting records. Both task 51's implementer and its
+> gate flagged it, and the implementer's own judgement - which I agree with - is
+> that it should land **here rather than at task 58**, because this task is the
+> first consumer that cares: a CloudFront log delivery pointed at a stream that
+> cannot yet accept records is the failure, and it is silent. Task 51's contract
+> already names `pollUntil` as the precedent to follow.
+> Decide deliberately: either wait for `ACTIVE` before this task's delivery is
+> created, or establish that the delivery tolerates a `CREATING` stream and say
+> why. Do not leave it implicit - this plan's recurring hazard is an empty
+> dashboard with no error anywhere, and a delivery attached to a stream that
+> never became active produces exactly that.
+
 ## Steps
 
 - [ ] Write `analytics-log-destination` with `dependsOn: ['analytics-firehose-stream']`, calling `putDeliveryDestination` with the stream ARN and the output format the Iceberg pipeline needs, using task 37's option rather than a second client method, under a destination name distinct from `ctx.names.deliveryDestination`.

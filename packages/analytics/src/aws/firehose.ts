@@ -8,8 +8,9 @@ import {
 import { rethrowWithContext } from './errors.js';
 
 /**
- * Amazon Data Firehose control-plane client - create/describe/delete and tagging
- * for the one delivery stream this plugin owns (the `firehose` API, AWS JSON 1.1).
+ * Amazon Data Firehose control-plane client - create/describe/update-destination/delete
+ * and tagging for the one delivery stream this plugin owns (the `firehose` API, AWS
+ * JSON 1.1).
  * It lives in `blogwright-analytics`, not in core: core's `SIGNING_NAMES` gains no
  * `firehose` key, and every request signs through the `{ service: 'firehose',
  * signingName: 'firehose' }` descriptor the plugin transport seam accepts (see
@@ -25,16 +26,23 @@ import { rethrowWithContext } from './errors.js';
  *
  * Operation names and body shapes below are verified field by field against the
  * Firehose API reference (`CreateDeliveryStream`, `DescribeDeliveryStream`,
- * `DeleteDeliveryStream`, `TagDeliveryStream`, and the `IcebergDestinationConfiguration`,
- * `CatalogConfiguration`, `S3DestinationConfiguration`, `DestinationTableConfiguration`,
- * `BufferingHints`, `Processor` and `ProcessorParameter` shapes they nest). No SDK
+ * `UpdateDestination`, `DeleteDeliveryStream`, `TagDeliveryStream`, and the
+ * `IcebergDestinationConfiguration`, `IcebergDestinationUpdate`, `CatalogConfiguration`,
+ * `S3DestinationConfiguration`, `DestinationTableConfiguration`, `DeliveryStreamDescription`,
+ * `DestinationDescription`, `IcebergDestinationDescription`, `BufferingHints`, `Processor`
+ * and `ProcessorParameter` shapes they nest). No SDK
  * validates them here and transport-mocked tests can only assert the body this module
  * itself builds, so the reference is the only thing that catches a wrong key - and a
- * wrong key produces a silently misconfigured stream, not an error. Two spellings are
+ * wrong key produces a silently misconfigured stream, not an error. Four spellings are
  * easy to get wrong and are pinned deliberately: the ARN-bearing keys are `RoleARN`,
  * `BucketARN` and `CatalogARN` (upper-case `ARN`), while the Lambda processor's
  * parameter is `LambdaArn` (mixed case) - one of the eleven literals
- * `ProcessorParameter.ParameterName` accepts.
+ * `ProcessorParameter.ParameterName` accepts; `UpdateDestination` names the current
+ * version `CurrentDeliveryStreamVersionId`, **not** the `VersionId` that
+ * `DeliveryStreamDescription` answers with (the value is the same, the key is not); and
+ * `IcebergDestinationUpdate` nests its error bucket under `S3Configuration`, where every
+ * other `*DestinationUpdate` in the same request body nests one under `S3Update` (see
+ * {@link FirehoseClient.updateDestination}).
  *
  * The floci emulator does not implement this service, so it is covered by transport
  * mocks in tests.
@@ -57,14 +65,19 @@ const STREAM_TYPE = 'DirectPut';
 /**
  * `page_views` is insert-only by design, so the stream is created append-only - the
  * analytics change spec settles this ("*The stream is created `AppendOnly`.*"), and it
- * also lets Firehose scale the stream's throughput limit automatically. It is a module
- * constant rather than a field of `IcebergDestinationInput` because this client creates
- * exactly one shape of stream and exposes no update operation that could ever set it to
- * anything else; whether the flag is even mutable after creation is unsettled between
- * two AWS documentation pages, and the node that reconciles the stream (not this client)
- * is where that question is answered.
+ * also lets Firehose scale the stream's throughput limit automatically.
+ *
+ * A module constant rather than a field of {@link IcebergDestinationInput}: this client
+ * builds exactly one shape of destination, and both operations that send one -
+ * `CreateDeliveryStream` and `UpdateDestination` - send this same value, so there is no
+ * call site that could ever ask for anything else. Whether the flag is mutable after
+ * creation is unsettled between two AWS documentation pages, and the node that
+ * reconciles the stream (not this client) is where that question is answered - which is
+ * why the constant is **exported**: the node compares it against the flag
+ * {@link DeliveryStreamStatus.appendOnly} read back off the live stream, and a second
+ * copy of the desired value in `nodes.ts` would let the two drift apart in silence.
  */
-const APPEND_ONLY = true;
+export const STREAM_APPEND_ONLY = true;
 
 /** The `Processor.Type` for a record-transforming Lambda; one of six literals the field accepts. */
 const LAMBDA_PROCESSOR = 'Lambda';
@@ -80,10 +93,17 @@ const LAMBDA_ARN_PARAMETER = 'LambdaArn';
  */
 export interface IcebergDestinationInput {
   /**
-   * The Glue catalog ARN the S3 Tables bucket is federated into, in the
-   * `arn:aws:glue:<region>:<account-id>:catalog` form the service requires
-   * (`CatalogConfiguration.CatalogARN`). Firehose reads the Iceberg table through
-   * this catalog, never through S3 Tables directly.
+   * The Glue catalog ARN the S3 Tables bucket is federated into
+   * (`CatalogConfiguration.CatalogARN`). Firehose reads the Iceberg table through this
+   * catalog, never through S3 Tables directly.
+   *
+   * The field's prose names the bare `arn:aws:glue:<region>:<account-id>:catalog` form,
+   * but its pattern is `arn:.*:glue:.*:\d{12}:catalog(?:(/[a-z0-9_-]+){1,2})?` - up to
+   * two further segments - and an S3 Tables destination needs both of them:
+   * `…:catalog/s3tablescatalog/<table-bucket>`, the child catalog the federation creates
+   * per table bucket. The bare form names the account's own Data Catalog, which holds no
+   * S3 Tables table at all. The stream node derives the child form; this is recorded
+   * here so nobody "corrects" it back to the prose.
    */
   readonly catalogArn: string;
   /**
@@ -139,7 +159,18 @@ export type DeliveryState =
   | 'delete-failed'
   | 'unknown';
 
-/** The narrow view of `DescribeDeliveryStream` that `analytics status` needs. */
+/**
+ * The narrow view of `DescribeDeliveryStream` that `analytics status` needs, plus the
+ * three fields {@link FirehoseClient.updateDestination} cannot be called without.
+ *
+ * The last three are optional and are set only when the response actually carried them.
+ * `VersionId` and `Destinations` are documented as required members of
+ * `DeliveryStreamDescription`, so on the service's own response model they are always
+ * there - but an absent one must reach the caller as absent rather than as `''` or
+ * `false`, because an empty `CurrentDeliveryStreamVersionId` fails the service's own
+ * `[0-9]+` pattern and a fabricated `appendOnly: false` would make the stream node
+ * replace a stream that needed nothing done to it.
+ */
 export interface DeliveryStreamStatus {
   readonly name: string;
   readonly arn: string;
@@ -150,6 +181,41 @@ export interface DeliveryStreamStatus {
    * is not set at all) on a healthy stream.
    */
   readonly failure?: string | undefined;
+  /**
+   * The stream's current configuration version, off `DeliveryStreamDescription.VersionId`.
+   * `UpdateDestination` refuses to run without it (it is how the service avoids
+   * conflicting merges) and calls the request key `CurrentDeliveryStreamVersionId`.
+   */
+  readonly versionId?: string | undefined;
+  /**
+   * The id of the stream's one destination, off `Destinations[0].DestinationId`.
+   * `UpdateDestination` requires it and there is nowhere else to get it: it is generated
+   * by the service (`destinationId-000000000001` in AWS's own example) and is not
+   * derivable from anything the caller knows.
+   */
+  readonly destinationId?: string | undefined;
+  /**
+   * The live `AppendOnly` flag off `Destinations[0].IcebergDestinationDescription`.
+   * Read back rather than assumed: it is what the stream node compares against
+   * {@link STREAM_APPEND_ONLY} to decide whether the destination needs reconciling at
+   * all. Absent for a destination that is not an Iceberg one, or for a service response
+   * that omits the flag.
+   */
+  readonly appendOnly?: boolean | undefined;
+}
+
+/**
+ * The current version and destination id `UpdateDestination` conditions on - the two
+ * halves of {@link DeliveryStreamStatus} that a caller must have read back off the live
+ * stream before it can update one. Taken as a pair rather than two positional strings
+ * so a call site cannot silently transpose them: both are opaque service-generated
+ * strings, so a swap would typecheck and fail only on the wire.
+ */
+export interface DestinationVersion {
+  /** `DeliveryStreamDescription.VersionId`, sent as `CurrentDeliveryStreamVersionId`. */
+  readonly versionId: string;
+  /** `Destinations[].DestinationId`, sent as `DestinationId`. */
+  readonly destinationId: string;
 }
 
 interface FailureDescriptionResponse {
@@ -157,11 +223,18 @@ interface FailureDescriptionResponse {
   Details?: string;
 }
 
+interface DestinationDescriptionResponse {
+  DestinationId?: string;
+  IcebergDestinationDescription?: { AppendOnly?: boolean };
+}
+
 interface DescribeDeliveryStreamResponse {
   DeliveryStreamDescription?: {
     DeliveryStreamName?: string;
     DeliveryStreamARN?: string;
     DeliveryStreamStatus?: string;
+    VersionId?: string;
+    Destinations?: DestinationDescriptionResponse[];
     FailureDescription?: FailureDescriptionResponse;
   };
 }
@@ -239,7 +312,7 @@ function buildIcebergDestination(input: IcebergDestinationInput): object {
       RoleARN: input.roleArn,
       ErrorOutputPrefix: input.errorOutputPrefix,
     },
-    AppendOnly: APPEND_ONLY,
+    AppendOnly: STREAM_APPEND_ONLY,
     BufferingHints: {
       IntervalInSeconds: input.bufferIntervalSeconds,
       SizeInMBs: input.bufferSizeMb,
@@ -291,9 +364,8 @@ export class FirehoseClient {
    * Create the delivery stream with its Iceberg destination. Idempotent: a stream of
    * the same name already existing is not an error (see `isStreamAlreadyExists`). Its
    * destination is not reconciled against `destination` on that path - changing a live
-   * stream's destination is `UpdateDestination`, a separate operation this client does
-   * not expose, and the node that owns the stream decides between updating and
-   * replacing it.
+   * stream's destination is {@link updateDestination}, a separate operation, and the
+   * node that owns the stream decides between updating and replacing it.
    *
    * `tags` are sent in the create request itself when non-empty, saving a round trip
    * and matching how `packages/core/src/aws/logs.ts:41` and `secretsmanager.ts:47-49`
@@ -338,15 +410,78 @@ export class FirehoseClient {
       });
       const description = out.DeliveryStreamDescription;
       const failure = formatFailure(description?.FailureDescription);
+      // The stream's single destination. `Destinations` is a list because the API shape
+      // is shared with services that fan out; a Firehose stream has exactly one, so the
+      // first element is it. `noUncheckedIndexedAccess` is why this is `undefined`-typed.
+      const destination = description?.Destinations?.[0];
+      const versionId = description?.VersionId;
+      const destinationId = destination?.DestinationId;
+      const appendOnly = destination?.IcebergDestinationDescription?.AppendOnly;
       return {
         name: description?.DeliveryStreamName ?? name,
         arn: description?.DeliveryStreamARN ?? '',
         state: toDeliveryState(description?.DeliveryStreamStatus),
         ...(failure !== undefined ? { failure } : {}),
+        ...(versionId !== undefined ? { versionId } : {}),
+        ...(destinationId !== undefined ? { destinationId } : {}),
+        ...(appendOnly !== undefined ? { appendOnly } : {}),
       };
     } catch (err) {
       if (err instanceof AwsError && err.isNotFound) return undefined;
       rethrowWithContext(err, 'describeDeliveryStream', name);
+    }
+  }
+
+  /**
+   * Reconfigure the live stream's destination in place, leaving its ARN - and therefore
+   * the CloudFront log delivery pointed at it - untouched. The alternative is deleting
+   * and recreating the stream, which cascades: a new stream carries a new ARN, so the
+   * delivery has to be repointed, and every record in flight during the gap is lost.
+   *
+   * **Every failure is rethrown; nothing is swallowed here.** `ResourceInUseException`
+   * on this operation is *not* the already-exists it is on `CreateDeliveryStream` (see
+   * {@link isStreamAlreadyExists}) - the reference defines it here as "the resource is
+   * already in use and not available for this operation", i.e. the stream is busy. So
+   * `isStreamAlreadyExists` is deliberately **not** reused, and neither is any other
+   * narrowing: whether a rejection means "fall back to replacing the stream" is the
+   * caller's decision, not this client's, precisely because AWS's own documentation
+   * contradicts itself on whether `AppendOnly` is settable after creation. Swallowing
+   * anything here would turn a refused update into a silent no-op.
+   *
+   * Three wire details are load-bearing and each is verified against the reference:
+   *
+   * - the current version travels as **`CurrentDeliveryStreamVersionId`**, not as the
+   *   `VersionId` that `DescribeDeliveryStream` answers with. Same value, different key;
+   *   sending `VersionId` would be dropped as an unknown member and the request rejected
+   *   for a missing required one.
+   * - `DestinationId` is required and comes from `Destinations[].DestinationId` - the
+   *   service generates it, so {@link describeDeliveryStream} is the only source.
+   * - the destination is sent under **`IcebergDestinationUpdate`**, whose shape is a
+   *   subset of the `IcebergDestinationConfiguration` {@link buildIcebergDestination}
+   *   already builds - including, unusually, its `S3Configuration` key. Every *other*
+   *   `*DestinationUpdate` in this request body renames that member to `S3Update`; the
+   *   Iceberg one does not. That is why the create's builder is reused verbatim rather
+   *   than a second, nearly-identical update builder being written: one builder is one
+   *   place for every spelling, and the two payloads are genuinely the same object.
+   *
+   * The service merges what is sent with what exists when the destination type is
+   * unchanged, so sending the whole destination (rather than only the changed field) is
+   * both allowed and what makes this a reconcile: whatever drifted converges.
+   */
+  async updateDestination(
+    name: string,
+    destination: IcebergDestinationInput,
+    current: DestinationVersion,
+  ): Promise<void> {
+    try {
+      await this.call('UpdateDestination', {
+        DeliveryStreamName: name,
+        CurrentDeliveryStreamVersionId: current.versionId,
+        DestinationId: current.destinationId,
+        IcebergDestinationUpdate: buildIcebergDestination(destination),
+      });
+    } catch (err) {
+      rethrowWithContext(err, 'updateDestination', name);
     }
   }
 

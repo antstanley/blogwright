@@ -19,3 +19,9 @@ pnpm-debug.log*
 
 # editors
 .idea/
+
+# Playwright MCP page/console snapshots, written into the repo root by the
+# browser tool. Verification artefacts, never sources; task 57's dashboard
+# check produced nine of them and they reached a merge commit before oxfmt
+# caught them.
+.playwright-mcp/

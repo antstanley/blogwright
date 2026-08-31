@@ -3,7 +3,7 @@
  * CloudFront-logs-to-Iceberg pipeline is built from and nothing else: the
  * site's own bucket, distribution and log group stay in the CLI's graph
  * (`packages/cli/src/nodes.ts`) and are never touched from here. This module
- * carries seven of them, in two chains. The table chain - the S3 Tables bucket,
+ * carries ten of them, in three chains. The table chain - the S3 Tables bucket,
  * the namespace inside it, the `page_views` table, and the Glue federation
  * Firehose reads that table through - runs `analytics-table-bucket` ->
  * `analytics-namespace` -> `analytics-table` ->
@@ -11,10 +11,15 @@
  * `visitor_key` salt, the Lambda execution role whose policy names that
  * secret's ARN, and the record-transform function itself - runs
  * `analytics-salt-secret` -> `analytics-transform-role` ->
- * `analytics-transform-function`. Both chains are wired through `dependsOn`,
- * and a node depends on every node whose recorded ARN it interpolates. The
- * remaining five of the spec's twelve are appended to this module as later
- * tasks land,
+ * `analytics-transform-function`. The delivery chain - the bucket every record
+ * Firehose cannot deliver lands in, the role it assumes, and the stream itself
+ * - runs `analytics-error-bucket` -> `analytics-firehose-role` ->
+ * `analytics-firehose-stream`, and joins the other two chains through the
+ * role's four grants and the stream's destination. All three are wired through
+ * `dependsOn`, and a node depends on every node whose recorded ARN it
+ * interpolates. The remaining two of the spec's twelve - the CloudWatch
+ * delivery destination and the delivery joining it to the site's log source -
+ * are appended to this module as later tasks land,
  * and a later `buildAnalyticsNodes(ctx)` returns the assembled set to the SPI's
  * `Plugin.nodes`; nothing here assembles or reconciles anything itself.
  *
@@ -51,11 +56,18 @@ import type {
   PluginContext,
   ResourceNode,
   ResourceOutputs,
+  S3Client,
   SecretsManagerClient,
 } from 'blogwright-core';
 import { zipSync } from 'fflate';
 
 import { createAnalyticsClients } from './aws/clients.js';
+import {
+  STREAM_APPEND_ONLY,
+  type DeliveryStreamStatus,
+  type FirehoseClient,
+  type IcebergDestinationInput,
+} from './aws/firehose.js';
 import type { CatalogFederation, GlueClient } from './aws/glue.js';
 import type { FunctionConfigurationInput, LambdaClient } from './aws/lambda.js';
 import type {
@@ -110,6 +122,15 @@ const TRANSFORM_ROLE_NODE = 'analytics-transform-role';
 
 /** The `analytics-transform-function` node id. */
 const TRANSFORM_FUNCTION_NODE = 'analytics-transform-function';
+
+/** The `analytics-error-bucket` node id, shared by its `id`, its state key and the edge into it. */
+const ERROR_BUCKET_NODE = 'analytics-error-bucket';
+
+/** The `analytics-firehose-role` node id. */
+const FIREHOSE_ROLE_NODE = 'analytics-firehose-role';
+
+/** The `analytics-firehose-stream` node id. */
+const FIREHOSE_STREAM_NODE = 'analytics-firehose-stream';
 
 /**
  * The Glue catalog the S3 Tables integration registers itself under. The one
@@ -851,55 +872,84 @@ function transformLogGroupArn(ctx: AnalyticsContext): string {
 }
 
 /**
- * The salt secret's ARN as `analytics-salt-secret` recorded it, or a throw
- * naming the missing edge.
- *
- * This ARN cannot be derived: Secrets Manager appends six random characters to
- * the name, which is why `packages/pds/src/nodes.ts` has to glob `<name>-*` in
- * its own grant and why this node instead depends on the node that reads the
- * real one back.
- *
- * What the declared `dependsOn` buys is that ordering *as a stated fact*, not
- * the ordering itself. `topoSort` drains its zero-indegree queue in
- * alphabetical order (`packages/cli/src/graph.ts:46-49`) and
- * `analytics-salt-secret` sorts before `analytics-transform-role`, so a role
- * declaring `dependsOn: []` would still be reconciled second today - by that
- * accident of the two ids, and by nothing else. The edge replaces the accident
- * with the constraint that is actually true: rename either node past the other
- * in sort order and the implicit ordering flips in silence (in teardown too,
- * which is this same order reversed - `graph.ts:107`), whereas the declared
- * edge either still holds or makes `topoSort` throw `depends on unknown node`
- * (`graph.ts:40`) before a single API call is made.
- *
- * The throw below is the runtime backstop under either regime: whatever the
- * order, the policy is never written with `undefined` interpolated into a live
- * IAM grant - a wrong permission written silently, never an error, and one
- * nothing downstream would notice until the transform's first
- * `GetSecretValue` was denied.
- *
- * The empty string is rejected as hard as `undefined`: `describeSecret` reads
- * the ARN straight off the response, so a body carrying none would leave a
- * grant on `""`.
+ * What one node needs from another node's recorded output: whose ARN it is,
+ * which node recorded it, which node is reading it, and what that reader cannot
+ * do without it. Spelled as a record rather than four positional strings
+ * because all four are prose and a transposition would typecheck.
  */
-function requireSaltSecretArn(ctx: AnalyticsContext): string {
-  const arn = ctx.state.resources[SALT_SECRET_NODE]?.arn;
+interface RecordedArnRequest {
+  /** The resource in an operator's vocabulary, e.g. `salt secret`. */
+  readonly what: string;
+  /** The node id that records it - the reader's declared dependency. */
+  readonly node: string;
+  /** The node id doing the reading. */
+  readonly dependent: string;
+  /** What the reader has none of without it, e.g. `execution role to run as`. */
+  readonly lack: string;
+}
+
+/**
+ * An ARN another node recorded, or a throw naming the missing edge.
+ *
+ * Six nodes in this module interpolate an ARN they did not derive, and this is
+ * the one place that read is done. What the declared `dependsOn` buys is the
+ * ordering *as a stated fact*, not the ordering itself. `topoSort` drains its
+ * zero-indegree queue in alphabetical order
+ * (`packages/cli/src/graph.ts:46-49`), so several of these pairs would be
+ * reconciled in the right order today even with no edge declared - by the
+ * accident of how their ids sort, and by nothing else. The edge replaces the
+ * accident with the constraint that is actually true: rename either node past
+ * the other in sort order and the implicit ordering flips in silence (in
+ * teardown too, which is this same order reversed - `graph.ts:107`), whereas
+ * the declared edge either still holds or makes `topoSort` throw `depends on
+ * unknown node` (`graph.ts:40`) before a single API call is made.
+ *
+ * The throw is the runtime backstop under either regime: whatever the order, no
+ * policy is written with `undefined` interpolated into a live IAM grant and no
+ * delivery stream is created against `undefined` - a wrong permission or a
+ * misrouted stream written silently, never an error, and one nothing downstream
+ * would notice until a record was denied or lost.
+ *
+ * The empty string is rejected as hard as `undefined`: several of these ARNs
+ * are read straight off an AWS response, so a body carrying none would
+ * otherwise leave a grant on `""`.
+ */
+function requireRecordedArn(ctx: AnalyticsContext, request: RecordedArnRequest): string {
+  const arn = ctx.state.resources[request.node]?.arn;
   if (typeof arn !== 'string' || arn === '') {
     throw new Error(
-      `the analytics salt secret's ARN is not recorded in the "${ctx.env}" plugin state, so ${TRANSFORM_ROLE_NODE} has no resource to grant secretsmanager:GetSecretValue on - ${SALT_SECRET_NODE} is this node's declared dependency and must be reconciled first; run \`blogwright analytics bootstrap --env ${ctx.env}\``,
+      `the analytics ${request.what}'s ARN is not recorded in the "${ctx.env}" plugin state, so ${request.dependent} has no ${request.lack} - ${request.node} is this node's declared dependency and must be reconciled first; run \`blogwright analytics bootstrap --env ${ctx.env}\``,
     );
   }
   return arn;
 }
 
-/** The transform role's ARN as `analytics-transform-role` recorded it, or a throw. See {@link requireSaltSecretArn}. */
+/**
+ * The salt secret's ARN as `analytics-salt-secret` recorded it. See
+ * {@link requireRecordedArn} for what the throw is doing.
+ *
+ * This ARN cannot be derived: Secrets Manager appends six random characters to
+ * the name, which is why `packages/pds/src/nodes.ts` has to glob `<name>-*` in
+ * its own grant and why this node instead depends on the node that reads the
+ * real one back.
+ */
+function requireSaltSecretArn(ctx: AnalyticsContext): string {
+  return requireRecordedArn(ctx, {
+    what: 'salt secret',
+    node: SALT_SECRET_NODE,
+    dependent: TRANSFORM_ROLE_NODE,
+    lack: 'resource to grant secretsmanager:GetSecretValue on',
+  });
+}
+
+/** The transform role's ARN as `analytics-transform-role` recorded it. See {@link requireRecordedArn}. */
 function requireTransformRoleArn(ctx: AnalyticsContext): string {
-  const arn = ctx.state.resources[TRANSFORM_ROLE_NODE]?.arn;
-  if (typeof arn !== 'string' || arn === '') {
-    throw new Error(
-      `the analytics transform role's ARN is not recorded in the "${ctx.env}" plugin state, so ${TRANSFORM_FUNCTION_NODE} has no execution role to run as - ${TRANSFORM_ROLE_NODE} is this node's declared dependency and must be reconciled first; run \`blogwright analytics bootstrap --env ${ctx.env}\``,
-    );
-  }
-  return arn;
+  return requireRecordedArn(ctx, {
+    what: 'transform role',
+    node: TRANSFORM_ROLE_NODE,
+    dependent: TRANSFORM_FUNCTION_NODE,
+    lack: 'execution role to run as',
+  });
 }
 
 /**
@@ -1464,6 +1514,809 @@ export function analyticsTransformFunctionNode(): AnalyticsNode {
       // `destroyGraph` walks the chain in reverse, so this runs before
       // `analytics-transform-role` removes the role it runs as.
       await lambda(ctx).deleteFunction(transformFunctionName(ctx));
+    },
+  };
+}
+
+/* ------------------------------------------------------------------------- *
+ * The delivery chain: the error bucket, the delivery role, and the stream.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The suffix the Firehose failed-record bucket's name carries, appended to
+ * `ctx.names.prefix`. See {@link transformFunctionName} for why the prefix is
+ * the source of the environment here and {@link resolveAnalyticsConfig} is not:
+ * the `analytics` block owns six settings and this is not one of them, so there
+ * is no operator override to honour and the environment still leads the name.
+ */
+const ERROR_BUCKET_SUFFIX = '-analytics-errors';
+
+/** The suffix the Firehose delivery role carries. See {@link ERROR_BUCKET_SUFFIX}. */
+const FIREHOSE_ROLE_SUFFIX = '-analytics-firehose-role';
+
+/** The suffix the delivery stream carries. See {@link ERROR_BUCKET_SUFFIX}. */
+const FIREHOSE_STREAM_SUFFIX = '-analytics-firehose';
+
+/**
+ * The longest name S3 accepts for a bucket - the same limit `deriveNames`
+ * enforces on the site's own bucket (`packages/core/src/config.ts:355`) and
+ * `resolveAnalyticsConfig` on the table bucket, restated here because this is a
+ * third bucket name derived in a third place.
+ */
+const ERROR_BUCKET_NAME_MAX_LENGTH = 63;
+
+/** The longest name Firehose accepts for a delivery stream. */
+const STREAM_NAME_MAX_LENGTH = 64;
+
+/** The name of the inline policy this plugin puts on its own Firehose delivery role. */
+const FIREHOSE_ROLE_POLICY = 'firehose-delivery';
+
+/**
+ * The trust document the Firehose delivery role is created with, verified
+ * against AWS's own "Allow Firehose to assume an IAM role"
+ * (`firehose/latest/dev/controlling-access.html`), which is one statement
+ * granting `sts:AssumeRole` to `firehose.amazonaws.com`.
+ *
+ * Deliberately **not** {@link LAMBDA_TRUST} with a swapped principal, and
+ * deliberately without that document's `sts:TagSession`: Firehose assumes this
+ * role on its own schedule with no session tags to pass, so granting the action
+ * would widen the trust for a caller that never uses it. The two documents are
+ * allowed to drift for the same reason the transform's own copy is allowed to
+ * drift from the CLI's - each one names the principal *its* resource assumes.
+ */
+const FIREHOSE_TRUST = {
+  Version: POLICY_VERSION,
+  Statement: [
+    {
+      Effect: 'Allow',
+      Principal: { Service: 'firehose.amazonaws.com' },
+      Action: ['sts:AssumeRole'],
+    },
+  ],
+};
+
+/**
+ * The key prefix under {@link errorBucketName} that failed records land at.
+ *
+ * One prefix serves both of Firehose's two distinct error surfaces - the
+ * stream-level `S3Configuration.ErrorOutputPrefix` for a record that never
+ * reached a table, and the table-level
+ * `DestinationTableConfiguration.S3ErrorOutputPrefix` for one the table's
+ * schema rejected (`aws/firehose.ts` spells out the difference). One stream
+ * writes to one table, so separating them would sort records by a distinction
+ * that has no second case on this side of it.
+ */
+const ERROR_OUTPUT_PREFIX = 'firehose-errors/';
+
+/**
+ * Seconds Firehose buffers records before writing a file, and the size in MiB
+ * that would flush one sooner. Both are sent, because the service requires the
+ * pair when either is given (`BufferingHints`); both are at the service's
+ * documented maximum (900 seconds, 128 MiB), and the pair is chosen together.
+ *
+ * At a blog's volume the size bound is unreachable, so the interval alone
+ * governs and every flush is time-driven. The maximum interval therefore
+ * produces the largest files this stream can produce, which is exactly what the
+ * change spec's own cost assumption wants - "log volume for a blog is small
+ * enough that batched Firehose delivery produces files large enough not to make
+ * S3 Tables compaction the dominant cost". Fifteen minutes of delivery latency
+ * is far inside what a day-partitioned dashboard needs; trading it for smaller,
+ * more numerous Iceberg data files would buy freshness nothing here reads.
+ */
+const STREAM_BUFFER_INTERVAL_SECONDS = 900;
+
+/** See {@link STREAM_BUFFER_INTERVAL_SECONDS} - the two are chosen as a pair. */
+const STREAM_BUFFER_SIZE_MB = 128;
+
+/**
+ * The plugin's own S3 client - **core's `S3Client` built over the pinned
+ * signer, never `ctx.clients.s3`**, which core constructs over the
+ * primary-region signer (`packages/core/src/clients.ts`). The same choice
+ * {@link secrets} makes and for a sharper reason: an S3 bucket is created in
+ * the region its request is signed for, so reaching for the host's copy would
+ * put the error bucket in `config.region` while the stream writing to it is
+ * pinned to {@link ANALYTICS_REGION}.
+ */
+function s3(ctx: AnalyticsContext): S3Client {
+  return createAnalyticsClients(ctx).s3;
+}
+
+/**
+ * The plugin's own Firehose client, built the same way {@link s3tables},
+ * {@link glue} and {@link lambda} are: core's bundle enumerates no `firehose`
+ * key at all, and every client this plugin uses signs in
+ * {@link ANALYTICS_REGION}.
+ */
+function firehose(ctx: AnalyticsContext): FirehoseClient {
+  return createAnalyticsClients(ctx).firehose;
+}
+
+/** The Firehose failed-record bucket's name. See {@link ERROR_BUCKET_SUFFIX}. */
+function errorBucketName(ctx: AnalyticsContext): string {
+  return boundedName(
+    `${ctx.names.prefix}${ERROR_BUCKET_SUFFIX}`,
+    ERROR_BUCKET_NAME_MAX_LENGTH,
+    'error bucket',
+  );
+}
+
+/** The Firehose delivery role's name. See {@link ERROR_BUCKET_SUFFIX}. */
+function firehoseRoleName(ctx: AnalyticsContext): string {
+  return boundedName(
+    `${ctx.names.prefix}${FIREHOSE_ROLE_SUFFIX}`,
+    ROLE_NAME_MAX_LENGTH,
+    'Firehose delivery role',
+  );
+}
+
+/** The delivery stream's name. See {@link ERROR_BUCKET_SUFFIX}. */
+function streamName(ctx: AnalyticsContext): string {
+  return boundedName(
+    `${ctx.names.prefix}${FIREHOSE_STREAM_SUFFIX}`,
+    STREAM_NAME_MAX_LENGTH,
+    'delivery stream',
+  );
+}
+
+/**
+ * The error bucket's ARN as `analytics-error-bucket` recorded it. See
+ * {@link requireRecordedArn}.
+ *
+ * Read back rather than re-derived even though an S3 bucket ARN *is* derivable
+ * from its name, and that is the point: the read is what makes the declared
+ * edge load-bearing. The role declares `analytics-error-bucket` directly; the
+ * stream inherits the same ordering transitively through its edge on the role,
+ * which is the spec's own `error-bucket -> firehose-role -> firehose-stream`
+ * chain. Deriving here instead would let either of them name a bucket that does
+ * not exist yet - and Firehose accepts a `BucketARN` for a bucket it cannot
+ * write to, so the first symptom would be records failing to a bucket that was
+ * never created.
+ */
+function requireErrorBucketArn(ctx: AnalyticsContext, dependent: string): string {
+  return requireRecordedArn(ctx, {
+    what: 'error bucket',
+    node: ERROR_BUCKET_NODE,
+    dependent,
+    lack: "bucket to write Firehose's failed records to",
+  });
+}
+
+/** The `page_views` table's ARN as `analytics-table` recorded it. See {@link requireRecordedArn}. */
+function requireTableArn(ctx: AnalyticsContext): string {
+  return requireRecordedArn(ctx, {
+    what: 'page_views table',
+    node: TABLE_NODE,
+    dependent: FIREHOSE_ROLE_NODE,
+    lack: 'table to grant s3tables write access on',
+  });
+}
+
+/**
+ * The transform function's ARN as `analytics-transform-function` recorded it.
+ * See {@link requireRecordedArn}. Read rather than re-derived from
+ * {@link transformFunctionName}: the recorded value is the ARN Lambda itself
+ * answered with, and it is what both readers need - the role grants
+ * `lambda:InvokeFunction` on it and the stream's processor names it as
+ * `LambdaArn`, so a derivation that drifted would produce a grant on one ARN
+ * and an invoke of another.
+ */
+function requireTransformFunctionArn(ctx: AnalyticsContext, dependent: string): string {
+  return requireRecordedArn(ctx, {
+    what: 'transform function',
+    node: TRANSFORM_FUNCTION_NODE,
+    dependent,
+    lack: 'record-transform Lambda to run every record through',
+  });
+}
+
+/** The delivery role's ARN as `analytics-firehose-role` recorded it. See {@link requireRecordedArn}. */
+function requireFirehoseRoleArn(ctx: AnalyticsContext): string {
+  return requireRecordedArn(ctx, {
+    what: 'Firehose delivery role',
+    node: FIREHOSE_ROLE_NODE,
+    dependent: FIREHOSE_STREAM_NODE,
+    lack: 'role for Firehose to assume',
+  });
+}
+
+/**
+ * The Glue catalog ARN Firehose reaches this environment's Iceberg table
+ * through: the **child** catalog the S3 Tables integration creates per table
+ * bucket, `arn:aws:glue:<region>:<account>:catalog/s3tablescatalog/<bucket>`.
+ *
+ * Derived rather than read off `analytics-catalog-integration`'s recorded ARN,
+ * which is a different string - that node adopts the account-wide federation
+ * root (`.../catalog/s3tablescatalog`), one level above this. So the stream's
+ * edge on that node is an *existence* dependency, not an interpolation one: the
+ * federation has to be enabled before Firehose can resolve this child catalog,
+ * and there is nothing recorded there to interpolate.
+ *
+ * The bare `arn:aws:glue:<region>:<account>:catalog` form - which is what
+ * `CatalogConfiguration.CatalogARN`'s prose names - is the account's own Data
+ * Catalog and holds no S3 Tables table at all. The field's pattern allows up to
+ * two further segments precisely so this form fits; `aws/firehose.ts` records
+ * that on the field itself.
+ */
+function federatedCatalogArn(ctx: AnalyticsContext): string {
+  const bucket = resolveAnalyticsConfig(ctx).tableBucket;
+  return `arn:aws:glue:${ANALYTICS_REGION}:${ctx.accountId}:catalog/${CATALOG_NAME}/${bucket}`;
+}
+
+/**
+ * The five concrete Glue resources the delivery role's catalog grant names,
+ * following AWS's own S3 Tables delivery policy - which writes the last three
+ * with account-wide wildcards for the child catalog, the database and the
+ * table, and is narrowed here to this environment's own table bucket, namespace
+ * and table.
+ *
+ * Every level of the hierarchy has to be named because Glue authorises the walk
+ * down it, not just the leaf: the account catalog, the federation root, this
+ * table bucket's child catalog, the namespace as a database, and the table.
+ * Dropping a level does not produce a smaller working grant - it produces a
+ * `GetTable` that is denied, which Firehose reports by routing every record to
+ * the error bucket.
+ */
+function glueGrantResources(ctx: AnalyticsContext): string[] {
+  const analytics = resolveAnalyticsConfig(ctx);
+  const glueArn = `arn:aws:glue:${ANALYTICS_REGION}:${ctx.accountId}`;
+  const child = `${CATALOG_NAME}/${analytics.tableBucket}`;
+  return [
+    `${glueArn}:catalog`,
+    `${glueArn}:catalog/${CATALOG_NAME}`,
+    `${glueArn}:catalog/${child}`,
+    `${glueArn}:database/${child}/${analytics.namespace}`,
+    `${glueArn}:table/${child}/${analytics.namespace}/${analytics.table}`,
+  ];
+}
+
+/**
+ * Apply the delivery role's inline policy. Shared by `create` and `update` -
+ * the `applyExecRolePolicy` pattern (`packages/cli/src/nodes.ts:180-216`) - so
+ * a reconcile of an existing role rewrites the same document a fresh one gets,
+ * and a table recreated under a new generated ARN reaches the policy without a
+ * teardown.
+ *
+ * **Exactly four statements, one per capability the change spec names, every
+ * `Resource` a concrete ARN and none of them `*`.** The action lists are AWS's
+ * own, from the "Grant Firehose access to Amazon S3 Tables" policy under IAM
+ * access control; what is narrowed is the resources, which that policy writes
+ * with wildcards over the whole account.
+ *
+ * Two of the four are easy to get subtly wrong and are worth stating:
+ *
+ * - the error-bucket statement names the bucket **and** `<bucket>/*`. Bucket
+ *   actions (`s3:ListBucket`, `s3:GetBucketLocation`) authorise against the
+ *   bucket ARN and object actions (`s3:PutObject`) against the key ARN, and
+ *   neither ARN matches the other. With only the bucket named, `PutObject`
+ *   would be denied and every failed record would be lost outright - which is
+ *   the one failure this whole bucket exists to make recoverable.
+ * - the lambda statement names the transform's **unqualified** function ARN,
+ *   the one `analytics-transform-function` recorded, because that is the exact
+ *   string the stream sends as `LambdaArn`. AWS's example writes a
+ *   `:<version>`-qualified ARN; a qualified resource does not match an
+ *   unqualified invoke, so copying it would deny every transform call and send
+ *   every record to the error bucket.
+ *
+ * There is no fifth statement. AWS's policy carries three more - Kinesis (this
+ * stream is `DirectPut`), KMS (no customer-managed key is configured anywhere
+ * in this pipeline) and CloudWatch Logs (no `CloudWatchLoggingOptions` is sent,
+ * so Firehose writes no log stream to grant on) - and each of the three is
+ * conditional on a feature this pipeline does not use.
+ */
+async function applyFirehoseRolePolicy(ctx: AnalyticsContext): Promise<void> {
+  const errorBucketArn = requireErrorBucketArn(ctx, FIREHOSE_ROLE_NODE);
+  await ctx.clients.iam.putRolePolicy(firehoseRoleName(ctx), FIREHOSE_ROLE_POLICY, {
+    Version: POLICY_VERSION,
+    Statement: [
+      {
+        Effect: 'Allow',
+        Action: [
+          'glue:GetDatabase',
+          'glue:GetDatabases',
+          'glue:GetTable',
+          'glue:GetTables',
+          'glue:UpdateTable',
+        ],
+        Resource: glueGrantResources(ctx),
+      },
+      {
+        Effect: 'Allow',
+        Action: [
+          's3tables:GetTableBucket',
+          's3tables:GetNamespace',
+          's3tables:GetTable',
+          's3tables:GetTableData',
+          's3tables:GetTableMetadataLocation',
+          's3tables:PutTableData',
+          's3tables:UpdateTableMetadataLocation',
+        ],
+        Resource: [tableBucketArn(ctx), requireTableArn(ctx)],
+      },
+      {
+        // `lambda:GetFunctionConfiguration` travels with the invoke in AWS's own
+        // single statement for this capability: Firehose reads the function's
+        // timeout before it invokes, so an invoke-only grant leaves the
+        // processor unusable rather than merely unobservable.
+        Effect: 'Allow',
+        Action: ['lambda:InvokeFunction', 'lambda:GetFunctionConfiguration'],
+        Resource: requireTransformFunctionArn(ctx, FIREHOSE_ROLE_NODE),
+      },
+      {
+        // The plugin's OWN error bucket, never the site's environment bucket -
+        // the one the CLI's `bucketNode` creates off `ctx.names`. That one sits
+        // in `config.region` while this stream is pinned to us-east-1, and an S3
+        // ARN carries no region, so the API can neither express nor reject the
+        // mismatch. See `analyticsErrorBucketNode`. A schema mismatch sends
+        // *every* affected record here, so this is a normal path, not a rare one.
+        Effect: 'Allow',
+        Action: [
+          's3:AbortMultipartUpload',
+          's3:GetBucketLocation',
+          's3:GetObject',
+          's3:ListBucket',
+          's3:ListBucketMultipartUploads',
+          's3:PutObject',
+        ],
+        Resource: [errorBucketArn, `${errorBucketArn}/*`],
+      },
+    ],
+  });
+}
+
+/**
+ * The Iceberg destination the stream is created and reconciled against, built
+ * in one place so the create payload and the `UpdateDestination` payload cannot
+ * drift - the reason {@link transformConfiguration} exists for the transform
+ * function, and the same reason.
+ *
+ * Every resource in it is either a recorded output of a node this one declares
+ * an edge to, or a derivation from the resolved analytics config; nothing is a
+ * re-derived name.
+ */
+function firehoseDestination(ctx: AnalyticsContext): IcebergDestinationInput {
+  const analytics = resolveAnalyticsConfig(ctx);
+  return {
+    catalogArn: federatedCatalogArn(ctx),
+    roleArn: requireFirehoseRoleArn(ctx),
+    namespace: analytics.namespace,
+    tableName: analytics.table,
+    // The plugin's own bucket, in us-east-1 with the rest of the pipeline -
+    // never the site's environment bucket, the one the CLI's `bucketNode` owns,
+    // which lives in `config.region`. `S3DestinationConfiguration.BucketARN` matches
+    // `arn:.*:s3:::[\w\.\-]{1,255}`: an S3 ARN carries no region, so the API can
+    // neither express the mismatch nor reject it, and Firehose's cross-region
+    // documentation covers only HTTP endpoint destinations. A schema mismatch
+    // sends *every* affected record here, so this is a normal path rather than a
+    // rare one, and resting it on undocumented behaviour is what the plugin's
+    // own bucket exists to avoid.
+    errorBucketArn: requireErrorBucketArn(ctx, FIREHOSE_STREAM_NODE),
+    errorOutputPrefix: ERROR_OUTPUT_PREFIX,
+    bufferIntervalSeconds: STREAM_BUFFER_INTERVAL_SECONDS,
+    bufferSizeMb: STREAM_BUFFER_SIZE_MB,
+    transformLambdaArn: requireTransformFunctionArn(ctx, FIREHOSE_STREAM_NODE),
+  };
+}
+
+/**
+ * Record `value` under `key`, or remove a stale entry when the response carried
+ * none.
+ *
+ * The removal is the half that matters. {@link output} re-records rather than
+ * replaces, so a `failure` left over from a create that failed on a KMS error
+ * would outlive the recovery and `analytics status` would go on reporting it;
+ * an `appendOnly` left over from a describe that stopped reporting the flag
+ * would make the reconcile below skip work it should do. Absent in the response
+ * has to mean absent in state, which is the same rule the ARN guards in this
+ * module state as "never record `''` as though it were an ARN" - one direction
+ * each of the same discipline.
+ */
+function recordOptional(
+  out: ResourceOutputs,
+  key: string,
+  value: string | boolean | undefined,
+): void {
+  if (value === undefined) delete out[key];
+  else out[key] = value;
+}
+
+/**
+ * Record the delivery stream's identity and health from a `DescribeDeliveryStream`.
+ *
+ * `state` and `failure` are what `analytics status` reports (task 55), so the
+ * stream's health is hydrated by the same `read` the reconcile runs and there is
+ * no second describe path. `versionId` and `destinationId` are what
+ * `UpdateDestination` cannot be called without, and `appendOnly` is the live
+ * flag the reconcile compares against {@link STREAM_APPEND_ONLY}.
+ *
+ * The ARN is guarded on its value, the guard `analytics-table` and
+ * `analytics-catalog-integration` both put on theirs: `describeDeliveryStream`
+ * falls back to `''` for a body carrying no `DeliveryStreamARN`, and an empty
+ * string recorded under `arn` reads downstream as a real one.
+ */
+function recordStream(ctx: AnalyticsContext, status: DeliveryStreamStatus): void {
+  const out = output(ctx, FIREHOSE_STREAM_NODE);
+  out.name = status.name;
+  out.state = status.state;
+  recordOptional(out, 'arn', status.arn === '' ? undefined : status.arn);
+  recordOptional(out, 'versionId', status.versionId);
+  recordOptional(out, 'destinationId', status.destinationId);
+  recordOptional(out, 'appendOnly', status.appendOnly);
+  recordOptional(out, 'failure', status.failure);
+}
+
+/**
+ * Create the stream, record what exists as soon as it exists, then hydrate
+ * everything only a describe can supply - and refuse to report success over a
+ * stream that is not actually being created.
+ *
+ * **Record ordering**, which this module deliberately decides per node: the
+ * name goes into state the moment `createDeliveryStream` returns, before the
+ * describe, because `createDeliveryStream` answers with no ARN by design
+ * (`aws/firehose.ts`) and a crash between the two calls must still leave the
+ * stream recorded for `destroy` to remove. That is `analytics-table`'s ordering
+ * and its reason. It is *not* `analytics-transform-function`'s, which also
+ * records its source hash and configuration fingerprint before the lookup -
+ * those are inputs it must not re-send, and this node has no equivalent to
+ * protect. It is also not `analytics-catalog-integration`'s, which records
+ * nothing at all until a check has passed, because that node adopts shared
+ * state and this one owns what it creates.
+ *
+ * The guard at the end closes a hole that `createDeliveryStream`'s own
+ * idempotency opens on the replacement path. That method swallows
+ * `ResourceInUseException` as "already exists", which is right when a re-run
+ * finds the stream it made last time - and wrong immediately after a delete,
+ * where the same exception means the *old* stream is still `DELETING`. Without
+ * this check the reconcile would report a replacement as done while the account
+ * held a stream that was on its way out, and the first symptom would be an
+ * empty dashboard. Re-running the bootstrap once the delete has settled is the
+ * fix, and the message says so.
+ */
+async function createStream(
+  ctx: AnalyticsContext,
+  client: FirehoseClient,
+  name: string,
+  destination: IcebergDestinationInput,
+): Promise<void> {
+  await client.createDeliveryStream(name, destination, ctx.tags);
+  output(ctx, FIREHOSE_STREAM_NODE).name = name;
+  const created = await client.describeDeliveryStream(name);
+  if (created !== undefined) recordStream(ctx, created);
+  if (created === undefined || created.state === 'deleting' || created.state === 'delete-failed') {
+    throw new Error(
+      `the analytics delivery stream "${name}" is ${created === undefined ? 'not readable' : `still ${created.state}`} after CreateDeliveryStream reported success, so no stream is accepting records - a delete of the previous stream has not settled yet. Re-run \`blogwright analytics bootstrap --env ${ctx.env}\` in a minute.`,
+    );
+  }
+}
+
+/**
+ * The S3 bucket every record Firehose cannot deliver is written to - **the
+ * physical place a silent pipeline failure becomes visible.**
+ *
+ * Firehose matches incoming JSON keys to the Iceberg column names exactly and
+ * *errors* the records that do not match to this bucket rather than dropping
+ * them (the change spec quotes the behaviour). So a missing column, a table
+ * whose catalog cannot be read, a Glue grant one level too narrow - none of
+ * them raise anything an operator sees. They fill this bucket while the
+ * dashboard stays empty, and this bucket is the only place the records
+ * themselves still exist. Two properties follow.
+ *
+ * **It is in {@link ANALYTICS_REGION}, with the rest of the pipeline**, created
+ * through the plugin's own {@link s3} client rather than `ctx.clients.s3`,
+ * which signs in `config.region`.
+ *
+ * **It is not the site's environment bucket.** The bucket the CLI's own
+ * `bucketNode` creates lives in
+ * `config.region` and `S3DestinationConfiguration.BucketARN` matches
+ * `arn:.*:s3:::[\w\.\-]{1,255}` - an S3 ARN carries no region, so the API can
+ * neither express a cross-region bucket nor reject one, and Firehose's
+ * cross-region documentation covers only HTTP endpoint destinations. Pointing
+ * at the site's bucket would therefore rest the pipeline's one recovery surface
+ * on undocumented behaviour, and would put failed-record objects - which carry
+ * the raw CloudFront fields, the viewer IP among them, precisely because the
+ * transform did not run on them - inside a bucket the site serves from.
+ */
+export function analyticsErrorBucketNode(): AnalyticsNode {
+  return {
+    id: ERROR_BUCKET_NODE,
+    dependsOn: [],
+    title: `Firehose failed-record bucket (${ANALYTICS_REGION})`,
+    async read(ctx) {
+      const name = errorBucketName(ctx);
+      if (!(await s3(ctx).bucketExists(name))) return false;
+      recordErrorBucket(ctx, name);
+      return true;
+    },
+    async create(ctx) {
+      const name = errorBucketName(ctx);
+      const client = s3(ctx);
+      await client.createBucket(name);
+      // Identity before the secondary mutations, `bucketNode`'s ordering
+      // (`packages/cli/src/nodes.ts:56-60`): a crash between CreateBucket and
+      // the tagging/public-access calls must still leave the bucket recorded.
+      recordErrorBucket(ctx, name);
+      await applyErrorBucketConfiguration(ctx, name);
+    },
+    async update(ctx) {
+      // Reconcile on every apply, for `bucketNode`'s reason: a bucket left by a
+      // run that crashed before its tagging/PAB calls converges on the next one.
+      await applyErrorBucketConfiguration(ctx, errorBucketName(ctx));
+    },
+    async delete(ctx) {
+      const name = errorBucketName(ctx);
+      const client = s3(ctx);
+      // The existence check is what makes a re-run after a completed teardown a
+      // no-op. `deleteBucket` swallows its own not-found, but `deletePrefix`
+      // does not: it lists first, and `listObjects` rethrows, so a second
+      // `analytics destroy` would fail on the half that was already done.
+      if (!(await client.bucketExists(name))) return;
+      // S3 refuses to delete a bucket that still holds objects, so the failed
+      // records go first - and are counted, because they are the evidence of
+      // whatever went wrong and an operator tearing the environment down is
+      // owed the line that says how much of it was discarded.
+      const removed = await client.deletePrefix(name, '');
+      if (removed > 0) {
+        ctx.logger.warn(
+          `discarded ${removed} failed-record object(s) from "${name}" - these were the records Firehose could not deliver, and they are not recoverable after this`,
+        );
+      }
+      await client.deleteBucket(name);
+    },
+  };
+}
+
+/**
+ * Record the error bucket's identity. Shared by `read` and `create` for
+ * {@link recordTableBucket}'s reason: both record the same two values from the
+ * same two sources, and `bucketExists` answers with nothing to echo back.
+ *
+ * The ARN is derived rather than read off a response - an S3 bucket ARN carries
+ * no region and no generated id, so it is a pure function of the name - which is
+ * why it needs none of the "never record `''`" guards the response-derived ARNs
+ * in this module carry. Recording it at all, rather than letting the two readers
+ * derive it themselves, is what makes their declared edges load-bearing; see
+ * {@link requireErrorBucketArn}.
+ */
+function recordErrorBucket(ctx: AnalyticsContext, name: string): void {
+  const out = output(ctx, ERROR_BUCKET_NODE);
+  out.name = name;
+  out.arn = `arn:aws:s3:::${name}`;
+}
+
+/**
+ * Tagging and the public-access block, both idempotent PUTs, shared by `create`
+ * and `update` - `applyBucketConfiguration`'s shape
+ * (`packages/cli/src/nodes.ts:38-42`).
+ *
+ * The public-access block is not decoration here. The objects in this bucket
+ * are the records the transform Lambda did *not* successfully process, so they
+ * carry CloudFront's raw fields - the viewer's IP address among them, the one
+ * value the whole `visitor_key` derivation exists to keep out of storage. A
+ * bucket that could be made public by a later policy or ACL would undo that for
+ * exactly the records where it was never applied.
+ */
+async function applyErrorBucketConfiguration(ctx: AnalyticsContext, name: string): Promise<void> {
+  const client = s3(ctx);
+  await client.putBucketTagging(name, ctx.tags ?? {});
+  await client.putPublicAccessBlock(name);
+}
+
+/**
+ * The role Firehose assumes to read the catalog, write the table, invoke the
+ * transform and store what it could not deliver - four grants, four concrete
+ * resources, no `*`.
+ *
+ * It declares `dependsOn` on the three nodes whose recorded ARNs those grants
+ * interpolate. `topoSort` drains zero-indegree nodes alphabetically
+ * (`packages/cli/src/graph.ts:35-38`), so a role declaring `dependsOn: []`
+ * would be reconciled *before* `analytics-transform-function` - `f` sorts before
+ * `t` - and the policy would interpolate an unrecorded output: a wrong
+ * permission written silently, never an error. `githubOidcRoleNode`
+ * (`packages/cli/src/nodes.ts:830`) is the precedent, declaring
+ * `cloudfront-distribution` for exactly this reason.
+ */
+export function analyticsFirehoseRoleNode(): AnalyticsNode {
+  return {
+    id: FIREHOSE_ROLE_NODE,
+    dependsOn: [ERROR_BUCKET_NODE, TABLE_NODE, TRANSFORM_FUNCTION_NODE],
+    title: 'IAM Firehose delivery role',
+    async read(ctx) {
+      const name = firehoseRoleName(ctx);
+      const arn = await ctx.clients.iam.getRoleArn(name);
+      // Falsy rather than `=== undefined`, `analytics-transform-role`'s guard:
+      // `getRoleArn` reads the ARN out of the response XML, so a body without
+      // one answers `undefined` while an empty tag would answer `""`.
+      if (!arn) return false;
+      const out = output(ctx, FIREHOSE_ROLE_NODE);
+      out.name = name;
+      out.arn = arn;
+      return true;
+    },
+    async create(ctx) {
+      const name = firehoseRoleName(ctx);
+      // `ctx.clients.iam`, the host's own client: IAM is a global service
+      // (`packages/core/src/aws/endpoint.ts`'s GLOBAL_SERVICES), so core's
+      // instance already signs us-east-1 and there is no region to get wrong.
+      const arn = await ctx.clients.iam.ensureRole(
+        name,
+        FIREHOSE_TRUST,
+        `Delivery role for the ${ctx.config.siteName} analytics Firehose stream`,
+        ctx.tags,
+      );
+      // Recorded before the policy PUT, `analytics-transform-role`'s ordering
+      // and its reason: the role is a real IAM object the moment `ensureRole`
+      // returns, and if the policy call then fails, this entry is what tells the
+      // next reconcile - and `delete` - that it exists. Nothing reads a role ARN
+      // as "the role is configured": the stream reads it to name in its
+      // destination, and `applyGraph` reconciles this node to completion first
+      // (`packages/cli/src/graph.ts:74-97` rethrows, so the stream is never
+      // reached after a failure here).
+      const out = output(ctx, FIREHOSE_ROLE_NODE);
+      out.name = name;
+      out.arn = arn;
+      await applyFirehoseRolePolicy(ctx);
+    },
+    async update(ctx) {
+      await applyFirehoseRolePolicy(ctx);
+    },
+    async delete(ctx) {
+      // Idempotent, and removes the inline policy first - `deleteRole`
+      // (`packages/core/src/aws/iam.ts:128`) lists and deletes them, because IAM
+      // refuses to delete a role that still carries one, and swallows the
+      // not-found so a half-finished teardown is re-runnable.
+      await ctx.clients.iam.deleteRole(firehoseRoleName(ctx));
+    },
+  };
+}
+
+/**
+ * The delivery stream itself: CloudFront's records in, the transform Lambda in
+ * front of the write, the `page_views` Iceberg table out, and the plugin's own
+ * error bucket for everything that does not make it.
+ *
+ * Its four edges are the ones its payload actually reads. The role edge is the
+ * spec's own rule - the `IcebergDestinationConfiguration` interpolates the
+ * role's recorded ARN - and it also carries `analytics-error-bucket`
+ * transitively, completing the `error-bucket -> firehose-role ->
+ * firehose-stream` chain. Without the role edge the ordering would survive only
+ * on `topoSort`'s alphabetical accident (`…-role` sorts before `…-stream`), the
+ * exact coincidence-reliance the spec's implementation notes warn against.
+ *
+ * **The `AppendOnly` reconcile is written against neither AWS document.** The
+ * Firehose considerations page says the flag is settable only with
+ * `CreateDeliveryStream`; the `IcebergDestinationUpdate` API reference lists it
+ * among the fields `UpdateDestination` accepts. They cannot both be right, and a
+ * node written against either alone is a defect whichever one turns out to be.
+ * So `update` attempts the in-place update first and falls back to replacing the
+ * stream when it is refused - and only when it is refused: the re-read that
+ * follows a successful update sits outside that `try`, because failing it is not
+ * a rejection and replacing a stream that was updated correctly would be pure
+ * loss. The order matters: `UpdateDestination` keeps the stream's ARN, while a
+ * replacement gets a new one - so the CloudFront log delivery task 53 builds
+ * would have to be repointed, and the records arriving during the gap are lost.
+ * Which path ran is in the log line.
+ */
+export function analyticsFirehoseStreamNode(): AnalyticsNode {
+  return {
+    id: FIREHOSE_STREAM_NODE,
+    dependsOn: [FIREHOSE_ROLE_NODE, TABLE_NODE, CATALOG_NODE, TRANSFORM_FUNCTION_NODE],
+    title: `Firehose delivery stream (${ANALYTICS_REGION})`,
+    async read(ctx) {
+      const status = await firehose(ctx).describeDeliveryStream(streamName(ctx));
+      // Absent: `create` runs. Note that a stream in any *live* state - including
+      // `CREATING_FAILED` and `DELETING` - is present, not absent, and is
+      // reported so deliberately. Answering `false` for one would send
+      // `applyGraph` to `create`, whose `ResourceInUseException` is swallowed as
+      // "already exists", and the reconcile would go green over a stream that
+      // accepts nothing.
+      //
+      // What `update` then does with such a stream is *nothing*: it branches on
+      // the recorded `AppendOnly` flag alone, so a `CREATING_FAILED` or
+      // `DELETING` stream whose flag already matches is reconciled with zero AWS
+      // calls and reported done. That is stated rather than guarded because this
+      // `read` is the hydration path - `recordStream` puts `state` and `failure`
+      // into the plugin's scoped state, and reporting an unusable stream from
+      // them is `analytics status`' job (task 55). Do not read this comment as a
+      // promise that the reconcile refuses over a dead stream; it does not.
+      if (status === undefined) return false;
+      recordStream(ctx, status);
+      return true;
+    },
+    async create(ctx) {
+      const name = streamName(ctx);
+      ctx.logger.step(
+        `creating the analytics delivery stream "${name}" with AppendOnly ${STREAM_APPEND_ONLY}`,
+      );
+      await createStream(ctx, firehose(ctx), name, firehoseDestination(ctx));
+    },
+    async update(ctx) {
+      const recorded = ctx.state.resources[FIREHOSE_STREAM_NODE];
+      const appendOnly =
+        typeof recorded?.['appendOnly'] === 'boolean' ? recorded['appendOnly'] : undefined;
+      // The live flag already matches what this pipeline wants, so there is
+      // nothing to reconcile and no AWS call at all. `undefined` does NOT match:
+      // a stream whose destination reported no flag, or a state file that lost
+      // it, is a stream this node cannot claim is append-only, and pushing the
+      // desired configuration is the safe direction.
+      if (appendOnly === STREAM_APPEND_ONLY) return;
+
+      const name = streamName(ctx);
+      const client = firehose(ctx);
+      const destination = firehoseDestination(ctx);
+      const versionId = recordedText(ctx, FIREHOSE_STREAM_NODE, 'versionId');
+      const destinationId = recordedText(ctx, FIREHOSE_STREAM_NODE, 'destinationId');
+
+      // Falsy rather than `!== undefined`, the guard `analytics-transform-role`'s
+      // `read` and `analytics-table`'s ARN both use: an empty recorded string is
+      // no more a version id than a missing one, and an empty
+      // `CurrentDeliveryStreamVersionId` fails the service's own `[0-9]+` pattern.
+      if (versionId && destinationId) {
+        // **Only the update call is in this `try`.** The re-read below is not,
+        // and must never be: it runs *after* `UpdateDestination` returned 200,
+        // so the stream is already reconfigured and still carries its ARN. A
+        // transient failure there - `LimitExceededException`, a throttle,
+        // anything `describeDeliveryStream` does not swallow as a not-found - is
+        // not a refusal, and reaching the fallback on one would delete and
+        // recreate a stream that was updated correctly: a NEW ARN, task 53's
+        // CloudFront log delivery orphaned, the records in flight lost, and an
+        // operator told the update was rejected when it succeeded.
+        let refusal: string | undefined;
+        try {
+          ctx.logger.step(
+            `updating the analytics delivery stream "${name}" in place (AppendOnly ${String(appendOnly)} -> ${STREAM_APPEND_ONLY}) - UpdateDestination keeps the stream's ARN, so the CloudFront log delivery pointed at it is untouched`,
+          );
+          await client.updateDestination(name, destination, { versionId, destinationId });
+        } catch (err) {
+          // The branch the contradicting documentation makes necessary. Not
+          // narrowed to one exception: whichever way AWS resolves it, a refused
+          // update has to reach the fallback rather than abort the reconcile.
+          // `String(err)` rather than the error itself, so the sentinel is set
+          // even for a thrown `undefined`.
+          refusal = String(err);
+        }
+
+        if (refusal === undefined) {
+          try {
+            // Re-read: the update bumps `VersionId`, so a state file still
+            // holding the old one would fail the next `UpdateDestination` on a
+            // ConcurrentModificationException it did not cause.
+            const updated = await client.describeDeliveryStream(name);
+            if (updated !== undefined) recordStream(ctx, updated);
+          } catch (err) {
+            // Warn and carry on rather than rethrow: the update is done, and the
+            // only casualty is a recorded version id that is now one behind.
+            // `read` re-hydrates it on the next reconcile, which is the same
+            // path that would recover a state file that never had one.
+            ctx.logger.warn(
+              `the analytics delivery stream "${name}" could not be re-read after UpdateDestination succeeded (${String(err)}) - the update is applied and the stream keeps its ARN, but the recorded version id is now stale until the next reconcile refreshes it`,
+            );
+          }
+          ctx.logger.ok(`updated the analytics delivery stream "${name}" in place`);
+          return;
+        }
+
+        ctx.logger.warn(
+          `UpdateDestination was refused for the analytics delivery stream "${name}" (${refusal}) - falling back to replacing it`,
+        );
+      } else {
+        ctx.logger.warn(
+          `the analytics delivery stream "${name}" has no recorded version id and destination id, which UpdateDestination requires - falling back to replacing it`,
+        );
+      }
+
+      ctx.logger.warn(
+        `replacing the analytics delivery stream "${name}": the new stream carries a NEW ARN, so the CloudFront log delivery has to be reconciled against it, and records arriving during the gap are lost`,
+      );
+      await client.deleteDeliveryStream(name);
+      await createStream(ctx, client, name, destination);
+    },
+    async delete(ctx) {
+      // No-op when the stream is already gone (`aws/firehose.ts` swallows the
+      // not-found and nothing else - including `ResourceInUseException`, which on
+      // this operation means "still CREATING", not "already deleted"), so a
+      // half-finished teardown is re-runnable. `destroyGraph` walks the chain in
+      // reverse, so this runs before `analytics-firehose-role` removes the role
+      // the stream assumes.
+      await firehose(ctx).deleteDeliveryStream(streamName(ctx));
     },
   };
 }
