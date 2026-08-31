@@ -10,8 +10,8 @@ import type { OpsConfig, PdsConfig } from 'blogwright-core';
 
 /**
  * Repo-relative paths of the committed OAuth client documents. The segments
- * under the public dir are protocol-fixed — they must mirror the URL paths in
- * the client metadata — so only the public dir itself is configurable.
+ * under the public dir are protocol-fixed - they must mirror the URL paths in
+ * the client metadata - so only the public dir itself is configurable.
  */
 export function clientDocumentPaths(cfg: Pick<OpsConfig, 'paths'>): {
   clientMetadata: string;
@@ -55,7 +55,7 @@ export function clientMetadata(domain: string, pds: PdsConfig): OAuthClientMetad
   };
 }
 
-/** The JWKS document served at jwksUrl(domain) — public key material only. */
+/** The JWKS document served at jwksUrl(domain) - public key material only. */
 export function jwksDocument(publicJwk: Record<string, unknown>): { keys: [typeof publicJwk] } {
   if (publicJwk.d !== undefined) throw new Error('jwksDocument received a private JWK (has "d")');
   return { keys: [publicJwk] };

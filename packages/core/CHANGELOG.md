@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- [#13](https://github.com/antstanley/blogwright/pull/13) [`b760320`](https://github.com/antstanley/blogwright/commit/b760320bef4a0ba479f847027ef66d1528d21d48) Thanks [@antstanley](https://github.com/antstanley)! - Ship smaller packages. The published tarballs no longer carry `.js.map` sourcemaps (`sourceMap` was set repo-wide in `tsconfig.base.json` and every emitted map was landing in `dist`), and `test-support.ts` — scaffolding imported only by `*.test.ts` — is now excluded from the build configs of `blogwright` and `blogwright-pds` rather than compiled into `dist`. It is still fully typechecked, since the `tsconfig.typecheck.json` files override `exclude` to `[]`.
+- [#13](https://github.com/antstanley/blogwright/pull/13) [`b760320`](https://github.com/antstanley/blogwright/commit/b760320bef4a0ba479f847027ef66d1528d21d48) Thanks [@antstanley](https://github.com/antstanley)! - Ship smaller packages. The published tarballs no longer carry `.js.map` sourcemaps (`sourceMap` was set repo-wide in `tsconfig.base.json` and every emitted map was landing in `dist`), and `test-support.ts` - scaffolding imported only by `*.test.ts` - is now excluded from the build configs of `blogwright` and `blogwright-pds` rather than compiled into `dist`. It is still fully typechecked, since the `tsconfig.typecheck.json` files override `exclude` to `[]`.
 
   Unpacked sizes drop by a quarter overall: `blogwright` 540.4 kB → 437.9 kB, `blogwright-core` 205.1 kB → 127.8 kB, `blogwright-pds` 99.9 kB → 58.9 kB, and the three packages together go from 183 files to 121. No runtime code changed.
 
@@ -12,11 +12,11 @@
 
 ### Patch Changes
 
-- [#11](https://github.com/antstanley/blogwright/pull/11) [`804edda`](https://github.com/antstanley/blogwright/commit/804eddace8698417a0ac99083daa8fe0e428c722) Thanks [@antstanley](https://github.com/antstanley)! - Make `bootstrap` resumable after a partial failure. The graph engine now persists whatever outputs a node recorded even when its create/update throws (best-effort — a save error never masks the node's own failure), and nodes record identity outputs before secondary mutations (bucket name before tagging, log-delivery ARNs as they are created). Re-running against a partial environment recovers automatically: the distribution node adopts an orphaned distribution on `CNAMEAlreadyExists`/`DistributionAlreadyExists` by matching the deterministic comment and verifying `CallerReference` (via a new `listDistributions` method on the CloudFront client), and the bucket node reconciles tagging and the public-access block on every apply. No more hand-editing `state/<env>.json` in S3.
+- [#11](https://github.com/antstanley/blogwright/pull/11) [`804edda`](https://github.com/antstanley/blogwright/commit/804eddace8698417a0ac99083daa8fe0e428c722) Thanks [@antstanley](https://github.com/antstanley)! - Make `bootstrap` resumable after a partial failure. The graph engine now persists whatever outputs a node recorded even when its create/update throws (best-effort - a save error never masks the node's own failure), and nodes record identity outputs before secondary mutations (bucket name before tagging, log-delivery ARNs as they are created). Re-running against a partial environment recovers automatically: the distribution node adopts an orphaned distribution on `CNAMEAlreadyExists`/`DistributionAlreadyExists` by matching the deterministic comment and verifying `CallerReference` (via a new `listDistributions` method on the CloudFront client), and the bucket node reconciles tagging and the public-access block on every apply. No more hand-editing `state/<env>.json` in S3.
 
-- [#9](https://github.com/antstanley/blogwright/pull/9) [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13) Thanks [@antstanley](https://github.com/antstanley)! - Send `x-amz-checksum-sha256` on the S3 bucket-configuration calls (`?publicAccessBlock`, `?tagging`, `?policy`) — S3 rejects them with `InvalidRequest: Missing required header … Content-MD5 OR x-amz-checksum-*`, which broke `bootstrap` at the "create S3 bucket" step.
+- [#9](https://github.com/antstanley/blogwright/pull/9) [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13) Thanks [@antstanley](https://github.com/antstanley)! - Send `x-amz-checksum-sha256` on the S3 bucket-configuration calls (`?publicAccessBlock`, `?tagging`, `?policy`) - S3 rejects them with `InvalidRequest: Missing required header … Content-MD5 OR x-amz-checksum-*`, which broke `bootstrap` at the "create S3 bucket" step.
 
-- [#9](https://github.com/antstanley/blogwright/pull/9) [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13) Thanks [@antstanley](https://github.com/antstanley)! - Send the required `Operation=Tag` query parameter on CloudFront TagResource — without it CloudFront returns `InvalidAction` (HTTP 404), which failed bootstrap right after creating the distribution.
+- [#9](https://github.com/antstanley/blogwright/pull/9) [`df587d5`](https://github.com/antstanley/blogwright/commit/df587d5f07d455d3d7446615a65b3e580e24ae13) Thanks [@antstanley](https://github.com/antstanley)! - Send the required `Operation=Tag` query parameter on CloudFront TagResource - without it CloudFront returns `InvalidAction` (HTTP 404), which failed bootstrap right after creating the distribution.
 
 ## 0.3.1
 
@@ -26,13 +26,13 @@
   `s3:PutObjectTagging`, which the build and exec role policies never granted.
   The tags ride on the PUT itself (`x-amz-tagging`), but AWS checks
   `PutObjectTagging` as a distinct action, so every tagged upload 403'd under the
-  constrained MicroVM role — while local deploys with an operator's own
+  constrained MicroVM role - while local deploys with an operator's own
   credentials sailed through, which is how it escaped. Both roles now grant it;
   re-run `blogwright bootstrap <env>` to apply the policy.
 
   Tagging also fails soft now: a role that cannot tag uploads the files untagged,
   warns once with the remedy, and the deploy succeeds. Tags are metadata, not
-  content — a permission gap should never fail a deploy whose files are fine. This
+  content - a permission gap should never fail a deploy whose files are fine. This
   also means an in-place upgrade deploys successfully _before_ the re-bootstrap
   that grants the action. ([#7](https://github.com/antstanley/blogwright/issues/7))
 
@@ -42,14 +42,14 @@
 
 - [`10dacc3`](https://github.com/antstanley/blogwright/commit/10dacc3d5a0a79c02b77f48c8cedcd49399690df) Thanks [@antstanley](https://github.com/antstanley)! - Serve `.webmanifest` as `application/manifest+json`, and add the other content
   types a modern static site ships: `jsonld`, `ttf`, `otf`, `mp4`, `webm`, `m3u8`,
-  `mp3`, `vtt`, `pdf`, `csv`. (`.ts` is deliberately left unmapped — in build
+  `mp3`, `vtt`, `pdf`, `csv`. (`.ts` is deliberately left unmapped - in build
   output it is far more likely stray TypeScript than an HLS segment.) Unmapped
   extensions still fall back to `application/octet-stream`, but the build log now
   warns which ones did, so a wrong header cannot stay silent. ([#6](https://github.com/antstanley/blogwright/issues/6))
 
   New `deploy --refresh` re-uploads every built file even when its content is
   unchanged. A deploy normally skips content-identical files, but S3 writes object
-  metadata (content type, tags) only on a PUT — so a fix like the one above, or
+  metadata (content type, tags) only on a PUT - so a fix like the one above, or
   the object tags added in this release, would never reach objects already live.
   Run `blogwright deploy --refresh` once after upgrading to push the corrected
   metadata (it also invalidates the CDN, which caches the old headers).
@@ -77,13 +77,13 @@
 - [`1601303`](https://github.com/antstanley/blogwright/commit/16013031529679ca01a1281f1bae3d1625f0ce04) Thanks [@antstanley](https://github.com/antstanley)! - Fix two bootstrap failures reported from non-us-east-1 stacks:
 
   - CloudFront access-log delivery (and its log group) now lives in us-east-1,
-    where the CloudFront LogType is supported — bootstrap in eu-west-1 previously
+    where the CloudFront LogType is supported - bootstrap in eu-west-1 previously
     failed its final node with `PutDeliverySource … ValidationException` and left
     the stack without access logs. ([#3](https://github.com/antstanley/blogwright/issues/3))
   - `preview bootstrap` now actually creates the wildcard DNS record: A and AAAA
     **alias** records pointing at the distribution (Z2FDTNDATAQYW2), replacing
-    the printed manual instruction. A pre-existing CNAME — from an older
-    bootstrap or a manual workaround — is cleared first, since Route53 refuses
+    the printed manual instruction. A pre-existing CNAME - from an older
+    bootstrap or a manual workaround - is cleared first, since Route53 refuses
     aliases alongside it; re-running bootstrap migrates existing stacks. ([#4](https://github.com/antstanley/blogwright/issues/4))
 
 ## 0.2.0
@@ -104,11 +104,11 @@
 
   - **Deploy any static site**: `paths.app`/`paths.dist` for monorepo apps,
     `spa: true` for client-side-routing fallback, and `sourceInclude` for
-    pre-built gitignored artifacts (wasm bundles built in CI) — alongside the
+    pre-built gitignored artifacts (wasm bundles built in CI) - alongside the
     original Astro-shaped defaults.
   - **A CLI that helps**: `blogwright init` first-run wizard, live MicroVM build
     progress, a deploy summary card, `status` as a drift tree, `history` with a
-    `← live` marker — pretty on a TTY, stable plain text for CI and agents
+    `← live` marker - pretty on a TTY, stable plain text for CI and agents
     (`--plain`, `NO_COLOR`).
   - **Hexagonal internals**: every side effect behind a port (filesystem,
     terminal, VCS, network), enforced by lint; the standard.site integration

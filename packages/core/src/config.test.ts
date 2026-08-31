@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveNames, parseConfig, stripJsonComments, stripTrailingCommas } from './config.js';
+import {
+  deriveNames,
+  parseConfig,
+  parseConfigDocument,
+  pluginBlock,
+  stripJsonComments,
+  stripTrailingCommas,
+} from './config.js';
 
 /** Wrap a config fragment with the required siteName. */
 const withSite = (fragment: string): string =>
@@ -87,36 +94,92 @@ describe('parseConfig', () => {
     expect(parseConfig(withSite('{}')).pds).toBeUndefined();
   });
 
-  it('applies pds defaults (secretName from siteName)', () => {
-    const cfg = parseConfig(withSite('{ "pds": { "name": "Ant Stanley" } }'));
-    expect(cfg.pds).toEqual({
-      name: 'Ant Stanley',
-      secretName: 'example/atproto',
-    });
+  // The four pds cases that used to live here - defaulting `secretName`,
+  // keeping explicit overrides, rejecting a blank `name`, rejecting a
+  // non-https `handleResolver` - moved to `packages/pds/src/config.test.ts`
+  // with the code they exercise. Core neither defaults nor judges a plugin's
+  // block; what it owes that block is the pass-through the cases below pin.
+
+  it('passes a plugin block core knows nothing about through byte-equal', () => {
+    const cfg = parseConfig(withSite('{ "analytics": { "table": "events", "sample": 0.5 } }'));
+    // `OpsConfig` declares no `analytics`, so the key is only reachable off
+    // the parsed object at runtime - which is exactly the survival being
+    // pinned. The index read is the test's, not a hole in the type.
+    const seen = (cfg as unknown as Record<string, unknown>)['analytics'];
+    expect(seen).toEqual({ table: 'events', sample: 0.5 });
+    expect(JSON.stringify(seen)).toBe('{"table":"events","sample":0.5}');
   });
 
-  it('keeps explicit pds overrides', () => {
-    const cfg = parseConfig(
-      withSite(
-        '{ "pds": { "name": "x", "handleResolver": "https://resolver.example", "secretName": "me/secret", "description": "d" } }',
-      ),
-    );
-    expect(cfg.pds?.handleResolver).toBe('https://resolver.example');
-    expect(cfg.pds?.secretName).toBe('me/secret');
-    expect(cfg.pds?.description).toBe('d');
-  });
-
-  it('rejects a pds section without a name', () => {
-    expect(() => parseConfig(withSite('{ "pds": { "name": " " } }'))).toThrow(/pds.name/);
-  });
-
-  it('rejects a non-https pds handleResolver', () => {
+  it('parses a malformed plugin block without throwing, since core no longer judges one', () => {
+    // Negative space: every one of these would be rejected by the owning
+    // plugin's own `validateConfig`, and none of them is core's business.
+    expect(() => parseConfig(withSite('{ "analytics": { "table": 42 } }'))).not.toThrow();
+    expect(() => parseConfig(withSite('{ "analytics": "not an object" }'))).not.toThrow();
+    expect(() => parseConfig(withSite('{ "analytics": null }'))).not.toThrow();
+    expect(() => parseConfig(withSite('{ "pds": { "name": " " } }'))).not.toThrow();
     expect(() =>
       parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "http://resolver" } }')),
-    ).toThrow(/https/);
+    ).not.toThrow();
     expect(() =>
-      parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "nope" } }')),
-    ).toThrow(/URL/);
+      parseConfig(withSite('{ "pds": { "name": "x", "secretName": "has a space" } }')),
+    ).not.toThrow();
+  });
+
+  it('round-trips a pds block exactly as written, including an absent secretName', () => {
+    const cfg = parseConfig(
+      withSite(
+        '{ "pds": { "name": "Ant Stanley", "description": "d", "handleResolver": "https://resolver.example" } }',
+      ),
+    );
+    // Byte-equal, not merely a superset: no `secretName` is added, so this
+    // fails the moment core starts defaulting the block again.
+    expect(cfg.pds).toEqual({
+      name: 'Ant Stanley',
+      description: 'd',
+      handleResolver: 'https://resolver.example',
+    });
+    expect(Object.keys(cfg.pds ?? {})).toEqual(['name', 'description', 'handleResolver']);
+    expect(cfg.pds?.secretName).toBeUndefined();
+  });
+
+  it('keeps an explicit secretName on the pds block untouched', () => {
+    const cfg = parseConfig(withSite('{ "pds": { "name": "x", "secretName": "me/secret" } }'));
+    expect(cfg.pds).toEqual({ name: 'x', secretName: 'me/secret' });
+  });
+});
+
+describe('parseConfigDocument', () => {
+  it('returns a config byte-identical to parseConfig, plus a raw document carrying an unknown top-level key', () => {
+    const text = withSite('{ "domain": "example.com", "analytics": { "table": "events" } }');
+
+    const { config, raw } = parseConfigDocument(text);
+
+    expect(config).toEqual(parseConfig(text));
+    expect(raw['siteName']).toBe('example');
+    expect(raw['domain']).toBe('example.com');
+    // `analytics` survives the `...raw` spread mergeConfig already does, so
+    // it round-trips into `raw` too - `OpsConfig`'s *type* has no declared
+    // property for it (a compile-time fact: `config[key]` is a `TS7053` for
+    // an arbitrary string `key`), which is why `pluginBlock` reads it off
+    // `raw`, never off `config`.
+    expect(raw['analytics']).toEqual({ table: 'events' });
+  });
+
+  it('parseConfig keeps its existing signature as the config half of parseConfigDocument', () => {
+    const text = withSite('{ "domain": "example.com" }');
+    expect(parseConfig(text)).toEqual(parseConfigDocument(text).config);
+  });
+});
+
+describe('pluginBlock', () => {
+  it('reads a plugin key out of the raw document', () => {
+    const { raw } = parseConfigDocument(withSite('{ "analytics": { "table": "events" } }'));
+    expect(pluginBlock(raw, 'analytics')).toEqual({ table: 'events' });
+  });
+
+  it('returns undefined for a key the document does not carry', () => {
+    const { raw } = parseConfigDocument(withSite('{}'));
+    expect(pluginBlock(raw, 'analytics')).toBeUndefined();
   });
 });
 
@@ -158,6 +221,16 @@ describe('deriveNames', () => {
     expect(names.microvmImage).toBe('staging-example-builder');
     expect(names.microvmLogGroup).toBe('/aws/lambda/microvms/staging-example-builder');
     expect(names.cloudfrontLogGroup).toBe('/example/staging/cloudfront');
+  });
+
+  it('pins the GitHub OIDC deploy role name so no existing role is renamed', () => {
+    // `<env>-<siteName>-gh` is the value `githubOidcRoleNode` derived privately
+    // before this field existed (`packages/cli/src/nodes.ts`), and it is the
+    // name `blogwright-pds` attaches its own inline policy to. A change here
+    // silently orphans every deployed role.
+    const cfg = parseConfig(withSite('{}'));
+    expect(deriveNames('production', '123456789012', cfg).githubRole).toBe('production-example-gh');
+    expect(deriveNames('staging', '123456789012', cfg).githubRole).toBe('staging-example-gh');
   });
 
   it('rejects an invalid environment name', () => {

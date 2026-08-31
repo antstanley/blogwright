@@ -27,7 +27,17 @@ export interface SeoConfig {
   sitemap: 'auto' | 'on' | 'off';
 }
 
-/** AT Protocol / standard.site publishing (see `blogwright pds`). Inert when absent. */
+/**
+ * AT Protocol / standard.site publishing (see `blogwright pds`). Inert when
+ * absent.
+ *
+ * A *shape*, not a contract core enforces: `blogwright-pds` owns this key end
+ * to end - it validates the block (`validatePdsConfig`) and derives the
+ * `<siteName>/atproto` default `secretName` (`resolvePdsSecretName`). Core
+ * parses the block through untouched. The type stays here only because
+ * `OpsConfig.pds` is still declared, which is what lets the CLI's deploy-role
+ * statement read it until that statement moves to the plugin.
+ */
 export interface PdsConfig {
   /** Publication display name (site.standard.publication `name`). */
   name: string;
@@ -39,8 +49,12 @@ export interface PdsConfig {
    * the DID document during OAuth.
    */
   handleResolver?: string | undefined;
-  /** Secrets Manager secret holding the OAuth client key + session. */
-  secretName: string;
+  /**
+   * Secrets Manager secret holding the OAuth client key + session. Optional
+   * because core no longer defaults it: `blogwright-pds` resolves an absent
+   * one to `<siteName>/atproto`.
+   */
+  secretName?: string | undefined;
 }
 
 /**
@@ -91,7 +105,7 @@ export interface OpsConfig {
   /** Extra path prefixes excluded from the source zip (on top of .gitignore). */
   sourceIgnore: string[];
   /**
-   * Paths zipped into the deploy source even when gitignored — for artifacts a
+   * Paths zipped into the deploy source even when gitignored - for artifacts a
    * pre-deploy step builds outside the MicroVM (a wasm bundle, generated
    * assets). Each entry must exist and be non-empty at deploy time, so a
    * forgotten pre-build fails fast instead of shipping a broken site.
@@ -238,16 +252,42 @@ export function stripTrailingCommas(input: string): string {
   return out;
 }
 
+/**
+ * Parse a JSONC config document into both its validated `OpsConfig` and the
+ * raw parsed document. `raw` carries every top-level property the file has,
+ * including a plugin's own key - `OpsConfig` has no index signature to read
+ * one off `config`, so a plugin's block survives the parse only here.
+ * `parseConfig` keeps its existing signature as this function's `config`
+ * half, so no existing caller changes.
+ */
+export function parseConfigDocument(text: string): {
+  config: OpsConfig;
+  raw: Readonly<Record<string, unknown>>;
+} {
+  const raw = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as Record<string, unknown>;
+  const config = mergeConfig(raw as Partial<OpsConfig>);
+  return { config, raw };
+}
+
 /** Parse + validate a JSONC config document, merged over defaults. */
 export function parseConfig(text: string): OpsConfig {
-  const raw = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as Partial<OpsConfig>;
-  return mergeConfig(raw);
+  return parseConfigDocument(text).config;
+}
+
+/**
+ * Read a plugin's own block out of a config document's raw form - the
+ * `unknown` the CLI hands straight to that plugin's `validateConfig`. Not a
+ * function a plugin calls itself; only the CLI's dispatch path reads a
+ * block this way, over the `raw` half {@link parseConfigDocument} returns.
+ */
+export function pluginBlock(raw: Readonly<Record<string, unknown>>, key: string): unknown {
+  return raw[key];
 }
 
 export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
   if (!raw.siteName) {
     throw new Error(
-      'config.siteName is required — a stable lowercase slug used in every derived AWS resource name',
+      'config.siteName is required - a stable lowercase slug used in every derived AWS resource name',
     );
   }
   const cfg: OpsConfig = {
@@ -263,12 +303,6 @@ export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
     seo: { ...DEFAULT_CONFIG.seo, ...raw.seo },
     paths: { ...DEFAULT_CONFIG.paths, ...raw.paths },
   };
-  if (raw.pds) {
-    cfg.pds = {
-      ...raw.pds,
-      secretName: raw.pds.secretName ?? `${cfg.siteName}/atproto`,
-    };
-  }
   validateConfig(cfg);
   return cfg;
 }
@@ -311,23 +345,10 @@ function validateConfig(cfg: OpsConfig): void {
       throw new Error(`config.paths.${key} must be repo-relative without "..", got "${value}"`);
     }
   }
-  if (cfg.pds) {
-    if (!cfg.pds.name?.trim()) throw new Error('config.pds.name is required');
-    if (cfg.pds.handleResolver !== undefined) {
-      let resolver: URL;
-      try {
-        resolver = new URL(cfg.pds.handleResolver);
-      } catch {
-        throw new Error(`config.pds.handleResolver must be a URL, got "${cfg.pds.handleResolver}"`);
-      }
-      if (resolver.protocol !== 'https:') {
-        throw new Error(`config.pds.handleResolver must be https, got "${cfg.pds.handleResolver}"`);
-      }
-    }
-    if (!/^[\w/+=.@-]+$/.test(cfg.pds.secretName)) {
-      throw new Error(`config.pds.secretName has invalid characters: "${cfg.pds.secretName}"`);
-    }
-  }
+  // No plugin-block branch here, by design: a plugin's block is that plugin's
+  // own to judge. Core validates only the keys it declares, so an unknown - or
+  // malformed - plugin block parses through untouched and is checked by that
+  // plugin's `validateConfig`, off `parseConfigDocument`'s raw half.
 }
 
 export interface Names {
@@ -336,6 +357,16 @@ export interface Names {
   prefix: string;
   buildRole: string;
   execRole: string;
+  /**
+   * The GitHub Actions OIDC deploy role. Derived here rather than inside the
+   * CLI's own `githubOidcRoleNode` because it has two readers: that node, and
+   * `blogwright-pds`, whose resource node attaches its own named inline policy
+   * to the same role (`packages/pds/src/nodes.ts`). Only the role's ARN reaches
+   * the site's state, so a plugin cannot recover the name from there - and a
+   * second, private derivation is exactly the duplication DEVELOPMENT.md
+   * §Limits and bounds bans for a derived AWS name.
+   */
+  githubRole: string;
   microvmImage: string;
   microvmLogGroup: string;
   cloudfrontLogGroup: string;
@@ -363,6 +394,7 @@ export function deriveNames(env: string, accountId: string, cfg: OpsConfig): Nam
     prefix,
     buildRole: `${prefix}-build-role`,
     execRole: `${prefix}-exec-role`,
+    githubRole: `${prefix}-gh`,
     microvmImage,
     microvmLogGroup: `/aws/lambda/microvms/${microvmImage}`,
     cloudfrontLogGroup: `/${cfg.siteName}/${env}/cloudfront`,

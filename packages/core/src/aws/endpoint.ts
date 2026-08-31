@@ -9,7 +9,7 @@
 export interface ResolvedEndpoint {
   protocol: 'http:' | 'https:';
   host: string;
-  /** Signing region — some services (iam, cloudfront) are global and sign as us-east-1. */
+  /** Signing region - some services (iam, cloudfront) are global and sign as us-east-1. */
   signingRegion: string;
   /** True when talking to an override origin (floci/localstack); forces S3 path-style. */
   override: boolean;
@@ -32,15 +32,52 @@ export const SIGNING_NAMES = {
 
 export type ServiceKey = keyof typeof SIGNING_NAMES;
 
+/**
+ * A plugin-supplied AWS service - core does not enumerate it, so the plugin names
+ * its own SigV4 signing name and whether it is global (signs in us-east-1).
+ */
+export interface ServiceDescriptor {
+  service: string;
+  signingName: string;
+  global?: boolean | undefined;
+}
+
+/** What every `service`-keyed site actually needs, whichever form `service` arrived in. */
+export interface ResolvedService {
+  name: string;
+  signingName: string;
+  global: boolean;
+}
+
 /** Services that are global; they always sign in us-east-1. */
 const GLOBAL_SERVICES = new Set<ServiceKey>(['iam', 'cloudfront', 'route53']);
 
+/**
+ * Turns a core `ServiceKey` or a plugin-supplied `ServiceDescriptor` into one shape.
+ * The single resolution helper every `service`-keyed site reads.
+ */
+export function resolveService(service: ServiceKey | ServiceDescriptor): ResolvedService {
+  if (typeof service === 'string') {
+    return {
+      name: service,
+      signingName: SIGNING_NAMES[service],
+      global: GLOBAL_SERVICES.has(service),
+    };
+  }
+  return {
+    name: service.service,
+    signingName: service.signingName,
+    global: service.global ?? false,
+  };
+}
+
 export function resolveEndpoint(
-  service: ServiceKey,
+  service: ServiceKey | ServiceDescriptor,
   region: string,
   override: string | undefined,
 ): ResolvedEndpoint {
-  const signingRegion = GLOBAL_SERVICES.has(service) ? 'us-east-1' : region;
+  const resolved = resolveService(service);
+  const signingRegion = resolved.global ? 'us-east-1' : region;
 
   if (override) {
     const url = new URL(override);
@@ -54,13 +91,13 @@ export function resolveEndpoint(
 
   return {
     protocol: 'https:',
-    host: canonicalHost(service, region),
+    host: canonicalHost(resolved.name, region),
     signingRegion,
     override: false,
   };
 }
 
-function canonicalHost(service: ServiceKey, region: string): string {
+function canonicalHost(service: string, region: string): string {
   switch (service) {
     case 'iam':
       return 'iam.amazonaws.com';

@@ -5,26 +5,31 @@
   "singleQuote": true,
   "trailingComma": "all",
   "arrowParens": "always",
-  // oxfmt owns this repo's TypeScript and JavaScript, nothing else. Build output
-  // (dist/, packages/cli/agent/, node_modules/) needs no entry here — oxfmt reads
-  // .gitignore by default. Patterns are relative to this file.
+  // oxfmt owns this repo's TypeScript, JavaScript and CSS, nothing else. Build
+  // output (dist/, packages/cli/agent/, packages/analytics/app/.svelte-kit/,
+  // node_modules/) needs no entry here - oxfmt reads .gitignore by default.
+  // Patterns are relative to this file.
+  //
+  // The `.svelte` files under packages/analytics/app/ are the one authored
+  // source this gate does not reach: oxfmt has no Svelte parser, so it neither
+  // formats nor complains about them. That is recorded rather than fixed - the
+  // only fix is a second formatter (prettier plus prettier-plugin-svelte) for
+  // three files, which is a larger dependency surface than the problem. Their
+  // types are still checked: `pnpm typecheck` runs svelte-check over them.
   "ignorePatterns": [
     // Owned by changesets: `pnpm changeset` writes the frontmatter with double
     // quotes and rewrites these files on every release, so formatting them just
     // starts a fight the CLI wins.
     ".changeset/**",
     "**/CHANGELOG.md",
-
-    // Authored prose — the Starlight docs site, specs, and READMEs. Reflowing
+    // Authored prose - the Starlight docs site, specs, and READMEs. Reflowing
     // hand-written documentation is a content change, not formatting.
     "**/*.md",
     "**/*.mdx",
-
     // Hand-tuned config where key order and comments carry meaning: package.json
     // field order, the commented .oxlintrc.json and config/*.jsonc deploy files.
     "**/*.json",
     "**/*.jsonc",
-
     // CI workflows: YAML layout is deliberate and reformatting risks semantics.
     ".github/**"
   ]

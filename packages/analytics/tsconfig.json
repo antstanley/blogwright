@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "dist",
+    "**/*.test.ts",
+    "src/transform/entry.ts",
+    "src/transform/rolldown.config.ts",
+    "src/transform/write-manifest.ts"
+  ]
+}

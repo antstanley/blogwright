@@ -5,12 +5,15 @@ import {
   pollUntil,
   textTag,
   type CreateImageInput,
+  type DeliverySummary,
   type DistributionListItem,
+  type ResourceNode as CoreResourceNode,
 } from 'blogwright-core';
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
-import type { ResourceNode } from './graph.js';
+
+type ResourceNode = CoreResourceNode<OpsContext>;
 
 /** Lambda-managed MicroVM base image (Amazon Linux 2023) for the primary region. */
 function microvmBaseImageArn(region: string): string {
@@ -75,7 +78,7 @@ function logGroupNode(
   name: (ctx: OpsContext) => string,
   days: (ctx: OpsContext) => number,
   // CloudFront vended log delivery exists only in us-east-1, so its log group
-  // must live there too — regardless of the stack's primary region.
+  // must live there too - regardless of the stack's primary region.
   usEast1 = false,
 ): ResourceNode {
   const logs = (ctx: OpsContext) => (usEast1 ? ctx.clients.logsUsEast1 : ctx.clients.logs);
@@ -115,7 +118,7 @@ const LAMBDA_TRUST = {
 };
 
 /** IAM role Lambda assumes while building the MicroVM image. */
-/** Apply the build role's inline policy (idempotent — used by create + update). */
+/** Apply the build role's inline policy (idempotent - used by create + update). */
 async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
   // The build role is BOTH the image-build role AND the MicroVM's ambient runtime
   // identity (via IMDS), so it needs the build's runtime S3 permissions: read the
@@ -127,7 +130,7 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
       { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
       {
         // s3:PutObjectTagging is required even though the tags ride on the PUT
-        // itself (x-amz-tagging header) — AWS checks it as a distinct action, and
+        // itself (x-amz-tagging header) - AWS checks it as a distinct action, and
         // PutObject does not imply it. Without it every tagged upload 403s.
         Effect: 'Allow',
         Action: ['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject'],
@@ -187,7 +190,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
         Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
       },
       {
-        // s3:PutObjectTagging: see the build role — a tagged PUT needs it explicitly.
+        // s3:PutObjectTagging: see the build role - a tagged PUT needs it explicitly.
         Effect: 'Allow',
         Action: ['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject'],
         Resource: siteWriteResource(ctx),
@@ -271,7 +274,7 @@ async function imageInput(ctx: OpsContext): Promise<{ input: CreateImageInput; h
 
 /**
  * Poll until the image reaches its expected terminal state, treating a timeout (still
- * CREATING/UPDATING) as failure — never success. For updates, require the version to
+ * CREATING/UPDATING) as failure - never success. For updates, require the version to
  * advance past `priorVersion` so a stale pre-update state can't be read as done.
  */
 async function awaitImageSettled(
@@ -324,7 +327,7 @@ export function builderImageAction(
  * Create, rebuild, or leave the MicroVM builder image, depending on what's deployed:
  * create it if missing, rebuild it if the agent bundle (or its log group) changed or the
  * last build is unhealthy, otherwise no-op. Idempotent and cheap in the common case (a
- * single GetMicrovmImage + hash compare), so it's safe to run before every deploy — which
+ * single GetMicrovmImage + hash compare), so it's safe to run before every deploy - which
  * is how build-agent changes propagate through CI without a separate `bootstrap`.
  */
 export async function reconcileBuilderImage(ctx: OpsContext): Promise<void> {
@@ -389,12 +392,12 @@ function microvmImageNode(): ResourceNode {
   };
 }
 
-/** ACM certificate (us-east-1) — only present when a custom domain is configured. */
+/** ACM certificate (us-east-1) - only present when a custom domain is configured. */
 function certificateNode(): ResourceNode {
   return {
     id: 'acm-certificate',
     // Depends on the bucket so state (with the cert ARN) can be saved before the long
-    // ISSUED wait — the id sorts before 'bucket', so without this it would run first.
+    // ISSUED wait - the id sorts before 'bucket', so without this it would run first.
     dependsOn: ['bucket'],
     title: 'ACM certificate',
     async read(ctx) {
@@ -425,7 +428,7 @@ function certificateNode(): ResourceNode {
       let initial = await ctx.clients.acm.describeCertificate(arn);
       if (initial.status === 'PENDING_VALIDATION' && initial.validation.length === 0) {
         // ACM populates the validation ResourceRecords asynchronously after
-        // RequestCertificate — an empty set here is that race, not "nothing to
+        // RequestCertificate - an empty set here is that race, not "nothing to
         // validate". Acting on it would skip record creation entirely and the
         // issuance poll below could never succeed.
         initial = await pollUntil(
@@ -441,7 +444,7 @@ function certificateNode(): ResourceNode {
       }
       if (initial.status !== 'ISSUED' && initial.validation.length > 0) {
         if (ctx.preview) {
-          // Preview domain is a Route53 hosted zone — create the validation records for you.
+          // Preview domain is a Route53 hosted zone - create the validation records for you.
           const zoneId = await ctx.clients.route53.hostedZoneId(domain);
           if (!zoneId) throw new Error(`no Route53 hosted zone found for ${domain}`);
           for (const r of initial.validation) {
@@ -517,7 +520,7 @@ const PREVIEW_FUNCTION_CODE = `function handler(event) {
 /**
  * CloudFront Function (viewer-request) for staging/production: resolve a directory URL
  * to its index document (`/projects/` → `/projects/index.html`). Required because the S3
- * origin is the private REST endpoint (via OAC), which — unlike an S3 website endpoint —
+ * origin is the private REST endpoint (via OAC), which - unlike an S3 website endpoint -
  * does no index-document resolution, so `DefaultRootObject` only covers the apex. The
  * `/site` origin path is applied by the distribution, so this function must not add it.
  */
@@ -565,7 +568,7 @@ function routerFunctionNode(preview: boolean): ResourceNode {
 /**
  * Find the distribution a crashed earlier bootstrap created but never recorded in
  * state. The deterministic comment (`"<siteName> <env>"`) narrows candidates; identity
- * is confirmed by CallerReference — comments are editable in the console, while the
+ * is confirmed by CallerReference - comments are editable in the console, while the
  * reference is immutable for the distribution's life and collision-free across
  * environments by construction.
  */
@@ -623,7 +626,7 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
           functionArn: String(output(ctx, 'cloudfront-function').arn),
           // Previews are served uncached (per-PR content, host-routed); staging/production
           // keep the default cache policy. Non-preview stacks map the S3 REST origin's
-          // 403/404 (a missing key) to the site's 404 page — or, in SPA mode, to
+          // 403/404 (a missing key) to the site's 404 page - or, in SPA mode, to
           // /index.html with a 200 so client-side routes deep-link correctly.
           ...(preview
             ? { cachePolicyId: CACHING_DISABLED }
@@ -637,8 +640,8 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
         });
       } catch (err) {
         // A crashed earlier bootstrap can leave a distribution in AWS that state never
-        // recorded. Retrying then 409s on the duplicate alias — CloudFront's CNAME
-        // conflict check fires before the CallerReference idempotency match — so adopt
+        // recorded. Retrying then 409s on the duplicate alias - CloudFront's CNAME
+        // conflict check fires before the CallerReference idempotency match - so adopt
         // the orphan instead. No verified match means the alias belongs to a foreign
         // distribution: that conflict is real and must surface.
         const conflict =
@@ -671,14 +674,14 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
     },
     async update(ctx) {
       // A domain added (or changed) after the first bootstrap must reach the
-      // existing distribution — the certificate node validates the cert, but
+      // existing distribution - the certificate node validates the cert, but
       // only this reconcile attaches the alias + viewer certificate.
       const id = output(ctx, 'cloudfront-distribution').id;
       if (typeof id !== 'string') return;
       if (!ctx.domain) {
         // Deliberately no automatic alias removal: dropping --domain from a
         // later run must not detach a live site's hostname.
-        ctx.logger.ok('no domain configured — existing aliases left as-is');
+        ctx.logger.ok('no domain configured - existing aliases left as-is');
         return;
       }
       const alias = preview ? `*.${ctx.domain}` : ctx.domain;
@@ -707,6 +710,56 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       await ctx.clients.cloudfront.deleteDistribution(id);
     },
   };
+}
+
+/**
+ * True when `delivery` is the one this site's node created. AWS permits exactly
+ * one delivery source per distribution, so the analytics plugin necessarily
+ * hangs its own delivery off the site's source: ownership is the destination a
+ * delivery feeds, and nothing else. The final `:`-separated segment of a
+ * `delivery-destination` ARN is its name, which is derived from the environment
+ * (`deriveNames`) and therefore also matches the previous stack's delivery on a
+ * destroy → bootstrap cycle - exactly the delivery the ConflictException retry
+ * exists to remove.
+ *
+ * Position cannot stand in for this (`findDeliveryIdBySource` takes whichever
+ * delivery AWS lists first), and neither can the recorded `destination` output:
+ * it is empty precisely when the retry needs it, because `putDeliverySource`
+ * throws the Conflict before `putDeliveryDestination` ever runs.
+ */
+function isOwnDelivery(delivery: DeliverySummary, destinationName: string): boolean {
+  return delivery.deliveryDestinationArn.split(':').pop() === destinationName;
+}
+
+/**
+ * The ids of the site's own deliveries on `names.deliverySource`, after
+ * refusing outright when the shared source carries a delivery the site did not
+ * create. Both the `delete()` teardown and the ConflictException retry call
+ * this BEFORE deleting anything: each of them goes on to delete the delivery
+ * source, and AWS rejects that while another delivery is attached - a refusal
+ * `deleteDeliverySource` does not catch (it swallows only not-found). Refusing
+ * up front turns a teardown that throws part-way, after the site's own delivery
+ * is already gone, into an actionable stop with nothing removed.
+ */
+async function ownDeliveryIdsOrRefuse(ctx: OpsContext): Promise<string[]> {
+  const deliveries = await ctx.clients.logsUsEast1.deliveriesForSource(ctx.names.deliverySource);
+  const foreign = deliveries.filter((d) => !isOwnDelivery(d, ctx.names.deliveryDestination));
+  if (foreign.length > 0) {
+    const listed = foreign
+      .map((d) => `${d.id} (destination ${d.deliveryDestinationArn})`)
+      .join(', ');
+    throw new Error(
+      `delivery source ${ctx.names.deliverySource} still carries ` +
+        `${foreign.length === 1 ? 'a delivery' : `${foreign.length} deliveries`} this site does ` +
+        `not own (${listed}); removing the source would break whoever does. Tear that stack ` +
+        `down first, then retry: blogwright analytics destroy ${ctx.env} --yes`,
+    );
+  }
+  // Filtered, not `deliveries.map(...)`: the throw above already guarantees every
+  // delivery here is the site's own, but that is a non-local guarantee. Re-applying
+  // the predicate makes the name and the body agree on their own, so softening the
+  // refusal cannot silently start feeding foreign ids to the delete loop.
+  return deliveries.filter((d) => isOwnDelivery(d, ctx.names.deliveryDestination)).map((d) => d.id);
 }
 
 /** Wire CloudFront access logs to the CloudWatch log group via vended log delivery. */
@@ -745,14 +798,20 @@ function logDeliveryNode(): ResourceNode {
         await wire(ctx);
       } catch (err) {
         // delete() below leaves the delivery plumbing behind, and PutDeliverySource
-        // refuses to repoint an existing source at a new distribution ARN — so a
+        // refuses to repoint an existing source at a new distribution ARN - so a
         // destroy → bootstrap cycle hits ConflictException here. Remove the stale
         // delivery/source/destination trio and retry once.
         if (!(err instanceof AwsError && /Conflict/i.test(err.code))) throw err;
-        ctx.logger.step('stale log delivery from a previous stack — removing and retrying');
-        for (const id of await ctx.clients.logsUsEast1.deliveriesForSource(
-          ctx.names.deliverySource,
-        )) {
+        ctx.logger.step('stale log delivery from a previous stack - removing and retrying');
+        // Refuse before deleting anything when the source is shared: removing it
+        // IS the retry (PutDeliverySource will not repoint a source that still
+        // exists), so a foreign delivery forecloses the retry entirely. Deleting
+        // only the site's own delivery and pressing on would leave the stack with
+        // no CloudWatch delivery and a failed bootstrap - worse than the conflict
+        // being healed. Only the site's own ids are removed here; the old loop
+        // deleted every delivery on the source, silently unwiring the other owner.
+        const ownDeliveryIds = await ownDeliveryIdsOrRefuse(ctx);
+        for (const id of ownDeliveryIds) {
           await ctx.clients.logsUsEast1.deleteDelivery(id);
         }
         await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
@@ -765,11 +824,10 @@ function logDeliveryNode(): ResourceNode {
       // delivery source/destination persist, and a later bootstrap against a new
       // distribution ARN fails with ConflictException ("Update to existing Delivery Source
       // with new ResourceId is not allowed"). Delete the delivery first (it references both),
-      // then the source and destination. The id isn't in state, so look it up by source name.
-      const deliveryId = await ctx.clients.logsUsEast1.findDeliveryIdBySource(
-        ctx.names.deliverySource,
-      );
-      if (deliveryId) await ctx.clients.logsUsEast1.deleteDelivery(deliveryId);
+      // then the source and destination. The ids aren't in state, so look them up by source
+      // name - which also settles whether this site still owns the source at all.
+      const deliveryIds = await ownDeliveryIdsOrRefuse(ctx);
+      for (const id of deliveryIds) await ctx.clients.logsUsEast1.deleteDelivery(id);
       await ctx.clients.logsUsEast1.deleteDeliverySource(ctx.names.deliverySource);
       await ctx.clients.logsUsEast1.deleteDeliveryDestination(ctx.names.deliveryDestination);
     },
@@ -818,12 +876,12 @@ const GITHUB_OIDC_URL = 'token.actions.githubusercontent.com';
 const GITHUB_OIDC_THUMBPRINT = '6938fd4d98bab03faadb97b34396831e3780aea1';
 
 /**
- * IAM role a GitHub Actions workflow assumes via OIDC — to deploy/destroy previews
+ * IAM role a GitHub Actions workflow assumes via OIDC - to deploy/destroy previews
  * (preview stack, any ref) or to deploy production (main branch only, plus CloudFront
  * invalidation and read access to the PDS credentials secret).
  */
 function githubOidcRoleNode(preview: boolean): ResourceNode {
-  const roleName = (ctx: OpsContext) => `${ctx.names.prefix}-gh`;
+  const roleName = (ctx: OpsContext) => ctx.names.githubRole;
   return {
     id: 'gh-oidc-role',
     // Production deploys invalidate the distribution, so its ARN must be in state.
@@ -850,7 +908,7 @@ function githubOidcRoleNode(preview: boolean): ResourceNode {
 /**
  * The workflow's OIDC subject claim, scoped per environment to match how each one
  * deploys: previews from any PR ref; staging from pushes to main; production from the
- * `production` GitHub Environment (release-gated — see production.yml), which lets
+ * `production` GitHub Environment (release-gated - see production.yml), which lets
  * deploys be gated behind environment protection rules.
  */
 export function oidcSubClaim(repo: string, env: string, preview: boolean): string {
@@ -915,6 +973,18 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       // refresh tokens are single-use, so every sync persists the rotated
       // session (PutSecretValue via the upsert helper, which tries CreateSecret
       // first when the secret is missing).
+      //
+      // The `??` default duplicates the pds plugin's own `resolvePdsSecretName`
+      // deliberately, and must NOT be replaced by an import of it: this
+      // resource graph carries no plugin knowledge, which is the whole point of
+      // the plugin owning its own node (`packages/pds/src/nodes.ts`). Core
+      // stopped defaulting `pds.secretName`, so without this default the
+      // template literal would happily interpolate `undefined` into a live IAM
+      // policy - `applyOidcRole` rewrites this whole document on every
+      // `blogwright bootstrap`, so a wrong ARN here is a broken permission and
+      // not a test failure. Task 59 deletes this statement together with the
+      // `ctx.config.pds` branch around it; the duplication lives only until
+      // then.
       statements.push({
         Effect: 'Allow',
         Action: [
@@ -922,7 +992,7 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
           'secretsmanager:PutSecretValue',
           'secretsmanager:CreateSecret',
         ],
-        Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName}-*`,
+        Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName ?? `${ctx.config.siteName}/atproto`}-*`,
       });
     }
   }
@@ -968,7 +1038,7 @@ async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
 
 /**
  * Route53 wildcard record pointing *.<domain> at the preview CloudFront
- * distribution — A/AAAA alias records (free queries, apex-safe), not a CNAME.
+ * distribution - A/AAAA alias records (free queries, apex-safe), not a CNAME.
  */
 function previewDnsNode(): ResourceNode {
   async function upsertAliases(ctx: OpsContext): Promise<void> {
@@ -979,7 +1049,7 @@ function previewDnsNode(): ResourceNode {
     const cf = String(output(ctx, 'cloudfront-distribution').domainName);
     const out = output(ctx, 'preview-dns');
     // Route53 refuses A/AAAA alongside a CNAME at the same name, so clear any
-    // CNAME first — a pre-0.2.1 bootstrap's (recorded in state) or an
+    // CNAME first - a pre-0.2.1 bootstrap's (recorded in state) or an
     // operator's manual workaround (pointing at the distribution). Deleting a
     // record that is not there is a no-op.
     if (out.type !== 'ALIAS') {

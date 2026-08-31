@@ -22,7 +22,7 @@ function indexRobots(sitemapUrl: string | undefined): string {
  * Resolve robots.txt / sitemap.xml directives for a deploy from the environment + config.
  * `baseUrl` is the canonical origin the site is served from (e.g. https://example.com).
  * Defaults are environment-aware: production is indexable with a sitemap; every other
- * environment blocks crawlers and skips the sitemap — all overridable via config.seo.
+ * environment blocks crawlers and skips the sitemap - all overridable via config.seo.
  */
 export function resolveSeo(ctx: OpsContext, baseUrl: string | undefined): SeoDirectives {
   const isProd = !ctx.preview && ctx.env === 'production';

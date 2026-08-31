@@ -1,6 +1,8 @@
 # build output
 dist/
 .astro/
+# SvelteKit's generated types and manifest for the analytics dashboard app
+.svelte-kit/
 # build-agent artifacts copied into the CLI package by its build
 packages/cli/agent/
 
@@ -19,3 +21,18 @@ pnpm-debug.log*
 
 # editors
 .idea/
+
+# Playwright MCP page/console snapshots, written into the repo root by the
+# browser tool. Verification artefacts, never sources; task 57's dashboard
+# check produced nine of them and they reached a merge commit before oxfmt
+# caught them.
+.playwright-mcp/
+
+# Loose screenshots a browser-verification run drops in the repo root. The
+# MCP server writes into the MAIN checkout rather than the task workspace, so
+# these arrive where the merge happens, and a .png is invisible to every gate
+# except oxfmt - which does not format images either.
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp

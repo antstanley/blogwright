@@ -2,7 +2,7 @@
  * Test-only PdsContext factory. Builds a real, fully-typed context over
  * in-memory adapters: file access hits a Map-backed FileSystem, and every
  * secrets-client method a test has not overridden fails fast at the transport.
- * Tests substitute behaviour here — at the ports — never by casting.
+ * Tests substitute behaviour here - at the ports - never by casting.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -21,6 +21,7 @@ import {
   type Transport,
 } from 'blogwright-core';
 
+import { resolvePdsSecretName } from './config.js';
 import type { PdsContext, PdsLogger } from './context.js';
 
 export interface TestContextOverrides {
@@ -34,13 +35,13 @@ export interface TestContextOverrides {
 
 const rejectAllTransport: Transport = async (req) => {
   throw new Error(
-    `unexpected AWS request in test: ${req.method} ${req.url} — override the client method on createTestContext`,
+    `unexpected AWS request in test: ${req.method} ${req.url} - override the client method on createTestContext`,
   );
 };
 
 /**
  * Layer test overrides over a real client so untouched methods still fail fast.
- * Overrides must be plain objects of methods (own properties) — a class
+ * Overrides must be plain objects of methods (own properties) - a class
  * instance's prototype methods would not be copied.
  */
 function testSecrets(
@@ -64,7 +65,7 @@ const silentTerminal: Terminal = {
   status: () => undefined,
   question: async (prompt) => {
     throw new Error(
-      `unexpected terminal prompt in test: ${prompt} — override ports.terminal on createTestContext`,
+      `unexpected terminal prompt in test: ${prompt} - override ports.terminal on createTestContext`,
     );
   },
 };
@@ -91,10 +92,16 @@ export async function removeTempDir(dir: string): Promise<void> {
  * Build a complete PdsContext for tests. Defaults: env "test", site "example",
  * config merged over DEFAULT_CONFIG, a fresh in-memory FileSystem, a silent
  * terminal, a secrets client that fails fast until overridden, and a silent
- * logger.
+ * logger. A `pds` block's `secretName` is resolved here too - the same
+ * `<siteName>/atproto` default `requirePdsConfig` applies - so a test that
+ * omits it still gets a context whose `config.pds.secretName` is set, even
+ * once core stops defaulting it.
  */
 export function createTestContext(overrides: TestContextOverrides = {}): PdsContext {
   const config = mergeConfig({ siteName: 'example', ...overrides.config });
+  if (config.pds) {
+    config.pds = { ...config.pds, secretName: resolvePdsSecretName(config.pds, config.siteName) };
+  }
   return {
     env: overrides.env ?? 'test',
     domain: overrides.domain,

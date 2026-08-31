@@ -3,6 +3,9 @@
   "version": "0.3.3",
   "type": "module",
   "sideEffects": false,
+  "blogwright": {
+    "plugin": "pds"
+  },
   "files": [
     "dist"
   ],

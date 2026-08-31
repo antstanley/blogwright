@@ -169,7 +169,7 @@ export class MicrovmsClient {
   }
 
   async updateImage(id: string, input: CreateImageInput): Promise<MicrovmImage> {
-    // A PUT is idempotent on the image itself, so no clientToken is needed — and reusing one
+    // A PUT is idempotent on the image itself, so no clientToken is needed - and reusing one
     // across separate update attempts triggers "clientToken used with different parameters".
     const { clientToken, ...body } = this.imageBody(input) as Record<string, unknown>;
     void clientToken;
@@ -224,7 +224,7 @@ export class MicrovmsClient {
    *
    * `maxResults` is always sent: the ListMicrovms operation defines it as a defaulted
    * query parameter, and the service normalizes a missing default into the request before
-   * validating the SigV4 signature — so omitting it produces an intermittent
+   * validating the SigV4 signature - so omitting it produces an intermittent
    * SignatureDoesNotMatch that GetMicrovm/DeleteMicrovm (no query params) never hit.
    */
   async listMicrovms(

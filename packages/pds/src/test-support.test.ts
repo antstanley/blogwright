@@ -13,6 +13,15 @@ describe('createTestContext', () => {
     expect(() => createTestContext({ config: { siteName: 'Bad Name' } })).toThrow(/siteName/);
   });
 
+  it('resolves a default secretName for a pds block that omits it', () => {
+    // No cast: core declares `secretName` optional because it no longer
+    // defaults it, so this is the shape a real config file has. The default
+    // this asserts is the *plugin's* (`resolvePdsSecretName`), applied by
+    // `createTestContext`, not core's - core's is gone.
+    const ctx = createTestContext({ config: { pds: { name: 'Ant' } } });
+    expect(ctx.config.pds?.secretName).toBe('example/atproto');
+  });
+
   it('wires an isolated in-memory filesystem port', async () => {
     const ctx = createTestContext();
     await ctx.ports.fs.writeText('/repo/file.txt', 'hello');

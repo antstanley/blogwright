@@ -14,7 +14,7 @@ export interface DnsRecord {
   aliasZoneId?: string | undefined;
 }
 
-/** CloudFront's fixed alias hosted zone id — the same for every distribution. */
+/** CloudFront's fixed alias hosted zone id - the same for every distribution. */
 export const CLOUDFRONT_ALIAS_ZONE_ID = 'Z2FDTNDATAQYW2';
 
 /** Route53 client (REST-XML). Global service, signed in us-east-1. */
@@ -78,7 +78,7 @@ export class Route53Client {
     try {
       await this.change(zoneId, 'DELETE', record);
     } catch (err) {
-      // Route53 rejects a DELETE whose record doesn't exactly match/exist —
+      // Route53 rejects a DELETE whose record doesn't exactly match/exist -
       // that (and only that) means "already gone". Throttling, auth, and other
       // failures must surface, or a teardown leaves the record dangling while
       // reporting success.

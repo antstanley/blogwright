@@ -4,7 +4,7 @@
 </h1>
 
 <p align="center">
-  Full operations for a blog site on AWS — S3 + CloudFront hosting, with the site
+  Full operations for a blog site on AWS - S3 + CloudFront hosting, with the site
   built inside a <strong>Lambda MicroVM</strong>. One CLI, no CloudFormation, no
   Terraform, no CDK.
   <br /><br />
@@ -13,7 +13,7 @@
 
 ---
 
-Works with any static site that builds via `pnpm build` — an Astro blog at the
+Works with any static site that builds via `pnpm build` - an Astro blog at the
 repo root, or a SvelteKit/Vite SPA in a monorepo subdirectory. The CLI talks to
 AWS by SigV4-signing raw HTTP requests and models the infrastructure as a
 reconcilable dependency graph. Deploys are incremental: only changed files are
@@ -26,12 +26,12 @@ Requires Node ≥ 22 and AWS credentials in the ambient provider chain.
 ```sh
 pnpm add -D blogwright
 
-pnpm exec blogwright init          # first-run wizard — writes config/production.jsonc
+pnpm exec blogwright init          # first-run wizard - writes config/production.jsonc
 pnpm exec blogwright bootstrap     # create the infrastructure; prints DNS records to add
 pnpm exec blogwright deploy        # build in a MicroVM and publish (`bw` works too)
 ```
 
-(No TTY? Write the config by hand — only `region` and `siteName` are required:
+(No TTY? Write the config by hand - only `region` and `siteName` are required:
 `echo '{ "region": "us-east-1", "siteName": "example" }' > config/production.jsonc`.)
 
 The [quickstart](https://blogwright.iamstan.dev/getting-started/quickstart/)
@@ -52,50 +52,73 @@ blogwright destroy --yes                    # tear everything down
 
 blogwright preview …                        # per-PR preview stack
 blogwright pds …                            # standard.site (AT Protocol) publishing
+
+blogwright plugin add <name>                # install a plugin, pinned to this version
+blogwright plugin list                      # list installed plugins and their versions
+blogwright plugin remove <name>             # uninstall a plugin, teardown asked first
+blogwright <plugin> <action>                # run an installed plugin's own command
 ```
 
 Environment defaults to `production`; pass another as the positional `[env]` or
 `--env`. Full flags, positional layouts, and output contracts are in the
 [CLI reference](https://blogwright.iamstan.dev/reference/cli/).
 
+An installed plugin claims its own namespace: `blogwright <plugin> <action>` runs
+one of its commands, `blogwright <plugin> init` splices that plugin's block into
+the environment's config file, and `blogwright <plugin> bootstrap|status|destroy`
+reconciles that plugin's own resources, recorded in its own state object rather
+than the site's. `blogwright plugin add analytics` installs the package
+`blogwright-analytics` at this CLI's own version and pins it exactly, so every
+checkout of the repo gets the same pair. The pin is taken at install time, not
+maintained: upgrading the CLI on its own leaves the plugin at the version it was
+pinned to, and nothing declares or checks an interface version, so nothing
+reports the gap - re-running `blogwright plugin add` will not close it either,
+since a package the manifest already declares is left untouched.
+
+The plugin interface itself is **internal and unversioned**: it is deliberately
+undocumented, it can change in any release without a major version, and it is not
+a public contract - so no third party should write a plugin against it yet. It
+becomes a documented, versioned API only once it has carried two features through
+a release cycle.
+
 ## Documentation
 
 Everything lives at **[blogwright.iamstan.dev](https://blogwright.iamstan.dev)**:
 
-- [Deploying](https://blogwright.iamstan.dev/guides/deploying/) — the deploy
+- [Deploying](https://blogwright.iamstan.dev/guides/deploying/) - the deploy
   lifecycle: source zip, MicroVM build, ETag-diff sync, selective invalidation,
   `--refresh`.
-- [Configuration reference](https://blogwright.iamstan.dev/reference/configuration/) —
+- [Configuration reference](https://blogwright.iamstan.dev/reference/configuration/) -
   every key in `config/<env>.jsonc`, with defaults.
-- [CI deploys with GitHub OIDC](https://blogwright.iamstan.dev/guides/ci-github-oidc/) —
+- [CI deploys with GitHub OIDC](https://blogwright.iamstan.dev/guides/ci-github-oidc/) -
   keyless deploys from GitHub Actions.
-- [PR previews](https://blogwright.iamstan.dev/guides/pr-previews/) — every PR at
+- [PR previews](https://blogwright.iamstan.dev/guides/pr-previews/) - every PR at
   `https://<id>.<preview-domain>` from one shared stack.
-- [Publishing to standard.site](https://blogwright.iamstan.dev/guides/publishing-standard-site/) —
+- [Publishing to standard.site](https://blogwright.iamstan.dev/guides/publishing-standard-site/) -
   mirroring posts to an AT Protocol PDS, with OAuth handled by the CLI.
-- [Beyond Astro](https://blogwright.iamstan.dev/guides/non-astro-sites/) — monorepo
+- [Beyond Astro](https://blogwright.iamstan.dev/guides/non-astro-sites/) - monorepo
   SPAs (`paths.app`/`paths.dist`, `spa`, `sourceInclude`).
-- [Architecture](https://blogwright.iamstan.dev/reference/architecture/) — the
+- [Architecture](https://blogwright.iamstan.dev/reference/architecture/) - the
   resource graph, bucket layout, builder MicroVM, and SigV4 transport.
 
-Every page is also available as plain Markdown — append `.md` to any URL, or
+Every page is also available as plain Markdown - append `.md` to any URL, or
 start from [blogwright.iamstan.dev/llms.txt](https://blogwright.iamstan.dev/llms.txt).
 
 ## Packages
 
 | Package                  | What it is                                                                                                       |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, dispatch — plus the `blogwright/rkey` subpath export (a re-export of `blogwright-pds/rkey`) |
+| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, dispatch - plus the `blogwright/rkey` subpath export (a re-export of `blogwright-pds/rkey`) |
 | `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store, shared ports (filesystem, terminal)          |
 | `blogwright-pds`         | standard.site (AT Protocol) publishing: OAuth client, secret store, PDS record sync, URL-derived rkeys           |
-| `blogwright-build-agent` | HTTP build server baked into the builder MicroVM image (not published — its bundle ships inside the CLI package) |
+| `blogwright-build-agent` | HTTP build server baked into the builder MicroVM image (not published - its bundle ships inside the CLI package) |
 
 ## Testing
 
 ```sh
 pnpm install
 pnpm build                          # core -> build-agent -> cli (and the docs site)
-pnpm test                           # unit tests (transport mocks) — no cloud needed
+pnpm test                           # unit tests (transport mocks) - no cloud needed
 
 # Integration tests against the floci emulator:
 docker run -d --name floci -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock floci/floci:latest
@@ -106,15 +129,15 @@ The `lambda-microvms` control plane is not emulated by floci, so the MicroVM
 client and deploy orchestration are covered by transport-level mocks rather than
 integration tests.
 
-Contributor guidelines — coding style, error handling, version control (jj), and
-the definition of done — live in [DEVELOPMENT.md](DEVELOPMENT.md). The docs site
+Contributor guidelines - coding style, error handling, version control (jj), and
+the definition of done - live in [DEVELOPMENT.md](DEVELOPMENT.md). The docs site
 sources live in [`docs/`](docs/); PRs that touch them get a preview at
 `pr-<n>.preview.blogwright.iamstan.dev`.
 
 ## Releasing
 
 Versioning is driven by **changesets** and releases by tags, with **staged npm
-publishing** — no npm token anywhere (see `.github/workflows/version-pr.yml`
+publishing** - no npm token anywhere (see `.github/workflows/version-pr.yml`
 and `release.yml`):
 
 1. Every user-facing change ships with a changeset: `pnpm changeset`, pick the
@@ -124,14 +147,14 @@ and `release.yml`):
    changesets into a version bump + per-package CHANGELOGs. Merge it when
    ready to release.
 3. Tag the merge: `git tag v<x>.<y>.<z> && git push origin v<x>.<y>.<z>` (tags
-   are the one place plain git is used — jj does not author tags; the version
+   are the one place plain git is used - jj does not author tags; the version
    is previewed in the PR).
 4. CI validates versions match the tag, builds, runs the full gate set plus
    `publint` and `arethetypeswrong`, then **stages** all three packages to npm
    via OIDC trusted publishing with provenance, and cuts a GitHub Release from
    the changesets CHANGELOG entry.
 5. Nothing is live yet: approve the staged packages (`npm stage approve`, or
-   the staged-packages UI on npmjs.com). Re-running a tag is idempotent —
+   the staged-packages UI on npmjs.com). Re-running a tag is idempotent -
    already-published packages are skipped.
 
 One-time setup on npmjs.com: each package (`blogwright-core`, `blogwright-pds`,

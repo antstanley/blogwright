@@ -5,7 +5,7 @@ import { defineConfig } from 'rolldown';
 // and the AWS SDK/smithy packages it pulls in must all be inlined here.
 //
 // platform: 'node' keeps node: builtins external and auto-polyfills any require() the
-// bundled CJS dependencies still use — the ESM-native replacement for the createRequire
+// bundled CJS dependencies still use - the ESM-native replacement for the createRequire
 // banner the previous esbuild build injected by hand.
 export default defineConfig([
   {
@@ -15,7 +15,7 @@ export default defineConfig([
       file: 'dist/server.js',
       format: 'esm',
       // The AWS SDK pulls in dynamic import()s; inline them so the whole agent stays a
-      // single self-contained file (the image copies only server.js — see Dockerfile).
+      // single self-contained file (the image copies only server.js - see Dockerfile).
       codeSplitting: false,
     },
   },

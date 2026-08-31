@@ -1,7 +1,8 @@
 /**
- * Process adapter for the Vcs port: shells out to jj/git. The only module
- * outside the build-agent that may import node:child_process; failures are
- * translated with the command and directory before they cross the port.
+ * Process adapter for the Vcs port: shells out to jj/git. One of only two
+ * modules outside the build-agent that may import node:child_process (the
+ * other is process-package-manager.ts); failures are translated with the
+ * command and directory before they cross the port.
  */
 
 import { execFile } from 'node:child_process';
@@ -28,7 +29,7 @@ async function runVcsCommand(cwd: string, command: string, args: string[]): Prom
 /**
  * Build the jj/git process adapter. The revision hash prefers jj's git commit
  * id (jj auto-commits the working copy), falling back to git HEAD; listings
- * honor .gitignore — tracked files plus untracked files that are not ignored.
+ * honor .gitignore - tracked files plus untracked files that are not ignored.
  */
 export function createProcessVcs(): Vcs {
   return {
@@ -38,7 +39,7 @@ export function createProcessVcs(): Vcs {
         const hash = (await runVcsCommand(cwd, 'jj', jjArgs)).trim();
         if (hash) return hash;
       } catch {
-        /* jj unavailable or not a jj repo — fall through to git */
+        /* jj unavailable or not a jj repo - fall through to git */
       }
       return (await runVcsCommand(cwd, 'git', ['rev-parse', '--short', 'HEAD'])).trim();
     },

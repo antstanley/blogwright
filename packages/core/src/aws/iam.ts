@@ -6,7 +6,7 @@ import { allTags, textTag } from './xml.js';
 
 const VERSION = '2010-05-08';
 
-/** IAM client (query protocol) — roles with inline policies. */
+/** IAM client (query protocol) - roles with inline policies. */
 export class IamClient {
   constructor(private readonly client: SigningClient) {}
 

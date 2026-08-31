@@ -1,0 +1,9 @@
+---
+"blogwright": minor
+---
+
+`blogwright pds <action>` is now answered by the bundled plugin's own declared commands rather than a hardcoded branch in the CLI: `cli.ts` contains no reference to pds at all, and the namespace falls through to the same generic dispatcher every other installed plugin uses. All six actions behave as before - `keygen`, `login`, `init`, `sync`, and the two-word `secret status` and `secret delete`, which are now matched by declaration instead of by shifting positionals. `--identifier` and `--yes` still reach `pds login` and `pds secret delete`, and the environment positional still resolves: `blogwright pds sync staging` and `blogwright pds secret status staging` target `staging`, not `production`.
+
+Two user-visible changes come with it. `blogwright pds bootstrap`, `pds status` and `pds destroy` now work: because the plugin contributes resource nodes, `blogwright --help` has advertised those three generic lifecycle verbs since the plugin became discoverable, while the old branch refused them with `unknown pds action: …`. That gap is closed. And an unknown action - `blogwright pds` with no action, or `blogwright pds bogus` - still exits 1 with the same `unknown pds action: …` message, but now prints the plugin's own action listing (all six, plus the three lifecycle verbs) instead of the CLI's full usage text. No help text is lost beyond what the previous release already named when the static `pds …` block moved out of the command list.
+
+The post-deploy PDS sync is unchanged and still runs from `blogwright deploy`: the CLI reaches `syncAfterDeploy` through a direct import, because the plugin SPI has no post-deploy lifecycle hook and `blogwright-pds` ships with the CLI as a non-optional dependency.

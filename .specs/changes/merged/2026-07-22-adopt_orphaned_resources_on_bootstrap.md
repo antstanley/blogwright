@@ -7,7 +7,7 @@ when a resource exists in AWS but not in state: `CreateDistribution` fails with
 `CNAMEAlreadyExists` before CloudFront's `CallerReference` idempotency applies,
 and multi-step nodes skip their configuration steps entirely once the primary
 resource exists. This change makes every node's create path either adopt the
-existing resource or fail with an actionable pointer — never a dead end that
+existing resource or fail with an actionable pointer - never a dead end that
 requires manual state surgery.
 
 ---
@@ -19,7 +19,7 @@ bug failed the distribution node after `CreateDistribution` succeeded, leaving
 distributions in AWS that the state file did not record. Re-running `bootstrap`
 could not recover: the distribution node's `read()` keys off the state output,
 found nothing, called `CreateDistribution` again, and CloudFront rejected the
-duplicate alias with `CNAMEAlreadyExists` (HTTP 409) — its alias-conflict check
+duplicate alias with `CNAMEAlreadyExists` (HTTP 409) - its alias-conflict check
 fires before the `CallerReference` idempotency match that would otherwise have
 returned the existing distribution. The only way forward was hand-editing
 `state/<env>.json` in S3.
@@ -36,14 +36,14 @@ automatic when they exist anyway.
 
 ## Affected spec pages
 
-No canonical spec page covers the resource nodes yet — the nearest
+No canonical spec page covers the resource nodes yet - the nearest
 documentation is DEVELOPMENT.md's architecture notes. This change spec stands
 alone; if a canonical node-catalogue page exists by merge time, the blocks below
 fold into the relevant node sections.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none — no canonical page for the resource nodes yet)* | Behavioral change to the distribution and bucket nodes; new `listDistributions` client method in blogwright-core |
+| *(none - no canonical page for the resource nodes yet)* | Behavioral change to the distribution and bucket nodes; new `listDistributions` client method in blogwright-core |
 
 ---
 
@@ -58,7 +58,7 @@ fold into the relevant node sections.
 > candidate's config and comparing `CallerReference` against the node's own
 > deterministic reference (`<env>-<siteName>-<accountId>`). On a match it
 > records `id`/`arn`/`domainName`, applies tags, and continues; with no match
-> the original error propagates — an alias conflict with a foreign distribution
+> the original error propagates - an alias conflict with a foreign distribution
 > is real and must surface.
 
 ### Resource nodes → S3 bucket (Add)
@@ -83,7 +83,7 @@ fold into the relevant node sections.
 
 ## Type changes
 
-None — no state-file or config entities change shape. Adoption writes the same
+None - no state-file or config entities change shape. Adoption writes the same
 `id`/`arn`/`domainName` outputs the create path writes.
 
 ---
@@ -91,16 +91,16 @@ None — no state-file or config entities change shape. Adoption writes the same
 ## Implementation notes
 
 ```
-1. packages/core/src/aws/cloudfront.ts — add listDistributions(): GET
+1. packages/core/src/aws/cloudfront.ts - add listDistributions(): GET
    /2020-05-31/distribution (paginated, Marker/NextMarker), returning
    {id, arn, domainName, comment} per item. getDistributionConfig (:134)
    already returns the raw XML; CallerReference is extractable with textTag.
-2. packages/cli/src/nodes.ts:567-604 (distributionNode.create) — catch
+2. packages/cli/src/nodes.ts:567-604 (distributionNode.create) - catch
    AwsError codes CNAMEAlreadyExists / DistributionAlreadyExists, run the
    adoption lookup, verify CallerReference === `${ctx.names.prefix}-${ctx.accountId}`
    (the value passed at :569), then fall through to the existing
    output-recording + tagResource path.
-3. packages/cli/src/nodes.ts:34-56 (bucketNode) — add update() applying
+3. packages/cli/src/nodes.ts:34-56 (bucketNode) - add update() applying
    putBucketTagging + putPublicAccessBlock; create() keeps its current calls.
 4. Tests (packages/cli/src/nodes.test.ts): CNAMEAlreadyExists with a matching
    CallerReference → adopted, outputs recorded, tags applied; with a
@@ -126,7 +126,7 @@ None — no state-file or config entities change shape. Adoption writes the same
 **Assumptions**
 
 - The distribution comment (`"<siteName> <env>"`) and `CallerReference`
-  (`<env>-<siteName>-<accountId>`) remain deterministic — they are the adoption
+  (`<env>-<siteName>-<accountId>`) remain deterministic - they are the adoption
   identity. Changing either derivation invalidates adoption of resources
   created before the change.
 - `ListDistributions` visibility is immediate enough after a crashed run;

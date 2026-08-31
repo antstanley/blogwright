@@ -62,8 +62,8 @@ describe('generateSitemap', () => {
     await writeFile(join(dist, 'index.html'), '');
     await writeFile(join(dist, 'posts', 'index.html'), '');
     await writeFile(join(dist, 'posts', 'hello', 'index.html'), '');
-    await writeFile(join(dist, 'llms.txt'), ''); // non-html — excluded
-    await writeFile(join(dist, '404.html'), ''); // error page — excluded
+    await writeFile(join(dist, 'llms.txt'), ''); // non-html - excluded
+    await writeFile(join(dist, '404.html'), ''); // error page - excluded
     await writeFile(join(dist, '_astro', 'app.css'), '').catch(async () => {
       await mkdir(join(dist, '_astro'), { recursive: true });
       await writeFile(join(dist, '_astro', 'app.css'), '');
@@ -113,7 +113,7 @@ describe('contentType coverage', () => {
     expect(contentType('paper.pdf')).toBe('application/pdf');
   });
 
-  it('leaves .ts unmapped — in build output it is stray TypeScript, not an HLS segment', () => {
+  it('leaves .ts unmapped - in build output it is stray TypeScript, not an HLS segment', () => {
     expect(contentType('chunk.ts')).toBe(DEFAULT_CONTENT_TYPE);
   });
 
@@ -203,7 +203,7 @@ describe('createSiteUploader (issue #7 fail-soft tagging)', () => {
     expect(logs).toEqual([]);
   });
 
-  it('falls back to an untagged upload — once — when tagging is denied', async () => {
+  it('falls back to an untagged upload - once - when tagging is denied', async () => {
     const { s3, puts } = fakeS3(true);
     const logs: string[] = [];
     const upload = createSiteUploader(s3, (l) => logs.push(l));

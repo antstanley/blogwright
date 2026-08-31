@@ -12,7 +12,7 @@ function isActive(vm: Microvm): boolean {
 /**
  * Active MicroVMs launched from *this* environment's builder image. Matches on the image
  * ARN recorded in state, falling back to the (env-scoped) image name so a stack whose
- * state predates the ARN still resolves — and a sibling env's VMs are never touched.
+ * state predates the ARN still resolves - and a sibling env's VMs are never touched.
  */
 export async function runningStackMicrovms(ctx: OpsContext): Promise<Microvm[]> {
   const imageArn = ctx.state.resources['microvm-image']?.arn;
@@ -32,7 +32,7 @@ export async function runningStackMicrovms(ctx: OpsContext): Promise<Microvm[]> 
 
 /**
  * Guard a destroy/teardown against running builder MicroVMs (deleting the image 400s while
- * any are alive). Lists them, then interactively offers to terminate — default yes — or to
+ * any are alive). Lists them, then interactively offers to terminate - default yes - or to
  * wait, which cancels the destroy. Non-interactive callers get the default (terminate) so
  * automation isn't blocked. Returns true to proceed with the destroy, false to abort.
  */
@@ -51,7 +51,7 @@ export async function clearRunningMicrovms(ctx: OpsContext): Promise<boolean> {
     defaultYes: true,
   });
   if (!proceed) {
-    ctx.logger.info('Leaving MicroVMs running — destroy cancelled.');
+    ctx.logger.info('Leaving MicroVMs running - destroy cancelled.');
     return false;
   }
 

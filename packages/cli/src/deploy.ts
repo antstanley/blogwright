@@ -37,8 +37,8 @@ function manifestKey(hash: string): string {
 
 /**
  * Nudge the MicroVM's endpoint to wake its event loop. A Firecracker-resumed process
- * can sit idle with its poll timer pending until some I/O arrives; a connection here —
- * even one the agent's HTTP/1 server can't fully parse — wakes the loop so the timer
+ * can sit idle with its poll timer pending until some I/O arrives; a connection here -
+ * even one the agent's HTTP/1 server can't fully parse - wakes the loop so the timer
  * fires and the build starts. The wake-up, not the response, is the point: a missing
  * endpoint or token means nothing to nudge, and a rejecting ping never fails the poll.
  */
@@ -60,7 +60,7 @@ function isGatewayError(err: unknown): boolean {
 /**
  * Launch the builder MicroVM, retrying gateway errors (502/503/504) with a
  * bounded backoff. The control plane can answer 502 for a short window right
- * after the builder image was updated (fresh agent hash) — an
+ * after the builder image was updated (fresh agent hash) - an
  * eventual-consistency gap that would otherwise fail every consumer's first
  * deploy after a blogwright upgrade. Retrying is safe: the input's client
  * token makes the launch idempotent. Exported for tests.
@@ -77,7 +77,7 @@ export async function runMicrovmWithRetry(
       const delay = delaysMs[attempt];
       if (!isGatewayError(err) || delay === undefined) throw err;
       ctx.logger.warn(
-        `MicroVM launch returned HTTP ${(err as AwsError).statusCode} — ` +
+        `MicroVM launch returned HTTP ${(err as AwsError).statusCode} - ` +
           `retrying in ${Math.round(delay / 1000)}s (a just-updated builder image can lag)`,
       );
       await sleep(delay);
@@ -89,7 +89,7 @@ export async function runMicrovmWithRetry(
  * Resolve the MicroVM build log group from bootstrapped state rather than re-deriving it.
  * The image and the build-role IAM policy bake this name in at bootstrap, so if the derived
  * name (`ctx.names.microvmLogGroup`) is renamed in code later, a deploy must still target
- * the group the running stack actually logs to — otherwise the VM's logs land in (or are
+ * the group the running stack actually logs to - otherwise the VM's logs land in (or are
  * denied to) a different group and `pollBuild` waits on an empty one.
  */
 export function microvmLogGroup(ctx: OpsContext): string {
@@ -118,7 +118,7 @@ export async function pollBuild(
   token: string,
 ): Promise<AgentStatus> {
   const seen = new Set<string>();
-  // Anchored at VM launch (startTime), like the VM's own maximumDuration —
+  // Anchored at VM launch (startTime), like the VM's own maximumDuration -
   // anchoring at poll start would keep polling a VM that is already dead for
   // however long the RUNNING-wait consumed. One grace minute for log delivery.
   const deadline = startTime + ctx.config.microvm.maxDurationSeconds * 1000 + 60_000;
@@ -154,7 +154,7 @@ export async function pollBuild(
       if (result) return result;
       // Log delivery can lag or drop (e.g. the VM logging to a group the deploy isn't tailing).
       // The agent writes build/changed/<hash>.json as its final step, so treat that artifact as
-      // an authoritative completion signal too — a successful build then can't hang until the
+      // an authoritative completion signal too - a successful build then can't hang until the
       // deadline just because its logs never reached CloudWatch. runBuild clears any stale copy
       // before launch, so its presence means *this* build finished.
       if (await ctx.clients.s3.objectExists(ctx.names.bucket, `build/changed/${hash}.json`)) {
@@ -210,7 +210,7 @@ export async function runBuild(
 
   // Launch first: if runMicrovm throws, no pending.json is left behind (a leaked job
   // could otherwise be picked up during a later image bake and poison the snapshot).
-  // A MicroVM is ephemeral compute, so the client token is unique per launch — keying it
+  // A MicroVM is ephemeral compute, so the client token is unique per launch - keying it
   // on the hash would make a re-deploy (or workflow re-run) of the same source idempotently
   // return the ALREADY-TERMINATED original VM instead of launching a fresh one. Generated
   // once here so a network retry of this single call still dedupes.
@@ -267,7 +267,7 @@ export async function runBuild(
   } finally {
     // The pending-job cleanup must survive a terminate failure: a leaked
     // pending.json is the poison-the-next-image-bake hazard the launch
-    // ordering above exists to avoid. A failed terminate is only logged —
+    // ordering above exists to avoid. A failed terminate is only logged -
     // the VM self-terminates at maxDuration, and the build outcome (already
     // determined) must not be masked by a cleanup error.
     await ctx.clients.microvms.terminateMicrovm(run.microvmId).catch((err: unknown) => {
@@ -344,16 +344,16 @@ export async function invalidateChanged(
     }
   }
   if (!paths) {
-    ctx.logger.warn('no changed-paths manifest — invalidating everything (/*)');
+    ctx.logger.warn('no changed-paths manifest - invalidating everything (/*)');
     await invalidateCloudFront(ctx, ['/*']);
     return { mode: 'all', count: 0 };
   }
   let summary: InvalidationSummary;
   if (paths.length === 0) {
-    ctx.logger.ok('no content changed — skipping CloudFront invalidation');
+    ctx.logger.ok('no content changed - skipping CloudFront invalidation');
     summary = { mode: 'none', count: 0 };
   } else if (paths.length > ctx.config.invalidationMaxPaths) {
-    ctx.logger.step(`${paths.length} paths changed (> cap) — invalidating everything (/*)`);
+    ctx.logger.step(`${paths.length} paths changed (> cap) - invalidating everything (/*)`);
     await invalidateCloudFront(ctx, ['/*']);
     summary = { mode: 'all', count: paths.length };
   } else {

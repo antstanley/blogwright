@@ -17,13 +17,13 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
 
-// The repo's own TypeScript — resolved from packages/cli, never a global one.
+// The repo's own TypeScript - resolved from packages/cli, never a global one.
 const requireFromCli = createRequire(join(repoRoot, 'packages/cli/package.json'));
 let tscJs;
 try {
   tscJs = requireFromCli.resolve('typescript/lib/tsc.js');
 } catch {
-  console.error('FAIL: could not resolve typescript from packages/cli — run pnpm install first.');
+  console.error('FAIL: could not resolve typescript from packages/cli - run pnpm install first.');
   process.exit(2);
 }
 
@@ -106,7 +106,7 @@ if (unparsed.trim() !== '') {
   console.error(unparsed);
 }
 console.error(
-  'Each broken claim names the spec section or task it pins — that document ' +
+  'Each broken claim names the spec section or task it pins - that document ' +
     'now asserts a stale truth (or a transcription here is behind the spec). ' +
     'Fix the document or the transcription, never the claim alone.',
 );

@@ -56,7 +56,7 @@ let credCache: { creds: AwsCredentials; exp: number } | undefined;
 
 /**
  * Resolve the MicroVM's execution-role credentials. Tries standard env vars first
- * (Lambda-style), then the ECS/container credentials endpoint — covering both ways
+ * (Lambda-style), then the ECS/container credentials endpoint - covering both ways
  * the exec role might be exposed inside the MicroVM.
  */
 async function resolveCredentials(): Promise<AwsCredentials> {
@@ -216,7 +216,7 @@ export const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 /**
  * Whether a built file must be PUT again. Content-identical files are normally
  * skipped (that is what keeps a redeploy cheap and its invalidation narrow),
- * but S3 writes object metadata — content type, tags — only on a PUT, so a
+ * but S3 writes object metadata - content type, tags - only on a PUT, so a
  * metadata fix would never reach them. `refresh` forces the upload.
  */
 export function shouldUpload(
@@ -237,12 +237,12 @@ function isAccessDenied(err: unknown): boolean {
  * Upload the site files, degrading gracefully when the role may not tag.
  *
  * Object tags ride on the PUT (`x-amz-tagging`), but AWS still checks
- * `s3:PutObjectTagging` as a distinct action — a role granted only `s3:PutObject`
+ * `s3:PutObjectTagging` as a distinct action - a role granted only `s3:PutObject`
  * gets a 403 and the whole upload fails. Tags are metadata, not content: rather
  * than fail a deploy whose files are otherwise fine, drop the tags for the rest
  * of the run and say so. (A stack bootstrapped on a version that grants the
  * action never takes this path; one upgrading in place does, until it
- * re-bootstraps — and a CI deploy role cannot fix its own IAM.)
+ * re-bootstraps - and a CI deploy role cannot fix its own IAM.)
  */
 export function createSiteUploader(s3: S3Client, log: LogFn) {
   let taggingDenied = false;
@@ -263,7 +263,7 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
         if (!isAccessDenied(err)) throw err;
         taggingDenied = true;
         log(
-          'warning: this role cannot tag objects (s3:PutObjectTagging denied) — ' +
+          'warning: this role cannot tag objects (s3:PutObjectTagging denied) - ' +
             'uploading untagged. Run `blogwright bootstrap <env>` to grant it, then ' +
             'redeploy with --refresh to tag the existing objects.',
         );
@@ -275,7 +275,7 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
 
 /**
  * The lowercase extension of a key, or undefined when it has none (`LICENSE`,
- * `_headers`) — a leading dot is a dotfile, not an extension (`.nojekyll`).
+ * `_headers`) - a leading dot is a dotfile, not an extension (`.nojekyll`).
  * Splitting the whole path would treat an extensionless *key* as its own
  * extension, which both mistypes files and produces nonsense diagnostics.
  */
@@ -288,15 +288,15 @@ export function extensionOf(path: string): string | undefined {
 
 /**
  * Content type for a key, or {@link DEFAULT_CONTENT_TYPE} when the extension is
- * unmapped or absent. The default is deliberate — it makes a browser download
- * rather than mis-render an unknown payload — but a *silently* wrong header is
+ * unmapped or absent. The default is deliberate - it makes a browser download
+ * rather than mis-render an unknown payload - but a *silently* wrong header is
  * how the .webmanifest gap survived, so runBuild logs unmapped extensions.
  */
 export function contentType(path: string): string {
   const ext = extensionOf(path);
   if (ext === undefined) return DEFAULT_CONTENT_TYPE;
   // Object.hasOwn guards against inherited keys (e.g. a file named "x.constructor"
-  // would otherwise resolve to Object.prototype.constructor — a truthy function).
+  // would otherwise resolve to Object.prototype.constructor - a truthy function).
   const type = Object.hasOwn(CONTENT_TYPES, ext) ? CONTENT_TYPES[ext] : undefined;
   return type ?? DEFAULT_CONTENT_TYPE;
 }
@@ -398,7 +398,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   // publishes from wherever its toolchain emits; both must stay inside workDir.
   const appDir = resolveWithin(workDir, payload.appDir ?? '.', 'appDir');
   // --prod=false: the image bakes NODE_ENV=production (right for `pnpm run build`),
-  // but under it pnpm skips devDependencies — where static sites keep their build
+  // but under it pnpm skips devDependencies - where static sites keep their build
   // tooling (astro, vite, tailwind). The site build needs the full install.
   await exec('pnpm', ['install', '--frozen-lockfile', '--prod=false'], appDir, log);
   await exec('pnpm', ['run', 'build'], appDir, log);
@@ -432,7 +432,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   const changedKeys = new Set<string>();
   const unmapped = new Set<string>();
   if (payload.refresh) {
-    log('refresh: re-uploading every file (metadata — content type, tags — may have changed)');
+    log('refresh: re-uploading every file (metadata - content type, tags - may have changed)');
   }
   for (const file of built) {
     const key = prefix + relative(distDir, file).split('\\').join('/');
@@ -451,7 +451,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   if (unmapped.size > 0) {
     // A silently wrong header is how the .webmanifest gap survived; say it out loud.
     log(
-      `warning: no content type mapped for extension(s) ${[...unmapped].sort().join(', ')} — ` +
+      `warning: no content type mapped for extension(s) ${[...unmapped].sort().join(', ')} - ` +
         `serving them as ${DEFAULT_CONTENT_TYPE}`,
     );
   }
@@ -465,7 +465,7 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   const changedPaths = [...new Set([...changedKeys].flatMap((k) => invalidationPaths(k, prefix)))];
   // The changed-paths manifest is only an invalidation optimization: if writing it fails
   // (e.g. the runtime role lacks build/changed/* PutObject), the site is already published,
-  // so log and continue — the CLI falls back to a wildcard invalidation.
+  // so log and continue - the CLI falls back to a wildcard invalidation.
   try {
     await s3.putObject(
       payload.bucket,

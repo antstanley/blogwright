@@ -7,7 +7,7 @@ const API = '/2020-05-31';
 const XMLNS = 'http://cloudfront.amazonaws.com/doc/2020-05-31/';
 /** AWS managed "CachingOptimized" cache policy. */
 export const CACHING_OPTIMIZED = '658327ea-f89d-4fab-a63d-7e88639e58f6';
-/** AWS managed "CachingDisabled" cache policy (used for previews — no CDN caching). */
+/** AWS managed "CachingDisabled" cache policy (used for previews - no CDN caching). */
 export const CACHING_DISABLED = '4135ea2d-6df8-44a3-9df3-4b5a84be39ad';
 
 export interface DistributionSummary {
@@ -18,7 +18,7 @@ export interface DistributionSummary {
   etag: string | undefined;
 }
 
-/** One entry from ListDistributions — enough to identify a distribution for adoption. */
+/** One entry from ListDistributions - enough to identify a distribution for adoption. */
 export interface DistributionListItem {
   id: string;
   arn: string;
@@ -162,7 +162,7 @@ export class CloudFrontClient {
       service: 'cloudfront',
       method: 'POST',
       path: `${API}/tagging`,
-      // Operation=Tag is required — the tagging path is shared with UntagResource
+      // Operation=Tag is required - the tagging path is shared with UntagResource
       // (Operation=Untag) and CloudFront routes on it; without it: InvalidAction.
       query: { Operation: 'Tag', Resource: resourceArn },
       headers: { 'content-type': 'application/xml' },
@@ -186,7 +186,7 @@ export class CloudFrontClient {
   }
 
   /**
-   * Reconcile the distribution's aliases and viewer certificate in place — the
+   * Reconcile the distribution's aliases and viewer certificate in place - the
    * path taken when a domain is added (or changed) after the distribution was
    * first created. Compares semantically (CNAME set + certificate ARN), since
    * the returned config carries legacy elements our builder never emits.
@@ -227,7 +227,7 @@ export class CloudFrontClient {
   /**
    * Disable a distribution by flipping its top-level `<Enabled>` to false. The config
    * also contains `<Enabled>false</Enabled>` inside TrustedSigners/Logging, so the
-   * distribution-level flag must be matched specifically — it is the one immediately
+   * distribution-level flag must be matched specifically - it is the one immediately
    * followed by `<ViewerCertificate>` in the schema.
    */
   async disableDistribution(id: string): Promise<void> {
@@ -303,7 +303,7 @@ export class CloudFrontClient {
   private async describeFunction(name: string): Promise<{ arn: string; etag: string } | undefined> {
     // DescribeFunction is GET …/function/{name}/describe (XML summary). The
     // bare GET …/function/{name} is GetFunction, whose body is the raw code
-    // bytes — no FunctionARN to parse.
+    // bytes - no FunctionARN to parse.
     try {
       const res = await this.client.send({
         service: 'cloudfront',
@@ -338,7 +338,7 @@ export class CloudFrontClient {
       });
     }
     // Re-read the current ETag before publishing. Create/update return a fresh ETag, but
-    // it isn't reliably surfaced from the response headers — publishing the DEVELOPMENT
+    // it isn't reliably surfaced from the response headers - publishing the DEVELOPMENT
     // stage with a stale ETag fails the precondition (HTTP 412), which is what broke
     // reconciling an already-existing function.
     const current = await this.describeFunction(name);

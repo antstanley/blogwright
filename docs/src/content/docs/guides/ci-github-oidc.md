@@ -1,6 +1,6 @@
 ---
 title: CI deploys with GitHub OIDC
-description: Let GitHub Actions deploy your site with a short-lived OIDC role — no AWS keys stored anywhere.
+description: Let GitHub Actions deploy your site with a short-lived OIDC role - no AWS keys stored anywhere.
 sidebar:
   order: 4
 ---
@@ -30,12 +30,12 @@ blogwright bootstrap staging     # creates staging-example-gh
 Bootstrap creates two things:
 
 - The account-wide **OIDC identity provider** for `token.actions.githubusercontent.com` (audience `sts.amazonaws.com`), created only if it doesn't already exist.
-- A per-environment **deploy role** named `<env>-<siteName>-gh` — e.g. `production-example-gh` — trusted only for tokens from your repository.
+- A per-environment **deploy role** named `<env>-<siteName>-gh` - e.g. `production-example-gh` - trusted only for tokens from your repository.
 
 Adding `githubRepo` to an already-bootstrapped environment works the same way: re-run `blogwright bootstrap <env>` and the reconcile creates the missing role. Re-running bootstrap also reapplies the trust policy and permissions, so changing `githubRepo` (a repo rename or transfer) is a config edit plus a bootstrap.
 
 :::note
-`destroy` removes only the repo-scoped role. The OIDC identity provider is account-global — other stacks and tools may share it — so it is deliberately left in place.
+`destroy` removes only the repo-scoped role. The OIDC identity provider is account-global - other stacks and tools may share it - so it is deliberately left in place.
 :::
 
 ## Trust conditions
@@ -46,19 +46,19 @@ The role's trust policy pins the token's audience to `sts.amazonaws.com` and mat
 | --- | --- | --- |
 | `production` | `repo:owner/repo:environment:production` | Only jobs running in the **`production` GitHub environment** |
 | Any other (e.g. `staging`) | `repo:owner/repo:ref:refs/heads/main` | Only workflow runs on the `main` branch |
-| Preview stack | `repo:owner/repo:*` | Any ref — PRs deploy and destroy previews |
+| Preview stack | `repo:owner/repo:*` | Any ref - PRs deploy and destroy previews |
 
-Scoping production to a GitHub environment rather than a branch lets you gate deploys behind environment protection rules — required reviewers, wait timers — in the repository settings. The workflow job must declare `environment: production`, or the token's subject won't match and `AssumeRoleWithWebIdentity` fails.
+Scoping production to a GitHub environment rather than a branch lets you gate deploys behind environment protection rules - required reviewers, wait timers - in the repository settings. The workflow job must declare `environment: production`, or the token's subject won't match and `AssumeRoleWithWebIdentity` fails.
 
 ## What the role can do
 
 The role is scoped to one environment's resources, not the account:
 
 - Read, write, and delete objects in the environment's S3 bucket (source zips, the built site, state).
-- Run and manage builder MicroVMs, and rebuild the builder image when the agent bundle changed — so build-agent updates ship through CI without a separate `bootstrap`.
+- Run and manage builder MicroVMs, and rebuild the builder image when the agent bundle changed - so build-agent updates ship through CI without a separate `bootstrap`.
 - Read the MicroVM build logs, and pass the environment's build and exec roles.
 - Create CloudFront invalidations on the environment's distribution (previews are never cached, so the preview role omits this).
-- When [standard.site publishing](/guides/publishing-standard-site/) is configured, read and write the OAuth secret in Secrets Manager — the post-deploy sync rotates the session on every run.
+- When [standard.site publishing](/guides/publishing-standard-site/) is configured, read and write the OAuth secret in Secrets Manager - the post-deploy sync rotates the session on every run.
 
 ## Finding the role ARN
 
@@ -106,7 +106,7 @@ jobs:
 
 ## Example: production on release
 
-Identical shape, with two changes: the job runs in the `production` GitHub environment (the trust condition requires it), and the trigger is a release rather than a push. The trust policy only checks the environment claim — the trigger is yours to choose — but releasing production deliberately, gated by environment protection rules, is the intended flow.
+Identical shape, with two changes: the job runs in the `production` GitHub environment (the trust condition requires it), and the trigger is a release rather than a push. The trust policy only checks the environment claim - the trigger is yours to choose - but releasing production deliberately, gated by environment protection rules, is the intended flow.
 
 ```yaml
 # .github/workflows/production.yml
@@ -140,9 +140,9 @@ jobs:
 ```
 
 :::tip
-CI output is automatically plain and line-oriented — the plain formats are a compatibility contract for machines and agents, so log lines are safe to grep in workflow steps. See [deploying](/guides/deploying/).
+CI output is automatically plain and line-oriented - the plain formats are a compatibility contract for machines and agents, so log lines are safe to grep in workflow steps. See [deploying](/guides/deploying/).
 :::
 
 ## The preview stack's role
 
-`blogwright preview bootstrap` creates its own role, `preview-<siteName>-gh`, trusted for **any ref** in the repository so a PR workflow can deploy a preview on open/update and destroy it on close. Its access is scoped to the preview stack's own bucket, and it has no CloudFront invalidation permission — previews are served uncached. See [PR previews](/guides/pr-previews/) for the preview workflow.
+`blogwright preview bootstrap` creates its own role, `preview-<siteName>-gh`, trusted for **any ref** in the repository so a PR workflow can deploy a preview on open/update and destroy it on close. Its access is scoped to the preview stack's own bucket, and it has no CloudFront invalidation permission - previews are served uncached. See [PR previews](/guides/pr-previews/) for the preview workflow.

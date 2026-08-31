@@ -1,9 +1,11 @@
+import type { PluginContext, ResourceNode } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { applyGraph, destroyGraph, topoSort, type ResourceNode } from './graph.js';
+import type { OpsContext } from './context.js';
+import { applyGraph, destroyGraph, topoSort } from './graph.js';
 import { createTestContext } from './test-support.js';
 
-function node(id: string, dependsOn: string[], log: string[]): ResourceNode {
+function node(id: string, dependsOn: string[], log: string[]): ResourceNode<OpsContext> {
   return {
     id,
     dependsOn,
@@ -55,7 +57,7 @@ describe('applyGraph / destroyGraph', () => {
         savedSnapshots.push(JSON.stringify(ctx.state.resources));
       },
     });
-    const failing: ResourceNode = {
+    const failing: ResourceNode<OpsContext> = {
       id: 'dist',
       dependsOn: [],
       title: 'dist',
@@ -87,7 +89,7 @@ describe('applyGraph / destroyGraph', () => {
         },
       },
     });
-    const failing: ResourceNode = {
+    const failing: ResourceNode<OpsContext> = {
       id: 'bucket',
       dependsOn: [],
       title: 'bucket',
@@ -98,14 +100,14 @@ describe('applyGraph / destroyGraph', () => {
       delete: async () => undefined,
     };
 
-    // The bucket's own failure surfaces — not the (inevitable) save failure after it.
+    // The bucket's own failure surfaces - not the (inevitable) save failure after it.
     await expect(applyGraph([failing], ctx)).rejects.toThrow(/CreateBucket denied/);
     expect(warnings.join('\n')).toContain('NoSuchBucket');
   });
 
   it('reconciles existing nodes via update instead of create', async () => {
     const log: string[] = [];
-    const updating: ResourceNode = {
+    const updating: ResourceNode<OpsContext> = {
       id: 'x',
       dependsOn: [],
       title: 'x',
@@ -122,5 +124,49 @@ describe('applyGraph / destroyGraph', () => {
     };
     await applyGraph([updating], createTestContext());
     expect(log).toEqual(['update']);
+  });
+});
+
+/**
+ * `topoSort`/`applyGraph`/`destroyGraph` are generic over the engine's own
+ * structural minimum (`GraphContext`), not over `OpsContext` - the CLI's own
+ * nodes above are just one instantiation, `ResourceNode<OpsContext>`. This
+ * suite exercises the other real instantiation: a node written against
+ * core's `PluginContext` alone, run through the very same engine, with a
+ * `PluginContext` built the way task 01's `PluginContext composition` test
+ * builds one (`context.test.ts`) - an `OpsContext` spread plus `pluginConfig`,
+ * `siteState` and `record`.
+ */
+describe('the engine over a core PluginContext instantiation', () => {
+  it('accepts a node typed on PluginContext through topoSort and applyGraph', async () => {
+    const ops = createTestContext();
+    const ctx: PluginContext<unknown> = {
+      ...ops,
+      pluginConfig: {},
+      siteState: { resources: ops.state.resources },
+      record: (nodeId, outputs) => {
+        ops.state.resources[nodeId] = outputs;
+      },
+    };
+
+    const log: string[] = [];
+    const pluginNode: ResourceNode<PluginContext<unknown>> = {
+      id: 'plugin-resource',
+      dependsOn: [],
+      title: 'plugin resource',
+      read: async (c) => c.siteState.resources['plugin-resource'] !== undefined,
+      create: async (c) => {
+        log.push('create');
+        c.record('plugin-resource', { id: 'p1' });
+      },
+      delete: async () => {
+        log.push('delete');
+      },
+    };
+
+    expect(topoSort([pluginNode]).map((n) => n.id)).toEqual(['plugin-resource']);
+    await applyGraph([pluginNode], ctx);
+    expect(log).toEqual(['create']);
+    expect(ctx.state.resources['plugin-resource']).toEqual({ id: 'p1' });
   });
 });

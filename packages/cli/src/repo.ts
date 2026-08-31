@@ -1,6 +1,6 @@
 /**
  * Deploy source packaging: choose the repository files to ship and build a
- * deterministic zip of them. Pure domain — the VCS listing and file contents
+ * deterministic zip of them. Pure domain - the VCS listing and file contents
  * arrive through ports (see ports.ts; the process adapter owns jj/git).
  */
 
@@ -16,7 +16,7 @@ const ZIP_MTIME = new Date('1980-01-01T00:00:00Z');
 /**
  * Filename injected into the source zip carrying the build revision. The site build
  * runs in a MicroVM from this zip (no `.git`), so `astro.config` reads the hash from
- * this file — see the repo's astro.config.mjs.
+ * this file - see the repo's astro.config.mjs.
  */
 export const COMMIT_FILE = '.commit-hash';
 
@@ -32,7 +32,7 @@ export async function listRepoFiles(
   include: string[] = [],
 ): Promise<string[]> {
   const files = await ports.vcs.listFiles(cwd);
-  // An ignore entry matches an exact path or a directory boundary — "dist"
+  // An ignore entry matches an exact path or a directory boundary - "dist"
   // drops dist and dist/**, never dist-notes.md (files silently missing from
   // the deployed site are painful to trace back to a prefix collision).
   const matches = (f: string, entry: string) => {
@@ -66,7 +66,7 @@ async function includedFiles(fs: FileSystem, cwd: string, entry: string): Promis
   } catch (err) {
     if (err instanceof FileNotFoundError && (await fs.exists(abs))) return [rel]; // a single file
     throw new Error(
-      `sourceInclude path "${entry}" is missing or empty — run the pre-deploy build that produces it before deploying`,
+      `sourceInclude path "${entry}" is missing or empty - run the pre-deploy build that produces it before deploying`,
       { cause: err },
     );
   }
@@ -74,7 +74,7 @@ async function includedFiles(fs: FileSystem, cwd: string, entry: string): Promis
 
 /**
  * Build a deterministic zip of the given files (read relative to cwd). Extra entries
- * (path → text content) are added in memory — used to inject build metadata such as
+ * (path → text content) are added in memory - used to inject build metadata such as
  * the commit hash without touching the working tree.
  */
 export async function buildRepoZip(

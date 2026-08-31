@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { getCollection } from 'astro:content';
 
-// https://llmstxt.org — a plain-text/markdown index that points LLMs at the
+// https://llmstxt.org - a plain-text/markdown index that points LLMs at the
 // machine-readable (Markdown) version of every docs page.
 
 // Mirrors the sidebar groups in astro.config.mjs; pages list in sidebar order.

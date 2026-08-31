@@ -1,6 +1,6 @@
 /*
  * ANSI colour helpers shared by the CLI and feature packages. Pure string
- * composition — writing (and stripping for non-interactive sessions) is the
+ * composition - writing (and stripping for non-interactive sessions) is the
  * logger's job.
  */
 

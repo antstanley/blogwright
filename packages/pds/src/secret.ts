@@ -13,7 +13,7 @@ import type { SecretsManagerClient } from 'blogwright-core';
 import type { PdsContext } from './context.js';
 import { requirePdsConfig } from './sync.js';
 
-/** The client surface secret persistence needs — structural, so tests can stub it. */
+/** The client surface secret persistence needs - structural, so tests can stub it. */
 export type SecretsStore = Pick<SecretsManagerClient, 'getSecretValue' | 'upsertSecret'>;
 
 export interface PdsSecret {
@@ -52,7 +52,7 @@ export function parsePdsSecret(raw: string, secretName: string): PdsSecret {
   const parsed = parseJsonObject(raw, secretName);
   if (isLegacySecret(parsed)) {
     throw new Error(
-      `secret "${secretName}" holds app-password credentials — app passwords are no longer ` +
+      `secret "${secretName}" holds app-password credentials - app passwords are no longer ` +
         'supported; run `blogwright pds keygen` then `blogwright pds login`',
     );
   }
@@ -63,21 +63,21 @@ export function parsePdsSecret(raw: string, secretName: string): PdsSecret {
 }
 
 /**
- * Fetch and parse the secret. Called only at keygen/login/sync time —
+ * Fetch and parse the secret. Called only at keygen/login/sync time -
  * secret material must never be loaded during context creation.
  */
 export async function loadPdsSecret(ctx: PdsContext): Promise<PdsSecret> {
   const pds = requirePdsConfig(ctx);
   const raw = await ctx.clients.secrets.getSecretValue(pds.secretName);
   if (!raw) {
-    throw new Error(`no secret at "${pds.secretName}" — create it with \`blogwright pds keygen\``);
+    throw new Error(`no secret at "${pds.secretName}" - create it with \`blogwright pds keygen\``);
   }
   return parsePdsSecret(raw, pds.secretName);
 }
 
 /**
  * Read-modify-write the secret; starts from an empty v1 value when absent.
- * `replaceLegacy` lets keygen start over from a pre-OAuth app-password value —
+ * `replaceLegacy` lets keygen start over from a pre-OAuth app-password value -
  * the migration entry point; every other writer must reject it.
  */
 export async function updatePdsSecret(
@@ -99,7 +99,7 @@ export async function updatePdsSecret(
 
 /**
  * NodeOAuthClient session store backed by the secret. `set` runs on login and
- * on every refresh-token rotation — persisting it is what keeps the CI session
+ * on every refresh-token rotation - persisting it is what keeps the CI session
  * alive; `del` clears only the session (client key and DID survive a logout).
  */
 export function sessionStoreForSecret(
@@ -117,7 +117,7 @@ export function sessionStoreForSecret(
     async set(sub: string, session: NodeSavedSession): Promise<void> {
       // Retried: this write persists a just-rotated single-use refresh token.
       // If it throws, the OAuth library revokes the new token and deletes the
-      // session — one Secrets Manager throttle at exactly the wrong moment
+      // session - one Secrets Manager throttle at exactly the wrong moment
       // would otherwise force an interactive re-login.
       let lastError: unknown;
       for (let attempt = 0; attempt < 3; attempt++) {

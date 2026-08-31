@@ -4,6 +4,33 @@
   "workspaces": {
     "packages/core": { "project": "src/**/*.ts" },
     "packages/pds": { "project": "src/**/*.ts" },
+    // The analytics workspace holds two trees: the package's own TypeScript
+    // under `src/`, and the SvelteKit dashboard application under `app/` whose
+    // build produces `dist/app`. Both are in `project`, so neither is exempt
+    // from the dead-code gate - there is no `ignoreDependencies` entry here and
+    // the Svelte toolchain is proved used rather than declared unused.
+    //
+    // Two things make that work. knip's own Svelte plugin registers a `.svelte`
+    // compiler (it turns on because `svelte` is a dependency of this
+    // workspace), which is what lets `layerchart` and `app/src/lib/*` be seen
+    // as imported. And knip's SvelteKit plugin looks for its routes at
+    // `src/routes` relative to the *workspace* root, which is one level above
+    // this application, so its `config` and `entry` are restated below against
+    // `app/`. `app/src/app.d.ts` is an entry for the same reason a tsconfig
+    // `include` is: an ambient declaration is consumed by the compiler and
+    // never imported.
+    "packages/analytics": {
+      "project": ["src/**/*.ts", "app/**/*.{ts,js,svelte}"],
+      "entry": [
+        "src/transform/rolldown.config.ts",
+        "src/transform/write-manifest.ts",
+        "app/src/app.d.ts"
+      ],
+      "sveltekit": {
+        "config": ["app/svelte.config.js", "app/vite.config.ts"],
+        "entry": ["app/src/routes/**/+{page,layout}{,@*}.{js,ts,svelte}"]
+      }
+    },
     "packages/cli": {
       "project": "src/**/*.ts",
       "ignoreDependencies": ["blogwright-build-agent"]

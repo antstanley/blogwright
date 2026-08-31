@@ -18,7 +18,7 @@ const IMAGE_PACKAGE_JSON = JSON.stringify({
 /**
  * Package the build-agent (Dockerfile + bundled server) into a zip and upload it to
  * `build/agent/agent-<hash>.zip`. `<hash>` is the reproducible source hash stamped
- * into agent-manifest.json when the agent was bundled — a hash of the agent's
+ * into agent-manifest.json when the agent was bundled - a hash of the agent's
  * *source*, not the bundle, because bundle bytes vary by build platform/toolchain
  * while source bytes are identical everywhere. The MicroVM image is then built from
  * this artifact and keyed by the same hash, so identical source never rebuilds.
@@ -42,7 +42,7 @@ export async function packageAndUploadAgent(
   }
   const hash = manifest.hash;
   if (!hash || !/^[0-9a-f]{12}$/.test(hash)) {
-    throw new Error(`agent-manifest.json in ${dir} has no valid hash — rebuild the agent`);
+    throw new Error(`agent-manifest.json in ${dir} has no valid hash - rebuild the agent`);
   }
 
   const entries: Zippable = {

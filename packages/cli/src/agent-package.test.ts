@@ -85,7 +85,7 @@ describe('packageAndUploadAgent', () => {
     const { ctx } = contextWithArtifacts(JSON.stringify({}));
 
     await expect(packageAndUploadAgent(ctx)).rejects.toThrow(
-      `agent-manifest.json in ${TEST_AGENT_DIR} has no valid hash — rebuild the agent`,
+      `agent-manifest.json in ${TEST_AGENT_DIR} has no valid hash - rebuild the agent`,
     );
   });
 

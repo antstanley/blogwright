@@ -12,7 +12,7 @@ const VECTORS: Array<[path: string, tid: string]> = [
   ['/posts/building-with-astro/', '5zku6kcmbo4tc'],
   // Dated path exercises the timestamp branch of the TID layout.
   ['/blog/2026/06/05/how-to/', '3mnitfsis22os'],
-  // Trailing slash is significant — this must differ from the first vector.
+  // Trailing slash is significant - this must differ from the first vector.
   ['/posts/hello-world', '3wkwuregyshfn'],
 ];
 
@@ -29,7 +29,7 @@ describe('tidFromPath', () => {
 
   it('falls back to the path hash for date-like patterns that are not real dates', () => {
     // The reference implementation throws RangeError(BigInt NaN) here, so no
-    // live record can depend on these paths — the hash fallback is safe and
+    // live record can depend on these paths - the hash fallback is safe and
     // must stay deterministic.
     const a = tidFromPath('/posts/sku-3456-78-90/');
     const b = tidFromPath('/posts/2019-12-32-retro/');

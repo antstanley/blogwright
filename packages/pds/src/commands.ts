@@ -26,7 +26,7 @@ import { rkeyFromUri } from './xrpc.js';
 
 /**
  * Generate the OAuth confidential-client key: private JWK into the secret
- * (clearing any session — client auth is bound to the key), public half into
+ * (clearing any session - client auth is bound to the key), public half into
  * the two committed /oauth/ documents the site serves.
  */
 export async function keygen(
@@ -43,7 +43,7 @@ export async function keygen(
     ctx.clients.secrets,
     pds.secretName,
     (secret) => ({ ...secret, clientKey, session: undefined }),
-    // keygen is the migration entry point — a legacy app-password value is replaced
+    // keygen is the migration entry point - a legacy app-password value is replaced
     { replaceLegacy: true, tags: ctx.tags },
   );
   ctx.logger.ok(`stored private key "${kid}" in secret "${pds.secretName}"`);
@@ -59,7 +59,7 @@ export async function keygen(
   }
   ctx.logger.info(
     colors.bold(
-      `Commit ${ctx.config.paths.publicDir}/oauth/* and release — then run \`blogwright pds login\`.`,
+      `Commit ${ctx.config.paths.publicDir}/oauth/* and release - then run \`blogwright pds login\`.`,
     ),
   );
 }
@@ -83,7 +83,7 @@ export async function secretStatus(ctx: PdsContext): Promise<void> {
   const pds = requirePdsConfig(ctx);
   const meta = await ctx.clients.secrets.describeSecret(pds.secretName);
   if (!meta) {
-    ctx.logger.info(`no secret at "${pds.secretName}" — create it with \`blogwright pds keygen\``);
+    ctx.logger.info(`no secret at "${pds.secretName}" - create it with \`blogwright pds keygen\``);
     return;
   }
   ctx.logger.info(`  name          ${meta.name}`);
@@ -112,7 +112,7 @@ export async function secretDelete(ctx: PdsContext, opts: { yes: boolean }): Pro
 
 /**
  * One-time (idempotent) publication setup: create the site.standard.publication
- * record — or update it when the committed well-known file already names one — and
+ * record - or update it when the committed well-known file already names one - and
  * write the two site files the user commits.
  */
 export async function init(
@@ -135,7 +135,7 @@ export async function init(
     // does not own, silently breaking standard.site verification.
     throw new Error(
       `${wellKnownPath(ctx.config)} points at ${existingUri}, which belongs to a different ` +
-        `account than ${did} — delete the file to create a fresh publication, or log in ` +
+        `account than ${did} - delete the file to create a fresh publication, or log in ` +
         `with the owning account`,
     );
   }
@@ -160,7 +160,7 @@ export async function init(
   ctx.logger.info(`  wrote ${ctx.config.paths.atprotoJson}`);
   ctx.logger.info(
     colors.bold(
-      'Commit both files and deploy — they verify the publication and the post link tags.',
+      'Commit both files and deploy - they verify the publication and the post link tags.',
     ),
   );
 }
@@ -190,7 +190,7 @@ function logSummary(ctx: PdsContext, s: SyncSummary): void {
   for (const slug of s.updated) ctx.logger.info(`  updated  ${slug}`);
   if (s.orphans.length > 0) {
     ctx.logger.warn(
-      `${s.orphans.length} PDS record(s) have no local post (rkeys: ${s.orphans.join(', ')}) — ` +
+      `${s.orphans.length} PDS record(s) have no local post (rkeys: ${s.orphans.join(', ')}) - ` +
         'not deleted; remove them manually if intended',
     );
   }
@@ -198,7 +198,7 @@ function logSummary(ctx: PdsContext, s: SyncSummary): void {
 
 /**
  * Post-deploy hook: reconcile the PDS after a successful production deploy.
- * Never fatal — a PDS outage must not fail a good site deploy; the next deploy
+ * Never fatal - a PDS outage must not fail a good site deploy; the next deploy
  * re-reconciles. No-op unless production, configured, and initialised.
  */
 export async function syncAfterDeploy(
@@ -211,7 +211,7 @@ export async function syncAfterDeploy(
   const root = repoRoot ?? (await findRepoRoot(ctx.ports.fs));
   const initialised = await readWellKnownUri(ctx.ports.fs, root, ctx.config).catch(() => undefined);
   if (!initialised) {
-    ctx.logger.info('standard.site publishing not initialised (`blogwright pds init`) — skipping');
+    ctx.logger.info('standard.site publishing not initialised (`blogwright pds init`) - skipping');
     return;
   }
   try {
