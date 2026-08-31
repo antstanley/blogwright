@@ -7,6 +7,37 @@
 **Produces:** the Vite/SvelteKit toolchain row and the `AnalyticsQuery` ports row in DEVELOPMENT.md, a `packages/analytics/README.md` documenting install, the five steady-state actions, the us-east-1 pinning and the privacy contract, a changeset stating the semver impact, the spec's two remaining open questions each resolved or owned, and the plugin-system spec merged - the flip task 20 deferred here - leaving the pds and analytics specs pending, named as tasks 60's and 61's
 **Pointers:** `DEVELOPMENT.md:12-22` (the Toolchain table the Vite/SvelteKit row joins, below the `rolldown` row at `:21`; the pnpm row at `:16` says "workspace of four packages" and becomes five), `DEVELOPMENT.md:328-330` (the four-package-split Assumption, which gains `blogwright-analytics` as the second instance of its own feature-package exception), `DEVELOPMENT.md:72-81` (§Hexagonal architecture's ports table the `AnalyticsQuery` row joins, in the same four-column shape as the `Vcs` row at `:80`), `DEVELOPMENT.md:246-251` (§Documentation: doc comments on public exports, a module comment stating what each module owns, no bare `// TODO` without an owner), `packages/analytics/README.md` (new - `packages/pds/README.md:1-10` is the shape: what the package owns, what it depends on, and where the command surface is documented), `packages/analytics/src/ports.ts` (task 45 - where `AnalyticsQuery` is defined and where the fixture-backed fake named in the ports row lives), `packages/analytics/src/adapters/duckdb-query.ts` (task 46 - the real adapter named in the ports row), `packages/analytics/src/config.ts` (task 44 - the recorded table-bucket-per-environment decision the Glue-integration triage draws on), `packages/analytics/src/transform/visitor-key.ts` (task 41 - the recorded salt-stability and cadence decisions), `.changeset/config.json:5` (the `fixed` group `["blogwright", "blogwright-core", "blogwright-pds"]` - decide explicitly whether `blogwright-analytics` joins it), [the analytics change spec](../../../changes/2026-07-26-analytics_plugin.md) (its §Merge plan and its two §Open questions - its `Status:` flip is task 61's, not this task's), [the plugin-system change spec](../../../changes/2026-07-26-cli_plugin_system.md) (its `Status:` header line - task 20 deferred the flip here), `packages/core/src/aws/endpoint.ts` and `packages/core/src/clients.ts` (tasks 31 and 38 - the seam and `signingUsEast1`, the work that flip waits on), `.specs/README.md` §Change specs (the pending list, which this task reduces to two entries naming tasks 60 and 61, and the merged list the plugin-system spec joins - line anchors are deliberately not given for a file this plan's own tasks keep editing)
 
+> **ROUTED FINDING - added 2026-08-31 from task 30's gate. Two stale documentation claims that no task's definition of done currently names.**
+> Both were found while building task 30, correctly left unfixed there (its
+> certificate scopes it to one `DEVELOPMENT.md` paragraph), and routed here
+> because this task already edits `DEVELOPMENT.md` in three places and is the
+> plan's documentation-closure task. **Neither is in this task's DoD as written,
+> so if you take them, add them to it; if you decline either, say so with an
+> owner rather than leaving it recorded and unowned - the gate's whole point in
+> raising them was that a recorded-but-unowned finding is one that gets lost.**
+>
+> 1. **`docs/src/content/docs/reference/cli.md` still documents pre-migration
+>    dispatch, and nothing in `docs/` names the plugin verbs.** Verified by the
+>    gate at task 30's tip: `grep -c plugin` on that page is **0** - no plugin
+>    section, no `blogwright <plugin> <action>` row, no `plugin add|list|remove`.
+>    Meanwhile §Invocation (`:28`) still lists `blogwright pds secret <action>
+>    [env]` as its own positional layout, §Exit codes (`:249`) still says `1`
+>    covers "unknown command, `preview` action, or `pds` action", and the
+>    `## pds commands` section (`:167`) carries only the six declared actions.
+>    Task 30 declined to add three `pds` rows, and its reasoning was upheld: doing
+>    so would document *host SPI* verbs as if the plugin declared them, and would
+>    leave two structural descriptions of dispatch wrong on the same page. The
+>    real fix is a plugin section plus corrections to §Invocation and §Exit codes.
+>    This is the **second** finding to land on this page from one cause - task 20's
+>    D6 was the first.
+> 2. **`DEVELOPMENT.md:132` (§Where validation lives) has a row falsified by
+>    task 29.** It reads "explicit dispatch in `cli.ts`; unknown commands fail
+>    with usage". Dispatch has been generic since task 29
+>    (`packages/cli/src/plugin-commands.ts:653`), and an unknown action now
+>    returns the plugin's own action listing. A comment naming the wrong
+>    guarantee is a step toward deleting a guard that works, and this build has
+>    found five of them.
+
 > **ROUTED FINDING - added 2026-08-30 from task 43's repair.**
 > One phrase to correct in a landed file. `packages/analytics/src/transform/handler.ts:60-62`
 > says "the bundle task 43 produces carries no client, no signer and no

@@ -1040,6 +1040,96 @@ task 59, whose role rewrite is what its warning backs.
   knowingly accepting the gap in the definition-of-done baseline - should
   answer for interface members in the same breath.
 
+- *The pds migration spec's merge-plan steps 1 and 2 are not applicable, and
+  they are not the same case as the plugin-system spec's step 1.* Recorded by
+  task 30 on 2026-08-31, in the shape task 20 set for its own two deferrals.
+  Step 1 - "apply the `Proposed changes` blocks to whichever canonical page
+  documents CLI dispatch and the pds feature, **once one exists**" - is
+  conditional on its face and the condition is false: no canonical page exists,
+  as the spec's own §Affected spec pages table says in its first row and this
+  plan's baseline says in its first bullet. Nothing is refused here; the step
+  has no target. That is a weaker case than the plugin-system spec's step 1,
+  whose "if none exists, record the SPI as a new canonical page and index it"
+  fallback made it LIVE and forced task 20 to refuse it on a conflicting
+  instruction from the same spec - the two must not be conflated when this spec
+  is eventually merged. Step 2 - "fold the modified `PdsConfig` `$def` into the
+  canonical schema" - is written UNCONDITIONALLY, and is vacuous for a
+  different reason: `find .specs -name '*.schema.json'` returns nothing, so the
+  `$def` has no destination. Worth carrying forward with it: when a canonical
+  schema is eventually written, the `PdsConfig` shape it must carry is the one
+  in `packages/core/src/config.ts` today, whose `secretName` is optional
+  because task 27 removed core's defaulting - not the shape the spec's §Type
+  changes describes. Owner for both: the spec's owner (Ant Stanley), because
+  the unblocking act is creating a canonical spec set, which no task in this
+  plan takes. Explicitly NOT task 60: task 60 flips this spec's `Status:`
+  against a merge plan whose first two steps stay recorded as not-applicable,
+  and the failure this record exists to prevent is a spec reaching `Merged`
+  with two silently unexecuted steps.
+- *The pds spec's merge-plan steps 4 and 5 are deferred from task 30 to task
+  60, and the deferral is now mechanically enforced.* Recorded by task 30 on
+  2026-08-31. The spec stays at
+  `.specs/changes/2026-07-26-migrate_pds_to_plugin_system.md` reading
+  `Status: Proposed`, stays out of `merged/`, and stays second in
+  `.specs/README.md`'s pending list of three. Reason: two of its `Proposed
+  changes` blocks have not landed - §The site graph drops its pds branch (task
+  59, reviewed CORRECT but parked at `parked/task-59` behind a release its own
+  O5 names) and §`bootstrap` warns while plugin state exists (task 60, blocked
+  by inheritance). A `Merged` header claims the whole spec shipped. What is new
+  since task 20's equivalent note is that the ordering is no longer only
+  written down: `changeset version` consumes `.changeset/` whole, so task 59's
+  `cli-site-graph-drops-pds.md` is deliberately held OUT of that directory, and
+  that absence - not the bold warning the changeset carries - is what stops the
+  deploy-role grant removal shipping in the same release as task 30's migration
+  note. Task 30's changeset is written against that guarantee: its §Upgrading
+  item 1 says the site's statement is removed in a LATER release and that
+  neither that removal nor task 60's terminal warning is in this one. Owner:
+  task 60, the first point at which the header is honest.
+- *`blogwright pds bootstrap` - the one required upgrade step - is documented
+  nowhere in `docs/`, and the page that should carry it needs a rewrite rather
+  than a row.* Raised by task 59's gate, considered and declined by task 30 on
+  2026-08-31. Two corrections to the finding as it reaches this plan. Its
+  premise that `guides/ci-github-oidc.md` names the verb holds only on task
+  59's parked branch: at the tip, `grep -rn 'blogwright pds bootstrap' docs/`
+  returns nothing at all, so the gap is wider than reported. And the test it
+  sets - whether `reference/cli.md` gives the three verbs a natural home -
+  fails plainly: that page has zero occurrences of "plugin", no
+  `blogwright <plugin> <action>` row, and no `blogwright plugin add|list|remove`
+  entry, while its §Invocation positional-layout table and its §Exit codes row
+  both still describe the pre-migration dispatch model. Adding three rows under
+  `## pds commands` would document host SPI verbs as if the pds package
+  declared them and leave two structural descriptions of dispatch wrong on the
+  same page. This is the SECOND finding to land on that page from one cause -
+  task 20's D6 recorded that it documents no plugin command at all and called
+  it "worth a task of its own alongside the M5 analytics docs" - and the single
+  fix for both is a plugin-aware rewrite of a page that mirrors
+  `blogwright --help`, whose help is now assembled from discovery. Recommended
+  owner: task 58, the plan's remaining documentation task, which already
+  depends on task 30. The caveat is the point of recording it: nothing in task
+  58's definition of done names `docs/`, so unless that DoD is amended, this
+  gap survives the plan. Not at risk in the meantime is the changeset itself,
+  which is self-contained - it names the verb, marks it required, gives the
+  form with an environment, and states its one precondition.
+- *The pds spec's three open questions, carried forward so task 60's move
+  cannot lose them.* Recorded by task 30 on 2026-08-31; all three remain in the
+  spec's own §Assumptions and open questions and travel with the file. Two have
+  acquired evidence their original wording does not carry. *An `afterDeploy`
+  hook*: `deploy` still reaches the post-deploy sync through a static import of
+  `blogwright-pds` in `packages/cli/src/commands.ts`, which is a recorded wart
+  only while pds stays a non-optional dependency and becomes a bug the day it
+  does not - and the migration has now SHIPPED with that import, so the
+  question is load-bearing rather than hypothetical. Nothing is blocked on it:
+  analytics ingests through Firehose and has no post-deploy work, so the SPI
+  still has one consumer's worth of evidence for the hook, which is none.
+  *`OpsConfig` holding plugin blocks as an opaque map*: core still declares the
+  `PdsConfig` type for a feature it no longer implements, deliberately, because
+  `OpsConfig.pds` is what keeps the CLI's own deploy-role node compiling until
+  task 59 removes it - so the better moment to revisit is immediately AFTER
+  task 59 lands, when the last site-side reader is gone. *Shorter `pds` action
+  aliases*: unaffected by anything that landed, and now a one-line addition to
+  the plugin's `commands` table rather than another positional shim; no user
+  has asked, and this release is otherwise trying to keep the surface
+  identical.
+
 ---
 
 ## Decisions settled after the review

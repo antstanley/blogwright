@@ -99,10 +99,22 @@ Conventions:
   never imports an adapter. `blogwright-core` hosts ports shared across packages
   (transport, filesystem, terminal) and their adapters; a package hosts privately
   the ports only it uses (the CLI's VCS and builder-ping ports).
-- **Features live in their own packages.** A coherent feature with its own domain -
-  the standard.site integration in `blogwright-pds` is the model - is its own
-  workspace package depending on `blogwright-core`, consumed by the CLI through a
-  narrow surface (`PdsContext`, satisfied structurally by the CLI's `OpsContext`). The CLI owns dispatch and wiring, not feature logic.
+- **Features live in their own packages, and the plugin manifest is the mechanism.**
+  A coherent feature with its own domain - the standard.site integration in
+  `blogwright-pds` is the model - is its own workspace package depending on
+  `blogwright-core`. It announces itself by declaring
+  `"blogwright": { "plugin": "<namespace>" }` in its own `package.json`: that
+  manifest field is what CLI discovery scans a dependency tree for, and the
+  package's default export is then the `Plugin` declaring its namespace, its
+  commands, the config key it owns and validates, and the resource nodes it
+  contributes. The CLI owns discovery, dispatch and wiring, not feature logic:
+  `cli.ts` carries no branch for a feature package and no mention of `pds`. A
+  feature's commands still take the narrow surface that feature actually needs
+  (`PdsContext`, a `Pick` over core's `PluginContext<PdsConfig>`, satisfied
+  structurally by the CLI's `OpsContext` - no import in either direction and no
+  adapter, pinned by a plain assignment in `packages/cli/src/context.test.ts`);
+  only the `nodes` contributor takes the full `PluginContext`, because only a
+  lifecycle verb's dispatch boundary builds one.
 
 ## Error handling and boundaries
 
