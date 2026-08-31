@@ -1,5 +1,7 @@
 # blogwright-core
 
+## 0.4.0-beta.2
+
 ## 0.4.0-beta.1
 
 ## 0.4.0-beta.0

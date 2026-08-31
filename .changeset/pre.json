@@ -18,6 +18,7 @@
     "core-config-drops-pds",
     "core-signing-us-east-1",
     "core-transport-service-descriptor",
+    "firehose-role-propagation-retry",
     "generic-plugin-dispatch",
     "init-wizard-plugin-blocks",
     "lambda-role-propagation-retry",
