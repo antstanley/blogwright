@@ -70,6 +70,20 @@ export class LogsClient {
     }
   }
 
+  /**
+   * Create a log stream inside a log group, treating an existing stream as success.
+   * `CreateLogStream` takes no tags, so this carries none: a stream is tagged only
+   * through the group that holds it.
+   */
+  async ensureLogStream(logGroupName: string, logStreamName: string): Promise<void> {
+    try {
+      await this.call('CreateLogStream', { logGroupName, logStreamName });
+    } catch (err) {
+      if (err instanceof AwsError && err.isAlreadyExists) return;
+      throw err;
+    }
+  }
+
   async putRetentionPolicy(name: string, retentionInDays: number): Promise<void> {
     await this.call('PutRetentionPolicy', { logGroupName: name, retentionInDays });
   }

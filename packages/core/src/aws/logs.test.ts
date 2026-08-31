@@ -238,3 +238,40 @@ describe('LogsClient.createDelivery request body', () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe('LogsClient.ensureLogStream', () => {
+  it('sends CreateLogStream carrying exactly the log group and log stream names', async () => {
+    let captured: { body: unknown; headers: Record<string, string> } | undefined;
+    const transport: Transport = async (req) => {
+      captured = { body: JSON.parse(String(req.body ?? '{}')), headers: req.headers };
+      return response(200, '{}');
+    };
+    await logsWith(transport).ensureLogStream('analytics-delivery-errors', 'firehose');
+    // CreateLogStream takes these two keys and nothing else - no tags - so the whole
+    // body is pinned rather than matched loosely: an extra key has to redden here.
+    expect(captured?.body).toStrictEqual({
+      logGroupName: 'analytics-delivery-errors',
+      logStreamName: 'firehose',
+    });
+    expect(captured?.headers['x-amz-target']).toBe('Logs_20140328.CreateLogStream');
+  });
+
+  it('returns normally when the stream already exists, so creating it is re-runnable', async () => {
+    const transport: Transport = async () =>
+      response(
+        400,
+        JSON.stringify({ __type: 'ResourceAlreadyExistsException', message: 'exists' }),
+      );
+    await expect(
+      logsWith(transport).ensureLogStream('analytics-delivery-errors', 'firehose'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rethrows every other failure instead of swallowing it', async () => {
+    const transport: Transport = async () =>
+      response(400, JSON.stringify({ __type: 'ValidationException', message: 'bad input' }));
+    await expect(
+      logsWith(transport).ensureLogStream('analytics-delivery-errors', 'firehose'),
+    ).rejects.toThrow(/ValidationException|bad input/);
+  });
+});
