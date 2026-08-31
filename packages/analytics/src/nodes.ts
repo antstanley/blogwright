@@ -1456,32 +1456,43 @@ export function transformUpdate(
 }
 
 /**
- * Retry `call` while Lambda still refuses the transform role.
+ * The 400s AWS returns while a role this graph just created is still
+ * propagating. Each service words it differently and none of them puts anything
+ * machine-readable in the code - Lambda's arrives as `Http400`, Firehose's as
+ * `InvalidArgumentException` - so the message is all there is to match on:
  *
- * IAM is eventually consistent, and this graph creates the role in the node
- * immediately before the one that uses it - the tightest possible window. AWS
- * answers a `CreateFunction` naming a role it has not finished propagating with
- * a 400 whose message is `The role defined for the function cannot be assumed
- * by Lambda`, and that failure is purely a matter of timing: the same request
- * succeeds seconds later with nothing changed. Without this the first
- * `analytics bootstrap` on a fresh environment fails at the tenth of twelve
- * nodes, which is exactly what it did the first time anyone ran it.
+ *   Lambda:   The role defined for the function cannot be assumed by Lambda.
+ *   Firehose: Firehose is unable to assume role arn:... Please check the role
+ *             provided.
  *
- * The predicate is deliberately narrow - this message, at 400, on this service -
- * rather than "retry 400s". Almost every other 400 Lambda returns is permanent
- * (a malformed zip, a bad handler path, a role that genuinely lacks the trust
- * policy), and retrying those would turn a clear failure into a slow one.
+ * Deliberately not a loose "retry 400s". Almost every other 400 these services
+ * return is permanent - a malformed zip, a bad handler path, a role that
+ * genuinely lacks the trust policy - and retrying those turns a clear failure
+ * into a slow one. The negative case is asserted in the suite for that reason.
  *
- * `updateFunctionConfiguration` gets the same treatment because it sends
- * `roleArn` too: an environment whose role was torn down and recreated hits the
- * identical window on the update path.
+ * **If a future node consumes a role from a third service, add its wording
+ * here.** This pattern was fixed for Lambda alone first, and Firehose failed
+ * the very next run - the class has two members today and both are listed.
+ */
+const ROLE_NOT_YET_ASSUMABLE = /cannot be assumed by|unable to assume role/i;
+
+/**
+ * Retry `call` while IAM has not finished propagating a role it just created.
+ *
+ * IAM is eventually consistent, and this graph creates each role in the node
+ * immediately before the one that assumes it - the tightest window the ordering
+ * can produce. Both pairings are affected: transform-role -> transform-function
+ * and firehose-role -> firehose-stream. The failure is purely timing; the same
+ * request succeeds seconds later with nothing changed.
+ *
+ * The update paths are wrapped too, because both send the role ARN: an
+ * environment whose role was torn down and recreated hits the identical window
+ * on `updateFunctionConfiguration` and `updateDestination`.
  */
 function whileRoleIsPropagating<T>(call: () => Promise<T>): Promise<T> {
   return withRetry(call, {
     retryable: (err) =>
-      err instanceof AwsError &&
-      err.statusCode === 400 &&
-      /cannot be assumed by Lambda/i.test(err.message),
+      err instanceof AwsError && err.statusCode === 400 && ROLE_NOT_YET_ASSUMABLE.test(err.message),
   });
 }
 
@@ -2062,7 +2073,7 @@ async function createStream(
   name: string,
   destination: IcebergDestinationInput,
 ): Promise<void> {
-  await client.createDeliveryStream(name, destination, ctx.tags);
+  await whileRoleIsPropagating(() => client.createDeliveryStream(name, destination, ctx.tags));
   output(ctx, FIREHOSE_STREAM_NODE).name = name;
   const created = await client.describeDeliveryStream(name);
   if (created !== undefined) recordStream(ctx, created);
@@ -2349,7 +2360,9 @@ export function analyticsFirehoseStreamNode(): AnalyticsNode {
           ctx.logger.step(
             `updating the analytics delivery stream "${name}" in place (AppendOnly ${String(appendOnly)} -> ${STREAM_APPEND_ONLY}) - UpdateDestination keeps the stream's ARN, so the CloudFront log delivery pointed at it is untouched`,
           );
-          await client.updateDestination(name, destination, { versionId, destinationId });
+          await whileRoleIsPropagating(() =>
+            client.updateDestination(name, destination, { versionId, destinationId }),
+          );
         } catch (err) {
           // The branch the contradicting documentation makes necessary. Not
           // narrowed to one exception: whichever way AWS resolves it, a refused
