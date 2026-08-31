@@ -1880,3 +1880,49 @@ never-failing fake counts as no evidence at all.
   could not fail, and now one property that had no assertion at all, have been
   found in this build; this is the first found by reading what the code says
   about itself rather than by mutating what it does.
+
+- **The type-claim gate was failing at plan close, and nothing had noticed for
+  weeks.** Task 00's DoD carried two standing obligations - retire the
+  ground-truth claims as their tasks land, and decide at plan close whether the
+  gate graduates into CI - and both were still open when the backlog emptied.
+  `check.mjs` exited **1** with 2 broken claims of 31: C23, which pinned that
+  `PdsConfig.secretName` was a required `string` and instructed its own deletion
+  when task 27 widened it, and C28, which pinned that `AwsClients` lacked
+  `signingUsEast1` until task 38. Both tasks had landed long before. Both claims
+  broke exactly as designed. **Nobody saw it, because the gate is deliberately
+  not wired into CI, so nothing ran it.**
+
+  That is the finding, and it is sharper than "we forgot". A checker that is
+  correct, that reports precisely, and that nothing invokes is
+  indistinguishable from no checker at all - and worse than none, because the
+  plan counted on it. The three `Reviewable:` filter defects this build found
+  were the same failure at test granularity; this is it at tool granularity.
+  **Any check whose value depends on someone remembering to run it should
+  either be wired into something that runs anyway, or given a named moment in a
+  DoD that a gate will verify.** Task 00 chose the second and the moment
+  arrived unattended, because "at plan close" is nobody's task.
+
+  Retired now as deliberate deletions naming tasks 27 and 38; the gate exits 0
+  with 29 claims held. C26 stays: task 31 rewrote it rather than deleting it,
+  because the transport seam changed its meaning instead of ending it. **A claim
+  retires when its subject ceases to exist, not when its task lands** - the
+  distinction task 00's own wording missed by listing all three together.
+
+  One caution, from walking into it. The first retirement left the comments
+  beginning `// CLAIM C23 RETIRED …`, and `check.mjs:39` counts any line
+  matching `^\s*// CLAIM C\d+` - so the count stayed at 31 and the gate passed
+  with two claims holding while asserting nothing. The eighth assertion in this
+  build that could not fail, and the first written by the orchestrator rather
+  than found in someone else's work. Renaming the marker gave the honest 29.
+
+- **Decision (task 00, step 4): the type-claim gate is NOT wired into CI, and
+  retires with the plan when task 60 closes.** It checks planning artifacts -
+  transcriptions of proposed type changes - not shipped code, so every claim
+  whose spec has merged is now checking a real declaration that `pnpm typecheck`
+  already covers; graduating it would add a second, weaker typecheck over a
+  corpus with no maintainer. It is not dead yet, though: the pds and
+  plugin-system specs are still pending, both owned by parked task 60, and the
+  claims pinning those are still doing real work. Retiring today would drop live
+  guarantees; wiring it into CI would enshrine a corpus with a scheduled end.
+  Task 60 is the moment. This is a judgement about what the repo should carry,
+  not a fact about the code, and is the user's to overturn.

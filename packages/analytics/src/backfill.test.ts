@@ -593,7 +593,7 @@ describe('the idempotency bound', () => {
     );
   });
 
-  it('counts a day\'s occupancy with bots included, so a bot-only day is an occupied day', async () => {
+  it("counts a day's occupancy with bots included, so a bot-only day is an occupied day", async () => {
     // `includeBots` is bound to `true` in `rowsAlreadyIn` rather than left to
     // `config.analytics.bots`, and this is the assertion that holds it there.
     // With `false`, a day holding nothing but bot traffic would count as empty

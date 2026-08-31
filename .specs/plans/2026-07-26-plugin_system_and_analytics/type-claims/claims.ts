@@ -272,14 +272,12 @@ void nineLeftOut;
 // PdsConfig - the widening and the resolved shape (tasks 21, 22, 27)
 // ---------------------------------------------------------------------------
 
-// CLAIM C23 [migrate_pds_to_plugin_system §`blogwright-core` → Config] expects
-// clean - today's ground truth this claim retires WHEN TASK 27 LANDS: core's
-// `PdsConfig.secretName` is still a required `string`. When task 27 widens it,
-// this fails; delete the claim and re-run - the corpus statements that say
-// "today" have become history at that commit.
-declare const corePdsConfig: PdsConfig;
-const secretNameTotalToday: string = corePdsConfig.secretName;
-void secretNameTotalToday;
+// RETIRED CLAIM C23 - 2026-08-31 at plan close, its landing task being TASK 27.
+// It pinned today's ground truth - core's `PdsConfig.secretName` was a required
+// `string` - and instructed its own deletion the moment task 27 widened it.
+// Task 27 landed and the claim broke, exactly as designed; this is the
+// deliberate deletion it asked for, not a silent edit. C25 below still pins the
+// widened-and-resolved shape, so the guarantee did not leave with it.
 
 // CLAIM C24 [migrate_pds_to_plugin_system §Config ownership] expects TS2322 -
 // the widening the migration must not leak: under the proposed shape every
@@ -333,14 +331,13 @@ const keyStillAccepted: ServiceKey | ServiceDescriptor = 'microvms';
 void descriptorAccepted;
 void keyStillAccepted;
 
-// CLAIM C28 [cli_plugin_system §Plugin-supplied AWS services / task 38] expects
-// TS2339 - ground truth today: `AwsClients` does not carry `signingUsEast1`
-// yet ("the us-east-1 signer … is a local const reachable only through the
-// pre-built clients"). Retires when task 38 lands; delete the claim and
-// re-run.
-// @ts-expect-error TS2339
-void ops.clients.signingUsEast1;
-
+// RETIRED CLAIM C28 - 2026-08-31 at plan close, its landing task being TASK 38.
+// It pinned that `AwsClients` did not yet carry `signingUsEast1` and instructed
+// its own deletion once task 38 added it. Task 38 landed; the directive went
+// unused and the gate reported it broken. This is that deletion. Unlike C26 -
+// which task 31 rewrote rather than retired, because the seam changed its
+// meaning instead of ending it - this claim had nothing left to say: the member
+// now exists and `pnpm typecheck` covers it as ordinary shipped code.
 // ---------------------------------------------------------------------------
 // Scoped state (task 04) - the store type is shared, only the key changes
 // ---------------------------------------------------------------------------

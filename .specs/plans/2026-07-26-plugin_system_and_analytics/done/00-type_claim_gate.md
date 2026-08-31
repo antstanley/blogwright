@@ -17,8 +17,49 @@
 
 ## Definition of done
 
-- [ ] `node check.mjs` exits 0 on the corpus as committed, reporting every claim held, and exits non-zero naming the broken claim (its `Cnn` id and the document section it cites) when any transcription, claim, or real type under `packages/` drifts - demonstrated by the recorded constraint-reintroduction run.
+- [x] `node check.mjs` exits 0 on the corpus as committed, reporting every claim held, and exits non-zero naming the broken claim (its `Cnn` id and the document section it cites) when any transcription, claim, or real type under `packages/` drifts - demonstrated by the recorded constraint-reintroduction run.
 - [ ] Every transcribed declaration cites the spec section it comes from, and every claim carries the document section or task number it pins plus the exact diagnostic code that document quotes; negative claims use `@ts-expect-error` so a silently-compiling claim fails the gate as `TS2578`.
 - [ ] The gate touches nothing the production toolchain owns: `pnpm knip`, `pnpm build`, `pnpm test`, `pnpm lint` and `pnpm exec oxfmt --check .` behave identically with and without the `type-claims/` directory, and no root `package.json` script or CI step names it.
-- [ ] The three retirement claims (C23/C26/C28) are either still pinning ground truth or have been deliberately deleted in the commit that landed their task, with the task named - no claim is ever silenced by weakening its assertion.
+- [x] The three retirement claims (C23/C26/C28) are either still pinning ground truth or have been deliberately deleted in the commit that landed their task, with the task named - no claim is ever silenced by weakening its assertion.
 - [ ] Reviewable: run `node .specs/plans/2026-07-26-plugin_system_and_analytics/type-claims/check.mjs` and observe PASS with the claim count; then temporarily add `extends PluginContext` to `ResourceNode` in `transcriptions.ts`, observe FAIL naming claim C16 with `TS2344`, and revert.
+> **PLAN-CLOSE DISCHARGE - 2026-08-31, by the orchestrator.** Two of this task's
+> obligations were standing ones, due at plan close rather than at its own merge,
+> and neither had been discharged when the backlog emptied.
+>
+> **The retirements were overdue and the gate was already failing.** C23 pinned
+> that `PdsConfig.secretName` was a required `string` "today" and instructed its
+> own deletion when task 27 widened it; C28 pinned that `AwsClients` lacked
+> `signingUsEast1` and instructed the same for task 38. Both tasks landed
+> long ago, both claims broke exactly as designed - and nobody saw it, because
+> the gate is deliberately not wired into CI, so nothing ran it. `check.mjs`
+> exited **1** with 2 broken claims of 31 at plan close. Both are now retired as
+> deliberate deletions naming their landing tasks, and the gate exits **0** with
+> **29 claims held** (12 compiled positives, 17 pinned compile-errors).
+>
+> C26 is correctly **not** retired: task 31 rewrote it rather than deleting it,
+> because the transport seam changed the claim's meaning instead of ending it -
+> it now pins that the seam takes a descriptor and never a bare string. That
+> distinction is the useful one: a claim retires when its subject ceases to
+> exist, not merely when its task lands.
+>
+> A caution worth recording, because I walked into it. My first retirement left
+> the comments beginning `// CLAIM C23 RETIRED …`, and `check.mjs:39` counts any
+> line matching `^\s*// CLAIM C\d+`. The count stayed at 31 and the gate passed -
+> two claims "holding" while asserting nothing at all. That is an assertion that
+> cannot fail, the eighth this build has produced and the first written by the
+> orchestrator. Renaming the marker to `// RETIRED CLAIM C23 -` dropped the count
+> to the honest 29.
+>
+> **The graduation decision (this task's fourth step) is: keep the gate until
+> task 60 closes, then retire it with the plan - do NOT wire it into CI.** The
+> reasoning: the gate checks *planning artifacts*, transcriptions of proposed
+> type changes, not shipped code. Once a spec merges, every claim of its that
+> survives is checking a real declaration, which `pnpm typecheck` already covers
+> as ordinary code - so a graduated gate would be a second, weaker typecheck over
+> a corpus nobody maintains. But it is **not** dead yet: two specs remain
+> pending, the pds and plugin-system ones, both owned by parked task 60, and the
+> claims pinning those are still doing real work. Retiring it now would drop
+> live guarantees; wiring it into CI would enshrine a corpus with a scheduled
+> end. Task 60 is the right moment, and this is recorded in plan.md's open
+> questions per the step. **The user may overturn this**; it is a judgement about
+> what the repo should carry, not a fact about the code.
