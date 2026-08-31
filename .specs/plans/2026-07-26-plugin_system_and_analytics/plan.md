@@ -680,7 +680,9 @@ task 59, whose role rewrite is what its warning backs.
   them while they were being written.
   That is the decisive observation: freshly-authored citations into an actively
   edited file are stale on arrival, because nothing recomputes them and nothing
-  checks them. The convention does not decay slowly - it does not work.- *`plugin list` and `plugin remove` contradict each other for a bundled
+  checks them. The convention does not decay slowly - it does not work.
+
+- *`plugin list` and `plugin remove` contradict each other for a bundled
   plugin.* Found by task 26's verification gate 2026-08-31, on the real binary.
   This is the first commit at which `plugin list` reports a plugin the CLI
   **bundles** rather than one the repo installed. `blogwright plugin list`
