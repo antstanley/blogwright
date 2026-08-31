@@ -6,12 +6,12 @@
 
 import { zipSync, type Zippable } from 'fflate';
 
-import { FileNotFoundError, type FileSystem } from 'blogwright-core';
+import { FileNotFoundError, REPRODUCIBLE_ZIP_MTIME, type FileSystem } from 'blogwright-core';
 
 import type { Ports } from './ports.js';
 
-/** Fixed timestamp for reproducible zips (fflate requires 1980-2099). */
-const ZIP_MTIME = new Date('1980-01-01T00:00:00Z');
+/** Fixed timestamp for reproducible zips. See {@link REPRODUCIBLE_ZIP_MTIME} for why it is not UTC-constructed. */
+const ZIP_MTIME = REPRODUCIBLE_ZIP_MTIME;
 
 /**
  * Filename injected into the source zip carrying the build revision. The site build

@@ -5,6 +5,7 @@
  * `ctx.agentDir`; this module touches no Node API directly.
  */
 
+import { REPRODUCIBLE_ZIP_MTIME } from 'blogwright-core';
 import { zipSync, type Zippable } from 'fflate';
 
 import type { OpsContext } from './context.js';
@@ -50,7 +51,7 @@ export async function packageAndUploadAgent(
     'server.js': server,
     'package.json': new TextEncoder().encode(IMAGE_PACKAGE_JSON),
   };
-  const zip = zipSync(entries, { level: 6, mtime: new Date('1980-01-01T00:00:00Z') });
+  const zip = zipSync(entries, { level: 6, mtime: REPRODUCIBLE_ZIP_MTIME });
   const key = `build/agent/agent-${hash}.zip`;
 
   await ctx.clients.s3.putObject(ctx.names.bucket, key, zip, 'application/zip');
