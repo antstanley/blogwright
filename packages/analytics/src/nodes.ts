@@ -3,24 +3,29 @@
  * CloudFront-logs-to-Iceberg pipeline is built from and nothing else: the
  * site's own bucket, distribution and log group stay in the CLI's graph
  * (`packages/cli/src/nodes.ts`) and are never touched from here. This module
- * carries all twelve of them, in four chains. The table chain - the S3 Tables bucket,
+ * carries all fourteen of them, in four chains. The table chain - the S3 Tables bucket,
  * the namespace inside it, the `page_views` table, and the Glue federation
  * Firehose reads that table through - runs `analytics-table-bucket` ->
  * `analytics-namespace` -> `analytics-table` ->
  * `analytics-catalog-integration`. The transform chain - the long-lived
- * `visitor_key` salt, the Lambda execution role whose policy names that
- * secret's ARN, and the record-transform function itself - runs
- * `analytics-salt-secret` -> `analytics-transform-role` ->
- * `analytics-transform-function`. The delivery chain - the bucket every record
- * Firehose cannot deliver lands in, the role it assumes, and the stream itself
- * - runs `analytics-error-bucket` -> `analytics-firehose-role` ->
- * `analytics-firehose-stream`, and joins the other two chains through the
- * role's four grants and the stream's destination. The vended-delivery chain -
+ * `visitor_key` salt, the log group the function's own output lands in, the
+ * Lambda execution role whose policy names that secret's ARN, and the
+ * record-transform function itself - runs `analytics-salt-secret` ->
+ * `analytics-transform-role` -> `analytics-transform-function`, with
+ * `analytics-transform-log-group` a second edge into that function. The
+ * delivery chain - the bucket every record Firehose cannot deliver lands in,
+ * the log group Firehose's delivery errors land in, the role it assumes, and
+ * the stream itself - runs `analytics-error-bucket` ->
+ * `analytics-firehose-role` -> `analytics-firehose-stream`, with
+ * `analytics-firehose-log-group` a second edge into that stream, and joins the
+ * other two chains through the role's four grants and the stream's
+ * destination. The vended-delivery chain -
  * the CloudWatch delivery destination pointing at that stream and the delivery
  * joining it to the site's log source - runs `analytics-log-destination` ->
  * `analytics-log-delivery` and hangs off the stream. All four are wired through
  * `dependsOn`, and a node depends on every node whose recorded ARN it
- * interpolates. {@link buildAnalyticsNodes} at the foot of this module returns
+ * interpolates - plus the two writers whose log group has to exist before the
+ * first line they write, which is an ordering with nothing read back. {@link buildAnalyticsNodes} at the foot of this module returns
  * the assembled set, and `plugin.ts` hands it to the SPI's `Plugin.nodes`;
  * assembling an array is all it does - nothing here reconciles anything.
  *
@@ -41,8 +46,8 @@
  * over the host's `signingUsEast1` signer; no node here picks a region for a
  * request. {@link ANALYTICS_REGION} below is the same region as *text*, needed
  * only because an ARN spells its region out and because every node `title`
- * states the pin, so the bootstrap output an operator reads carries it. Ten of
- * the twelve titles state it as the region they are created in; the two IAM
+ * states the pin, so the bootstrap output an operator reads carries it. Twelve
+ * of the fourteen titles state it as the region they are created in; the two IAM
  * role nodes state it as the pipeline they serve, because IAM is global and
  * "created in us-east-1" is not a property a role has (§Region pinning says so
  * in as many words) - a title claiming otherwise would be the pin stated
@@ -144,6 +149,14 @@ const CATALOG_NODE = 'analytics-catalog-integration';
 /** The `analytics-salt-secret` node id, shared by its `id`, its state key and the edge into it. */
 const SALT_SECRET_NODE = 'analytics-salt-secret';
 
+/**
+ * The `analytics-transform-log-group` node id. The group the transform Lambda
+ * writes its own output to, owned here rather than left to the implicit
+ * creation Lambda would otherwise do on first invocation - which is what makes
+ * its retention a property at all.
+ */
+const TRANSFORM_LOG_GROUP_NODE = 'analytics-transform-log-group';
+
 /** The `analytics-transform-role` node id. */
 const TRANSFORM_ROLE_NODE = 'analytics-transform-role';
 
@@ -153,11 +166,19 @@ const TRANSFORM_FUNCTION_NODE = 'analytics-transform-function';
 /** The `analytics-error-bucket` node id, shared by its `id`, its state key and the edge into it. */
 const ERROR_BUCKET_NODE = 'analytics-error-bucket';
 
+/**
+ * The `analytics-firehose-log-group` node id. The group Firehose writes its
+ * delivery errors to, and the one node in this module that owns a log stream as
+ * well as a group: enabling error logging through the API requires both to
+ * exist in advance.
+ */
+const FIREHOSE_LOG_GROUP_NODE = 'analytics-firehose-log-group';
+
 /** The `analytics-firehose-role` node id. */
 const FIREHOSE_ROLE_NODE = 'analytics-firehose-role';
 
 /**
- * The `analytics-firehose-stream` node id. Exported, alone among the twelve,
+ * The `analytics-firehose-stream` node id. Exported, alone among the fourteen,
  * because `analytics status` reads this node's recorded outputs back out of
  * the scoped state its `read` hydrated - the stream's delivery health - and a
  * second copy of the string in `commands.ts` would be a state key with two
@@ -761,9 +782,12 @@ const ZIP_MTIME = REPRODUCIBLE_ZIP_MTIME;
 const ZIP_LEVEL = 6;
 
 /**
- * The prefix Lambda derives a function's log group from. The group itself is
- * created by the Lambda service on first invocation and by no node in this
- * graph - see {@link transformLogGroupArn}.
+ * The prefix Lambda derives a function's log group from, and therefore the
+ * prefix {@link transformLogGroupName} builds the one group this plugin owns
+ * for its function from. `analytics-transform-log-group` creates that group; it
+ * is not left to the implicit creation the Lambda service performs on a
+ * function's first invocation, because a group created that way is retained
+ * forever and carries none of the environment's tags.
  */
 const LAMBDA_LOG_GROUP_PREFIX = '/aws/lambda/';
 
@@ -898,9 +922,25 @@ function transformRoleName(ctx: AnalyticsContext): string {
 }
 
 /**
+ * The transform Lambda's log group name - **the one home this string has.**
+ *
+ * `analytics-transform-log-group` creates the group under this name and
+ * {@link transformLogGroupArn} scopes the role's grant to the ARN built from
+ * it, so the group that exists and the group the function is allowed to write
+ * to are one string by construction rather than two literals that happen to
+ * agree. Derived from {@link transformFunctionName} rather than re-derived from
+ * `ctx.names.prefix` for the same reason: Lambda's own group name is that
+ * function's name under {@link LAMBDA_LOG_GROUP_PREFIX}, so a second derivation
+ * could name a group Lambda never writes to.
+ */
+function transformLogGroupName(ctx: AnalyticsContext): string {
+  return `${LAMBDA_LOG_GROUP_PREFIX}${transformFunctionName(ctx)}`;
+}
+
+/**
  * The log group ARN the role's `logs:` grant is scoped to - the function's
- * **own** group and nothing else, the scoping
- * `packages/cli/src/nodes.ts:212` applies to the site's exec role.
+ * **own** group and nothing else, the scoping the site's exec role applies
+ * (`packages/cli/src/nodes.ts`).
  *
  * The region is {@link ANALYTICS_REGION} and not `ctx.config.region`, which is
  * the one place this ARN differs from the CLI's `logGroupArn` helper (whose
@@ -909,18 +949,32 @@ function transformRoleName(ctx: AnalyticsContext): string {
  * log group is too, and a grant naming the primary region would be a grant on a
  * group that never exists.
  *
- * **No node creates this group.** Lambda creates it implicitly on the
- * function's first invocation. That is worth stating because the policy below
- * grants `logs:CreateLogStream` and `logs:PutLogEvents` and *not*
- * `logs:CreateLogGroup`: the transform's own diagnostics therefore depend on
- * that implicit creation succeeding, and the pipeline's real failure signal is
- * elsewhere - a record the transform cannot map goes to Firehose's error prefix
- * (`transform/handler.ts`), and a batch that throws raises Firehose's own error
- * metric. Adding the group as a node of its own, with the retention the site's
- * log groups carry, is a coherent follow-up and is outside this node set.
+ * **`analytics-transform-log-group` creates this group**, which is why the
+ * policy below grants `logs:CreateLogStream` and `logs:PutLogEvents` and *not*
+ * `logs:CreateLogGroup`: the role has nothing to create, the shape the site's
+ * exec role has. An earlier version of this comment said no node creates the
+ * group and that Lambda's implicit creation on the function's first invocation
+ * was enough; production disproved it - the group never appeared, the transform
+ * ran and reported nothing, and the pipeline's record-level signals (a record
+ * the transform cannot map goes to Firehose's error prefix,
+ * `transform/handler.ts`, and a batch that throws raises Firehose's own error
+ * metric) answered *which* and never *why*.
  */
 function transformLogGroupArn(ctx: AnalyticsContext): string {
-  const group = `${LAMBDA_LOG_GROUP_PREFIX}${transformFunctionName(ctx)}`;
+  return analyticsLogGroupArn(ctx, transformLogGroupName(ctx));
+}
+
+/**
+ * A log group's ARN in {@link ANALYTICS_REGION}, in the `:*` form both an IAM
+ * grant and this plugin's recorded outputs use.
+ *
+ * Takes no region parameter, which is the one way it differs from the CLI's own
+ * `logGroupArn` (`packages/cli/src/nodes.ts`) - that helper defaults to
+ * `ctx.config.region`, correctly, because the site's groups live there. Every
+ * group this plugin names lives in us-east-1 with the rest of the pipeline, so
+ * there is no region for a caller to choose and no default for one to forget.
+ */
+function analyticsLogGroupArn(ctx: AnalyticsContext, group: string): string {
   return `arn:aws:logs:${ANALYTICS_REGION}:${ctx.accountId}:log-group:${group}:*`;
 }
 
@@ -1013,8 +1067,13 @@ function requireTransformRoleArn(ctx: AnalyticsContext): string {
  * without a teardown.
  *
  * **Two statements, two concrete resources, no `*` anywhere.** The `logs`
- * statement names the function's own log group ({@link transformLogGroupArn});
- * the `secretsmanager` statement names the one secret this pipeline owns and
+ * statement names the function's own log group ({@link transformLogGroupArn})
+ * and carries two actions rather than three: `logs:CreateLogGroup` is
+ * deliberately absent, because `analytics-transform-log-group` creates that
+ * group and a role granted the creation of a group it never has to create is a
+ * grant with no call behind it - the same shape the site's exec role has. What
+ * Lambda needs at runtime is the stream inside that group and the events in it.
+ * The `secretsmanager` statement names the one secret this pipeline owns and
  * nothing else. A `*` in the second would hand every secret in the account -
  * every other environment's salt, and `blogwright-pds`'s OAuth client key and
  * live session - to a role whose only job is to read one value, and nothing in
@@ -1184,6 +1243,104 @@ export function analyticsSaltSecretNode(): AnalyticsNode {
       );
     },
   };
+}
+
+/**
+ * A CloudWatch log group this plugin owns, on the read/create/update/delete
+ * contract the site's own groups have (`logGroupNode`,
+ * `packages/cli/src/nodes.ts`): `read` reports presence and records the ARN,
+ * `create` ensures the group with the environment's tags and then applies
+ * {@link LOG_RETENTION_DAYS}, `update` re-applies that retention on every
+ * apply, and `delete` removes the group.
+ *
+ * Owning the group is what makes retention a property at all. A group a service
+ * creates for itself is retained **forever** and no reconcile ever notices;
+ * re-applying the policy on every `update` also converts a group that already
+ * exists in that state - an environment provisioned before these two nodes
+ * existed - without a teardown.
+ *
+ * `stream`, when given, is a log stream the group must also hold. It is ensured
+ * on `create` **and re-ensured on every `update`**, which is the one place these
+ * nodes depart from the site's `logGroupNode` and is the
+ * {@link applyErrorBucketConfiguration} reconcile-on-every-apply pattern rather
+ * than the site's narrower update. The reason is concrete: `read()` answers on
+ * the group alone, so a group left by a run that stopped between
+ * `CreateLogGroup` and `CreateLogStream` reports present forever while an
+ * `update` that only re-applied retention would do nothing about the stream it
+ * is missing. Deleting a group deletes the streams inside it, so `delete` needs
+ * no counterpart.
+ *
+ * `dependsOn: []` on both: a group is the head of the chain that writes to it
+ * and reads no other node's output.
+ */
+function analyticsLogGroupNode(spec: {
+  readonly id: string;
+  readonly title: string;
+  readonly name: (ctx: AnalyticsContext) => string;
+  readonly stream?: string;
+}): AnalyticsNode {
+  const { id, title, name, stream } = spec;
+  const record = (ctx: AnalyticsContext, group: string): void => {
+    const out = output(ctx, id);
+    out.name = group;
+    out.arn = analyticsLogGroupArn(ctx, group);
+  };
+  return {
+    id,
+    dependsOn: [],
+    title,
+    async read(ctx) {
+      const group = name(ctx);
+      if (!(await logs(ctx).logGroupExists(group))) return false;
+      record(ctx, group);
+      return true;
+    },
+    async create(ctx) {
+      const group = name(ctx);
+      const client = logs(ctx);
+      await client.ensureLogGroup(group, ctx.tags);
+      // Identity before the secondary calls, the ordering `analytics-error-bucket`
+      // and the site's own `bucketNode` follow: a crash between CreateLogGroup and
+      // the retention or the stream must still leave the group recorded in state.
+      record(ctx, group);
+      await client.putRetentionPolicy(group, LOG_RETENTION_DAYS);
+      if (stream !== undefined) await client.ensureLogStream(group, stream);
+    },
+    async update(ctx) {
+      const group = name(ctx);
+      const client = logs(ctx);
+      await client.putRetentionPolicy(group, LOG_RETENTION_DAYS);
+      if (stream !== undefined) await client.ensureLogStream(group, stream);
+    },
+    async delete(ctx) {
+      // `deleteLogGroup` swallows its own not-found, so a re-run after a
+      // completed teardown is a no-op rather than a failure.
+      await logs(ctx).deleteLogGroup(name(ctx));
+    },
+  };
+}
+
+/**
+ * The transform Lambda's own log group: the mapping decisions, the drop path,
+ * and the cold-start read of the salt secret - the only place this pipeline
+ * says *why* a record went where it did.
+ *
+ * Lambda writes into it under the execution role's existing
+ * `logs:CreateLogStream` and `logs:PutLogEvents`, scoped to this group and no
+ * other ({@link transformLogGroupArn}). The role is deliberately not granted
+ * `logs:CreateLogGroup`, because this node is what creates the group.
+ *
+ * It is at the head of the chain that writes to it -
+ * `analytics-transform-function` declares the edge - and the role does not,
+ * because the role's policy *derives* this group's ARN from the function's name
+ * rather than reading a recorded one, so there is no output to wait for.
+ */
+export function analyticsTransformLogGroupNode(): AnalyticsNode {
+  return analyticsLogGroupNode({
+    id: TRANSFORM_LOG_GROUP_NODE,
+    title: `Transform Lambda log group (${ANALYTICS_REGION})`,
+    name: transformLogGroupName,
+  });
 }
 
 /**
@@ -1506,12 +1663,16 @@ function whileRoleIsPropagating<T>(call: () => Promise<T>): Promise<T> {
  * artifact's name, even though the zip travels inline rather than through a
  * bucket (see {@link MAX_INLINE_ZIP_BYTES} for why inline).
  *
- * It depends on `analytics-transform-role`, whose recorded ARN it runs as.
+ * It depends on `analytics-transform-role`, whose recorded ARN it runs as, and
+ * on `analytics-transform-log-group`, whose ARN it reads nothing of: a group
+ * that does not exist when the function first runs is a log line lost with
+ * nothing raised, and on teardown the reverse order the engine walks removes
+ * the function before the group holding the evidence of what it did.
  */
 export function analyticsTransformFunctionNode(): AnalyticsNode {
   return {
     id: TRANSFORM_FUNCTION_NODE,
-    dependsOn: [TRANSFORM_ROLE_NODE],
+    dependsOn: [TRANSFORM_ROLE_NODE, TRANSFORM_LOG_GROUP_NODE],
     title: `Record-transform Lambda (${ANALYTICS_REGION})`,
     async read(ctx) {
       const name = transformFunctionName(ctx);
@@ -1685,6 +1846,44 @@ const FIREHOSE_TRUST = {
 const ERROR_OUTPUT_PREFIX = 'firehose-errors/';
 
 /**
+ * Days both of this plugin's log groups retain what is written to them,
+ * re-applied on every `update` the way the site's own groups re-apply theirs.
+ *
+ * 365, matching the site's `retention.microvmDays` default - a year of the
+ * build's own output, and a year of this pipeline's. It is a plugin-owned
+ * constant and **not** read from `ctx.config.retention`, deliberately: that
+ * block holds exactly two keys, `microvmDays` and `cloudfrontDays`, and each
+ * one names one of the site's own two log groups. A third and fourth consumer
+ * reading either would make an operator's setting for a group they named
+ * silently govern two resources it was never named for, so that an environment
+ * shortening its CloudFront retention would shorten the transform's diagnostics
+ * with it and nothing would say so. Making retention configurable per plugin is
+ * a config change with a name of its own, not a key borrowed here.
+ */
+const LOG_RETENTION_DAYS = 365;
+
+/**
+ * The log stream inside {@link firehoseLogGroupName} that Firehose writes its
+ * delivery errors to. Firehose's own name for that stream - enabling error
+ * logging through the API names it explicitly, and the service creates neither
+ * the group nor the stream.
+ *
+ * `BackupDelivery`, the stream Firehose uses for a destination configured with
+ * S3 backup, is deliberately not created: the Iceberg destination this pipeline
+ * builds configures none, so a second stream would be an empty one forever.
+ */
+const DESTINATION_DELIVERY_STREAM = 'DestinationDelivery';
+
+/**
+ * The prefix a Firehose delivery stream's log group is conventionally named
+ * under, the counterpart of {@link LAMBDA_LOG_GROUP_PREFIX}. Firehose derives
+ * nothing from it - it writes to whatever group the stream's
+ * `CloudWatchLoggingOptions` names - so the convention is this plugin's to keep,
+ * and {@link firehoseLogGroupName} is where it is kept.
+ */
+const FIREHOSE_LOG_GROUP_PREFIX = '/aws/kinesisfirehose/';
+
+/**
  * Seconds Firehose buffers records before writing a file, and the size in MiB
  * that would flush one sooner. Both are sent, because the service requires the
  * pair when either is given (`BufferingHints`); both are at the service's
@@ -1752,6 +1951,24 @@ function streamName(ctx: AnalyticsContext): string {
     STREAM_NAME_MAX_LENGTH,
     'delivery stream',
   );
+}
+
+/**
+ * The log group Firehose writes its delivery errors to - **the one home this
+ * string has**, for {@link transformLogGroupName}'s reason and with more riding
+ * on it. `analytics-firehose-log-group` creates the group under this name
+ * today; the delivery role's grant on the stream inside it and the stream's own
+ * `CloudWatchLoggingOptions` are the two readers that follow, and each is meant
+ * to reach the name through this helper rather than spell a third literal of
+ * it. Firehose writes to whatever group its logging options name, so three
+ * spellings would fail as an empty group rather than as an error.
+ *
+ * Derived from {@link streamName} rather than from `ctx.names.prefix`, so the
+ * group is named after the stream whose errors it holds even if that stream's
+ * suffix ever changes.
+ */
+function firehoseLogGroupName(ctx: AnalyticsContext): string {
+  return `${FIREHOSE_LOG_GROUP_PREFIX}${streamName(ctx)}`;
 }
 
 /**
@@ -2197,6 +2414,36 @@ async function applyErrorBucketConfiguration(ctx: AnalyticsContext, name: string
 }
 
 /**
+ * The log group Firehose writes its delivery errors to, and the log stream
+ * inside it that they are written to.
+ *
+ * **Firehose creates neither.** Enabling error logging through the API rather
+ * than the console requires the group *and* the stream to exist in advance, so
+ * this node creates both - and re-ensures the stream on every `update` beside
+ * the retention, which is why {@link analyticsLogGroupNode} takes a stream at
+ * all. Without that, a group left by a run that stopped between
+ * `CreateLogGroup` and `CreateLogStream` is permanently one call short, with
+ * `read()` reporting it present and `update()` doing nothing about it, and the
+ * symptom is a delivery failure with nowhere to be explained.
+ *
+ * {@link DESTINATION_DELIVERY_STREAM} is the only stream created:
+ * `BackupDelivery` belongs to a destination configured with S3 backup, and the
+ * Iceberg destination this pipeline builds configures none.
+ *
+ * It is at the head of the chain that writes to it -
+ * `analytics-firehose-stream` declares the edge - while the delivery role does
+ * not, for the reason `analytics-transform-log-group`'s counterpart does not.
+ */
+export function analyticsFirehoseLogGroupNode(): AnalyticsNode {
+  return analyticsLogGroupNode({
+    id: FIREHOSE_LOG_GROUP_NODE,
+    title: `Firehose delivery-error log group (${ANALYTICS_REGION})`,
+    name: firehoseLogGroupName,
+    stream: DESTINATION_DELIVERY_STREAM,
+  });
+}
+
+/**
  * The role Firehose assumes to read the catalog, write the table, invoke the
  * transform and store what it could not deliver - four grants, four concrete
  * resources, no `*`.
@@ -2294,7 +2541,16 @@ export function analyticsFirehoseRoleNode(): AnalyticsNode {
 export function analyticsFirehoseStreamNode(): AnalyticsNode {
   return {
     id: FIREHOSE_STREAM_NODE,
-    dependsOn: [FIREHOSE_ROLE_NODE, TABLE_NODE, CATALOG_NODE, TRANSFORM_FUNCTION_NODE],
+    dependsOn: [
+      FIREHOSE_ROLE_NODE,
+      TABLE_NODE,
+      CATALOG_NODE,
+      TRANSFORM_FUNCTION_NODE,
+      // Not an ARN this node interpolates: the group has to exist before the
+      // stream can report a delivery failure into it, and on teardown the
+      // stream goes before the group that holds its errors.
+      FIREHOSE_LOG_GROUP_NODE,
+    ],
     title: `Firehose delivery stream (${ANALYTICS_REGION})`,
     async read(ctx) {
       const status = await firehose(ctx).describeDeliveryStream(streamName(ctx));
@@ -3011,7 +3267,7 @@ export function analyticsLogDeliveryNode(): AnalyticsNode {
 }
 
 /**
- * The plugin's twelve resource nodes, assembled in the order the change spec's
+ * The plugin's fourteen resource nodes, assembled in the order the change spec's
  * §Analytics pipeline → Resource nodes table lists them. This is what
  * `Plugin.nodes` (`plugin.ts`) hands the CLI's generic `analytics bootstrap`
  * and `analytics destroy` verbs, and it is the whole of what this package
@@ -3032,7 +3288,7 @@ export function analyticsLogDeliveryNode(): AnalyticsNode {
  *
  * **No `ctx` parameter, deliberately.** The SPI declares `nodes?(ctx)` and the
  * CLI calls it with one, so this function is assignable to it as written - a
- * zero-argument function satisfies a one-argument signature. None of the twelve
+ * zero-argument function satisfies a one-argument signature. None of the fourteen
  * factories needs a context to be *built*: each reads `ctx` inside `read`,
  * `create`, `update` and `delete`, when the reconcile is actually running. A
  * parameter accepted and ignored here would be an unused binding and, worse, a
@@ -3054,10 +3310,12 @@ export function buildAnalyticsNodes(): AnalyticsNode[] {
     analyticsCatalogIntegrationNode(),
     // The transform chain.
     analyticsSaltSecretNode(),
+    analyticsTransformLogGroupNode(),
     analyticsTransformRoleNode(),
     analyticsTransformFunctionNode(),
     // The delivery chain.
     analyticsErrorBucketNode(),
+    analyticsFirehoseLogGroupNode(),
     analyticsFirehoseRoleNode(),
     analyticsFirehoseStreamNode(),
     // The vended-delivery chain.

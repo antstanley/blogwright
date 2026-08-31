@@ -171,7 +171,7 @@ const CACHE_HIT_RESULT_TYPES = ['Hit', 'RefreshHit'] as const;
  * The name of the row-count query. Not one of the seven the spec's §Local
  * server lists - those answer the dashboard's panels; this one answers
  * `analytics status`, which reports the table's current row count beside the
- * plugin's twelve nodes. It lives in this set rather than in the command
+ * plugin's fourteen nodes. It lives in this set rather than in the command
  * because the command may not write SQL: every statement this package runs is
  * one of these definitions, reached through the `AnalyticsQuery` port.
  */

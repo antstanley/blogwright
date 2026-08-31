@@ -7,7 +7,7 @@ through DuckDB. The site's existing CloudWatch log delivery is untouched - one C
 delivery source carries several deliveries, so this one is added beside it.
 
 This package owns the whole pipeline: its own four AWS service clients (S3 Tables,
-Firehose, Glue, Lambda), the twelve resource nodes those clients reconcile, the
+Firehose, Glue, Lambda), the fourteen resource nodes those clients reconcile, the
 record-transform Lambda, the named query set, and the dashboard application. It depends
 on `blogwright-core` (ports, the SigV4 transport and signer, the S3 and Secrets Manager
 clients) and on DuckDB, which is reached only through the `AnalyticsQuery` port's one

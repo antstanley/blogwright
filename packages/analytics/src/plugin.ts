@@ -51,11 +51,11 @@
  * They are both now, and `analytics status` still runs the declared command
  * above rather than the generic verb, because a declared action wins.
  *
- * The property `nodes` carries is not just "twelve nodes": it is that the
+ * The property `nodes` carries is not just "fourteen nodes": it is that the
  * CLI's engine reconciles them against the store `toPluginContext` scoped to
  * this plugin's name, `state/<env>.analytics.json` - never the site's
  * `state/<env>.json`. `blogwright bootstrap` therefore provisions none of
- * these twelve (the site's `buildNodes` does not consult discovery), and
+ * these fourteen (the site's `buildNodes` does not consult discovery), and
  * `blogwright destroy --yes` removes none of them, because
  * `assertNoScopedState` (`packages/cli/src/commands.ts`) refuses the site
  * teardown for as long as that scoped object exists and names
