@@ -595,6 +595,27 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *Tasks 27 and 29 had no edge between them, and landing 27 first would have
+  left a malformed `pds` block validated by nothing.* Found by task 27's gate
+  2026-08-31, after the fact. Task 27 removes core's validation of the `pds`
+  block on the principle that the plugin owns its own topography; the plugin's
+  validator runs at dispatch, in `resolvePluginConfig`. But until task 29
+  landed, `cli.ts` routed `pds` to `runPds`, which **never reaches
+  `resolvePluginConfig`** - so on that path core's check was the only one, and
+  27 alone would have deleted it while nothing replaced it.
+  The dependency table records no edge, the two tasks are genuinely independent
+  by file, and 29 happened to land first only because of how the wave scheduler
+  ordered them. Had it gone the other way, a malformed `pds` block would have
+  parsed silently and failed later at AWS.
+  This is the same class as the 16/52 edge the table also missed - "independent"
+  there meant "no shared file", here it means "no shared symbol", and both
+  times the real coupling was a **runtime path**: one task removes a check, a
+  different task moves the only route that reaches its replacement. Worth
+  deciding whether the table should record such edges, or whether the answer is
+  simply that a task removing a validation must name where the replacement runs
+  and prove that route is live.
+  Note for task 58: it must not flip the plugin-system spec to `Merged` citing
+  27 and 59 alone - the honest closure also depends on 29 having landed.
 - *Cross-file line-number citations in comments do not survive refactors, and
   this build has now produced ten stale ones.* Observed across task 29's three
   review rounds 2026-08-31, but the pattern is repo-wide. Task 29 deleted one

@@ -25,6 +25,25 @@
 > permits I/O, and analytics' absence from it looks like an oversight from when
 > the package had no adapters rather than a deliberate exclusion.
 
+> **ROUTED FINDING - added 2026-08-31 from task 53's verification gate.**
+> **Implementing §Backfill literally will skip a refusal you need.** The spec
+> says the refusal fires "when the plugin's scoped state carries **no delivery
+> record**". Task 53 produces a state in which there IS a delivery record and
+> the bound is missing: its `read` hydrates `source`, `destination`,
+> `distribution` and `delivery: 'configured'` from AWS, but deliberately omits
+> `createdDay`, because `createdDay` is written once in `create` and nowhere
+> else - a lost state file must not be refilled with today's date, since a
+> fabricated later bound would double-insert.
+> So `read` returns true, `create` never runs, and the record exists without a
+> bound. Under a literal reading of §Backfill your refusal does not fire, and
+> the next step computes "days strictly before `undefined`".
+> **Refuse on an absent `createdDay` as well as on an absent record**, and make
+> the message actionable - the operator's real remedy is to supply the bound,
+> not to re-bootstrap. Note also that task 53 keeps `CREATED_DAY_KEY`
+> module-private, so you will restate the `'createdDay'` string; that was
+> deliberate (exporting a constant with no consumer is what `pnpm knip`
+> catches), but it means the two spellings must agree and nothing checks that.
+
 ## Steps
 
 - [ ] Declare `AnalyticsIngest` in `packages/analytics/src/ports.ts` as `insertDay(day, rows)` beside `AnalyticsQuery`, with a doc comment stating it exists for the one-shot backfill and that the dashboard's read path never receives it; write the recording fake beside it.

@@ -973,6 +973,18 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       // refresh tokens are single-use, so every sync persists the rotated
       // session (PutSecretValue via the upsert helper, which tries CreateSecret
       // first when the secret is missing).
+      //
+      // The `??` default duplicates the pds plugin's own `resolvePdsSecretName`
+      // deliberately, and must NOT be replaced by an import of it: this
+      // resource graph carries no plugin knowledge, which is the whole point of
+      // the plugin owning its own node (`packages/pds/src/nodes.ts`). Core
+      // stopped defaulting `pds.secretName`, so without this default the
+      // template literal would happily interpolate `undefined` into a live IAM
+      // policy - `applyOidcRole` rewrites this whole document on every
+      // `blogwright bootstrap`, so a wrong ARN here is a broken permission and
+      // not a test failure. Task 59 deletes this statement together with the
+      // `ctx.config.pds` branch around it; the duplication lives only until
+      // then.
       statements.push({
         Effect: 'Allow',
         Action: [
@@ -980,7 +992,7 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
           'secretsmanager:PutSecretValue',
           'secretsmanager:CreateSecret',
         ],
-        Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName}-*`,
+        Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName ?? `${ctx.config.siteName}/atproto`}-*`,
       });
     }
   }

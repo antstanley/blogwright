@@ -27,7 +27,17 @@ export interface SeoConfig {
   sitemap: 'auto' | 'on' | 'off';
 }
 
-/** AT Protocol / standard.site publishing (see `blogwright pds`). Inert when absent. */
+/**
+ * AT Protocol / standard.site publishing (see `blogwright pds`). Inert when
+ * absent.
+ *
+ * A *shape*, not a contract core enforces: `blogwright-pds` owns this key end
+ * to end - it validates the block (`validatePdsConfig`) and derives the
+ * `<siteName>/atproto` default `secretName` (`resolvePdsSecretName`). Core
+ * parses the block through untouched. The type stays here only because
+ * `OpsConfig.pds` is still declared, which is what lets the CLI's deploy-role
+ * statement read it until that statement moves to the plugin.
+ */
 export interface PdsConfig {
   /** Publication display name (site.standard.publication `name`). */
   name: string;
@@ -39,8 +49,12 @@ export interface PdsConfig {
    * the DID document during OAuth.
    */
   handleResolver?: string | undefined;
-  /** Secrets Manager secret holding the OAuth client key + session. */
-  secretName: string;
+  /**
+   * Secrets Manager secret holding the OAuth client key + session. Optional
+   * because core no longer defaults it: `blogwright-pds` resolves an absent
+   * one to `<siteName>/atproto`.
+   */
+  secretName?: string | undefined;
 }
 
 /**
@@ -289,12 +303,6 @@ export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
     seo: { ...DEFAULT_CONFIG.seo, ...raw.seo },
     paths: { ...DEFAULT_CONFIG.paths, ...raw.paths },
   };
-  if (raw.pds) {
-    cfg.pds = {
-      ...raw.pds,
-      secretName: raw.pds.secretName ?? `${cfg.siteName}/atproto`,
-    };
-  }
   validateConfig(cfg);
   return cfg;
 }
@@ -337,23 +345,10 @@ function validateConfig(cfg: OpsConfig): void {
       throw new Error(`config.paths.${key} must be repo-relative without "..", got "${value}"`);
     }
   }
-  if (cfg.pds) {
-    if (!cfg.pds.name?.trim()) throw new Error('config.pds.name is required');
-    if (cfg.pds.handleResolver !== undefined) {
-      let resolver: URL;
-      try {
-        resolver = new URL(cfg.pds.handleResolver);
-      } catch {
-        throw new Error(`config.pds.handleResolver must be a URL, got "${cfg.pds.handleResolver}"`);
-      }
-      if (resolver.protocol !== 'https:') {
-        throw new Error(`config.pds.handleResolver must be https, got "${cfg.pds.handleResolver}"`);
-      }
-    }
-    if (!/^[\w/+=.@-]+$/.test(cfg.pds.secretName)) {
-      throw new Error(`config.pds.secretName has invalid characters: "${cfg.pds.secretName}"`);
-    }
-  }
+  // No plugin-block branch here, by design: a plugin's block is that plugin's
+  // own to judge. Core validates only the keys it declares, so an unknown - or
+  // malformed - plugin block parses through untouched and is checked by that
+  // plugin's `validateConfig`, off `parseConfigDocument`'s raw half.
 }
 
 export interface Names {

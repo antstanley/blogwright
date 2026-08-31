@@ -1,4 +1,3 @@
-import type { PdsConfig } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { createTestContext } from './test-support.js';
@@ -15,11 +14,11 @@ describe('createTestContext', () => {
   });
 
   it('resolves a default secretName for a pds block that omits it', () => {
-    // Cast, not a widened override type: secretName may genuinely be absent
-    // here despite PdsConfig declaring it required today, once core stops
-    // applying its own default (task 27) - see config.test.ts for the same
-    // reasoning.
-    const ctx = createTestContext({ config: { pds: { name: 'Ant' } as PdsConfig } });
+    // No cast: core declares `secretName` optional because it no longer
+    // defaults it, so this is the shape a real config file has. The default
+    // this asserts is the *plugin's* (`resolvePdsSecretName`), applied by
+    // `createTestContext`, not core's - core's is gone.
+    const ctx = createTestContext({ config: { pds: { name: 'Ant' } } });
     expect(ctx.config.pds?.secretName).toBe('example/atproto');
   });
 

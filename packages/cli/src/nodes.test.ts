@@ -1,17 +1,32 @@
-import { AwsError, type DistributionConfigInput } from 'blogwright-core';
+import { AwsError, type DistributionConfigInput, type PdsConfig } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
 import { buildNodes, builderImageAction, oidcRolePolicyStatements, oidcSubClaim } from './nodes.js';
 import { createTestContext } from './test-support.js';
 
-function ctx(opts: { preview: boolean; pds?: boolean }): OpsContext {
+/**
+ * The block `pds: true` stands for: a `secretName` spelled out in the config.
+ * Deliberately NOT `example/atproto` - that is exactly what `siteName:
+ * 'example'` derives, so a fixture spelling it out could not tell an explicit
+ * read from the default, and dropping the `secretName` read altogether would
+ * leave every test green.
+ */
+const PDS_WITH_SECRET_NAME: PdsConfig = { name: 'x', secretName: 'spelled-out/pds-key' };
+
+/**
+ * `pds: true` uses {@link PDS_WITH_SECRET_NAME}; an explicit block is passed
+ * through as written, which is how a block omitting `secretName` - legal now
+ * that core no longer defaults it - reaches the policy builder.
+ */
+function ctx(opts: { preview: boolean; pds?: boolean | PdsConfig }): OpsContext {
+  const pds = opts.pds === true ? PDS_WITH_SECRET_NAME : opts.pds === false ? undefined : opts.pds;
   return createTestContext({
     preview: opts.preview,
     env: opts.preview ? 'preview' : 'production',
     config: {
       githubRepo: 'antstanley/example',
-      ...(opts.pds ? { pds: { name: 'x', secretName: 'example/atproto' } } : {}),
+      ...(pds ? { pds } : {}),
     },
     state: {
       resources: {
@@ -296,6 +311,27 @@ describe('oidcRolePolicyStatements', () => {
       'secretsmanager:PutSecretValue',
       'secretsmanager:CreateSecret',
     ]);
+    // The block's own `secretName`, not the `<siteName>/atproto` default the
+    // test below covers: `example` would derive `example/atproto`, so this
+    // value is the only thing that fails if the `??`'s left operand is dropped.
+    expect(secret.Resource).toBe(
+      'arn:aws:secretsmanager:us-east-1:123456789012:secret:spelled-out/pds-key-*',
+    );
+  });
+
+  it('derives the secret ARN from siteName when the pds block omits secretName', () => {
+    // Core stopped defaulting `pds.secretName`, so this block is the shape a
+    // real config now produces. The statement's `??` default is what keeps the
+    // ARN total.
+    const statements = oidcRolePolicyStatements(ctx({ preview: false, pds: { name: 'x' } }));
+    const secret = statements.find((s) =>
+      actionsOf([s]).includes('secretsmanager:GetSecretValue'),
+    ) as { Resource: string };
+    // Named explicitly because the failure mode is a valid-looking ARN, not an
+    // exception: a template literal interpolates `undefined` silently, and
+    // `applyOidcRole` rewrites the whole live `<env>-deploy` document on every
+    // `blogwright bootstrap`.
+    expect(secret.Resource).not.toContain('undefined');
     expect(secret.Resource).toBe(
       'arn:aws:secretsmanager:us-east-1:123456789012:secret:example/atproto-*',
     );

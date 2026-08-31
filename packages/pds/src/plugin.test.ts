@@ -69,12 +69,11 @@ const rejectAllTransport: Transport = async (req) => {
 };
 
 /**
- * A `pds` block for a fixture. The cast mirrors `nodes.test.ts`: core still
- * declares `secretName` as required while a real config file omits it and
- * `mergeConfig` is what fills it in.
+ * A `pds` block for a fixture. Mirrors `nodes.test.ts`: no cast, because core
+ * declares `secretName` optional now that it no longer defaults it.
  */
 function pdsBlock(overrides: Partial<PdsConfig>): PdsConfig {
-  return { name: 'Example', ...overrides } as PdsConfig;
+  return { name: 'Example', ...overrides };
 }
 
 interface ContextOverrides {

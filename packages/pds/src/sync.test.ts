@@ -62,10 +62,8 @@ describe('requirePdsConfig', () => {
   // `createTestContext` resolves `secretName` itself (test-support.test.ts),
   // so building a block through it would never exercise requirePdsConfig's
   // own resolution. Setting `ctx.config.pds` directly afterwards, bypassing
-  // that, isolates it - the same reasoning config.test.ts casts through for
-  // resolvePdsSecretName: secretName may genuinely be absent from a raw
-  // config despite PdsConfig declaring it required today, until core stops
-  // applying its own default (task 27).
+  // that, isolates it. A block with no `secretName` needs no cast: core
+  // declares the field optional because it no longer defaults it.
   function ctxWithPds(pds: PdsConfig | undefined): PdsContext {
     const ctx = createTestContext({ config: { siteName: 'my-site' } });
     ctx.config.pds = pds;
@@ -73,7 +71,7 @@ describe('requirePdsConfig', () => {
   }
 
   it('resolves the default "<siteName>/atproto" secretName when absent', () => {
-    const ctx = ctxWithPds({ name: 'Ant Stanley' } as PdsConfig);
+    const ctx = ctxWithPds({ name: 'Ant Stanley' });
     expect(requirePdsConfig(ctx).secretName).toBe('my-site/atproto');
   });
 

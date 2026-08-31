@@ -94,36 +94,57 @@ describe('parseConfig', () => {
     expect(parseConfig(withSite('{}')).pds).toBeUndefined();
   });
 
-  it('applies pds defaults (secretName from siteName)', () => {
-    const cfg = parseConfig(withSite('{ "pds": { "name": "Ant Stanley" } }'));
-    expect(cfg.pds).toEqual({
-      name: 'Ant Stanley',
-      secretName: 'example/atproto',
-    });
+  // The four pds cases that used to live here - defaulting `secretName`,
+  // keeping explicit overrides, rejecting a blank `name`, rejecting a
+  // non-https `handleResolver` - moved to `packages/pds/src/config.test.ts`
+  // with the code they exercise. Core neither defaults nor judges a plugin's
+  // block; what it owes that block is the pass-through the cases below pin.
+
+  it('passes a plugin block core knows nothing about through byte-equal', () => {
+    const cfg = parseConfig(withSite('{ "analytics": { "table": "events", "sample": 0.5 } }'));
+    // `OpsConfig` declares no `analytics`, so the key is only reachable off
+    // the parsed object at runtime - which is exactly the survival being
+    // pinned. The index read is the test's, not a hole in the type.
+    const seen = (cfg as unknown as Record<string, unknown>)['analytics'];
+    expect(seen).toEqual({ table: 'events', sample: 0.5 });
+    expect(JSON.stringify(seen)).toBe('{"table":"events","sample":0.5}');
   });
 
-  it('keeps explicit pds overrides', () => {
-    const cfg = parseConfig(
-      withSite(
-        '{ "pds": { "name": "x", "handleResolver": "https://resolver.example", "secretName": "me/secret", "description": "d" } }',
-      ),
-    );
-    expect(cfg.pds?.handleResolver).toBe('https://resolver.example');
-    expect(cfg.pds?.secretName).toBe('me/secret');
-    expect(cfg.pds?.description).toBe('d');
-  });
-
-  it('rejects a pds section without a name', () => {
-    expect(() => parseConfig(withSite('{ "pds": { "name": " " } }'))).toThrow(/pds.name/);
-  });
-
-  it('rejects a non-https pds handleResolver', () => {
+  it('parses a malformed plugin block without throwing, since core no longer judges one', () => {
+    // Negative space: every one of these would be rejected by the owning
+    // plugin's own `validateConfig`, and none of them is core's business.
+    expect(() => parseConfig(withSite('{ "analytics": { "table": 42 } }'))).not.toThrow();
+    expect(() => parseConfig(withSite('{ "analytics": "not an object" }'))).not.toThrow();
+    expect(() => parseConfig(withSite('{ "analytics": null }'))).not.toThrow();
+    expect(() => parseConfig(withSite('{ "pds": { "name": " " } }'))).not.toThrow();
     expect(() =>
       parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "http://resolver" } }')),
-    ).toThrow(/https/);
+    ).not.toThrow();
     expect(() =>
-      parseConfig(withSite('{ "pds": { "name": "x", "handleResolver": "nope" } }')),
-    ).toThrow(/URL/);
+      parseConfig(withSite('{ "pds": { "name": "x", "secretName": "has a space" } }')),
+    ).not.toThrow();
+  });
+
+  it('round-trips a pds block exactly as written, including an absent secretName', () => {
+    const cfg = parseConfig(
+      withSite(
+        '{ "pds": { "name": "Ant Stanley", "description": "d", "handleResolver": "https://resolver.example" } }',
+      ),
+    );
+    // Byte-equal, not merely a superset: no `secretName` is added, so this
+    // fails the moment core starts defaulting the block again.
+    expect(cfg.pds).toEqual({
+      name: 'Ant Stanley',
+      description: 'd',
+      handleResolver: 'https://resolver.example',
+    });
+    expect(Object.keys(cfg.pds ?? {})).toEqual(['name', 'description', 'handleResolver']);
+    expect(cfg.pds?.secretName).toBeUndefined();
+  });
+
+  it('keeps an explicit secretName on the pds block untouched', () => {
+    const cfg = parseConfig(withSite('{ "pds": { "name": "x", "secretName": "me/secret" } }'));
+    expect(cfg.pds).toEqual({ name: 'x', secretName: 'me/secret' });
   });
 });
 
