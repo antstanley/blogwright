@@ -72,6 +72,7 @@ import {
   AwsError,
   pollUntil,
   REPRODUCIBLE_ZIP_MTIME,
+  withRetry,
   type DeliveryOutputFormat,
   type DeliverySummary,
   type LogsClient,
@@ -1455,6 +1456,36 @@ export function transformUpdate(
 }
 
 /**
+ * Retry `call` while Lambda still refuses the transform role.
+ *
+ * IAM is eventually consistent, and this graph creates the role in the node
+ * immediately before the one that uses it - the tightest possible window. AWS
+ * answers a `CreateFunction` naming a role it has not finished propagating with
+ * a 400 whose message is `The role defined for the function cannot be assumed
+ * by Lambda`, and that failure is purely a matter of timing: the same request
+ * succeeds seconds later with nothing changed. Without this the first
+ * `analytics bootstrap` on a fresh environment fails at the tenth of twelve
+ * nodes, which is exactly what it did the first time anyone ran it.
+ *
+ * The predicate is deliberately narrow - this message, at 400, on this service -
+ * rather than "retry 400s". Almost every other 400 Lambda returns is permanent
+ * (a malformed zip, a bad handler path, a role that genuinely lacks the trust
+ * policy), and retrying those would turn a clear failure into a slow one.
+ *
+ * `updateFunctionConfiguration` gets the same treatment because it sends
+ * `roleArn` too: an environment whose role was torn down and recreated hits the
+ * identical window on the update path.
+ */
+function whileRoleIsPropagating<T>(call: () => Promise<T>): Promise<T> {
+  return withRetry(call, {
+    retryable: (err) =>
+      err instanceof AwsError &&
+      err.statusCode === 400 &&
+      /cannot be assumed by Lambda/i.test(err.message),
+  });
+}
+
+/**
  * The record-transform Lambda: the function Firehose runs over every CloudFront
  * record before it reaches the `page_views` table.
  *
@@ -1506,7 +1537,9 @@ export function analyticsTransformFunctionNode(): AnalyticsNode {
       const configuration = transformConfiguration(ctx);
       const zipFile = await packTransformBundle(ctx);
       const client = lambda(ctx);
-      await client.createFunction({ name, zipFile, ...configuration });
+      await whileRoleIsPropagating(() =>
+        client.createFunction({ name, zipFile, ...configuration }),
+      );
       // Identity and code identity before the ARN lookup, the discipline
       // `analytics-table`'s `create` follows and for the same reason:
       // `createFunction` returns `void` by design (`aws/lambda.ts`), so the ARN
@@ -1551,7 +1584,7 @@ export function analyticsTransformFunctionNode(): AnalyticsNode {
       // as soon as it is true, so the retry after such a failure sends only the
       // half that did not land.
       if (update.configuration) {
-        await client.updateFunctionConfiguration(name, configuration);
+        await whileRoleIsPropagating(() => client.updateFunctionConfiguration(name, configuration));
         out.configuration = fingerprint;
       }
       if (update.code) {
