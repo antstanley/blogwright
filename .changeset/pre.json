@@ -1,0 +1,13 @@
+{
+  "mode": "pre",
+  "tag": "beta",
+  "initialVersions": {
+    "blogwright-docs": "0.0.0",
+    "blogwright-analytics": "0.3.3",
+    "blogwright-build-agent": "0.1.0",
+    "blogwright": "0.3.3",
+    "blogwright-core": "0.3.3",
+    "blogwright-pds": "0.3.3"
+  },
+  "changesets": []
+}
