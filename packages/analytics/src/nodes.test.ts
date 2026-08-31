@@ -2401,6 +2401,18 @@ function firehoseFailure(code: string, message: string): RawResponse {
   };
 }
 
+/**
+ * Firehose's reply while IAM has not finished propagating the delivery role.
+ * The wording is nothing like Lambda's for the same condition, which is why the
+ * predicate carries both.
+ */
+function firehoseRoleNotYetAssumable(): RawResponse {
+  return firehoseFailure(
+    'InvalidArgumentException',
+    `Firehose is unable to assume role ${FIREHOSE_ROLE_ARN}. Please check the role provided.`,
+  );
+}
+
 /** `DescribeDeliveryStream`'s reply for a stream that does not exist. */
 function noSuchStream(): RawResponse {
   return firehoseFailure('ResourceNotFoundException', 'Firehose stream not found');
@@ -2988,6 +3000,42 @@ describe('analytics-firehose-stream', () => {
     expect(ctx.state.resources['analytics-firehose-stream']).toBeUndefined();
   });
 
+  // The same IAM propagation window the transform function hits, one node
+  // later. This is the failure a real `analytics bootstrap` produced on the
+  // run AFTER the Lambda retry shipped - the fix had been applied to one of
+  // the graph's two role consumers, and the other failed immediately.
+  it('retries CreateDeliveryStream while Firehose cannot yet assume the role', async () => {
+    const { ctx, requests } = makeContext([
+      firehoseRoleNotYetAssumable(),
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      ok(streamDescription('CREATING')),
+    ]);
+
+    await analyticsFirehoseStreamNode().create(withStreamDependencies(ctx));
+
+    // Two CreateDeliveryStream calls: the first refused, the second accepted.
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.CreateDeliveryStream',
+      'Firehose_20150804.CreateDeliveryStream',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+  });
+
+  // Firehose words this differently from Lambda and puts nothing
+  // machine-readable in the code, so the predicate matches on message. This
+  // pins that a permanent InvalidArgumentException at the same status is NOT
+  // retried - the property that keeps the retry from hiding real failures.
+  it('does not retry a Firehose 400 that is not the role propagation window', async () => {
+    const { ctx, requests } = makeContext([
+      firehoseFailure('InvalidArgumentException', 'AppendOnly cannot be updated'),
+    ]);
+
+    await expect(analyticsFirehoseStreamNode().create(withStreamDependencies(ctx))).rejects.toThrow(
+      /AppendOnly cannot be updated/,
+    );
+    expect(requests).toHaveLength(1);
+  });
+
   it('creates the stream with the Iceberg destination and the transform processor', async () => {
     const { ctx, requests } = makeContext([
       ok({ DeliveryStreamARN: STREAM_ARN }),
@@ -3123,6 +3171,37 @@ describe('analytics-firehose-stream', () => {
       appendOnly: true,
     });
     // No replacement happened, so nothing warned about a new ARN.
+    expect(warnings.join('\n')).not.toMatch(/NEW ARN/);
+  });
+
+  // The most consequential of the four retry cases. The fallback below is
+  // deliberately NOT narrowed to one exception - any refused update reaches it -
+  // so before the retry a transient role-propagation 400 was indistinguishable
+  // from a genuine refusal, and the node answered it by DELETING and recreating
+  // the stream: a new ARN, task 53's CloudFront log delivery orphaned, and the
+  // records in flight lost. Retrying the timing failure is what keeps a
+  // destructive fallback for the case that actually warrants it.
+  it('retries a role-propagation refusal on UpdateDestination instead of replacing the stream', async () => {
+    const warnings: string[] = [];
+    const { ctx, requests } = makeContext(
+      [
+        firehoseRoleNotYetAssumable(),
+        encode(''),
+        ok(streamDescription('ACTIVE', { VersionId: '4', Destinations: destinationWith(true) })),
+      ],
+      { warnings },
+    );
+
+    await analyticsFirehoseStreamNode().update?.(withRecordedStream(withStreamDependencies(ctx)));
+
+    // Two updates and a re-read - and crucially NO CreateDeliveryStream, which
+    // is what a replacement would have issued.
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    expect(targets(requests)).not.toContain('Firehose_20150804.CreateDeliveryStream');
     expect(warnings.join('\n')).not.toMatch(/NEW ARN/);
   });
 
