@@ -293,13 +293,13 @@ describe('the command table', () => {
   });
 
   it('refuses from each body that has not landed yet, naming the task that lands it', async () => {
-    // `dashboard` is deliberately absent from this list: task 56 landed its
-    // body, so it no longer refuses - it starts a listener, and
-    // `commands.test.ts` drives it. The table entry above still points at it,
-    // which is the half of task 47's contract this file keeps pinning.
-    await expect(status()).rejects.toThrow(
-      'blogwright analytics status is not implemented yet - task 55 lands this command',
-    );
+    // `dashboard` and `status` are deliberately absent from this list: tasks 56
+    // and 55 landed their bodies, so neither refuses any more - one starts a
+    // listener, the other reads the twelve nodes - and `commands.test.ts`
+    // drives both. The table entries above still point at them, which is the
+    // half of task 47's contract this file keeps pinning. `backfill` is the
+    // one still owed, and this assertion is what will fail when task 61 lands
+    // it, rather than leaving a stale refusal behind.
     await expect(backfill()).rejects.toThrow(
       'blogwright analytics backfill is not implemented yet - task 61 lands this command',
     );

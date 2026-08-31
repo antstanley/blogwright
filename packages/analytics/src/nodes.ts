@@ -154,8 +154,14 @@ const ERROR_BUCKET_NODE = 'analytics-error-bucket';
 /** The `analytics-firehose-role` node id. */
 const FIREHOSE_ROLE_NODE = 'analytics-firehose-role';
 
-/** The `analytics-firehose-stream` node id. */
-const FIREHOSE_STREAM_NODE = 'analytics-firehose-stream';
+/**
+ * The `analytics-firehose-stream` node id. Exported, alone among the twelve,
+ * because `analytics status` reads this node's recorded outputs back out of
+ * the scoped state its `read` hydrated - the stream's delivery health - and a
+ * second copy of the string in `commands.ts` would be a state key with two
+ * homes.
+ */
+export const FIREHOSE_STREAM_NODE = 'analytics-firehose-stream';
 
 /** The `analytics-log-destination` node id. */
 const LOG_DESTINATION_NODE = 'analytics-log-destination';

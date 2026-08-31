@@ -26,6 +26,7 @@ import {
   parseConfig,
   staticCredentials,
   StateStore,
+  stripColors,
   type PluginContext,
   type PluginLogger,
   type RawResponse,
@@ -35,9 +36,11 @@ import {
 } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
-import { dashboard, type DashboardCommandContext } from './commands.js';
+import { dashboard, status, type DashboardCommandContext } from './commands.js';
 import { DEFAULT_DASHBOARD_PORT, validateAnalyticsConfig, type AnalyticsConfig } from './config.js';
-import { createFixtureAnalyticsQuery } from './fixture-query.js';
+import { createFixtureAnalyticsQuery, type FixtureAnalyticsQuery } from './fixture-query.js';
+import type { AnalyticsQuery } from './ports.js';
+import { ROW_COUNT_COLUMN, ROW_COUNT_QUERY, WHOLE_TABLE_RANGE } from './queries.js';
 import { buildAnalyticsNodes } from './nodes.js';
 import { ANALYTICS_PACKAGE_DIR } from './paths.js';
 import { createDashboardServer } from './server.js';
@@ -438,9 +441,9 @@ interface RecordedCall {
   readonly url: string;
 }
 
-function reply(status: number, text: string): RawResponse {
+function reply(statusCode: number, text: string): RawResponse {
   return {
-    statusCode: status,
+    statusCode,
     headers: {},
     body: new TextEncoder().encode(text),
     text: () => text,
@@ -483,6 +486,73 @@ function iamReply(body: string): RawResponse {
 }
 
 /**
+ * How one of the worlds below answers. Both flags default off, so
+ * `analyticsWorld()` is exactly the permissive world task 54 wrote and every
+ * one of its assertions is unchanged by their existence.
+ */
+interface WorldOptions {
+  /**
+   * Answer every lookup "this does not exist", in each service's own failure
+   * shape - the account of an operator who has never run `analytics
+   * bootstrap`. The state object 404s in both worlds, so the scoped state is
+   * empty either way.
+   */
+  readonly unbootstrapped?: boolean;
+  /**
+   * Refuse `DescribeDeliveryStream` with an authorization failure rather than
+   * describing the stream, leaving the other eleven nodes readable - the
+   * shape a deploy role missing one permission actually takes.
+   */
+  readonly streamReadDenied?: boolean;
+  /**
+   * Describe a stream that exists but is in `CREATING_FAILED`, carrying the
+   * service's `FailureDescription`. The stream node reports such a stream
+   * present on purpose (see its `read`), which is what leaves the health line
+   * as the only place an operator can learn that nothing is being delivered.
+   */
+  readonly streamCreateFailed?: boolean;
+}
+
+/** The `FailureDescription` the failed-stream world reports, flattened by the client to `Type: Details`. */
+const STREAM_FAILURE = {
+  Type: 'CREATE_KMS_GRANT_FAILED',
+  Details: 'the delivery role cannot use the configured KMS key',
+};
+
+/** An error reply whose exception name travels in the header, as S3 Tables and Lambda send it. */
+function headerErrorReply(statusCode: number, exception: string, message: string): RawResponse {
+  const text = JSON.stringify({ message });
+  return {
+    statusCode,
+    headers: { 'x-amzn-errortype': exception },
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/** An error reply whose exception name travels in the body, as Glue, Secrets Manager and Firehose send it. */
+function bodyErrorReply(statusCode: number, code: string, message: string): RawResponse {
+  const text = JSON.stringify({ __type: code, message });
+  return {
+    statusCode,
+    headers: {},
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/** IAM's REST-XML failure - the one service whose not-found is read off a `<Code>` element. */
+function iamErrorReply(statusCode: number, code: string, message: string): RawResponse {
+  const text = `<ErrorResponse><Error><Type>Sender</Type><Code>${code}</Code><Message>${message}</Message></Error><RequestId>req</RequestId></ErrorResponse>`;
+  return {
+    statusCode,
+    headers: {},
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/**
  * A permissive stand-in for the nine AWS services the twelve nodes talk to,
  * answering "this already exists" to every lookup and success to every
  * mutation.
@@ -500,17 +570,30 @@ function iamReply(body: string): RawResponse {
  * An unrecognised host throws rather than answering: a node reaching a service
  * nobody accounted for must fail here, not be fed an empty object.
  */
-function analyticsWorld(): { transport: Transport; calls: RecordedCall[] } {
+function analyticsWorld(options: WorldOptions = {}): {
+  transport: Transport;
+  calls: RecordedCall[];
+} {
   const calls: RecordedCall[] = [];
+  const absent = options.unbootstrapped === true;
   const transport: Transport = async (req) => {
     calls.push({ method: req.method, url: req.url });
     const url = new URL(req.url);
     const host = url.hostname;
     const target = req.headers['x-amz-target'] ?? '';
 
-    if (host === 'iam.amazonaws.com') return iamReply(String(req.body ?? ''));
+    if (host === 'iam.amazonaws.com') {
+      const body = String(req.body ?? '');
+      if (absent && iamAction(body) === 'GetRole') {
+        return iamErrorReply(404, 'NoSuchEntity', 'The role cannot be found.');
+      }
+      return iamReply(body);
+    }
 
     if (host.startsWith('s3tables.')) {
+      if (absent) {
+        return headerErrorReply(404, 'NotFoundException', 'The specified resource does not exist.');
+      }
       if (url.pathname.startsWith('/buckets/')) {
         return jsonReply({
           arn: `arn:aws:s3tables:${PINNED_REGION}:${RECONCILE_ACCOUNT}:bucket/${RECONCILE_ENV}-${RECONCILE_SITE}-analytics`,
@@ -528,6 +611,7 @@ function analyticsWorld(): { transport: Transport; calls: RecordedCall[] } {
     }
 
     if (host.startsWith('glue.')) {
+      if (absent) return bodyErrorReply(400, 'EntityNotFoundException', 'Entity Not Found');
       // Federated over the account-and-region wildcard `federationSource`
       // derives; anything else and `verifiedSource` throws rather than adopting it.
       return jsonReply({
@@ -544,6 +628,13 @@ function analyticsWorld(): { transport: Transport; calls: RecordedCall[] } {
     }
 
     if (host.startsWith('secretsmanager.')) {
+      if (absent) {
+        return bodyErrorReply(
+          400,
+          'ResourceNotFoundException',
+          "Secrets Manager can't find the specified secret.",
+        );
+      }
       return jsonReply({
         ARN: `arn:aws:secretsmanager:${PINNED_REGION}:${RECONCILE_ACCOUNT}:secret:${RECONCILE_SITE}/${RECONCILE_ENV}/analytics-salt-AbCdEf`,
         Name: `${RECONCILE_SITE}/${RECONCILE_ENV}/analytics-salt`,
@@ -551,6 +642,9 @@ function analyticsWorld(): { transport: Transport; calls: RecordedCall[] } {
     }
 
     if (host.startsWith('lambda.')) {
+      if (absent) {
+        return headerErrorReply(404, 'ResourceNotFoundException', 'Function not found');
+      }
       if (req.method === 'GET') {
         return jsonReply({
           Configuration: {
@@ -565,11 +659,23 @@ function analyticsWorld(): { transport: Transport; calls: RecordedCall[] } {
 
     if (host.startsWith('firehose.')) {
       if (target.endsWith('.DescribeDeliveryStream')) {
+        if (options.streamReadDenied === true) {
+          return bodyErrorReply(
+            403,
+            'AccessDeniedException',
+            'not authorized to perform firehose:DescribeDeliveryStream',
+          );
+        }
+        if (absent) {
+          return bodyErrorReply(400, 'ResourceNotFoundException', 'Firehose stream not found');
+        }
         return jsonReply({
           DeliveryStreamDescription: {
             DeliveryStreamName: `${RECONCILE_ENV}-${RECONCILE_SITE}-analytics-firehose`,
             DeliveryStreamARN: `arn:aws:firehose:${PINNED_REGION}:${RECONCILE_ACCOUNT}:deliverystream/${RECONCILE_ENV}-${RECONCILE_SITE}-analytics-firehose`,
-            DeliveryStreamStatus: 'ACTIVE',
+            ...(options.streamCreateFailed === true
+              ? { DeliveryStreamStatus: 'CREATING_FAILED', FailureDescription: STREAM_FAILURE }
+              : { DeliveryStreamStatus: 'ACTIVE' }),
             VersionId: '1',
             // AppendOnly already matching is what makes the stream's `update` a
             // no-op, so this reconcile never falls into the replacement branch.
@@ -601,7 +707,11 @@ function analyticsWorld(): { transport: Transport; calls: RecordedCall[] } {
       // Path-style addressing (`packages/core/src/aws/s3.ts`), so `/<bucket>` is
       // a bucket operation and `/<bucket>/<key>` an object one.
       const segments = url.pathname.split('/').filter((segment) => segment !== '');
-      if (req.method === 'HEAD') return reply(200, '');
+      if (req.method === 'HEAD') {
+        return absent
+          ? reply(404, '<Error><Code>NoSuchBucket</Code><Message>no such bucket</Message></Error>')
+          : reply(200, '');
+      }
       if (req.method === 'GET' && segments.length === 1) {
         return xmlReply('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>');
       }
@@ -646,11 +756,12 @@ function stateCalls(calls: readonly RecordedCall[]): { method: string; key: stri
  * hands a plugin, so a node that reached for the site's key would reach it
  * through the very client this fixture is recording.
  */
-async function reconcileContext(): Promise<{
+async function analyticsContext(options: WorldOptions = {}): Promise<{
   ctx: PluginContext<AnalyticsConfig>;
   calls: RecordedCall[];
+  logger: RecordingLogger;
 }> {
-  const { transport, calls } = analyticsWorld();
+  const { transport, calls } = analyticsWorld(options);
   const config = mergeConfig({ siteName: RECONCILE_SITE, region: RECONCILE_REGION });
   const clients = createClients({
     region: config.region,
@@ -660,11 +771,10 @@ async function reconcileContext(): Promise<{
   const names = deriveNames(RECONCILE_ENV, RECONCILE_ACCOUNT, config);
   const store = new StateStore(clients.s3, names.bucket, RECONCILE_ENV, 'analytics');
   const state = await store.load();
-  // The transform function's recorded code hash, matching the manifest below -
-  // see RECONCILE_BUNDLE_HASH for why the reconcile must not repack the bundle.
-  state.resources['analytics-transform-function'] = { sourceHash: RECONCILE_BUNDLE_HASH };
+  const logger = recordingLogger();
   return {
     calls,
+    logger,
     ctx: {
       env: RECONCILE_ENV,
       domain: undefined,
@@ -681,7 +791,7 @@ async function reconcileContext(): Promise<{
         }),
         terminal: SILENT_TERMINAL,
       },
-      logger: recordingLogger(),
+      logger,
       store,
       state,
       siteState: { resources: { 'cloudfront-distribution': { arn: SITE_DISTRIBUTION_ARN } } },
@@ -693,6 +803,24 @@ async function reconcileContext(): Promise<{
       },
     },
   };
+}
+
+/**
+ * {@link analyticsContext} with the transform function's recorded code hash
+ * seeded, matching the fixture manifest - see RECONCILE_BUNDLE_HASH for why a
+ * reconcile must not repack the bundle. Only the two reconcile cases want it:
+ * a status seeds nothing, because "never bootstrapped" has to mean an empty
+ * scoped state object and not one with an entry already in it.
+ */
+async function reconcileContext(): Promise<{
+  ctx: PluginContext<AnalyticsConfig>;
+  calls: RecordedCall[];
+}> {
+  const built = await analyticsContext();
+  built.ctx.state.resources['analytics-transform-function'] = {
+    sourceHash: RECONCILE_BUNDLE_HASH,
+  };
+  return built;
 }
 
 /** `applyGraph`'s contract, restated - see this section's own comment for why it is not a second engine. */
@@ -765,5 +893,332 @@ describe("reconciling the analytics graph against the plugin's own scoped state 
     ]);
     expect([...new Set(touched.map((call) => call.key))]).toEqual([SCOPED_STATE_KEY]);
     expect(calls.filter((call) => call.url.includes(SITE_STATE_KEY))).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * TASK 55 - `analytics status`: the twelve nodes against the plugin's own
+ * scoped state, then the stream's delivery health and the table's row count.
+ *
+ * Every case here drives the real command over the real twelve nodes. The one
+ * thing substituted is the `AnalyticsQuery` port, which is where the vendor
+ * library would otherwise attach a catalog: the command takes it as a
+ * defaulted parameter for the reason the site's own `status(ctx, nodes =
+ * buildNodes(ctx))` takes its node set that way, so no test here starts DuckDB
+ * and none patches a module to avoid it.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The twelve titles, in the order `buildAnalyticsNodes` returns them and
+ * exactly as an operator reads them. Hand-written rather than mapped off the
+ * module under test: a listing derived from `buildAnalyticsNodes()` would
+ * agree with a listing that dropped a node, which is the assertion this suite
+ * exists to make.
+ */
+const ANALYTICS_NODE_TITLES = [
+  'S3 Tables bucket (us-east-1)',
+  'S3 Tables namespace (us-east-1)',
+  'Iceberg table (us-east-1)',
+  'Glue s3tablescatalog federation (shared - account-and-region scoped, us-east-1)',
+  'visitor_key salt secret (us-east-1 - created once, never replaced, kept on teardown)',
+  'IAM transform execution role (global - IAM is not regional; it serves the us-east-1 pipeline)',
+  'Record-transform Lambda (us-east-1)',
+  'Firehose failed-record bucket (us-east-1)',
+  'IAM Firehose delivery role (global - IAM is not regional; it serves the us-east-1 pipeline)',
+  'Firehose delivery stream (us-east-1)',
+  'CloudWatch delivery destination (us-east-1)',
+  'CloudFront log delivery to the analytics stream (us-east-1)',
+];
+
+/**
+ * The two nodes the permissive world reports missing, and the reason it is a
+ * realistic drift rather than a hole in the fixture: `analytics-log-destination`
+ * reads the plugin's own state (empty here, because the state object 404s) and
+ * `analytics-log-delivery` lists the site's delivery source, which carries the
+ * site's CloudWatch delivery and not this plugin's. That is exactly what an
+ * operator sees after a site re-bootstrap detached the plugin's delivery - and
+ * it is what makes the plain listing below a mixed one, so a command that
+ * hard-coded either mark would fail it.
+ */
+const DRIFTED_TITLES = new Set([
+  'CloudWatch delivery destination (us-east-1)',
+  'CloudFront log delivery to the analytics stream (us-east-1)',
+]);
+
+/** The count the fixture-backed port answers with - not a round number, so a hard-coded one shows. */
+const FIXTURE_ROW_COUNT = 4271;
+
+/** The relation the row-count line names, from task 44's defaults for an empty `analytics` block. */
+const FIXTURE_RELATION = 'web.page_views';
+
+/** The port the command asks for the row count, seeded with one row shaped like the query's own result. */
+function rowCountQuery(): FixtureAnalyticsQuery {
+  return createFixtureAnalyticsQuery({
+    [ROW_COUNT_QUERY]: [{ [ROW_COUNT_COLUMN]: FIXTURE_ROW_COUNT }],
+  });
+}
+
+/** A port whose read fails the way the real adapter's does when it cannot reach the table. */
+const FAILING_QUERY_MESSAGE = 'opening a DuckDB connection: AccessDenied';
+const failingQuery: AnalyticsQuery = {
+  run: () => Promise.reject(new Error(FAILING_QUERY_MESSAGE)),
+};
+
+/** What the command logged at one level, colour stripped, in order. */
+function linesAt(logger: RecordingLogger, level: 'info' | 'warn'): string[] {
+  const prefix = `${level} `;
+  return logger.lines
+    .filter((line) => line.startsWith(prefix))
+    .map((line) => stripColors(line.slice(prefix.length)));
+}
+
+/** Every line the command emitted at either level - what "the listing still completes" is read off. */
+function allLines(logger: RecordingLogger): string[] {
+  return [...linesAt(logger, 'info'), ...linesAt(logger, 'warn')];
+}
+
+/** The heading the command opens with. */
+function heading(): string {
+  return `Analytics status for "${RECONCILE_ENV}" (bucket ${STATE_BUCKET})`;
+}
+
+/** The plain listing the drift world produces, one line per node in the graph's own order. */
+function driftedPlainLines(): string[] {
+  return ANALYTICS_NODE_TITLES.map(
+    (title) => `  ${DRIFTED_TITLES.has(title) ? 'missing' : 'present'}  ${title}`,
+  );
+}
+
+/**
+ * The outcome of one command, in the vocabulary the host reports to the shell.
+ * A plugin may not import the CLI, so this restates the mapping `runPlugin`
+ * (`packages/cli/src/plugin-commands.ts`) applies: it returns 0 once `run`
+ * resolves, and a command that fails signals it by rejecting, which reaches
+ * `bin.ts`'s error path and sets exit 1. `failure` is carried so a test that
+ * fails says why rather than only reporting the wrong number.
+ */
+interface CommandOutcome {
+  readonly exitCode: number;
+  readonly failure?: string;
+}
+
+async function runToExitCode(run: () => Promise<void>): Promise<CommandOutcome> {
+  try {
+    await run();
+    return { exitCode: 0 };
+  } catch (err) {
+    return { exitCode: 1, failure: (err as Error).message };
+  }
+}
+
+describe('analytics status - the plain form, which is the contract for CI and agents', () => {
+  it('prints the heading, one stable line per node, the delivery health and the row count', async () => {
+    const { ctx, logger } = await analyticsContext();
+
+    await status(ctx, [], rowCountQuery());
+
+    // Line by line, spelled out: this is the output an agent or a CI job
+    // parses, so it is asserted as text and not as a shape.
+    expect(linesAt(logger, 'info')).toEqual([
+      `Analytics status for "test" (bucket test-example-123456789012)`,
+      '  present  S3 Tables bucket (us-east-1)',
+      '  present  S3 Tables namespace (us-east-1)',
+      '  present  Iceberg table (us-east-1)',
+      '  present  Glue s3tablescatalog federation (shared - account-and-region scoped, us-east-1)',
+      '  present  visitor_key salt secret (us-east-1 - created once, never replaced, kept on teardown)',
+      '  present  IAM transform execution role (global - IAM is not regional; it serves the us-east-1 pipeline)',
+      '  present  Record-transform Lambda (us-east-1)',
+      '  present  Firehose failed-record bucket (us-east-1)',
+      '  present  IAM Firehose delivery role (global - IAM is not regional; it serves the us-east-1 pipeline)',
+      '  present  Firehose delivery stream (us-east-1)',
+      '  missing  CloudWatch delivery destination (us-east-1)',
+      '  missing  CloudFront log delivery to the analytics stream (us-east-1)',
+      '  Firehose delivery: active',
+      `  rows in web.page_views: ${FIXTURE_ROW_COUNT}`,
+    ]);
+  });
+
+  it('warns about nothing when every node answered', async () => {
+    const { ctx, logger } = await analyticsContext();
+
+    await status(ctx, [], rowCountQuery());
+
+    expect(linesAt(logger, 'warn')).toEqual([]);
+  });
+
+  it('reads the twelve nodes and writes nothing back to the scoped state object', async () => {
+    const { ctx, calls } = await analyticsContext();
+
+    await status(ctx, [], rowCountQuery());
+
+    // A status is a read. `read()` hydrates `ctx.state` in memory - which is
+    // where the health line comes from - but the command never calls `save()`,
+    // so no PUT and no DELETE may reach `state/test.analytics.json`.
+    expect(stateCalls(calls).filter((call) => call.method !== 'GET')).toEqual([]);
+    expect(calls.filter((call) => call.url.includes(SITE_STATE_KEY))).toEqual([]);
+  });
+});
+
+describe('analytics status - the pretty form', () => {
+  it('renders the drift tree on an interactive terminal instead of the plain lines', async () => {
+    const built = await analyticsContext();
+    const ctx: PluginContext<AnalyticsConfig> = {
+      ...built.ctx,
+      ports: { ...built.ctx.ports, terminal: { ...SILENT_TERMINAL, isInteractive: true } },
+    };
+
+    await status(ctx, [], rowCountQuery());
+
+    expect(linesAt(built.logger, 'info')).toEqual([
+      heading(),
+      ...ANALYTICS_NODE_TITLES.map((title, index) => {
+        const connector = index === ANALYTICS_NODE_TITLES.length - 1 ? '╰─' : '├─';
+        return `${connector} ${DRIFTED_TITLES.has(title) ? '◌' : '✓'} ${title}`;
+      }),
+      '  Firehose delivery: active',
+      `  rows in ${FIXTURE_RELATION}: ${FIXTURE_ROW_COUNT}`,
+    ]);
+  });
+});
+
+describe('analytics status - the stream health line', () => {
+  it("takes it off the state the stream node's own read hydrated, issuing no second describe", async () => {
+    const { ctx, calls, logger } = await analyticsContext();
+
+    await status(ctx, [], rowCountQuery());
+
+    // One Firehose request for the whole command - the node's own read. A
+    // health line that described the stream for itself would make this two.
+    expect(calls.filter((call) => new URL(call.url).hostname.startsWith('firehose.'))).toHaveLength(
+      1,
+    );
+    expect(linesAt(logger, 'info')).toContain('  Firehose delivery: active');
+  });
+
+  it('warns with the service vocabulary and the failure detail when the stream is not delivering', async () => {
+    const { ctx, logger } = await analyticsContext({ streamCreateFailed: true });
+
+    await status(ctx, [], rowCountQuery());
+
+    // The stream node reports such a stream PRESENT on purpose, so the listing
+    // says present and this line is the only place the operator learns that
+    // nothing is being delivered.
+    expect(linesAt(logger, 'info')).toContain('  present  Firehose delivery stream (us-east-1)');
+    expect(linesAt(logger, 'warn')).toEqual([
+      `Firehose delivery: create-failed - ${STREAM_FAILURE.Type}: ${STREAM_FAILURE.Details}`,
+    ]);
+  });
+});
+
+describe('analytics status - a read that fails degrades to a warning', () => {
+  it('warns for an unreadable stream and still lists all twelve nodes', async () => {
+    const { ctx, logger } = await analyticsContext({ streamReadDenied: true });
+
+    await status(ctx, [], rowCountQuery());
+
+    // The exact message the client raised, twice over: once as the node's own
+    // `read failed` line and once as the health line's reason. An operator who
+    // greps either gets the permission they are missing and the stream it was
+    // asked for.
+    const denied =
+      'firehose: AccessDeniedException - describeDeliveryStream "test-example-analytics-firehose": not authorized to perform firehose:DescribeDeliveryStream (HTTP 403)';
+    expect(linesAt(logger, 'warn')).toEqual([
+      `Firehose delivery stream (us-east-1): read failed (${denied})`,
+      `Firehose delivery: unavailable - reading the stream failed (${denied})`,
+    ]);
+    // The listing completed: every one of the twelve was reported exactly once,
+    // across both levels, and the row count still ran.
+    for (const title of ANALYTICS_NODE_TITLES) {
+      expect(allLines(logger).filter((line) => line.includes(title))).toHaveLength(1);
+    }
+    expect(linesAt(logger, 'info')).toContain(
+      `  rows in ${FIXTURE_RELATION}: ${FIXTURE_ROW_COUNT}`,
+    );
+  });
+
+  it('warns for an unreadable table and still lists all twelve nodes', async () => {
+    const { ctx, logger } = await analyticsContext();
+
+    await status(ctx, [], failingQuery);
+
+    expect(linesAt(logger, 'warn')).toEqual([
+      `rows in ${FIXTURE_RELATION}: unavailable - ${FAILING_QUERY_MESSAGE}`,
+    ]);
+    expect(linesAt(logger, 'info')).toEqual([
+      heading(),
+      ...driftedPlainLines(),
+      '  Firehose delivery: active',
+    ]);
+  });
+});
+
+describe('analytics status - an environment that was never bootstrapped', () => {
+  it('exits 0 rather than throwing', async () => {
+    const { ctx } = await analyticsContext({ unbootstrapped: true });
+
+    // The exit code the host would report, not merely the absence of a throw:
+    // `runToExitCode` restates `runPlugin`'s own mapping, and carries the
+    // failure so a regression names itself.
+    expect(await runToExitCode(() => status(ctx, [], failingQuery))).toEqual({ exitCode: 0 });
+  });
+
+  it('reports every one of the twelve nodes missing, against an empty scoped state', async () => {
+    const { ctx, logger } = await analyticsContext({ unbootstrapped: true });
+    // Empty, and asserted before the command runs: the whole claim is about a
+    // state object that does not exist, and a fixture that had seeded one
+    // would let a "missing" line pass for the wrong reason.
+    expect(ctx.state.resources).toEqual({});
+
+    await status(ctx, [], failingQuery);
+
+    expect(linesAt(logger, 'info')).toEqual([
+      heading(),
+      ...ANALYTICS_NODE_TITLES.map((title) => `  missing  ${title}`),
+    ]);
+  });
+
+  it('warns that there is no stream and that the table cannot be read', async () => {
+    const { ctx, logger } = await analyticsContext({ unbootstrapped: true });
+
+    await status(ctx, [], failingQuery);
+
+    expect(linesAt(logger, 'warn')).toEqual([
+      'Firehose delivery: no delivery stream - `blogwright analytics bootstrap test` creates it',
+      `rows in ${FIXTURE_RELATION}: unavailable - ${FAILING_QUERY_MESSAGE}`,
+    ]);
+  });
+});
+
+describe('analytics status - the row count crosses the AnalyticsQuery port', () => {
+  it('asks for the named row-count query over the whole table, bots included', async () => {
+    const { ctx } = await analyticsContext();
+    const query = rowCountQuery();
+
+    await status(ctx, [], query);
+
+    // What the port was asked, as the shared `prepareQuery` resolved it: one
+    // call, the name from the definition table, and the whole-table range
+    // bound as values rather than spliced into a statement.
+    expect(query.calls.map((call) => call.name)).toEqual([ROW_COUNT_QUERY]);
+    expect(query.calls[0]?.bindings).toEqual({
+      from: WHOLE_TABLE_RANGE.from,
+      to: WHOLE_TABLE_RANGE.to,
+      include_bots: true,
+    });
+  });
+
+  it('warns rather than reporting a figure when the query answers no row', async () => {
+    // Not a shape the real adapter can produce - `count(*)` always answers one
+    // row - which is exactly why the guard needs a test: nothing else would
+    // ever exercise it, and a status that printed `rows: undefined` would be
+    // worse than one that said it could not tell.
+    const { ctx, logger } = await analyticsContext();
+    const empty = createFixtureAnalyticsQuery({ [ROW_COUNT_QUERY]: [] });
+
+    await status(ctx, [], empty);
+
+    expect(linesAt(logger, 'warn')).toEqual([
+      `rows in ${FIXTURE_RELATION}: unavailable - the ${ROW_COUNT_QUERY} query answered no ${ROW_COUNT_COLUMN}`,
+    ]);
   });
 });

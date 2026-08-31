@@ -10,6 +10,9 @@ import {
   prepareQuery,
   type QueryName,
   type QueryParams,
+  ROW_COUNT_COLUMN,
+  ROW_COUNT_QUERY,
+  WHOLE_TABLE_RANGE,
 } from './queries.js';
 import { PAGE_VIEWS_COLUMNS } from './schema.js';
 
@@ -23,6 +26,15 @@ const SPEC_QUERY_NAMES = [
   'cache-hit-ratio',
   'unique-visitors',
 ];
+
+/**
+ * Every name the set answers to: the spec's seven, then the row count task 55
+ * added for `analytics status`. Spelled as a literal rather than as
+ * `[...SPEC_QUERY_NAMES, ROW_COUNT_QUERY]` in the membership assertion's own
+ * terms, so a set that lost the row count fails here instead of agreeing with
+ * whatever the module exports.
+ */
+const EVERY_QUERY_NAME = [...SPEC_QUERY_NAMES, 'row-count'];
 
 /** The date range and bot-inclusion flag the spec requires of every query. */
 const EVERY_BIND = ['from', 'to', 'include_bots'];
@@ -58,7 +70,7 @@ const INHERITED_KEYS = [
 
 /** The unknown-name rejection, as a caller reads it. */
 function unknownNameError(name: string): string {
-  return `unknown analytics query "${name}" - available queries are ${SPEC_QUERY_NAMES.join(', ')}`;
+  return `unknown analytics query "${name}" - available queries are ${EVERY_QUERY_NAME.join(', ')}`;
 }
 
 /**
@@ -115,8 +127,11 @@ function schemaColumnsIn(sql: string): string[] {
 const ITERATED: string[] = [];
 
 describe('ANALYTICS_QUERIES', () => {
-  it('is exactly the seven named queries the spec lists, in its order', () => {
-    expect([...ANALYTICS_QUERY_NAMES]).toEqual(SPEC_QUERY_NAMES);
+  it("is the seven named queries the spec lists, in its order, then the status command's row count", () => {
+    // One assertion, not two: a second one over `SPEC_QUERY_NAMES` alone would
+    // be a slice of an array this line has already pinned whole, so nothing
+    // could falsify it that has not already failed here.
+    expect([...ANALYTICS_QUERY_NAMES]).toEqual(EVERY_QUERY_NAME);
   });
 
   it('names every key of the table, so a definition cannot be added without a name', () => {
@@ -370,5 +385,59 @@ describe('createFixtureAnalyticsQuery', () => {
       // half of the spec's *Named queries, never client-supplied SQL* decision.
       query.run('drop-table', PARAMS),
     ).rejects.toThrow('unknown analytics query "drop-table"');
+  });
+});
+
+/*
+ * TASK 55 - the row count `analytics status` reports. It is in this set rather
+ * than in the command for one reason: the command may not write SQL, so the
+ * only way to the table is a name the port already answers to.
+ */
+describe('the row-count query', () => {
+  const definition = definitionOf(ROW_COUNT_QUERY);
+
+  it('selects one count column and nothing else, so a status line is one figure', () => {
+    expect(definition.resultColumns).toEqual([ROW_COUNT_COLUMN]);
+    expect(definition.sql).toMatch(/count\(\*\)\s+AS\s+row_count/i);
+  });
+
+  it('counts rows rather than grouping them, so the answer is a single row', () => {
+    expect(definition.sql).not.toMatch(/\bGROUP BY\b/i);
+  });
+
+  it('is bounded on the day partition like every other definition, and binds the bot flag', () => {
+    // Restated here as well as in the per-definition suite because this is the
+    // property that makes WHOLE_TABLE_RANGE meaningful: an unbounded count
+    // would ignore the range and the constant below would be decoration.
+    expect(definition.sql).toContain('day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)');
+    expect(definition.sql).toContain('$include_bots');
+  });
+});
+
+describe('WHOLE_TABLE_RANGE', () => {
+  it('is the widest range a YYYY-MM-DD day can express', () => {
+    expect(WHOLE_TABLE_RANGE).toEqual({ from: '1970-01-01', to: '9999-12-31' });
+  });
+
+  it('passes the same day validation a caller-supplied range does', () => {
+    // The point of the assertion: `validateRange` rejects anything that is not
+    // a real calendar day, so a constant of `1970-1-1` or `9999-13-01` would
+    // raise here rather than reaching the table as a silent no-rows answer.
+    const prepared = prepareQuery(
+      ROW_COUNT_QUERY,
+      { range: WHOLE_TABLE_RANGE, includeBots: true },
+      CONFIG,
+    );
+    expect(prepared.bindings).toEqual({ from: '1970-01-01', to: '9999-12-31', include_bots: true });
+  });
+
+  it('brackets the days the table can hold, which is what makes the count the whole table', () => {
+    // Both ends compared lexically, which is chronological for this shape.
+    // CloudFront predates the epoch by nothing and the table's `day` comes off
+    // the request's own timestamp, so a row outside this range cannot exist.
+    for (const day of ['2008-11-18', '2026-08-31', '2999-12-31']) {
+      expect(WHOLE_TABLE_RANGE.from <= day).toBe(true);
+      expect(WHOLE_TABLE_RANGE.to >= day).toBe(true);
+    }
   });
 });

@@ -1,8 +1,12 @@
 /**
- * The fixed set of named, parameterised queries the local dashboard answers
- * from - never SQL supplied by a client. See [the change spec's §Analytics
- * dashboard → Local
- * server](../../../.specs/changes/2026-07-26-analytics_plugin.md).
+ * The fixed set of named, parameterised queries this package answers from -
+ * never SQL supplied by a client. Seven of them are the dashboard's panels;
+ * see [the change spec's §Analytics dashboard → Local
+ * server](../../../.specs/changes/2026-07-26-analytics_plugin.md). The eighth,
+ * {@link ROW_COUNT_QUERY}, serves `analytics status`, and is here for the same
+ * reason the other seven are: a command reaches the table through the
+ * `AnalyticsQuery` port, and the port takes a name from this set, never a
+ * statement.
  *
  * **Parameterised is a shape here, not a convention.** A definition's SQL is
  * built by the {@link sql} tag, whose only substitution slot accepts
@@ -164,8 +168,38 @@ interface QueryDefinition {
 const CACHE_HIT_RESULT_TYPES = ['Hit', 'RefreshHit'] as const;
 
 /**
- * The seven named queries the spec's §Local server lists, keyed by the name a
- * caller asks for.
+ * The name of the row-count query. Not one of the seven the spec's §Local
+ * server lists - those answer the dashboard's panels; this one answers
+ * `analytics status`, which reports the table's current row count beside the
+ * plugin's twelve nodes. It lives in this set rather than in the command
+ * because the command may not write SQL: every statement this package runs is
+ * one of these definitions, reached through the `AnalyticsQuery` port.
+ */
+export const ROW_COUNT_QUERY = 'row-count';
+
+/** The one column {@link ROW_COUNT_QUERY} selects. Named so no caller spells it twice. */
+export const ROW_COUNT_COLUMN = 'row_count';
+
+/**
+ * The range {@link ROW_COUNT_QUERY} is asked over when the caller wants the
+ * whole table, as `analytics status` does.
+ *
+ * Every definition in this set is bounded on the `day` partition - the spec
+ * requires the range and the bot flag of all of them - so "the whole table" is
+ * expressed as the widest range the column can hold rather than as an
+ * unbounded statement. Both ends are calendar days {@link isCalendarDay}
+ * accepts, so this constant goes through exactly the validation a caller's
+ * range does. `from` is the Unix epoch, which no `day` can precede: the column
+ * is derived from the request's own timestamp. `to` is the last day of the
+ * four-digit years, which is the largest day this module's `YYYY-MM-DD` shape
+ * can express at all.
+ */
+export const WHOLE_TABLE_RANGE = { from: '1970-01-01', to: '9999-12-31' } as const;
+
+/**
+ * Every named query, keyed by the name a caller asks for: the seven the spec's
+ * §Local server lists, in its order, and then {@link ROW_COUNT_QUERY}, which
+ * no panel draws and `analytics status` reports.
  *
  * Every statement reads {@link PAGE_VIEWS}, bounds itself on the `day`
  * partition with `$from`/`$to`, and honours `$include_bots` - a row whose
@@ -313,6 +347,27 @@ SELECT day,
        sum(daily_unique_visitors) OVER () AS summed_daily_unique_visitors
 FROM daily
 ORDER BY day
+`,
+  },
+
+  /**
+   * Not a dashboard panel: the figure `analytics status` reports beside the
+   * node listing, so an operator can tell "the pipeline is provisioned" from
+   * "the pipeline has delivered something". Bots are counted when the caller
+   * asks for them - a row is a row - which is why the status command binds
+   * `include_bots` explicitly rather than leaving it to `config.analytics.bots`.
+   */
+  [ROW_COUNT_QUERY]: {
+    rowMeaning: 'the number of rows the table holds over the range, one row carrying the count',
+    columns: ['day', 'is_bot'],
+    binds: ['from', 'to', 'include_bots'],
+    resultColumns: [ROW_COUNT_COLUMN],
+    literals: [],
+    sql: sql`
+SELECT count(*) AS row_count
+FROM ${PAGE_VIEWS}
+WHERE day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)
+  AND ($include_bots OR NOT coalesce(is_bot, false))
 `,
   },
 } as const satisfies Record<string, QueryDefinition>;

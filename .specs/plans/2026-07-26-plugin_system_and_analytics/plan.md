@@ -1196,6 +1196,110 @@ task 59, whose role rewrite is what its warning backs.
   the plugin's `commands` table rather than another positional shim; no user
   has asked, and this release is otherwise trying to keep the surface
   identical.
+- *`AnalyticsQuery` has no way to close a session, and `analytics status` is
+  the first one-shot command to open one.* Raised by task 55's implementation
+  2026-08-31. The port is `run(name, params)` and nothing else; the DuckDB
+  adapter opens its connection lazily on the first query and caches it for the
+  life of the object, with `connection.close()` reachable only from inside the
+  adapter's own session handling. That is exactly right for the dashboard,
+  which holds the session for as long as it serves - but `analytics status`
+  asks one query and returns, and `bin.ts` ends a command by setting
+  `process.exitCode` rather than calling `process.exit`, so the process leaves
+  only when the event loop drains. Whether an idle DuckDB instance holds a
+  libuv handle open was left unsettled by task 55, which declined to invent a
+  `close()` on a port task 45 owns to fix something it had not observed - the
+  right instinct, but the premise was wrong. **Task 55's gate settled it by
+  measurement, and the answer is that there is no leak.** A Node process that
+  creates a `DuckDBInstance(':memory:')`, connects, runs a query and returns
+  without closing exits cleanly in 74ms: an idle instance holds no libuv
+  handle, and `:memory:` opens no file handle. So the gap is cosmetic in the
+  port, not a latent leak, and `bin.ts` setting `process.exitCode` rather than
+  calling `process.exit` costs nothing here.
+
+  Two corrections worth keeping, because both were reasons not to look. The
+  claim that "no test in this package may start DuckDB" is false - 
+  `adapters/duckdb-query.test.ts` already starts a real one at five sites,
+  deliberately - and the experiment proposed here (one `blogwright analytics
+  status` against a real table bucket, watching whether the shell comes back)
+  is far more expensive than the one that actually settles it, which needs no
+  AWS at all. **A premise that an experiment is impossible is worth checking
+  before it is recorded, because it is what stops anyone running it.** If a
+  future change does make the handle non-idle, the fix is a port change with
+  three call sites (the port, the fixture-backed
+  fake, and the server that already owns a shutdown path), which wants its own
+  task. Recorded now because every later one-shot command that reads the table
+  - task 61's `backfill` above all - inherits the same question.
+- *Task 55's definition of done asks for a context type that cannot exist, and
+  the task file's own pointer to `buildAnalyticsNodes(ctx)` is the same
+  mistake one level down.* Found by its implementation 2026-08-31, and resolved
+  in the direction of the code with the divergence recorded, as task 54's two
+  were. Every other consumer in the analytics package narrows the SPI context
+  to a `Pick` - `DashboardCommandContext`, `DuckDbQueryContext`,
+  `AnalyticsConfigContext` - and `status` cannot: it hands `ctx` to `read()` on
+  each of the twelve nodes, and an analytics node is a
+  `ResourceNode<PluginContext<AnalyticsConfig>>`, so the narrowest type that
+  compiles is the SPI context entire. A `Pick` naming its fifteen required
+  members - sixteen are declared, but only `tags` is optional, and the gate
+  confirmed by compilation that a `Pick` of the eleven the code visibly touches
+  fails on `domain`, `preview`, `store` and `save` - would be that type under a
+  second name, and would drift from it the day the SPI gains another member. So `status(ctx: PluginContext<AnalyticsConfig>, ...)` is
+  what shipped. Worth deciding whether the narrowing convention should be
+  stated as what it actually is - a rule for consumers that do not run nodes -
+  since the next plugin command that walks a node set will meet this again.
+- *"The same pretty/plain split" cannot mean the same plain LINE, because the
+  site's carries an account id.* Decided by task 55's implementation
+  2026-08-31 and recorded because a validator reading its definition of done
+  literally would call it a divergence. The site's plain status line is
+  `  <mark>  <title> <JSON of the node's recorded outputs>`
+  (`logStatusEntries`, `packages/cli/src/render.ts`), and the JSON is where the
+  drift view earns its name. `analytics status` keeps the split, the marks, the
+  two-space indent and the `read failed` wording, and drops that suffix: the
+  same definition of done asks for the plain form to be *asserted line by line*
+  as the contract CI and agents read, and a line carrying an ARN carries the
+  account id, the environment and a service-generated table id with it, so the
+  "same" line differs between two environments of one site and can never be
+  asserted as a contract. The outputs are still in
+  `state/<env>.analytics.json`, and the two lines the command adds after the
+  listing are what a reader wanted them for. Worth deciding whether the site's
+  own plain form should follow - its tests pin the JSON suffix
+  (`packages/cli/src/commands.test.ts`), so this is a real question and not a
+  tidy-up.
+- *Two of task 55's five `file:line` pointers had drifted, which is the third
+  measurement and the first one under four in five.* Resolved by content at the
+  tip 2026-08-31. `commands.ts:301-329` (the site's `status`, the pretty/plain
+  split the task asks to mirror) is at `:484`, and its inner citations moved
+  with it - the `pretty` branch cited at `:303` and the plain-form contract
+  comment cited at `:323` are both in `render.ts`'s `logStatusEntries` now,
+  which is where task 15 extracted them to. `commands.ts:250`, cited as "the
+  warn-and-continue precedent for one unreadable item inside a listing", is a
+  `deploy` summary row; the real precedent is `history`'s manifest loop in the
+  same file, whose `catch` logs `skipping unreadable manifest <key>` under the
+  comment *One corrupt manifest must not take down the whole listing* - and
+  the closer one still, for this exact shape, is `logStatusEntries`' own
+  `read failed` branch. The three that resolve are `render.ts:59`
+  (`StatusEntry`), `render.ts:72` (`renderStatusTree`) and
+  `core/src/ports.ts:34-50` (`isInteractive` at `:36`). Two of five is better
+  than task 54's seven of eight and task 29's four of five, and it is better
+  for a reason worth recording rather than celebrating: the two that survived
+  are in `render.ts`, a file this build has not edited. The rate tracks how
+  much the target file has moved, not how carefully the pointer was written,
+  which is the argument for naming symbols in one more form.
+- *The analytics certificate's invariant "no DuckDB may start anywhere in the
+  package's test suite" is already false at the tip, and it is false on
+  purpose.* Observed by task 55 2026-08-31 while discharging it.
+  `packages/analytics/src/adapters/duckdb-query.test.ts` connects a real
+  in-process DuckDB against `:memory:` and runs every definition in the named
+  set over the real `page_views` DDL - which is how task 46 proved its
+  statements parse and its identifier quoting holds, and it is worth keeping.
+  What the invariant is reaching for is that no DOMAIN test may start one: the
+  server, the command bodies and the query set are all exercised against the
+  fixture-backed fake, and the vendor library appears only under `adapters/`.
+  Task 55 relied on the distinction in both directions - its status tests
+  substitute at the port, and the row-count query it added is executed by that
+  real DuckDB in the adapter's own suite, which is what proves `count(*) AS
+  row_count` parses and that `row_count` is not a reserved word. Worth
+  restating the invariant in the form that is true before a later certificate
+  copies the absolute one and a verifier reads a deliberate test as a breach.
 
 ---
 
