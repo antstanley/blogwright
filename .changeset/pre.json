@@ -9,5 +9,30 @@
     "blogwright-core": "0.3.3",
     "blogwright-pds": "0.3.3"
   },
-  "changesets": []
+  "changesets": [
+    "analytics-backfill-action",
+    "analytics-lifecycle-verbs",
+    "analytics-plugin-package",
+    "analytics-status-command",
+    "cli-help-plugin-sections",
+    "core-config-drops-pds",
+    "core-signing-us-east-1",
+    "core-transport-service-descriptor",
+    "generic-plugin-dispatch",
+    "init-wizard-plugin-blocks",
+    "logs-delivery-output-format",
+    "pds-config-validation-timing",
+    "pds-discoverable-as-a-plugin",
+    "pds-dispatched-as-a-plugin",
+    "pds-migrated-onto-the-plugin-system",
+    "pds-owns-its-deploy-role-grant",
+    "plugin-add-remove-commands",
+    "plugin-config-validation",
+    "plugin-init-action",
+    "plugin-lifecycle-verbs",
+    "plugin-list-command",
+    "plugin-system",
+    "reproducible-zip-mtime",
+    "shared-delivery-source-guards"
+  ]
 }
