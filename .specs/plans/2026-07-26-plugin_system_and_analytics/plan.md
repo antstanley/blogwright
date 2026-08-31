@@ -1334,3 +1334,38 @@ discovery finding from the first review, one layer down. Task 52 now requires
 the fake to reject `deleteDeliverySource` while deliveries remain, and the
 certificate carries it as a premise (P4) so a green suite over a
 never-failing fake counts as no evidence at all.
+
+- **Task 59 is parked, and the parking is the enforcement.** Its gate returned
+  CORRECT / PARTIAL: the diff is proven - six mutations, every one reverted to a
+  byte-identical tree - but obligation O5 requires the release carrying task 30
+  to be *out* before task 59 lands, and its check is explicit that an unreleased
+  task 30 makes this blocked rather than early. No release can be cut from inside
+  the build, so no edit to task 59's seven files could have discharged it.
+
+  What makes this worth recording is that parking is not merely bookkeeping here.
+  `changeset version` consumes `.changeset/` whole, so any release cut while
+  `cli-site-graph-drops-pds.md` sits in that directory ships the deploy role's
+  Secrets Manager grant removal alongside task 30's migration note - and every
+  stack whose operator deploys before reading the notes loses the grant at its
+  next `blogwright bootstrap`. Holding the changeset out of the branch is the
+  only mechanical guarantee the repo can offer; the bold warning the changeset
+  carries is documentation, and documentation does not stop `changeset version`.
+  The work is preserved at jj bookmark `parked/task-59` (`ed1e186422ce`). To
+  unpark: cut and publish the release containing task 30's changeset, merge the
+  bookmark, and re-check O5 alone - O1-O4, O6 and O7 are SATISFIED and stand.
+
+  The general form: **a task whose definition of done names a release is not
+  completable by a build, only by a human.** Three tasks in this plan have that
+  shape (47's, now 59's, and 60's by inheritance). A plan that wants such
+  ordering enforced needs a mechanism in the repo - a held-back changeset
+  directory, a release-gate check - not a sentence in the notes.
+
+- **The dependency table does not carry the 30 -> 59 edge.** Task 59's row lists
+  `23, 29`, both of which were done when it was dispatched, so the scheduler
+  correctly considered it ready; the release-ordering constraint lives only
+  inside O5, where no scheduler reads. This is the second ordering edge this
+  build has found missing from the table (the first was 16 -> 52), and both were
+  found by a gate rather than by the schedule. An edge kind for "ships in a later
+  release than" would have caught it - the table's `Edge kind` column already
+  distinguishes `build`, `contract`, `review` and `data`, and a `release` kind
+  would have made task 59 unschedulable until task 30 landed.
