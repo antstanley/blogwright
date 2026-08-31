@@ -33,15 +33,22 @@
  * depends on the collect outcome too, since it is the one place a collision
  * becomes visible to a human.
  *
- * `pds` is deliberately absent from `RESERVED_COMMANDS`. The hardcoded
- * `command === 'pds'` branch in `cli.ts` (ahead of its `KNOWN_COMMANDS`
- * membership test) already shadows any plugin that declares the name `pds`
- * - but that shadow belongs to task 29, which deletes the branch once the
- * bundled `blogwright-pds` package is dispatched as an ordinary plugin.
- * Reserving `pds` here now would fix a problem this module does not have
- * (nothing here lets `pds` through unchecked; `cli.ts` intercepts it first)
- * while creating one task 29 would then have to undo - so the name stays
- * unreserved on purpose, pinned by a test below.
+ * `pds` is deliberately absent from `RESERVED_COMMANDS`, and adding it would
+ * now BREAK the namespace rather than merely shadow it. Task 29 deleted
+ * `cli.ts`'s hardcoded `command === 'pds'` branch: there is no built-in
+ * `pds` command left for a reservation to protect, and `blogwright pds
+ * <action>` is answered by the bundled `blogwright-pds` package, which
+ * declares the plugin name `pds` and is discovered here like any other
+ * plugin. Reserving the name would therefore aim
+ * `resolveNamespaceCollisions` below at that bundled plugin itself: it would
+ * become a `failures` entry rather than an installed one, and the namespace
+ * would stop working outright - `blogwright pds sync` exiting 1 with `no
+ * built-in command or installed plugin claims "pds"`, `blogwright --help`
+ * listing none of its six actions, and `blogwright plugin list` reporting it
+ * as reserved for a built-in command that no longer exists. Verified by
+ * adding `'pds'` to the set: discovery rejects the real bundled package and
+ * this file's real-disk integration cases fail on exactly that reason
+ * string. So the name stays unreserved on purpose, pinned by a test below.
  *
  * DECISION (task 13, record here for task 16 to find): a plugin's declared
  * ACTIONS can collide with a generic action the CLI contributes, distinct

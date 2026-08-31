@@ -626,7 +626,7 @@ describe('discover - namespace collisions', () => {
     expect(resultOrderB.failures).toEqual(expectedFailures);
   });
 
-  it('does not reserve "pds" - a plugin may declare that name and is discovered normally (cli.ts\'s hardcoded branch is the only thing shadowing it, until task 29)', async () => {
+  it('does not reserve "pds" - a plugin may declare that name and is discovered normally, and reserving it would reject the bundled blogwright-pds plugin itself, deleting the namespace', async () => {
     const fs = createMemoryFileSystem({
       [`${REPO_ROOT}/package.json`]: JSON.stringify({
         dependencies: { 'blogwright-pds-clone': '^1.0.0' },

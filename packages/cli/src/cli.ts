@@ -7,7 +7,6 @@ import {
   RepoRootNotFoundError,
   type Terminal,
 } from 'blogwright-core';
-import * as pds from 'blogwright-pds';
 
 import * as commands from './commands.js';
 import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from './context.js';
@@ -174,11 +173,15 @@ function isMissingPackageJsonError(err: unknown): boolean {
  * nothing is discovered, plus a section per plugin and failure otherwise.
  *
  * Called fresh on every invocation, never memoised across print sites: each
- * of the five call sites below (`main`'s own `--help`/bare-invocation
- * branch and unknown-command default, `runPds`'s unknown-action branch, and
- * `runPreview`'s two) reaches this only on the specific path it is on, so a
- * command that never prints help - `deploy`, `bootstrap`, `status` among
- * them - never calls `discover` and never touches `ports.loader` at all.
+ * of the four call sites below (`main`'s own `--help`/bare-invocation
+ * branch and unknown-command default, and `runPreview`'s two) reaches this
+ * only on the specific path it is on, so a command that never prints help -
+ * `deploy`, `bootstrap`, `status` among them - never calls `discover` and
+ * never touches `ports.loader` at all. Task 29 removed the fifth: the
+ * hardcoded namespace branch that printed this text for an unknown action
+ * of its own. Generic dispatch answers that namespace now, and
+ * `runPlugin`'s refusal lists the matched plugin's OWN actions
+ * (`renderActions`, `plugin-commands.ts`) instead of the whole of USAGE.
  * `blogwright plugin list` (task 17) and `blogwright init` (task 14) are
  * the other two paths that pay for discovery; every other built-in command
  * does not. See `DiscoveryPortsFactory`'s doc comment for why the ports
@@ -245,9 +248,8 @@ export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
  *      command that is neither a built-in nor `plugin` itself.
  *   2. `blogwright --help` and a bare invocation, plus every other USAGE
  *      print site in this module (`helpText`, below) - `main`'s own
- *      unknown-command default, `runPds`'s unknown-action branch, and
- *      `runPreview`'s two - so an error path never shows help that is
- *      stale about what is installed.
+ *      unknown-command default and `runPreview`'s two - so an error path
+ *      never shows help that is stale about what is installed.
  *   3. `blogwright plugin list` (task 17), which names plugins that failed
  *      to load - only a load attempt can discover that.
  *   4. `blogwright init`, whose wizard asks each discovered plugin's
@@ -262,12 +264,11 @@ export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
  * Every other built-in command pays nothing for discovery - `deploy`,
  * `bootstrap` and `status` among them (the three a laziness test in
  * `cli.test.ts` pins directly), and likewise `rollback`, `delete`,
- * `destroy`, `history`, `logs` and `preview`/`pds` dispatched successfully.
- * This becomes load-bearing once task 26 strips the static `pds` block out
- * of `USAGE`: with `--help` and its error-path echoes exempted from
- * discovery, there would be no commit at which `blogwright --help` (or
- * `blogwright pds bogus`) could list all six pds actions again before task
- * 29 finishes the migration.
+ * `destroy`, `history`, `logs` and `preview` dispatched successfully. A
+ * plugin NAMESPACE is not a built-in and never was: dispatching one runs
+ * discovery by construction (case 1), which is the whole reason a bundled
+ * plugin's actions can reach `--help`, and its own refusals, once no
+ * branch in this module knows any namespace by name (task 29).
  */
 export type DiscoveryPortsFactory = () => Pick<Ports, 'fs' | 'loader'>;
 
@@ -308,6 +309,17 @@ export async function main(
       endpoint: { type: 'string' },
       hash: { type: 'string' },
       id: { type: 'string' },
+      // Declared here even though no built-in command reads it. `main`
+      // parses ONE flag table for every invocation, so a flag only a
+      // plugin action takes still has to be pulled out of the positionals
+      // before dispatch - otherwise `--identifier alice.example` would be
+      // read as an environment. It reaches the plugin as the ordinary
+      // `--identifier <value>` token pair `serialiseFlags`
+      // (`plugin-commands.ts`) renders, so this module forwards it without
+      // knowing what it means, and the action that does know declares the
+      // flag in its own `summary`. Do not delete it as unused: nothing in
+      // this file refers to it by name, and dropping it turns the value
+      // into a stray positional rather than an error.
       identifier: { type: 'string' },
       plain: { type: 'boolean', default: false },
       refresh: { type: 'boolean', default: false },
@@ -394,15 +406,22 @@ export async function main(
   if (command === 'preview') {
     return runPreview(positionals, values, terminal, logger, makeContext, makeDiscoveryPorts);
   }
-  if (command === 'pds') {
-    return runPds(positionals, values, terminal, logger, makeContext, makeDiscoveryPorts);
-  }
   if (!KNOWN_COMMANDS.has(command)) {
     // Not a built-in and not `plugin` itself: the only remaining possibility
     // is an installed plugin's namespace. `runPlugin` runs discovery itself
     // (built-in commands below never call `makeDiscoveryPorts` or trigger
     // it) and reports an unknown plugin or action on its own, so there is no
     // further fallback here.
+    //
+    // TASK 29 - this is now the ONLY route into a plugin's namespace. The
+    // hardcoded branch that used to sit immediately above this membership
+    // test, ahead of it precisely so it would win, is gone: the bundled
+    // plugin the CLI ships in its own `dependencies` is discovered and
+    // dispatched here exactly like an installed one, which is why the name
+    // it claims stays out of `RESERVED_COMMANDS` (`known-commands.ts`).
+    // This module knows no namespace by name any more, and adding one back
+    // would re-open the split where `--help` advertised verbs the
+    // hand-rolled branch refused.
     return runPlugin(
       command,
       positionals.slice(1),
@@ -470,69 +489,6 @@ export async function main(
       logger.error(`unknown command: ${command}`);
       logger.info(await helpText(makeDiscoveryPorts()));
       return 1;
-  }
-  return 0;
-}
-
-interface PdsValues {
-  env?: string | undefined;
-  config?: string | undefined;
-  domain?: string | undefined;
-  endpoint?: string | undefined;
-  identifier?: string | undefined;
-  yes: boolean;
-}
-
-/** Handle `blogwright pds <action> [env]` (and `pds secret <action> [env]`). */
-async function runPds(
-  positionals: string[],
-  values: PdsValues,
-  terminal: Terminal,
-  logger: Logger,
-  makeContext: ContextFactory,
-  makeDiscoveryPorts: DiscoveryPortsFactory,
-): Promise<number> {
-  // `pds secret set production` - the secret sub-action shifts positionals by one.
-  const secret = positionals[1] === 'secret';
-  const action = secret ? `secret ${positionals[2] ?? ''}`.trim() : positionals[1];
-  const envPositional = positionals[secret ? 3 : 2];
-  const known = new Set(['keygen', 'login', 'init', 'sync', 'secret status', 'secret delete']);
-  if (!action || !known.has(action)) {
-    logger.error(`unknown pds action: ${action ?? '(none)'}`);
-    // Wired deliberately, unlike `runPlugin`'s fall-through: task 26 strips
-    // the static `pds` block from `USAGE` before task 29 deletes this whole
-    // branch, and an unwired print here would answer `blogwright pds bogus`
-    // with help listing no pds actions at all for that span.
-    logger.info(await helpText(makeDiscoveryPorts()));
-    return 1;
-  }
-  const ctx = await makeContext({
-    env: values.env ?? envPositional ?? 'production',
-    configPath: values.config,
-    domain: values.domain,
-    endpointOverride: values.endpoint,
-    ports: { terminal },
-  });
-
-  switch (action) {
-    case 'keygen':
-      await pds.keygen(ctx);
-      break;
-    case 'login':
-      await pds.login(ctx, { identifier: values.identifier });
-      break;
-    case 'secret status':
-      await pds.secretStatus(ctx);
-      break;
-    case 'secret delete':
-      await pds.secretDelete(ctx, { yes: values.yes });
-      break;
-    case 'init':
-      await pds.init(ctx);
-      break;
-    case 'sync':
-      await pds.sync(ctx);
-      break;
   }
   return 0;
 }

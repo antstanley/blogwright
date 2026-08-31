@@ -19,8 +19,10 @@
  *      claiming `command` as its namespace.
  *   2. Matches the LONGEST declared action against the leading positionals,
  *      so a multi-word action such as `secret status` dispatches by
- *      declaration - never by the hand-rolled positional shifting `runPds`
- *      still does at `cli.ts:196` until task 29 deletes it.
+ *      declaration - never by hand-rolled positional shifting. `cli.ts`'s
+ *      `runPds` branch shifted positionals to reach `secret status` and
+ *      `secret delete`; task 29 deleted it, and this step is now the only
+ *      thing that resolves a multi-word action anywhere in the CLI.
  *   3. Resolves the environment exactly the way every built-in command
  *      already does: the first positional left over once the action is
  *      consumed, overridden by `--env`, defaulting to `production`.
@@ -157,8 +159,11 @@ const DEFAULT_ENV = 'production';
  * The parsed flag values `main`'s single `parseArgs` call produces, as far
  * as generic plugin dispatch reads them. `main` passes its own `values`
  * object here directly - this interface only narrows what `runPlugin` reads
- * off it, the same way the hand-rolled `PdsValues`/`PreviewValues` in
- * `cli.ts` each narrow the same shared object for themselves.
+ * off it, the same way `cli.ts`'s hand-rolled `PreviewValues` narrows the
+ * same shared object for itself. `PdsValues` was the other such narrowing
+ * until task 29 deleted it with the rest of the pds branch, which is why
+ * `identifier` below matters: this interface, and `serialiseFlags` under
+ * it, are now the only thing that carries `--identifier` to `pds login`.
  */
 export interface PluginValues {
   env?: string | undefined;
@@ -222,12 +227,12 @@ interface ActionMatch {
  * Match the LONGEST declared action against the leading words of `rest`, so
  * a multi-word action such as `secret status` is matched as one unit rather
  * than by shifting a fixed number of positionals (the approach this
- * function replaces, `cli.ts:196`'s hand-rolled `secret` shift). Two
- * commands sharing a declared action name is a `validatePlugin` violation,
- * so no plugin ever reaches here with a genuine tie; the first
- * strictly-longer match found wins regardless of declaration order, which
- * is what makes `secret status` win over a bare `secret` when a plugin
- * declares both.
+ * function replaces: the hand-rolled `secret` shift in `cli.ts`'s `runPds`
+ * branch, deleted by task 29). Two commands sharing a declared action name
+ * is a `validatePlugin` violation, so no plugin ever reaches here with a
+ * genuine tie; the first strictly-longer match found wins regardless of
+ * declaration order, which is what makes `secret status` win over a bare
+ * `secret` when a plugin declares both.
  */
 function matchAction(
   commands: readonly PluginCommand<unknown>[],

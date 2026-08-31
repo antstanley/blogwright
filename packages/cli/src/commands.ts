@@ -1,4 +1,28 @@
 import { AwsError, colors, findRepoRoot, type ResourceNode, type S3Object } from 'blogwright-core';
+/*
+ * A STATIC, NON-OPTIONAL IMPORT, and deliberately the last one left in the
+ * CLI. Task 29 deleted every other reference to `blogwright-pds` from the
+ * dispatcher (`cli.ts` now knows no namespace by name; the package is
+ * discovered and dispatched as an ordinary plugin), and this one still
+ * stays, for two reasons:
+ *
+ *   - THE SPI HAS NO LIFECYCLE HOOKS. `Plugin` (`blogwright-core`'s
+ *     `plugin.ts`) declares `commands`, `nodes`, `configKey`,
+ *     `validateConfig` and `init` - nothing a plugin could register to be
+ *     called after a successful deploy. `deploy` below therefore reaches
+ *     this function by name, exactly as it always has; routing it through
+ *     plugin dispatch would mean inventing a hook the change spec does not
+ *     describe.
+ *   - THE PACKAGE SHIPS BY DEFAULT. `blogwright-pds` is a non-optional
+ *     `dependencies` entry of `packages/cli/package.json` - that is how the
+ *     bundled plugin reaches a consuming repo that depends on `blogwright`
+ *     alone - so the import can never fail to resolve, and no optional-
+ *     dependency guard is needed around it.
+ *
+ * `syncAfterDeploy` no-ops for any environment but `production` and for a
+ * site with no `pds` config block, so an unconfigured repo pays nothing for
+ * it. Both halves are asserted in `commands.test.ts`.
+ */
 import { syncAfterDeploy } from 'blogwright-pds';
 
 import type { OpsContext } from './context.js';

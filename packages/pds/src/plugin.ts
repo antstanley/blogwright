@@ -105,10 +105,12 @@ function flagValue(args: string[], flag: string): string | undefined {
 }
 
 /**
- * The six actions, with the exact action strings the CLI's own `pds` dispatch
- * accepts today - `secret status` and `secret delete` declared as the
- * two-word actions they are, which the host matches longest-first rather than
- * by the positional shifting `runPds` hand-rolls.
+ * The six actions, with the exact action strings the CLI's deleted `pds`
+ * dispatch used to accept - `secret status` and `secret delete` declared as
+ * the two-word actions they are. Since task 29 these declarations are the
+ * only definition of the namespace's actions: the host matches them
+ * longest-first, in place of the positional shifting `runPds` hand-rolled.
+ * Renaming or dropping one here removes the action from the CLI.
  */
 function pdsCommands(fns: PdsCommandFunctions): PluginCommand<PdsConfig>[] {
   return [
@@ -182,10 +184,13 @@ export function createPdsPlugin(fns: PdsCommandFunctions = pdsCommandFunctions):
 }
 
 /**
- * The package's default export. Inert until `package.json` declares the
- * `blogwright.plugin` manifest field: discovery never imports a package
- * without it, so `blogwright pds <action>` still routes through the CLI's own
- * `runPds` branch.
+ * The package's default export, and since task 29 the LIVE path for
+ * `blogwright pds <action>`: task 26 added the `blogwright.plugin` manifest
+ * field to this package's `package.json`, which is what makes discovery
+ * import it at all, and task 29 deleted the CLI's `runPds` branch that used
+ * to answer the namespace ahead of plugin dispatch. Remove that manifest
+ * field and the namespace does not fall back to anything - it stops
+ * existing.
  */
 const pdsPlugin: Plugin<PdsConfig> = createPdsPlugin();
 

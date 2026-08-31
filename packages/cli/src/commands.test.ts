@@ -16,7 +16,10 @@
 import {
   AwsError,
   colors,
+  createMemoryFileSystem,
+  createNodeFileSystem,
   createScriptedTerminal,
+  findRepoRoot,
   stripColors,
   type Microvm,
   type ResourceNode,
@@ -26,16 +29,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertNoScopedState,
+  deploy,
   destroy,
   previewTeardown,
   readNodeStatus,
   status,
 } from './commands.js';
-import type { OpsContext } from './context.js';
+import { cliPackageDir, type OpsContext } from './context.js';
 import { destroyGraph } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
-import { createTestContext } from './test-support.js';
+import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
 
 /**
  * Three nodes - present, missing, and one whose `read` throws - small enough
@@ -707,5 +711,157 @@ describe('previewTeardown', () => {
     // The preview graph, unchanged by the guard: the production eleven plus
     // the wildcard DNS record and the preview GitHub OIDC role.
     expect(buildNodes(ctx)).toHaveLength(13);
+  });
+});
+
+/*
+ * TASK 29 - the post-deploy PDS sync, which the removal of `cli.ts`'s
+ * hardcoded `pds` branch must leave untouched.
+ *
+ * `deploy` reaches `syncAfterDeploy` through the static import at the top of
+ * `commands.ts` (see the comment there for why it stays), not through plugin
+ * dispatch - the SPI has no lifecycle hook it could be registered on. That
+ * makes it the one pds code path in the CLI with no dispatch test behind it,
+ * and the one a reader of task 29's diff would most reasonably assume had
+ * been migrated away. It has not been, and these cases say so by running the
+ * real `deploy` end to end against stubbed ports and clients.
+ *
+ * The observable is `syncAfterDeploy`'s own "not initialised" line: it is
+ * emitted only past BOTH of that function's guards (`ctx.env !==
+ * 'production' || !ctx.config.pds` returns before it), and the memory
+ * filesystem below carries no `atproto.json`, so a repo that has configured
+ * the block but never run `pds init` is exactly the state that produces it.
+ * Nothing is asserted about a real PDS: the point is which code the deploy
+ * reaches, not what it would publish.
+ */
+describe('deploy reaches syncAfterDeploy', () => {
+  const HASH = 'abc123';
+  /** The agent bundle's own content hash, read from `agent-manifest.json`. */
+  const AGENT_HASH = '0123456789ab';
+  /** `syncAfterDeploy`'s line for a configured-but-uninitialised production site. */
+  const NOT_INITIALISED =
+    'standard.site publishing not initialised (`blogwright pds init`) - skipping';
+
+  /**
+   * Run the real `deploy` to completion. Every AWS call is answered by a
+   * stub client and every file read by an in-memory filesystem - the same
+   * substitution `deploy.test.ts`'s own `runBuild` fixture makes, extended
+   * far enough forward to reach the post-deploy sync. The builder image is
+   * seeded as already current (`builderImageAction` returns `skip`), the
+   * build's completion artifact is present (`objectExists` - `pollBuild`'s
+   * authoritative done signal), and the changed-paths manifest is empty, so
+   * no CloudFront invalidation is attempted either.
+   */
+  async function runDeploy(opts: { env: string; pds: boolean }): Promise<string[]> {
+    const repoRoot = await findRepoRoot(createNodeFileSystem());
+    const fs = createMemoryFileSystem({
+      [`${repoRoot}/.jj`]: '',
+      [`${repoRoot}/README.md`]: '# example',
+      [`${TEST_AGENT_DIR}/Dockerfile`]: 'FROM scratch',
+      [`${TEST_AGENT_DIR}/server.js`]: 'export {};',
+      [`${TEST_AGENT_DIR}/agent-manifest.json`]: JSON.stringify({ hash: AGENT_HASH }),
+    });
+    const logged: string[] = [];
+    const record = (msg: string) => logged.push(stripColors(msg));
+    const ctx = createTestContext({
+      env: opts.env,
+      config: opts.pds ? { pds: { name: 'Example', secretName: 'example/atproto' } } : {},
+      ports: {
+        fs,
+        terminal: createScriptedTerminal({ interactive: false }),
+        vcs: {
+          revisionHash: async () => HASH,
+          listFiles: async () => ['README.md'],
+        },
+      },
+      clients: {
+        s3: {
+          putObject: async () => undefined,
+          deleteObject: async () => undefined,
+          // pollBuild's completion signal: the build finished.
+          objectExists: async () => true,
+          getObjectText: async (_bucket: string, key: string) =>
+            key === `build/changed/${HASH}.json` ? '{"paths":[]}' : undefined,
+        },
+        microvms: {
+          getImage: async () => ({
+            imageArn: 'arn:img',
+            imageName: 'builder',
+            state: 'CREATED',
+            imageVersion: '1',
+          }),
+          runMicrovm: async () => ({
+            microvmId: 'vm-1',
+            state: 'PENDING',
+            endpoint: 'http://vm',
+          }),
+          getMicrovm: async () => ({
+            microvmId: 'vm-1',
+            state: 'RUNNING',
+            endpoint: 'http://vm',
+          }),
+          createAuthToken: async () => 'tok',
+          terminateMicrovm: async () => undefined,
+        },
+        logs: { filterEvents: async () => [] },
+      },
+      logger: { info: record, step: record, ok: record, warn: record },
+    });
+    // Seeded after construction because two of the three depend on names the
+    // context itself derives: an image recorded as current for THIS agent
+    // bundle and THIS log group is what makes `reconcileBuilderImage` skip.
+    ctx.state.resources['microvm-image'] = {
+      arn: 'arn:img',
+      agentHash: AGENT_HASH,
+      logGroup: ctx.names.microvmLogGroup,
+    };
+    ctx.state.resources['iam-build-role'] = { arn: 'arn:build' };
+    ctx.state.resources['iam-exec-role'] = { arn: 'arn:role' };
+
+    await deploy(ctx);
+    return logged;
+  }
+
+  it('runs the sync for production with a pds block', async () => {
+    const logged = await runDeploy({ env: 'production', pds: true });
+
+    expect(logged).toContain(NOT_INITIALISED);
+    // And the deploy itself completed - the line is from the post-deploy
+    // step, not from a run that fell over before reaching it. Raw, with no
+    // `✓` prefix: `createTestContext` takes a plain object logger, and the
+    // level glyphs are `createLogger`'s (`logger.ts`), a layer above.
+    expect(logged.some((line) => line.startsWith(`deployed ${HASH} in `))).toBe(true);
+  });
+
+  it('skips the sync outside production, even with a pds block', async () => {
+    const logged = await runDeploy({ env: 'staging', pds: true });
+
+    expect(logged).not.toContain(NOT_INITIALISED);
+    expect(logged.some((line) => line.startsWith(`deployed ${HASH} in `))).toBe(true);
+  });
+
+  it('skips the sync for production when the site configures no pds block', async () => {
+    const logged = await runDeploy({ env: 'production', pds: false });
+
+    expect(logged).not.toContain(NOT_INITIALISED);
+    expect(logged.some((line) => line.startsWith(`deployed ${HASH} in `))).toBe(true);
+  });
+
+  it('keeps blogwright-pds a non-optional dependency of the CLI package', async () => {
+    // The other half of the guarantee: the static import above can only be
+    // relied on while the package ships with the CLI. A move to
+    // `optionalDependencies`, `peerDependencies` or `devDependencies` would
+    // leave `deploy` importing something a consuming install need not have -
+    // and would equally stop the bundled plugin from being discovered at all
+    // (`plugins.test.ts`'s real-disk case resolves it from `cliPackageDir()`'s
+    // own `dependencies`).
+    const manifest = JSON.parse(
+      await createNodeFileSystem().readText(`${cliPackageDir()}/package.json`),
+    ) as Record<string, Record<string, string> | undefined>;
+
+    expect(manifest.dependencies?.['blogwright-pds']).toBe('workspace:*');
+    expect(manifest.optionalDependencies?.['blogwright-pds']).toBeUndefined();
+    expect(manifest.peerDependencies?.['blogwright-pds']).toBeUndefined();
+    expect(manifest.devDependencies?.['blogwright-pds']).toBeUndefined();
   });
 });

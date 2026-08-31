@@ -130,7 +130,7 @@ export interface PluginContext<TConfig = never> {
    * The plugin's **own** state, loaded from its scoped `store`. Typed as
    * core's `OpsState` - not a bare outputs map - because the engine reaches
    * through it: `destroyGraph` does `delete ctx.state.resources[node.id]`
-   * (`packages/cli/src/graph.ts:94`). This is the only state a plugin may
+   * (`packages/cli/src/graph.ts`). This is the only state a plugin may
    * write, and only through {@link PluginContext.record}; contrast with the
    * read-only {@link PluginContext.siteState}.
    */
@@ -144,7 +144,7 @@ export interface PluginContext<TConfig = never> {
    * Record a resource node's outputs (ARNs, ids, domains) under `nodeId` in
    * the plugin's own `state`. This is the *only* way a plugin's resource
    * nodes may record outputs - it mirrors what the CLI's own nodes do through
-   * the private `output(ctx, id)` helper (`packages/cli/src/nodes.ts:20-22`),
+   * the private `output(ctx, id)` helper (`packages/cli/src/nodes.ts`),
    * but a plugin node must never call `store.save()` directly: the engine
    * (`applyGraph`) saves the in-memory state after every node, and a node's
    * own direct write would be clobbered by that next save.
@@ -152,7 +152,7 @@ export interface PluginContext<TConfig = never> {
   record(nodeId: string, outputs: ResourceOutputs): void;
   /**
    * Persist the plugin's own working state through `store`. `applyGraph`
-   * calls this after every node (`packages/cli/src/graph.ts:84`); a plugin
+   * calls this after every node (`packages/cli/src/graph.ts`); a plugin
    * node itself never calls `store.save()` - see {@link PluginContext.record}.
    */
   save(): Promise<void>;
@@ -161,11 +161,12 @@ export interface PluginContext<TConfig = never> {
 /**
  * One command a plugin's namespace answers, generic over the same `TConfig`
  * as the owning {@link Plugin}. `action` is a plain string, not a nested
- * sub-namespace, so a multi-word action such as `secret status`
- * (`packages/cli/src/cli.ts:198`) is one `PluginCommand`, not two levels of
- * dispatch; the host matches the longest declared action first against the
- * remaining positionals. Declared with a method signature (`run(...)`), not
- * an arrow-typed property (`run: (...) => ...`) - that is what makes
+ * sub-namespace, so a multi-word action such as `secret status` (declared
+ * by the bundled pds plugin, `packages/pds/src/plugin.ts`) is one
+ * `PluginCommand`, not two levels of dispatch; the host matches the longest
+ * declared action first against the remaining positionals. Declared with a
+ * method signature (`run(...)`), not an arrow-typed property
+ * (`run: (...) => ...`) - that is what makes
  * `PluginCommand<A>[]` and `PluginCommand<B>[]` both assignable to
  * `PluginCommand<unknown>[]` with no cast; see {@link Plugin} for why the
  * host's registry depends on it.
@@ -234,7 +235,7 @@ export interface ResourceNode<Ctx = PluginContext> {
 
 /**
  * One question a plugin's `init` contributor asks, generalising
- * `packages/cli/src/init.ts:16-40`'s `Question`. An unanswered optional
+ * `packages/cli/src/init.ts`'s `Question`. An unanswered optional
  * question (`required` unset or `false`) resolves to the empty string,
  * never `undefined` - DEVELOPMENT.md §Error handling bans `undefined`
  * standing in for a domain value.
@@ -269,7 +270,7 @@ export interface PluginInitIo {
 
 /**
  * One property/comment pair an `init?(io)` contributor returns, mirroring
- * the entry shape `renderConfig` builds at `packages/cli/src/init.ts:48-65`.
+ * the entry shape `renderConfig` builds (`packages/cli/src/init.ts`).
  * `property` is the rendered `"key": value` text; `comment` is an optional
  * trailing `//` note. A contributor the operator declines returns an empty
  * array, never `undefined`.

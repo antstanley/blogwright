@@ -15,7 +15,9 @@
 /**
  * The CLI's command-name registries, isolated in their own leaf module with
  * no imports of its own. Both `cli.ts` (the dispatcher - it pulls in every
- * command implementation and the bundled `blogwright-pds` package) and
+ * built-in command implementation, and since task 29 no plugin package by
+ * name: `blogwright-pds` reaches it only transitively, through the
+ * post-deploy sync `commands.ts` imports) and
  * `plugins.ts` (a domain module that must stay inside the port boundary -
  * see DEVELOPMENT.md §Hexagonal architecture) need to read the same set of
  * reserved names, and neither may import the other: `plugins.ts` importing
@@ -42,16 +44,20 @@
  * could collide with it, and the union keeps this set correct both before
  * and after that command exists - no second edit required either way.
  *
- * `pds` is deliberately absent from `RESERVED_COMMANDS`. The hardcoded
- * `command === 'pds'` branch in `cli.ts` (ahead of its `KNOWN_COMMANDS`
- * membership test) already shadows any plugin that declares the name `pds`
- * - but that shadow belongs to task 29, which deletes the branch once the
- * bundled `blogwright-pds` package is dispatched as an ordinary plugin.
- * Reserving `pds` here now would fix a problem this module does not have
- * (nothing lets `pds` through unchecked; `cli.ts` intercepts it first)
- * while creating one task 29 would then have to undo - so the name stays
- * unreserved on purpose, pinned by a test in `plugins.test.ts` and
- * `cli.test.ts`.
+ * `pds` is deliberately absent from `RESERVED_COMMANDS`, and adding it here
+ * would break `blogwright pds` outright. There is no built-in `pds` command:
+ * task 29 deleted `cli.ts`'s hardcoded `command === 'pds'` branch, and the
+ * namespace is now served by the bundled `blogwright-pds` package, which
+ * declares the plugin name `pds` and is discovered like any other plugin.
+ * Reserving the name would make `discover`'s reserved-name check
+ * (`plugins.ts`) reject that package - a load `failures` entry, never an
+ * installed plugin - so `blogwright pds <action>` would exit 1 with `no
+ * built-in command or installed plugin claims "pds"`, `--help` would list
+ * none of its six actions, and `blogwright plugin list` would blame a
+ * built-in command that does not exist. This is the one name in this file
+ * whose reservation would REMOVE a working command rather than protect one;
+ * it stays unreserved on purpose, pinned by a test in `plugins.test.ts` and
+ * `cli.test.ts`. See `plugins.ts`'s module comment for the full reasoning.
  */
 
 export const KNOWN_COMMANDS = new Set([

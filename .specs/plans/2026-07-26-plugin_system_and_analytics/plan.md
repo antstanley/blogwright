@@ -595,7 +595,37 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
-- *`plugin list` and `plugin remove` contradict each other for a bundled
+- *Cross-file line-number citations in comments do not survive refactors, and
+  this build has now produced ten stale ones.* Observed across task 29's three
+  review rounds 2026-08-31, but the pattern is repo-wide. Task 29 deleted one
+  branch from `cli.ts`, and every comment that had cited it by line went dead at
+  once - in `plugins.ts`, `known-commands.ts`, `plugin-commands.ts` (twice),
+  `pds/src/index.ts`, `pds/src/plugin.ts` (twice), a test title, and
+  `core/src/plugin.ts`, the last of which was already stale beforehand.
+  The harm is not the dead pointer itself but what a reader does with it. Five
+  comments in this build named the wrong guarantee, and each was a step toward
+  deleting the guard that works - the sharpest being two files arguing `pds`
+  stays out of `RESERVED_COMMANDS` because "cli.ts intercepts it first", a
+  reason task 29 removed, while the real reason (reserving it makes `discover`
+  reject the bundled plugin outright, killing the namespace) was written
+  nowhere. An experiment settled it: reserving `pds` fails 18 tests.
+  A citation naming a **symbol** survives a move; one naming a line does not.
+  Worth deciding whether the convention should change, since nothing checks
+  these - no gate reads a comment, and `knip`, `lint` and `typecheck` are all
+  blind to a pointer that has rotted.
+  **The rate is now measured, and it is worse than the anecdote suggested.**
+  Task 29's third round checked every cross-file line citation in one file,
+  `packages/core/src/plugin.ts`, against its target: **four of five were
+  already wrong**, none previously reported, none caused by this plan.
+  `graph.ts:94` pointed at a `logger.warn` rather than the state deletion it
+  named; `graph.ts:84` at `node.create` rather than the `ctx.save()`;
+  `init.ts:48-65`'s `renderConfig` was at line 183. Only one citation in the
+  file still resolved, and it was left alone - the right restraint, since
+  churning accurate comments is its own cost.
+  So this is not a residue of the migration; it is the steady state of the
+  convention. If four in five are wrong in an untouched file, the citations are
+  not load-bearing documentation, they are decoration that occasionally
+  misleads. The cheap fix is to name symbols and let a reader grep.- *`plugin list` and `plugin remove` contradict each other for a bundled
   plugin.* Found by task 26's verification gate 2026-08-31, on the real binary.
   This is the first commit at which `plugin list` reports a plugin the CLI
   **bundles** rather than one the repo installed. `blogwright plugin list`

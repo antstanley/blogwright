@@ -26,10 +26,13 @@ import { buildPdsNodes } from './nodes.js';
 import plugin, { createPdsPlugin, type PdsCommandFunctions } from './plugin.js';
 
 /**
- * The action strings in the order the CLI's own `runPds` set spells them
- * (`packages/cli/src/cli.ts`). Written out here rather than derived from the
- * plugin, so the enumeration below compares the declaration against the
- * dispatch it has to reproduce - not against itself.
+ * The action strings in the order the CLI's `runPds` set spelled them
+ * (`packages/cli/src/cli.ts`), frozen here as they stood before task 29
+ * deleted that branch. Written out rather than derived from the plugin, so
+ * the enumeration below compares the declaration against the dispatch it had
+ * to reproduce - not against itself. That is why the list stays hand-written
+ * now the branch is gone: it is the pre-migration contract these
+ * declarations replaced, and the only remaining record of it.
  */
 const RUNPDS_ACTIONS = ['keygen', 'login', 'init', 'sync', 'secret status', 'secret delete'];
 
@@ -231,7 +234,7 @@ describe('the blogwright-pds plugin declaration', () => {
     expect(plugin.description).not.toContain('\n');
   });
 
-  it('declares exactly the six actions runPds accepts today', () => {
+  it('declares exactly the six actions the deleted runPds branch accepted', () => {
     expect(plugin.commands.map((command) => command.action)).toEqual(RUNPDS_ACTIONS);
   });
 
