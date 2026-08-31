@@ -1300,6 +1300,85 @@ task 59, whose role rewrite is what its warning backs.
   row_count` parses and that `row_count` is not a reserved word. Worth
   restating the invariant in the form that is true before a later certificate
   copies the absolute one and a verifier reads a deliberate test as a breach.
+- *The analytics change spec's merge-plan steps 1 and 2 are not applicable, and
+  step 1 is the pds spec's shape rather than the plugin-system spec's.* Recorded
+  by task 58 2026-08-31, with the same disposition task 30 gave the pds spec's.
+  Step 1 applies the `Proposed changes` blocks to canonical pages "once they
+  exist" and none does - the spec's own §Affected spec pages says so twice, and
+  this plan's baseline opens with it - so the step is conditional on its face
+  with **no fallback clause**, unlike the plugin-system spec's step 1, whose
+  unconditional "if none exists, record the SPI as a new canonical page" is what
+  forced task 20 to refuse rather than record it vacuous. Step 2 folds
+  `AnalyticsConfig` and `PageView` into a canonical schema and is written
+  unconditionally, but `find .specs -name '*.schema.json'` returns nothing, so
+  its object does not exist - a distinct reason, and worth a distinct note.
+  Owner of both: the spec's owner, because what unblocks them is the decision to
+  create a canonical spec set, which no task in this plan takes. Explicitly not
+  task 61: task 61 flips this spec against a merge plan whose first two steps
+  stay recorded as not-applicable rather than quietly ticked.
+- *The plugin-system spec's flip was refused a second time, and the open question
+  above is now answered in the direction it feared.* Task 58 2026-08-31. It
+  verified the seam its own definition of done names and found it present
+  (`packages/core/src/aws/endpoint.ts` `ServiceDescriptor`,
+  `packages/core/src/clients.ts` `signingUsEast1`), then verified the obligation
+  the routed constraint names and found it still open: `packages/cli/src/nodes.ts`
+  branches on `ctx.config.pds` in `oidcRolePolicyStatements` (`packages/cli/src/nodes.ts:921`) and interpolates that
+  plugin's secret name into the `<env>-deploy` document, with the code's own
+  comment saying task 59 deletes both. So the header stays `Proposed`, the file
+  stays in `changes/`, and `.specs/README.md`'s pending list holds **three**
+  entries rather than the two task 58's DoD asks for - the deviation is recorded
+  beside that DoD line rather than worked around. **Owner: task 60**, which ships
+  in the same release as task 59's removal and already flips the pds spec; the
+  check to run there is `grep -n "config\.pds" packages/cli/src/nodes.ts`
+  returning nothing. What this cost is worth naming: the routing worked, but only
+  because two gates wrote it down twice and an implementer read both. The cheaper
+  fix was always the one this entry's predecessor proposed - one line in task 58's
+  DoD, or an edge from 59 to 58 - and it was never applied.
+- *`docs/src/content/docs/reference/cli.md` has now taken three findings from one
+  cause and still has no owner in any task's definition of done.* Task 58
+  2026-08-31 confirmed the finding at the tip - `grep -c plugin` on that page is
+  0, §Invocation still lists `blogwright pds secret <action> [env]` as a
+  positional layout of its own, and §Exit codes still says `1` covers an unknown
+  `pds` action - and **declined** it, naming **task 60** as owner. Two reasons.
+  Task 58's own certificate scopes `docs/` out in its Residue; and that page
+  documents the released CLI, while none of the plugin surface has shipped a
+  release, so documenting `blogwright plugin add analytics` there now would
+  describe a surface an installed CLI does not have. That second reason is also
+  the deadline: the release tasks 59 and 60 gate is the moment the page becomes
+  wrong in the other direction, from stale to actively misleading. If task 60's
+  definition of done is not amended to carry the plugin section plus the
+  §Invocation and §Exit codes corrections, this needs a task of its own rather
+  than a fourth routing.
+- *A third definition-of-done check that cannot pass, and the first whose result
+  depends on whether anyone has built.* Found by task 58 2026-08-31 by measuring
+  it both ways. Its DoD asks that `grep -rn "TODO" packages/analytics/` return
+  nothing; at the tip that returned **0 matches before `pnpm build` and 7 after**,
+  every one of the seven inside `packages/analytics/app/.svelte-kit/output/` -
+  SvelteKit's generated server bundle, carrying upstream Svelte TODOs written by
+  neither the task nor this repo, under a path `.gitignore` excludes. The property
+  the line reaches for is tracked files only, so the check run and recorded was
+  the tracked-file form, with the original and the reason written beside the DoD
+  line rather than substituted silently - the disposition task 54's step 7 set.
+  Two things generalise. A check whose scope is a directory rather than a file set
+  will eventually include generated output, and this plan has now shipped three
+  self-defeating checks, which is enough to say the plan's own checks deserve the
+  same "can it fail, and for the right reason" test its tests get. And `git grep`,
+  the obvious tracked-file form, exits 128 in a non-colocated jj workspace, where
+  `.git` lives in the main repo - so a DoD naming it needs the `jj file list`
+  equivalent beside it or it cannot run where these tasks are built.
+- *Whether analytics rows should ever age out is scoped out of this plan, with the
+  correction that makes the question tractable.* Recorded by task 58 2026-08-31 as
+  the analytics spec's first remaining open question, owner the spec's owner. S3
+  Tables offers **no row-retention setting for a table you create** (corrected
+  2026-07-27): `PutTableRecordExpirationConfiguration` applies only to AWS-managed
+  tables, and `PutTableMaintenanceConfiguration` governs snapshot expiry and
+  compaction, which is storage reclamation rather than row retention. So aging
+  rows out is not a knob but whole-`day`-partition deletes the plugin would issue
+  itself - a node or an action, a cutoff config field, and a schedule. Nothing
+  forecloses it: the table is append-only and partitioned by `day`, and
+  `packages/analytics/README.md` states plainly that rows are never aged out so an
+  operator is not left to infer it. The site's `retention.cloudfrontDays` still
+  governs the CloudWatch copy, which is the retention an operator has today.
 
 ---
 
@@ -1664,3 +1743,45 @@ never-failing fake counts as no evidence at all.
   was owned all along, just not by the slice the `Reviewable:` line names - which
   is the same shape as this build's three `Reviewable:` filter defects, one layer
   down: a narrowed test command can make a real property look unowned.
+
+- **The task that documents everything shipped three false doc comments of its
+  own, and the plan predicted its own blocker by task number.** Task 58 is worth
+  two entries.
+
+  The first: it was routed a finding that a comment named the wrong guarantee,
+  adopted it correctly, swept the package for missing doc comments as its DoD
+  asked - and **two of the three comments it added were themselves false.**
+  `s3tables.ts` claimed `metadataLocation` "tells the `analytics-table` node
+  whether the Iceberg table has data behind it yet" (that node reads `table.name`
+  and `table.arn` and decides presence on `table === undefined`; nothing outside
+  `s3tables.ts` reads the field at all), and claimed `arn`/`name` were "the two
+  fields the `analytics-table-bucket` node reconciles against" (that node reads
+  neither - `recordTableBucket` derives both from config). Both were caught by
+  the gate and corrected at merge. The lesson is not that the sweep was careless:
+  **a doc comment written to satisfy a coverage rule is written from the outside
+  in, and describing what a caller does with a field is exactly the claim the
+  author is least able to check while writing it.** A comment that says only what
+  a type *is* cannot be wrong this way; one that says who reads it can. Six
+  comments naming the wrong guarantee have now been found in this build, and this
+  is the first pair created by the task sent to fix the others.
+
+  The second: task 58's DoD demanded the plugin-system spec be flipped to
+  `Merged`, conditioning it on the transport seam alone. The seam is in place, so
+  the line read literally demanded the flip - but `packages/cli/src/nodes.ts:971`
+  still reads `ctx.config.pds`, which the spec's §Plugin SPI topography invariant
+  forbids and which the spec's **own Decisions block** names as work that must
+  move before the spec completes. The implementer refused, against an explicit
+  instruction in its dispatch brief, and the gate upheld the refusal. **This
+  bullet block already predicted it** - that task 58 could flip the spec while the
+  obligation blocking it was still open - and proposed the one-line fix that was
+  never applied. A standing finding that names the task it will break, and is
+  still there when that task runs, is a finding the process failed to act on
+  rather than one it failed to make.
+
+  The flip now belongs to task 60, with `grep -n "config\.pds" packages/cli/src/nodes.ts`
+  as its check, and task 60's DoD was amended in the same breath because it had
+  expected `.specs/README.md` to hold one pending entry - arithmetically
+  incompatible with owning a second flip. The `reference/cli.md` documentation gap
+  moved with it: routed at task 20, again at task 30, declined at task 58, and
+  each time landing in no definition of done. It is now a checkable line in task
+  60 rather than a fifth routing into prose.

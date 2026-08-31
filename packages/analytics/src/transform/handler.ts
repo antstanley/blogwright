@@ -59,9 +59,9 @@
  * The one thing this module cannot do without is the secret, and it reaches it
  * through {@link SaltSecretStore}, a structural slice of core's own client
  * (the `packages/pds/src/secret.ts` precedent). That import is type-only, so it
- * erases at compile: the bundle task 43 produces carries no client, no signer
- * and no transport, and this module's tests stub the store with a plain object
- * rather than mocking a module or reaching a cloud.
+ * erases at compile: this module carries no client, no signer and no transport,
+ * and its tests stub the store with a plain object rather than mocking a module
+ * or reaching a cloud.
  *
  * Which also means this module is not a composition root. Binding a real
  * `SecretsManagerClient` - built over the us-east-1 signer, since the function

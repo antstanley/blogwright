@@ -23,10 +23,28 @@ This is inherited, not independent: nothing about the bootstrap warning itself i
 
 ## Definition of done
 
+> **ORCHESTRATOR AMENDMENT - 2026-08-31.** Two obligations were added here after task 58's gate, and
+> both were homeless before it. **The plugin-system spec's flip** was task 58's, but task 58 cannot
+> discharge it: the spec's §Plugin SPI topography invariant is violated by `packages/cli/src/nodes.ts:971`
+> until task 59 lands, and task 59 is parked behind a release. This task ships with task 59, so it is the
+> first contract that *can* hold it. The old line here expected `.specs/README.md` to hold exactly one
+> pending entry, which was arithmetically incompatible with owning the flip - that is fixed rather than
+> worked around. **The `reference/cli.md` documentation gap** had been routed three times (task 20's D6,
+> task 30's D6, task 58's decline) and each time landed in no definition of done; task 58 assigned it here,
+> but this file did not mention the page, which would have made it a fourth routing into nothing. It is now
+> a checkable line. A recorded finding that no DoD names is a finding that gets lost.
+>
+> Note for whoever discharges the first line: **there is a second `ctx.config.pds` site outside task 59's
+> scope** - `packages/cli/src/commands.ts:278`, the rollback PDS-sync warning. It is a command rather than
+> a node, so the invariant's literal wording ("no config key of a plugin's is read by a site node")
+> survives it and the grep above passes while it stands. Settle it explicitly rather than discover it.
+
+
 - [ ] After a successful reconcile, `blogwright bootstrap` warns once per `state/<env>.<plugin>.json` in the site bucket, naming the plugin and `blogwright <plugin> bootstrap`, and with no scoped key present its output is byte-identical to today and its call sequence unchanged except for exactly one added `listObjects` on the `state/` prefix - both directions asserted on a recording S3 client and a capturing logger, with the multi-plugin case warning once per key.
 - [ ] The check reads key names and nothing else: the matcher is the same helper the `blogwright destroy` refusal uses (one home, asserted by grep for a single definition), no discovery runs and no plugin module loads (task 10's laziness pinning still passes), the exit code is unchanged, and the lines go through `logger.warn` so `--plain` sessions see them without a prompt.
 - [ ] The warning is honest about its limit, where the code and changeset record it: a stack that never ran a plugin's bootstrap has no scoped key and sees no warning, so the release notes' `blogwright pds bootstrap` instruction (task 30) is complemented, not replaced.
 - [ ] The changeset records the new warning and states that this ships no later than the release carrying task 59 - a reviewer who finds task 59 scheduled for a later release than this task treats the ordering as broken.
-- [ ] The pds change spec's `Status:` is `Merged` with a `Merged:` date, the file sits in `.specs/changes/merged/` with every relative link re-pointed and its three open questions carried, and `.specs/README.md`'s pending list holds exactly one entry - the analytics spec, naming task 61 as its owner.
+- [ ] **BOTH** the pds change spec and the plugin-system change spec have `Status: Merged` with a `Merged:` date, sit in `.specs/changes/merged/` with every relative link re-pointed and their open questions carried, and `.specs/README.md`'s pending list holds exactly one entry - the analytics spec, naming task 61 as its owner. The plugin-system flip additionally requires `grep -n "config\.pds" packages/cli/src/nodes.ts` to return nothing, which is true only once task 59 has landed; if it still matches, this task is not done.
+- [ ] `docs/src/content/docs/reference/cli.md` documents the plugin surface - `grep -c plugin docs/src/content/docs/reference/cli.md` returns non-zero - and its §Invocation positional-layout table and §Exit codes row no longer describe pre-migration dispatch. This is the release at which that page stops being merely stale and becomes actively wrong, because the plugin surface ships in it.
 - [ ] Meets the repo definition of done (see plan.md baseline).
 - [ ] Reviewable: run `pnpm --filter blogwright exec vitest run commands plugin-commands --reporter=verbose`; confirm the with-key case warns naming the verb, the without-key case is byte-identical to today, and the scoped-key matcher greps to one definition; then run `ls .specs/changes .specs/changes/merged` and confirm the pds spec has moved with a `Merged:` date and every link in `.specs/README.md` resolves.

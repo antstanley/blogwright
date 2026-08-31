@@ -14,6 +14,13 @@
  * neither half may ship ahead of the other.
  */
 
+/**
+ * The plugin's own four AWS service clients and the shapes they return. They
+ * live here rather than in `blogwright-core` because core enumerates no
+ * `firehose`, `glue`, `lambda` or `s3tables` signing name: each signs through
+ * the plugin-supplied `ServiceDescriptor` seam over the host's us-east-1
+ * signer. Each module carries the client's own documentation.
+ */
 export * from './aws/firehose.js';
 export * from './aws/glue.js';
 export * from './aws/lambda.js';

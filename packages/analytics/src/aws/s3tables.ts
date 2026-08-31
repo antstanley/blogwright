@@ -51,16 +51,42 @@ const PATHS = {
   getTable: '/get-table',
 };
 
+/**
+ * An S3 Tables bucket, as {@link S3TablesClient.getTableBucket} reports it.
+ * Narrowed from the API response on purpose: the bucket's creation timestamp
+ * and owner account are facts about the account, not about whether the node is
+ * present.
+ *
+ * The `analytics-table-bucket` node reads neither field. It decides presence on
+ * whether this resolves at all (`bucket === undefined`), and `recordTableBucket`
+ * then derives both the recorded name and the ARN from config rather than from
+ * the response - so the two agree with what the node would create, not with
+ * whatever the account happens to hold.
+ */
 export interface TableBucket {
   arn: string;
   name: string;
 }
 
+/**
+ * A namespace inside a table bucket. `tableBucketArn` is carried alongside the
+ * name because `GetNamespace`'s own response omits it (only `CreateNamespace`
+ * returns it), so the value here is the one the caller looked the namespace up
+ * by - see `normalizeNamespace`.
+ */
 export interface Namespace {
   name: string;
   tableBucketArn: string;
 }
 
+/**
+ * A table inside a namespace. The `analytics-table` node decides presence on
+ * whether this resolves at all and records `name` and `arn`; it does not read
+ * `metadataLocation`, and nothing else in the package does either - the field
+ * is carried because the API returns it, not because a caller needs it. Worth
+ * deciding whether to drop it: knip cannot see an unused interface member, so
+ * nothing here would ever flag it.
+ */
 export interface Table {
   arn: string;
   name: string;

@@ -13,12 +13,13 @@ repository hygiene, agent-specific emphases, and the definition of done.
 | ---------- | ------------------------ | --------------------------------------------------------------------- |
 | TypeScript | ^6 (strict)              | shared `tsconfig.base.json`; see [TypeScript conventions](#typescript-conventions) |
 | Node       | ≥ 22 (CI runs 24)        | `engines` in every package; ESM only (`"type": "module"`)             |
-| pnpm       | 11                       | workspace of four packages under `packages/`                         |
+| pnpm       | 11                       | workspace of five packages under `packages/`                         |
 | oxlint     | latest                   | linter; per-package `pnpm lint`, config in `.oxlintrc.json`           |
 | oxfmt      | latest                   | formatter; config in `.oxfmtrc.json`, run via `pnpm exec oxfmt`       |
 | vitest     | 4                        | test runner in every package; `pnpm test` at the root runs all        |
 | knip       | 6                        | dead code / unused dependency check; `pnpm knip` at the root          |
 | rolldown   | latest                   | bundles the build-agent server only (`packages/build-agent`)          |
+| Vite / SvelteKit | 8 / 2 (Svelte 5)   | builds the analytics dashboard only (`packages/analytics/app` → `dist/app`); static adapter, no server |
 | jj         | 0.43+                    | version-control front end (colocated Git backend)                     |
 
 CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `pnpm test`,
@@ -81,6 +82,7 @@ Existing ports are the model for new ones:
 | `PingBuilder`               | `cli/src/ports.ts`            | `createFetchPing` (`cli/src/adapters/fetch-ping.ts`) | no-op / recording ping via `createTestContext` `ports.ping` overrides |
 | `ModuleLoader`              | `cli/src/ports.ts`            | `createNodeModuleLoader` (`cli/src/adapters/node-module-loader.ts`) | fail-fast fake via `createTestContext` `ports.loader` overrides |
 | `PackageManager`            | `cli/src/ports.ts`            | `createProcessPackageManager` (`cli/src/adapters/process-package-manager.ts`) | `createRecordingPackageManager` (`cli/src/test-support.ts`), passed as `main`'s `PackageManagerFactory` |
+| `AnalyticsQuery`            | `analytics/src/ports.ts`      | `createDuckDbAnalyticsQuery` (`analytics/src/adapters/duckdb-query.ts`) | `createFixtureAnalyticsQuery` (`analytics/src/fixture-query.ts`), fixture-backed |
 
 Conventions:
 
@@ -129,7 +131,7 @@ translate the failure into the repo's own vocabulary at that line.
 | AWS API → core                | Status, body shape                     | Per-service clients in `blogwright-core` over the SigV4 transport; the CLI never issues a raw AWS call |
 | PDS / OAuth → pds package     | Token responses, record shapes         | `blogwright-pds` owns the atproto surface; nothing outside it touches OAuth state |
 | S3 state read                 | Round-trip integrity                   | The state store re-parses `state/<env>.json` on read and fails typed on mismatch |
-| CLI arguments                 | Command, positionals, flags            | `parseArgs` plus explicit dispatch in `cli.ts`; unknown commands fail with usage |
+| CLI arguments                 | Command, positionals, flags            | `parseArgs` plus a `KNOWN_COMMANDS` membership test in `cli.ts`; every other first word is taken as a plugin namespace and dispatched generically by `runPlugin` (`cli/src/plugin-commands.ts`), which refuses an unknown namespace by naming `blogwright plugin list` and an unknown action by listing that plugin's own actions. Only a bare invocation with no command prints usage |
 
 ### Error handling in TypeScript
 
@@ -258,8 +260,8 @@ name is derived, with an error that says how to fix it.
 
 ### Documentation
 
-- Public exports of `blogwright-core`, `blogwright-pds`, and the `blogwright/rkey`
-  subpath carry doc comments.
+- Public exports of `blogwright-core`, `blogwright-pds`, `blogwright-analytics`, and
+  the `blogwright/rkey` subpath carry doc comments.
 - Each module opens with a comment stating what it owns (see `config.ts`,
   `repo-root.ts`).
 - No bare `// TODO` without an owner and a tracking reference.
@@ -339,9 +341,11 @@ A change is done when:
 
 **Assumptions**
 
-- The four-package split (core / cli / pds / build-agent) is stable; new code joins
-  an existing package, and a new package is added only for a coherent feature with its
-  own domain (`blogwright-pds`, extracted 2026-07-11, is the model).
+- The package split (core / cli / pds / analytics / build-agent) is stable; new code
+  joins an existing package, and a new package is added only for a coherent feature
+  with its own domain. `blogwright-pds` (extracted 2026-07-11) and
+  `blogwright-analytics` (added 2026-07-26, installed on demand and never shipped with
+  the CLI) are the two worked instances of that exception.
 - Consumers run the CLI via `pnpm exec` in their own repos; global installs are not a
   supported surface (the `bw` bin collides with Bitwarden's CLI when global).
 
@@ -357,9 +361,10 @@ A change is done when:
   becomes a pointer.
 - *VCS.* **jujutsu only.** The repo is jj-colocated and driven with jj; git
   conventions are deliberately not documented to avoid prescribing two workflows.
-- *Enforcement.* **CI as the sole gate.** No local hooks; `pnpm build/test/lint/knip`
-  in `.github/workflows/ci.yml` is the enforcement point, and contributors run the
-  same four commands locally before pushing.
+- *Enforcement.* **CI as the sole gate.** No local hooks;
+  `pnpm build/typecheck/test/lint`, `pnpm exec oxfmt --check .` and `pnpm knip` in
+  `.github/workflows/ci.yml` are the enforcement point, and contributors run the
+  same six commands locally before pushing.
 - *Architecture.* **Hexagonal (ports and adapters), adopted 2026-07-11.** The repo
   already practiced it at its two network seams (`Transport`, `XrpcTransport`) -
   transport-level mocking is why the test suite needs no cloud - so the adoption
@@ -384,7 +389,7 @@ A change is done when:
 - oxfmt is installed and configured (`.oxfmtrc.json`) but wired into no package
   script and not run in CI - should a root `fmt`/`fmt:check` script be added and
   enforced in CI?
-- Should a pre-push hook mirror the four CI gates locally, or is CI-only enforcement
+- Should a pre-push hook mirror the six CI gates locally, or is CI-only enforcement
   sufficient at this repo's size?
 - Commit subjects follow an imperative sentence-case convention, not Conventional
   Commits - adopt Conventional Commits before the first external contribution, or
