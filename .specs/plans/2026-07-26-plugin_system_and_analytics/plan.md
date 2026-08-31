@@ -1940,7 +1940,7 @@ never-failing fake counts as no evidence at all.
   without that grant. The function ran twice, reported zero errors, and created
   no log group, so the one artifact that says *why* the transform did what it
   did did not exist. Not fixed by granting it:
-  [`changes/2026-08-31-analytics_owned_log_groups.md`](../../changes/2026-08-31-analytics_owned_log_groups.md)
+  [`changes/merged/2026-08-31-analytics_owned_log_groups.md`](../../changes/merged/2026-08-31-analytics_owned_log_groups.md)
   supersedes that fix and has the plugin own the group as a resource node
   instead, so the role keeps the two actions it has. A node that owns the group
   gets a lifecycle, a 365-day retention policy and a teardown; the grant would
@@ -1958,7 +1958,7 @@ never-failing fake counts as no evidence at all.
   node with a lifecycle, a teardown and a retention policy, plus a
   `logs:PutLogEvents` grant on the delivery role. Worth doing, worth its own
   task - and it now has one. Both gaps are taken together by
-  [`changes/2026-08-31-analytics_owned_log_groups.md`](../../changes/2026-08-31-analytics_owned_log_groups.md),
+  [`changes/merged/2026-08-31-analytics_owned_log_groups.md`](../../changes/merged/2026-08-31-analytics_owned_log_groups.md),
   which gives each writer its own group: two nodes, taking the plugin's set from
   twelve to fourteen. Planned in
   [`plans/2026-08-31-analytics_owned_log_groups/plan.md`](../2026-08-31-analytics_owned_log_groups/plan.md).

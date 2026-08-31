@@ -1,6 +1,6 @@
 # Plan: The analytics plugin owns its two CloudWatch log groups
 
-**Status:** In progress · **Layout:** kanban · **Date:** 2026-08-31 · **Owner:** Ant Stanley · **Source spec:** [The analytics plugin owns its two CloudWatch log groups](../../changes/2026-08-31-analytics_owned_log_groups.md)
+**Status:** Done · **Layout:** kanban · **Date:** 2026-08-31 · **Owner:** Ant Stanley · **Source spec:** [The analytics plugin owns its two CloudWatch log groups](../../changes/merged/2026-08-31-analytics_owned_log_groups.md)
 
 Land one change spec as five tasks: the transform Lambda's log group and
 Firehose's delivery-error log group become plugin-owned resource nodes on the
@@ -27,7 +27,7 @@ spec it amends.
 
 - **Spec.** The repo has no canonical spec pages for resource nodes, AWS clients
   or the CLI surface, so
-  [2026-08-31-analytics_owned_log_groups.md](../../changes/2026-08-31-analytics_owned_log_groups.md)
+  [2026-08-31-analytics_owned_log_groups.md](../../changes/merged/2026-08-31-analytics_owned_log_groups.md)
   is the source and it amends
   [merged/2026-07-26-analytics_plugin.md](../../changes/merged/2026-07-26-analytics_plugin.md)
   in place. In scope: §Proposed changes (all five blocks, including the new
@@ -43,7 +43,7 @@ spec it amends.
   [plans/2026-07-26-plugin_system_and_analytics/plan.md](../2026-07-26-plugin_system_and_analytics/plan.md),
   both of which are kept - as are the two untracked paths this spec's own
   drafting put there, the change spec at
-  [changes/2026-08-31-analytics_owned_log_groups.md](../../changes/2026-08-31-analytics_owned_log_groups.md)
+  [changes/2026-08-31-analytics_owned_log_groups.md](../../changes/merged/2026-08-31-analytics_owned_log_groups.md)
   and this plan folder. Four paths survive task 01, not three, and the folder is
   one of them because it holds the task files the build is reading; a `git stash
   -u` or a `git clean` would take it. Until task 01 lands, every pointer in this plan below

@@ -32,25 +32,10 @@ spec set is created here later, that page moves to `development-guidelines.md`.
 Pending proposals live under [`changes/`](changes/); merged history under
 [`changes/merged/`](changes/merged/).
 
-Pending - one standalone proposal, and two of the three linked 2026-07-26 ones.
-The third of those, the analytics plugin, is merged below. Each linked entry names
-the task that flips it, so what is left is not read as an oversight.
-
-Standalone:
-
-- [The analytics plugin owns its two CloudWatch log groups](changes/2026-08-31-analytics_owned_log_groups.md)
-  (proposed 2026-08-31) - the transform Lambda's log group and Firehose's are
-  owned as resource nodes rather than left to implicit creation, both pinned to
-  `us-east-1` and retained for 365 days, and the delivery stream's
-  `CloudWatchLoggingOptions` is enabled against the second of them. Twelve nodes
-  become fourteen. It amends the merged analytics change spec in place, there
-  being no canonical page for the resource nodes yet, and **supersedes
-  [PR #27](https://github.com/antstanley/blogwright/pull/27)**, whose
-  `logs:CreateLogGroup` grant on the transform role is unnecessary once a node
-  owns the group. Close that PR before implementing; do not land both - that is
-  task 01 of its plan,
-  [Analytics-owned log groups](plans/2026-08-31-analytics_owned_log_groups/plan.md),
-  which flips this entry at task 05.
+Pending - two of the three linked 2026-07-26 proposals, and no standalone ones.
+The third of the linked three, the analytics plugin, is merged below, as is the
+standalone 2026-08-31 proposal that amends it. Each linked entry names the task
+that flips it, so what is left is not read as an oversight.
 
 The three linked 2026-07-26 proposals:
 
@@ -87,6 +72,22 @@ Merged:
   schema to fold into. Its two open questions - row expiry on an Iceberg table you
   create, and whether the shared Glue catalog integration should ever be deleted -
   are carried in the plan's own Assumptions and open questions.
+- [The analytics plugin owns its two CloudWatch log groups](changes/merged/2026-08-31-analytics_owned_log_groups.md)
+  (merged 2026-09-01, at task 05) - amends the analytics spec above in place
+  rather than a canonical page, there being none for the resource nodes yet. The
+  transform Lambda's log group and Firehose's become plugin-owned resource nodes,
+  both pinned to `us-east-1` and retained for 365 days, and the delivery stream's
+  `CloudWatchLoggingOptions` is enabled against the second of them. Twelve nodes
+  become fourteen. It **supersedes
+  [PR #27](https://github.com/antstanley/blogwright/pull/27)**, closed unmerged at
+  task 01, whose `logs:CreateLogGroup` grant on the transform role is unnecessary
+  once a node owns the group. Merge-plan steps 1-3, 6 and 7 are executed; steps 4
+  and 5 are recorded as not-applicable in its own §Merge plan, there being no
+  schema fragment to fold and no `DEVELOPMENT.md` change to make. Its four open
+  questions - the stream node's field-allowlist guard, configurable retention,
+  the site build role's own `logs:CreateLogGroup`, and whether `analytics status`
+  should report the two groups specially - are carried in its own Assumptions and
+  open questions.
 - [Persist node outputs when create() fails partway](changes/merged/2026-07-22-persist_partial_bootstrap_state.md)
   (merged 2026-07-22) - state saves on the failure path; identity outputs are
   recorded before secondary mutations.

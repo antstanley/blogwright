@@ -1,6 +1,6 @@
 # Change: The analytics plugin owns its two CloudWatch log groups
 
-**Status:** Proposed · **Date:** 2026-08-31 · **Owner:** Ant Stanley · **Target:** `packages/analytics` (two new resource nodes, the delivery role's fifth statement, the Firehose client's logging options, the stream node's update guard) + `packages/core` (one operation on the existing `LogsClient`)
+**Status:** Merged · **Date:** 2026-08-31 · **Merged:** 2026-09-01 · **Owner:** Ant Stanley · **Target:** `packages/analytics` (two new resource nodes, the delivery role's fifth statement, the Firehose client's logging options, the stream node's update guard) + `packages/core` (one operation on the existing `LogsClient`)
 
 The analytics pipeline is correct and undiagnosable. Its transform Lambda has
 no log group, because no node creates one and the execution role cannot; its
@@ -38,7 +38,7 @@ failures. But a record-level signal answers *which* records failed and never
 *why*, and a system that can only report *that* something failed charges its
 operator the diagnosis every time. `transformLogGroupArn`'s comment had noticed
 the missing grant and reasoned it away
-([`nodes.ts:912`](../../packages/analytics/src/nodes.ts)); the reasoning was
+([`nodes.ts:912`](../../../packages/analytics/src/nodes.ts)); the reasoning was
 wrong, and the comment is why the omission was read as cosmetic for a month.
 
 ---
@@ -47,11 +47,11 @@ wrong, and the comment is why the omission was read as cosmetic for a month.
 
 | Canonical page | Nature of change |
 |---|---|
-| [`changes/merged/2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md) → Analytics pipeline → Resource nodes | Twelve nodes become fourteen; two rows added to the table and the ordering restated |
-| [`changes/merged/2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md) → Analytics pipeline → Region pinning | The sentence enumerating the pinned resources gains the two log groups and its count |
-| [`changes/merged/2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md) → Analytics plugin → Namespace and commands | "orphaning twelve resources" becomes fourteen |
-| [`changes/merged/2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md) → Analytics pipeline → Observability | **New block.** What each group holds, who writes to it, and the retention it carries |
-| [`changes/merged/2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md) → `blogwright-core` → `LogsClient` delivery configuration | `LogsClient` gains `ensureLogStream`, the second core operation this pipeline needs |
+| [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → Analytics pipeline → Resource nodes | Twelve nodes become fourteen; two rows added to the table and the ordering restated |
+| [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → Analytics pipeline → Region pinning | The sentence enumerating the pinned resources gains the two log groups and its count |
+| [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → Analytics plugin → Namespace and commands | "orphaning twelve resources" becomes fourteen |
+| [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → Analytics pipeline → Observability | **New block.** What each group holds, who writes to it, and the retention it carries |
+| [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → `blogwright-core` → `LogsClient` delivery configuration | `LogsClient` gains `ensureLogStream`, the second core operation this pipeline needs |
 
 The repo has no canonical spec pages for resource nodes, AWS clients or the
 CLI surface - the merged analytics change spec is the record, and its own
@@ -105,10 +105,10 @@ them together.
 > On this one point the plugin departs from the site graph rather than
 > following it. The site's `iam-build-role` and `iam-exec-role` both declare
 > `dependsOn: ['bucket', 'microvm-log-group']`
-> ([`nodes.ts:157`](../../packages/cli/src/nodes.ts) and
-> [`:225`](../../packages/cli/src/nodes.ts)) while deriving that group's ARN
+> ([`nodes.ts:157`](../../../packages/cli/src/nodes.ts) and
+> [`:225`](../../../packages/cli/src/nodes.ts)) while deriving that group's ARN
 > from a name in exactly the same way
-> ([`nodes.ts:27-29`](../../packages/cli/src/nodes.ts)). Those edges are
+> ([`nodes.ts:27-29`](../../../packages/cli/src/nodes.ts)). Those edges are
 > harmless and stay; the plugin's two roles omit theirs because an edge that
 > orders nothing states a dependency that does not exist.
 
@@ -118,7 +118,7 @@ them together.
 > creation. Both are in `us-east-1` with the rest of the pipeline, both are
 > created with the environment's tags, and both carry a **365-day** retention
 > policy re-applied on every `update` - the `logGroupNode` contract the site's
-> own groups have ([`nodes.ts:75`](../../packages/cli/src/nodes.ts)).
+> own groups have ([`nodes.ts:75`](../../../packages/cli/src/nodes.ts)).
 >
 > - **`/aws/lambda/<prefix>-analytics-transform`** holds the transform Lambda's
 >   own output: the mapping decisions, the drop path, and the cold-start read
@@ -126,7 +126,7 @@ them together.
 >   existing `logs:CreateLogStream` and `logs:PutLogEvents`, scoped to this
 >   group and no other. The role is **not** granted `logs:CreateLogGroup`,
 >   because it has nothing to create - the same shape the site's exec role has
->   ([`nodes.ts:214`](../../packages/cli/src/nodes.ts)).
+>   ([`nodes.ts:214`](../../../packages/cli/src/nodes.ts)).
 > - **`/aws/kinesisfirehose/<prefix>-analytics-firehose`** holds Firehose's
 >   delivery errors, written to the log stream `DestinationDelivery`. Firehose
 >   creates neither: enabling error logging through the API rather than the
@@ -143,8 +143,8 @@ them together.
 > Owning the groups is what makes retention a property at all. A log group
 > Lambda creates on its own is retained **forever**, and no reconcile ever
 > notices. Reconciling retention on every apply also converts a group that
-> already exists in that state - an environment provisioned before this change
-> - without a teardown.
+> already exists in that state - an environment provisioned before this
+> change - without a teardown.
 >
 > These logs sit beside the pipeline's record-level failure signals rather than
 > replacing them, and the distinction is load-bearing. A record the transform
@@ -168,7 +168,7 @@ client serves - two of its four consumers are not delivery nodes. It becomes:
 > `ctx.clients.logsUsEast1` serves the delivery nodes and the plugin's two log
 > groups - four consumers where there were two - and is pinned to us-east-1 in
 > core for the same CloudFront quirk this pipeline inherits
-> ([`clients.ts:38-43`](../../packages/core/src/clients.ts)).
+> ([`clients.ts:38-43`](../../../packages/core/src/clients.ts)).
 
 No new client is constructed for the two groups, and the region pin needs no
 new enforcement point, so the sentence that follows this one in that paragraph
@@ -183,7 +183,7 @@ is unchanged.
 
 > `LogsClient` also exposes `ensureLogStream(logGroupName, logStreamName)`,
 > which swallows an already-exists response exactly as `ensureLogGroup` does
-> ([`logs.ts:61`](../../packages/core/src/aws/logs.ts)). It is core's rather
+> ([`logs.ts:61`](../../../packages/core/src/aws/logs.ts)). It is core's rather
 > than the plugin's for the reason `LogsClient` itself is: the site graph owns
 > this client, and a second CloudWatch Logs client in the plugin would
 > duplicate one `ctx.clients.logsUsEast1` already provides.
@@ -197,7 +197,7 @@ holds `AnalyticsConfig` and `PageView`; this change touches neither. Retention
 is a plugin-owned constant, not a config key - see the open question below,
 which is where making it one belongs.
 
-`IcebergDestinationInput` ([`firehose.ts:94`](../../packages/analytics/src/aws/firehose.ts))
+`IcebergDestinationInput` ([`firehose.ts:94`](../../../packages/analytics/src/aws/firehose.ts))
 gains two required fields, `logGroupName` and `logStreamName`. It is a
 TypeScript interface internal to the plugin's Firehose client, not a canonical
 entity, so it carries no schema fragment.
@@ -357,13 +357,13 @@ new export, so knip does not see it - confirm that before assuming it.
    and `.changeset/transform-log-group-grant.md` - not the working tree, which
    also carries this spec's own `.specs/README.md` registration and the lessons
    block appended to
-   [`plans/2026-07-26-plugin_system_and_analytics/plan.md`](../plans/2026-07-26-plugin_system_and_analytics/plan.md).
+   [`plans/2026-07-26-plugin_system_and_analytics/plan.md`](../../plans/2026-07-26-plugin_system_and_analytics/plan.md).
    Both of those are kept. The lessons block needs one correction as it is
    carried across: it says enabling Firehose's logging "means a thirteenth
    node", which was written when the fix was one node. This change adds two and
    takes the set to fourteen, so reword that sentence when this lands.
 2. Apply the `Proposed changes` blocks to
-   [`merged/2026-07-26-analytics_plugin.md`](merged/2026-07-26-analytics_plugin.md),
+   [`merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md),
    including the new §Observability block, and bump nothing else in that file's
    header - it is already `Merged`, and this change's own record is what dates
    the amendment. The relative links inside those blocks are written to resolve
@@ -423,6 +423,30 @@ new export, so knip does not see it - confirm that before assuming it.
 7. Update `.specs/README.md`: remove this file from the pending list and add it
    to the merged list beneath the analytics entry it amends.
 
+**Execution record (2026-09-01).** Step 1 landed at task 01 of
+[Analytics-owned log groups](../../plans/2026-08-31-analytics_owned_log_groups/plan.md);
+steps 2, 3, 6 and 7 landed at task 05. Steps 4 and 5 are recorded as **not
+applicable** rather than passed over, because a step nobody executed is
+indistinguishable from a step nobody needed once the header reads `Merged`:
+
+- **Step 4 - no schema fold. Not applicable.** This change has no `Type changes`
+  entry carrying a schema fragment. `IcebergDestinationInput` is a TypeScript
+  interface internal to the plugin's Firehose client rather than a canonical
+  entity, so it has no `$def` to fold and the merged analytics spec's own
+  fragment (`AnalyticsConfig`, `PageView`) is untouched. Owner: Ant Stanley.
+- **Step 5 - no `DEVELOPMENT.md` edit. Not applicable.** No new port, no new
+  toolchain entry, and no change to the package split: the two nodes and
+  `ensureLogStream` land inside packages that page already counts.
+  Owner: Ant Stanley.
+
+One correction to step 3's mappings, recorded rather than rewritten: they were
+resolved against `main@3d47969`, before this change's own `ensureLogStream`
+inserted fourteen lines into `packages/core/src/aws/logs.ts`. All five `logs.ts`
+targets therefore landed fourteen lines lower than listed - `:186`, `:225-232`,
+`:194`, `:160` and `:109` - each re-resolved by symbol against the shipped tree
+before it was written. The eight targets in the other four files were unaffected
+and stand as listed.
+
 ---
 
 ## Assumptions and open questions
@@ -446,7 +470,7 @@ new export, so knip does not see it - confirm that before assuming it.
   `CreateLogStream` and `PutLogEvents` and no group appeared at all.
 - `365` is an accepted `retentionInDays` value. CloudWatch Logs takes a fixed
   set and 365 is in it; `putRetentionPolicy`
-  ([`logs.ts:73`](../../packages/core/src/aws/logs.ts)) passes the number
+  ([`logs.ts:73`](../../../packages/core/src/aws/logs.ts)) passes the number
   through unvalidated, so an unaccepted value would fail at the API.
 - Deleting a log group deletes the log streams inside it, so
   `analytics-firehose-log-group`'s `delete()` needs no separate stream
@@ -461,9 +485,9 @@ new export, so knip does not see it - confirm that before assuming it.
   mean overriding one convention to satisfy the other and would put two
   principals' `PutLogEvents` grants on one resource.
 - *365 days, as a plugin-owned constant.* **Matching core's
-  `retention.microvmDays` default ([`config.ts:148`](../../packages/core/src/config.ts))
+  `retention.microvmDays` default ([`config.ts:148`](../../../packages/core/src/config.ts))
   by value, not by reading it.** Core's other default is `cloudfrontDays: 90`
-  ([`config.ts:149`](../../packages/core/src/config.ts)); a year was asked for,
+  ([`config.ts:149`](../../../packages/core/src/config.ts)); a year was asked for,
   so 365 is the number. It is not read from `ctx.config.retention` because that
   block's two keys each name one of the site's two log groups - a third and
   fourth consumer would make one of them silently govern resources it was never
@@ -478,18 +502,18 @@ new export, so knip does not see it - confirm that before assuming it.
 - *The two writers declare edges to their groups; the two roles do not.*
   **An edge is declared where an ordering is needed, not where an ARN is
   spelled.** A role derives its log group ARN from a name it already knows
-  ([`nodes.ts:922`](../../packages/analytics/src/nodes.ts)), so it has nothing
+  ([`nodes.ts:922`](../../../packages/analytics/src/nodes.ts)), so it has nothing
   to wait for; a writer that runs before its group exists loses output with
   nothing raised. Declaring both would be noise, declaring neither would rest
   on `topoSort`'s alphabetical drain
-  ([`graph.ts:46-49`](../../packages/cli/src/graph.ts)) - which happens to
+  ([`graph.ts:46-49`](../../../packages/cli/src/graph.ts)) - which happens to
   produce the right order today and is not a fact any of these nodes states.
   **This is a deliberate departure from the site graph, not an application of
   it.** The site's two roles *do* declare the edge -
   `dependsOn: ['bucket', 'microvm-log-group']` on both `iam-build-role`
-  ([`nodes.ts:157`](../../packages/cli/src/nodes.ts)) and `iam-exec-role`
-  ([`nodes.ts:225`](../../packages/cli/src/nodes.ts)) - even though
-  `logGroupArn` ([`nodes.ts:27-29`](../../packages/cli/src/nodes.ts)) derives
+  ([`nodes.ts:157`](../../../packages/cli/src/nodes.ts)) and `iam-exec-role`
+  ([`nodes.ts:225`](../../../packages/cli/src/nodes.ts)) - even though
+  `logGroupArn` ([`nodes.ts:27-29`](../../../packages/cli/src/nodes.ts)) derives
   that ARN from `ctx.names.microvmLogGroup` and leaves them nothing to wait for
   either. The rule above is the one this change follows; tightening the site's
   edges to match is a site-graph change and is not proposed here.
@@ -504,7 +528,7 @@ new export, so knip does not see it - confirm that before assuming it.
   grows, and this change is the first to grow one. Comparing the live value
   read back off the stream - rather than assuming a stream this plugin created
   has the configuration this plugin sends - is the rule `appendOnly` already
-  follows ([`firehose.ts:198-204`](../../packages/analytics/src/aws/firehose.ts));
+  follows ([`firehose.ts:198-204`](../../../packages/analytics/src/aws/firehose.ts));
   the new field follows it for the same reason.
 - *The Firehose group's `update()` re-ensures the stream.* **Reconcile on every
   apply, the bucket node's pattern rather than the site log group's.** A group
@@ -514,6 +538,16 @@ new export, so knip does not see it - confirm that before assuming it.
 
 **Open questions**
 
+- **Should the stream node's guard compare the whole live destination rather
+  than a growing list of fields?** Carried from the plan's own open questions
+  ([`plan.md`](../../plans/2026-08-31-analytics_owned_log_groups/plan.md)).
+  The guard this change widens is a field allowlist, and the next field the
+  destination grows pays the same cost again - silently, because the symptom is
+  a reconcile that does nothing rather than one that fails. Comparing the built
+  destination against the described one would end the class, but it also needs a
+  normalisation layer, since `DescribeDeliveryStream` does not echo an
+  `IcebergDestinationConfiguration` back field for field. Out of scope here and
+  worth its own change spec. Owner: Ant Stanley.
 - **Should retention be configurable?** Deliberately out of scope here. Adding
   a `retentionDays` key to `AnalyticsConfig` would change a shape the merged
   analytics spec documents in its `Type changes` fragment, which makes it a
@@ -523,11 +557,11 @@ new export, so knip does not see it - confirm that before assuming it.
   with a constant. Owner: Ant Stanley.
 - Should the site's `iam-build-role` lose its own `logs:CreateLogGroup`? It
   grants it on `microvm-log-group`
-  ([`nodes.ts:147`](../../packages/cli/src/nodes.ts)) even though that group is
+  ([`nodes.ts:147`](../../../packages/cli/src/nodes.ts)) even though that group is
   a node the site owns and the role declares an edge to it - the same
   redundancy this change removes the need for on the analytics side - while
   `iam-exec-role` on the same group does not
-  ([`nodes.ts:214`](../../packages/cli/src/nodes.ts)). The two disagree, and
+  ([`nodes.ts:214`](../../../packages/cli/src/nodes.ts)). The two disagree, and
   the exec role is the one this change follows. Tightening the build role is a
   site-graph change and is outside this one's scope. Owner: Ant Stanley.
 - Should `analytics status` report the two groups' presence, or is the generic

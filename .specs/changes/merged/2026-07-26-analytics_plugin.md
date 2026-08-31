@@ -16,7 +16,7 @@ and provisioned by `blogwright analytics bootstrap`.
 
 A blogwright site produces CloudFront access logs today, delivered to a
 CloudWatch log group by the vended-log-delivery trio in
-[`nodes.ts:713`](../../../packages/cli/src/nodes.ts). CloudWatch Logs is the wrong
+[`nodes.ts:766`](../../../packages/cli/src/nodes.ts). CloudWatch Logs is the wrong
 store for this data: querying it means Logs Insights scans priced per GB, the
 retention window is a blunt instrument (`retention.cloudfrontDays`), and there
 is no way to aggregate across months or join a request to the page it hit. An
@@ -37,7 +37,7 @@ the calls involved.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none - no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying twelve resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
+| *(none - no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying fourteen resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
 | *(none - no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
 | [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build; the pnpm row's "workspace of four packages" becomes five |
 | [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` and `AnalyticsIngest` ports join the ports table |
@@ -83,7 +83,7 @@ and, for SPI confidence, on
 > removes them - and, per the plugin SPI's §State → Scoped state stores, it
 > refuses while that object exists, naming `blogwright analytics destroy --yes`.
 > The refusal is what keeps a site teardown from emptying the bucket the
-> plugin's own record lives in and orphaning twelve resources.
+> plugin's own record lives in and orphaning fourteen resources.
 
 ### Analytics pipeline → Shape (Add)
 
@@ -111,16 +111,16 @@ and, for SPI confidence, on
 
 > AWS permits exactly one delivery source per distribution, so the site's
 > delivery and the plugin's necessarily share one - and the site's node owns it.
-> `logDeliveryNode` ([`nodes.ts:713`](../../../packages/cli/src/nodes.ts)) gains two
+> `logDeliveryNode` ([`nodes.ts:766`](../../../packages/cli/src/nodes.ts)) gains two
 > guards so the shared source cannot be torn out from under the plugin:
 >
 > - **`delete()` refuses to remove the delivery source** when
 >   `deliveriesForSource` returns any delivery other than its own, failing with a
 >   message naming `blogwright analytics destroy`. Today it deletes one delivery
->   found by `.find()` ([`logs.ts:131`](../../../packages/core/src/aws/logs.ts)) and
+>   found by `.find()` ([`logs.ts:186`](../../../packages/core/src/aws/logs.ts)) and
 >   then the source; with the analytics delivery still attached AWS rejects the
 >   delete, and `deleteDeliverySource` catches only `isNotFound`
->   ([`logs.ts:164-171`](../../../packages/core/src/aws/logs.ts)), so whatever the
+>   ([`logs.ts:225-232`](../../../packages/core/src/aws/logs.ts)), so whatever the
 >   error code, `blogwright destroy` throws partway through teardown. The guard
 >   turns that into an early, actionable refusal and does not depend on the code
 >   AWS returns.
@@ -132,7 +132,7 @@ and, for SPI confidence, on
 >   still records it as `configured`, so `analytics status` reports healthy and
 >   log delivery has stopped. Scoping the delivery deletion is not sufficient on
 >   its own, and this is the half that is easy to miss: the retry then calls
->   `deleteDeliverySource` ([`nodes.ts:758`](../../../packages/cli/src/nodes.ts))
+>   `deleteDeliverySource` ([`nodes.ts:817`](../../../packages/cli/src/nodes.ts))
 >   unconditionally, which is the very call the first guard exists to prevent, on
 >   the one path that guard does not cover. With the plugin's delivery still
 >   attached AWS rejects it, `deleteDeliverySource` catches only `isNotFound`, and
@@ -147,12 +147,12 @@ and, for SPI confidence, on
 >
 > Both guards have to tell the site's delivery from the plugin's, and neither
 > lookup the CLI has can express that: `deliveriesForSource`
-> ([`logs.ts:139`](../../../packages/core/src/aws/logs.ts)) returns bare ids, and
+> ([`logs.ts:194`](../../../packages/core/src/aws/logs.ts)) returns bare ids, and
 > `findDeliveryIdBySource` returns whichever AWS lists first. So
 > `deliveriesForSource` returns each delivery's destination ARN alongside its
 > id - `DescribeDeliveries` already carries the field - and the site's node
 > matches on `names.deliveryDestination`. The retry loop
-> ([`nodes.ts:753-757`](../../../packages/cli/src/nodes.ts)) is its only caller, so
+> ([`nodes.ts:813-816`](../../../packages/cli/src/nodes.ts)) is its only caller, so
 > the widening moves with the guards that need it rather than ahead of them.
 >
 > Both are site-graph changes that the analytics plugin depends on but does not
@@ -162,20 +162,20 @@ and, for SPI confidence, on
 ### Analytics pipeline → Region pinning (Add)
 
 > CloudFront standard logging accepts a Firehose stream only in `us-east-1`.
-> **Every one of the plugin's twelve nodes is therefore created in `us-east-1`
-> regardless of `config.region`** - the stream, its transform Lambda, its two
-> IAM roles, the S3 Tables bucket with its namespace and table, the Glue catalog
-> integration, the Firehose error bucket, the `visitor_key` salt secret, and the
-> log destination and delivery. The plugin states this at bootstrap rather than
-> deriving it silently, because it is the one place its resources diverge from
-> the site's.
+> **Every one of the plugin's fourteen nodes is therefore created in
+> `us-east-1` regardless of `config.region`** - the stream, its transform
+> Lambda, its two IAM roles, its two CloudWatch log groups, the S3 Tables
+> bucket with its namespace and table, the Glue catalog integration, the
+> Firehose error bucket, the `visitor_key` salt secret, and the log destination
+> and delivery. The plugin states this at bootstrap rather than deriving it
+> silently, because it is the one place its resources diverge from the site's.
 >
 > The pin is enforced at one place: every **regional** client the plugin uses is
 > built over `ctx.clients.signingUsEast1`, never over a client core pre-built
 > for the site's region. The salt secret is where that matters and would
 > otherwise be missed - `ctx.clients.secrets` is constructed over the
 > primary-region signer
-> ([`clients.ts:68`](../../../packages/core/src/clients.ts)), so reusing it would
+> ([`clients.ts:80`](../../../packages/core/src/clients.ts)), so reusing it would
 > put the secret in `config.region` while the transform Lambda that reads it and
 > the role ARN that grants `secretsmanager:GetSecretValue` on it are both
 > `us-east-1`. The plugin constructs its own `SecretsManagerClient` over
@@ -185,11 +185,12 @@ and, for SPI confidence, on
 > us-east-1 by construction, so neither weakens the rule. `ctx.clients.iam`
 > serves the two IAM roles: IAM is in `GLOBAL_SERVICES`, so it signs us-east-1
 > whatever the site's region is and `canonicalHost` returns `iam.amazonaws.com`
-> ([`endpoint.ts:36,43,65-66`](../../../packages/core/src/aws/endpoint.ts)) - and a
+> ([`endpoint.ts:53,80,102-103`](../../../packages/core/src/aws/endpoint.ts)) - and a
 > role is a global resource, so "created in us-east-1" is not a property it has.
-> `ctx.clients.logsUsEast1` serves the delivery nodes and is pinned to us-east-1
-> in core for the same CloudFront quirk this pipeline inherits
-> ([`clients.ts:28-33`](../../../packages/core/src/clients.ts)). Building either
+> `ctx.clients.logsUsEast1` serves the delivery nodes and the plugin's two log
+> groups - four consumers where there were two - and is pinned to us-east-1 in
+> core for the same CloudFront quirk this pipeline inherits
+> ([`clients.ts:38-43`](../../../packages/core/src/clients.ts)). Building either
 > over `signingUsEast1` would change nothing on the wire and would duplicate a
 > client that already exists.
 
@@ -240,8 +241,8 @@ and, for SPI confidence, on
 > `x-forwarded-for` - are never selected, so they never reach Firehose, the
 > transform, or the table. This governs the analytics delivery only: the site's
 > existing CloudWatch delivery is created with no `recordFields`
-> ([`logs.ts:114`](../../../packages/core/src/aws/logs.ts),
-> [`nodes.ts:732`](../../../packages/cli/src/nodes.ts)), so AWS's default field
+> ([`logs.ts:160`](../../../packages/core/src/aws/logs.ts),
+> [`nodes.ts:785`](../../../packages/cli/src/nodes.ts)), so AWS's default field
 > list - which includes both - still applies to the CloudWatch copy. Narrowing
 > that is a separate change to the site's node, not this one. The viewer IP is
 > selected for the analytics delivery because the transform needs it to derive
@@ -258,7 +259,7 @@ and, for SPI confidence, on
 > already writes - `names.cloudfrontLogGroup`, created in us-east-1 by the
 > site graph and bounded by `retention.cloudfrontDays` - through core's
 > existing `LogsClient.filterEvents`
-> ([`logs.ts:71`](../../../packages/core/src/aws/logs.ts)) over
+> ([`logs.ts:109`](../../../packages/core/src/aws/logs.ts)) over
 > `ctx.clients.logsUsEast1`: no new client and no new core operation. Each
 > event runs through the same field mapping, `visitor_key` derivation and drop
 > rules as the transform Lambda - a historical day's salt is derivable because
@@ -291,7 +292,8 @@ and, for SPI confidence, on
 
 ### Analytics pipeline → Resource nodes (Add)
 
-> The plugin contributes twelve nodes, reconciled by the same engine as the site's:
+> The plugin contributes fourteen nodes, reconciled by the same engine as the
+> site's:
 >
 > | Node | Resource |
 > |---|---|
@@ -300,10 +302,12 @@ and, for SPI confidence, on
 > | `analytics-table` | The `page_views` table (`CreateTable`) |
 > | `analytics-catalog-integration` | The Glue `s3tablescatalog` federation Firehose reads the table through |
 > | `analytics-salt-secret` | Secrets Manager secret holding the `visitor_key` salt |
+> | `analytics-transform-log-group` | `/aws/lambda/<prefix>-analytics-transform`, the transform Lambda's own log group |
 > | `analytics-transform-role` | Execution role for the transform Lambda, including `secretsmanager:GetSecretValue` on that secret alone |
 > | `analytics-transform-function` | The record-transform Lambda |
 > | `analytics-error-bucket` | S3 bucket in us-east-1 for Firehose's failed-record output |
-> | `analytics-firehose-role` | Firehose delivery role (Glue, S3 Tables, Lambda invoke, error bucket) |
+> | `analytics-firehose-log-group` | `/aws/kinesisfirehose/<prefix>-analytics-firehose` and its `DestinationDelivery` stream, Firehose's delivery-error log |
+> | `analytics-firehose-role` | Firehose delivery role (Glue, S3 Tables, Lambda invoke, error bucket, delivery logs) |
 > | `analytics-firehose-stream` | The delivery stream with its Iceberg destination, created with `AppendOnly: true` |
 > | `analytics-log-destination` | CloudWatch delivery destination pointing at the stream |
 > | `analytics-log-delivery` | The delivery joining the site's source to that destination |
@@ -312,6 +316,66 @@ and, for SPI confidence, on
 > per-environment. Its `read()` treats an existing integration as satisfied and
 > its `delete()` is a no-op, so two environments never fight over it and
 > tearing one down never breaks the other.
+>
+> The two log groups sit at the head of the chains that write to them:
+> `transform-log-group → transform-function` and
+> `firehose-log-group → firehose-stream`. Neither role declares an edge to a
+> group, and that asymmetry is deliberate: a role's policy *derives* its log
+> group ARN from the function or stream name rather than reading a recorded
+> one, so there is no output to wait for. The two writers do declare one,
+> because a group that does not exist when its writer first runs is a log line
+> lost with nothing raised - and, on teardown, the reverse order the engine
+> walks removes each writer before the group that holds its evidence.
+>
+> On this one point the plugin departs from the site graph rather than
+> following it. The site's `iam-build-role` and `iam-exec-role` both declare
+> `dependsOn: ['bucket', 'microvm-log-group']`
+> ([`nodes.ts:157`](../../../packages/cli/src/nodes.ts) and
+> [`:225`](../../../packages/cli/src/nodes.ts)) while deriving that group's ARN
+> from a name in exactly the same way
+> ([`nodes.ts:27-29`](../../../packages/cli/src/nodes.ts)). Those edges are
+> harmless and stay; the plugin's two roles omit theirs because an edge that
+> orders nothing states a dependency that does not exist.
+
+### Analytics pipeline → Observability (Add)
+
+> Two log groups are the plugin's, owned as nodes rather than left to implicit
+> creation. Both are in `us-east-1` with the rest of the pipeline, both are
+> created with the environment's tags, and both carry a **365-day** retention
+> policy re-applied on every `update` - the `logGroupNode` contract the site's
+> own groups have ([`nodes.ts:75`](../../../packages/cli/src/nodes.ts)).
+>
+> - **`/aws/lambda/<prefix>-analytics-transform`** holds the transform Lambda's
+>   own output: the mapping decisions, the drop path, and the cold-start read
+>   of the salt secret. Lambda writes into it under the execution role's
+>   existing `logs:CreateLogStream` and `logs:PutLogEvents`, scoped to this
+>   group and no other. The role is **not** granted `logs:CreateLogGroup`,
+>   because it has nothing to create - the same shape the site's exec role has
+>   ([`nodes.ts:214`](../../../packages/cli/src/nodes.ts)).
+> - **`/aws/kinesisfirehose/<prefix>-analytics-firehose`** holds Firehose's
+>   delivery errors, written to the log stream `DestinationDelivery`. Firehose
+>   creates neither: enabling error logging through the API rather than the
+>   console requires the group *and* the stream to exist in advance, so this
+>   node creates both - and re-ensures the stream on every `update` alongside
+>   the retention, which is the one place these two nodes depart from the
+>   site's `logGroupNode`. A group created by a run that stopped between
+>   `CreateLogGroup` and `CreateLogStream` is otherwise permanently one call
+>   short, with `read()` reporting it present and `update()` doing nothing
+>   about it. The delivery role's fifth statement grants
+>   `logs:PutLogEvents` on that one stream's ARN. `BackupDelivery` is not
+>   created, because the Iceberg destination configures no S3 backup.
+>
+> Owning the groups is what makes retention a property at all. A log group
+> Lambda creates on its own is retained **forever**, and no reconcile ever
+> notices. Reconciling retention on every apply also converts a group that
+> already exists in that state - an environment provisioned before this
+> change - without a teardown.
+>
+> These logs sit beside the pipeline's record-level failure signals rather than
+> replacing them, and the distinction is load-bearing. A record the transform
+> cannot map still goes to the Firehose error prefix and a failed batch still
+> raises Firehose's error metric; both answer *which*, and only these two
+> groups answer *why*.
 
 ### Analytics plugin → Its own service clients (Add)
 
@@ -364,6 +428,13 @@ and, for SPI confidence, on
 > The output format is immutable once a destination exists, so the delivery
 > destination node replaces rather than updates when the configured format
 > differs from the recorded one.
+>
+> `LogsClient` also exposes `ensureLogStream(logGroupName, logStreamName)`,
+> which swallows an already-exists response exactly as `ensureLogGroup` does
+> ([`logs.ts:61`](../../../packages/core/src/aws/logs.ts)). It is core's rather
+> than the plugin's for the reason `LogsClient` itself is: the site graph owns
+> this client, and a second CloudWatch Logs client in the plugin would
+> duplicate one `ctx.clients.logsUsEast1` already provides.
 
 ### Analytics dashboard → Local server (Add)
 
@@ -414,7 +485,7 @@ and, for SPI confidence, on
 > - `dashboard.port` - local port; defaults to `4317`.
 >
 > Every derived default carries the environment, matching `deriveNames`'
-> `<env>-<siteName>` prefix ([`config.ts:352`](../../../packages/core/src/config.ts)).
+> `<env>-<siteName>` prefix ([`config.ts:383`](../../../packages/core/src/config.ts)).
 > Without it two environments would write into one Iceberg table and
 > `blogwright analytics destroy --yes` in staging would run `DeleteTableBucket`
 > against production's data - scoped state (`state/<env>.analytics.json`) would
@@ -624,7 +695,7 @@ rather than create when it already exists.
   fails with an actionable message when they are absent.
 - One delivery source may carry multiple deliveries to different destination
   types. The CloudFront documentation states this and
-  `deliveriesForSource` ([`logs.ts:139`](../../../packages/core/src/aws/logs.ts))
+  `deliveriesForSource` ([`logs.ts:194`](../../../packages/core/src/aws/logs.ts))
   already returns a list; the site's existing CloudWatch delivery is expected to
   survive the addition untouched, and a test asserts it.
 - The Firehose error bucket is created by the plugin in `us-east-1`, not reused
