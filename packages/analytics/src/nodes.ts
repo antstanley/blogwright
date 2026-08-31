@@ -909,15 +909,25 @@ function transformRoleName(ctx: AnalyticsContext): string {
  * log group is too, and a grant naming the primary region would be a grant on a
  * group that never exists.
  *
- * **No node creates this group.** Lambda creates it implicitly on the
- * function's first invocation. That is worth stating because the policy below
- * grants `logs:CreateLogStream` and `logs:PutLogEvents` and *not*
- * `logs:CreateLogGroup`: the transform's own diagnostics therefore depend on
- * that implicit creation succeeding, and the pipeline's real failure signal is
- * elsewhere - a record the transform cannot map goes to Firehose's error prefix
- * (`transform/handler.ts`), and a batch that throws raises Firehose's own error
- * metric. Adding the group as a node of its own, with the retention the site's
- * log groups carry, is a coherent follow-up and is outside this node set.
+ * **No node creates this group; Lambda does, on its first invocation - and it
+ * needs `logs:CreateLogGroup` to do it.** This comment used to say the implicit
+ * creation happened regardless, and production proved otherwise: with only
+ * `CreateLogStream` and `PutLogEvents` granted, the first real deployment ran
+ * the transform twice, reported zero errors, and created no log group at all.
+ * The function was not broken - it was invisible, which is worse when something
+ * else in the pipeline is what you are trying to diagnose.
+ *
+ * The grant below is scoped to this function's own group, so it cannot create
+ * or write to any other. The pipeline's *record-level* failure signals are
+ * still elsewhere and still correct - a record the transform cannot map goes to
+ * Firehose's error prefix (`transform/handler.ts`), and a batch that throws
+ * raises Firehose's own error metric - but neither of those answers "why", and
+ * that answer only ever lived in these logs.
+ *
+ * Adding the group as a node of its own, with the retention the site's log
+ * groups carry, is still a coherent follow-up and still outside this node set:
+ * a Lambda-created group retains forever, which is a cost question rather than
+ * a correctness one.
  */
 function transformLogGroupArn(ctx: AnalyticsContext): string {
   const group = `${LAMBDA_LOG_GROUP_PREFIX}${transformFunctionName(ctx)}`;
@@ -1029,7 +1039,7 @@ async function applyTransformRolePolicy(ctx: AnalyticsContext): Promise<void> {
     Statement: [
       {
         Effect: 'Allow',
-        Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+        Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
         Resource: transformLogGroupArn(ctx),
       },
       {

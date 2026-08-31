@@ -1670,7 +1670,13 @@ describe('analytics-transform-role', () => {
       Statement: [
         {
           Effect: 'Allow',
-          Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+          // `CreateLogGroup` is load-bearing, not boilerplate. Lambda creates
+          // the group on first invocation and cannot without this: the first
+          // real deployment ran the transform twice, reported zero errors, and
+          // produced no log group at all - a function that works and cannot be
+          // observed. Scoped to this function's own group like the other two,
+          // so it grants nothing account-wide.
+          Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
           Resource: TRANSFORM_LOG_GROUP_ARN,
         },
         {

@@ -1926,3 +1926,37 @@ never-failing fake counts as no evidence at all.
   guarantees; wiring it into CI would enshrine a corpus with a scheduled end.
   Task 60 is the moment. This is a judgement about what the repo should carry,
   not a fact about the code, and is the user's to overturn.
+
+- **The first production run found two observability gaps and neither was a
+  correctness bug, which is what made them expensive.** `analytics bootstrap`
+  succeeded, 11 CloudFront records flowed end to end, and `page_views` held 11
+  rows - the pipeline was correct on its first real deployment. Diagnosing
+  whether it was correct took far longer than it should have, for two reasons.
+
+  **The transform role granted `logs:CreateLogStream` and `logs:PutLogEvents`
+  but not `logs:CreateLogGroup`.** `transformLogGroupArn`'s own comment recorded
+  the omission and then asserted the consequence away: "Lambda creates it
+  implicitly on the function's first invocation." It does not - it cannot,
+  without that grant. The function ran twice, reported zero errors, and created
+  no log group, so the one artifact that says *why* the transform did what it
+  did did not exist. Fixed by granting it, scoped to the function's own group.
+  The lesson is narrower than "grant the permission": **a comment that names a
+  missing grant and then explains why it does not matter is doing the reader's
+  thinking for them, and this one was wrong.** The omission was recorded here
+  as an open question and read as cosmetic for exactly that reason.
+
+  **Firehose's own `CloudWatchLoggingOptions` is `Enabled: false`.** That is a
+  larger fix and is deliberately NOT in the same change: Firehose does not
+  create its log group, so enabling it means a thirteenth node with a lifecycle,
+  a teardown and a retention policy, plus a `logs:PutLogEvents` grant on the
+  delivery role. Worth doing, worth its own task. Recorded here rather than left
+  in a PR description, because this build's own evidence is that a finding no
+  definition of done names is a finding that gets lost.
+
+  The generalizable point is about what "the pipeline's real failure signal is
+  elsewhere" is worth. It was true - the error prefix and Firehose's own metrics
+  both work, and both correctly reported zero failures. But neither answers
+  *why*, and a system that can only tell you *that* something failed costs its
+  operator the diagnosis every time. **Record-level failure signals and
+  explanatory logs are not substitutes for each other**, and the comment that
+  traded one for the other is what made the omission look acceptable.
