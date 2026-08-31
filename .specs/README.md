@@ -18,15 +18,41 @@ spec set is created here later, that page moves to `development-guidelines.md`.
   62 tasks, eight milestones, plus a compiled type-claim gate
   ([type-claims/](plans/2026-07-26-plugin_system_and_analytics/type-claims/README.md))
   that pins the corpus's compiler claims against the repo's real types.
+- [Analytics-owned log groups](plans/2026-08-31-analytics_owned_log_groups/plan.md) -
+  land the 2026-08-31 change spec: the transform Lambda's log group and Firehose's
+  become plugin-owned resource nodes with 365-day retention, and the delivery
+  stream's `CloudWatchLoggingOptions` is enabled against the second of them.
+  Five tasks, three milestones. It opens by resetting PR #27's superseded diff out
+  of the working tree, and its load-bearing task is not the two new nodes but the
+  Firehose stream node's update guard, which reconciles on `AppendOnly` alone today
+  and would otherwise leave every already-deployed stream unlogged.
 
 ## Change specs
 
 Pending proposals live under [`changes/`](changes/); merged history under
 [`changes/merged/`](changes/merged/).
 
-Pending - two of three linked proposals, landing in this order. The third, the
-analytics plugin, is merged below. Each entry names the task that flips it, so what
-is left is not read as an oversight:
+Pending - one standalone proposal, and two of the three linked 2026-07-26 ones.
+The third of those, the analytics plugin, is merged below. Each linked entry names
+the task that flips it, so what is left is not read as an oversight.
+
+Standalone:
+
+- [The analytics plugin owns its two CloudWatch log groups](changes/2026-08-31-analytics_owned_log_groups.md)
+  (proposed 2026-08-31) - the transform Lambda's log group and Firehose's are
+  owned as resource nodes rather than left to implicit creation, both pinned to
+  `us-east-1` and retained for 365 days, and the delivery stream's
+  `CloudWatchLoggingOptions` is enabled against the second of them. Twelve nodes
+  become fourteen. It amends the merged analytics change spec in place, there
+  being no canonical page for the resource nodes yet, and **supersedes
+  [PR #27](https://github.com/antstanley/blogwright/pull/27)**, whose
+  `logs:CreateLogGroup` grant on the transform role is unnecessary once a node
+  owns the group. Close that PR before implementing; do not land both - that is
+  task 01 of its plan,
+  [Analytics-owned log groups](plans/2026-08-31-analytics_owned_log_groups/plan.md),
+  which flips this entry at task 05.
+
+The three linked 2026-07-26 proposals:
 
 1. [An internal plugin system for the CLI](changes/2026-07-26-cli_plugin_system.md)
    (proposed 2026-07-26) - plugin SPI in `blogwright-core`, discovery by a
