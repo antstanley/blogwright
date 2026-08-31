@@ -1773,6 +1773,20 @@ function existingFunction(overrides: Record<string, unknown> = {}): RawResponse 
   });
 }
 
+/**
+ * Lambda's reply while IAM has not finished propagating the transform role.
+ * The exception name is `InvalidParameterValueException`, which is also what a
+ * malformed zip returns - so the message is the only thing separating a
+ * transient from a permanent failure here.
+ */
+function roleNotYetAssumable(): RawResponse {
+  return failure(
+    400,
+    'InvalidParameterValueException',
+    'The role defined for the function cannot be assumed by Lambda.',
+  );
+}
+
 /** Lambda's reply for a function that does not exist - the status is what `isNotFound` narrows on. */
 function noSuchFunction(): RawResponse {
   return failure(404, 'ResourceNotFoundException', `Function not found: ${TRANSFORM_FUNCTION_ARN}`);
@@ -1815,6 +1829,45 @@ describe('analytics-transform-function', () => {
     const { ctx } = makeContext([existingFunction({ State: 'Failed' })]);
     await expect(analyticsTransformFunctionNode().read(ctx)).rejects.toThrow(/Failed state/);
     expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  // AWS answers a CreateFunction naming a role it has not finished propagating
+  // with this 400, and the message is the only thing that identifies it - the
+  // code arrives as `Http400` like every other Lambda failure. This is not a
+  // hypothetical: it is what the first real `analytics bootstrap` hit, at the
+  // tenth of twelve nodes, because the role is created by the node immediately
+  // before this one.
+  it('retries CreateFunction while Lambda has not yet propagated the role', async () => {
+    const { ctx, requests } = makeContext([roleNotYetAssumable(), ok({}), existingFunction()]);
+
+    await analyticsTransformFunctionNode().create(withTransformRole(ctx));
+
+    // Two POSTs, not one: the first was refused and the second succeeded.
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toStrictEqual([
+      `POST ${LAMBDA_FUNCTIONS}`,
+      `POST ${LAMBDA_FUNCTIONS}`,
+      `GET ${LAMBDA_FUNCTIONS}/${TRANSFORM_FUNCTION}`,
+    ]);
+    expect(ctx.state.resources['analytics-transform-function']).toMatchObject({
+      name: TRANSFORM_FUNCTION,
+      arn: TRANSFORM_FUNCTION_ARN,
+    });
+  });
+
+  // The other half of the same property, and the reason the predicate matches a
+  // message rather than a status: almost every other 400 Lambda returns is
+  // permanent - a malformed zip, a bad handler path, a role that genuinely
+  // lacks the trust policy - and retrying those would turn a clear failure into
+  // a slow one.
+  it('does not retry a 400 that is not the role propagation window', async () => {
+    const { ctx, requests } = makeContext([
+      failure(400, 'InvalidParameterValueException', 'Unzipped size must be smaller than X bytes'),
+    ]);
+
+    await expect(analyticsTransformFunctionNode().create(withTransformRole(ctx))).rejects.toThrow(
+      /Unzipped size/,
+    );
+    expect(requests).toHaveLength(1);
   });
 
   it('creates the function from the bundled zip and records what it deployed', async () => {
@@ -1970,6 +2023,26 @@ describe('analytics-transform-function', () => {
     const body = requests[0]?.body as { ZipFile: string };
     expect(zipEntryNames(body.ZipFile)).toStrictEqual([TRANSFORM_BUNDLE_FILE]);
     expect(ctx.state.resources['analytics-transform-function']).toStrictEqual(deployedFunction());
+  });
+
+  // `updateFunctionConfiguration` sends `roleArn` too, so an environment whose
+  // role was torn down and recreated hits the same propagation window on the
+  // update path. Same helper, asserted separately rather than assumed from the
+  // create case.
+  it('retries UpdateFunctionConfiguration while Lambda has not yet propagated the role', async () => {
+    const saltSecretName = 'override/analytics/salt';
+    const { ctx, requests } = makeContext([roleNotYetAssumable(), ok({})], {
+      analytics: { saltSecretName },
+    });
+    withTransformRole(ctx);
+    ctx.record('analytics-transform-function', deployedFunction());
+
+    await analyticsTransformFunctionNode().update?.(ctx);
+
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toStrictEqual([
+      `PUT ${LAMBDA_FUNCTIONS}/${TRANSFORM_FUNCTION}/configuration`,
+      `PUT ${LAMBDA_FUNCTIONS}/${TRANSFORM_FUNCTION}/configuration`,
+    ]);
   });
 
   it('performs one update call when only the salt secret name moved', async () => {
