@@ -18,7 +18,7 @@
  * the stream itself - runs `analytics-error-bucket` ->
  * `analytics-firehose-role` -> `analytics-firehose-stream`, with
  * `analytics-firehose-log-group` a second edge into that stream, and joins the
- * other two chains through the role's four grants and the stream's
+ * other two chains through the role's five grants and the stream's
  * destination. The vended-delivery chain -
  * the CloudWatch delivery destination pointing at that stream and the delivery
  * joining it to the site's log source - runs `analytics-log-destination` ->
@@ -1972,6 +1972,23 @@ function firehoseLogGroupName(ctx: AnalyticsContext): string {
 }
 
 /**
+ * The ARN of the one log stream Firehose writes its delivery errors to, which
+ * the delivery role's `logs:PutLogEvents` grant is scoped to.
+ *
+ * Not {@link analyticsLogGroupArn}'s `:*` form, and the difference is the whole
+ * point of a separate helper: the group ARN's trailing wildcard grants every
+ * stream the group will ever hold, while `PutLogEvents` authorises against a
+ * stream ARN and this role writes to exactly one. Both halves come from the
+ * same two helpers the log-group node and the stream's own
+ * `CloudWatchLoggingOptions` reach for, so the grant cannot name a stream that
+ * is not the one being written to.
+ */
+function firehoseLogStreamArn(ctx: AnalyticsContext): string {
+  const group = firehoseLogGroupName(ctx);
+  return `arn:aws:logs:${ANALYTICS_REGION}:${ctx.accountId}:log-group:${group}:log-stream:${DESTINATION_DELIVERY_STREAM}`;
+}
+
+/**
  * The error bucket's ARN as `analytics-error-bucket` recorded it. See
  * {@link requireRecordedArn}.
  *
@@ -2089,13 +2106,13 @@ function glueGrantResources(ctx: AnalyticsContext): string[] {
  * and a table recreated under a new generated ARN reaches the policy without a
  * teardown.
  *
- * **Exactly four statements, one per capability the change spec names, every
+ * **Exactly five statements, one per capability the change spec names, every
  * `Resource` a concrete ARN and none of them `*`.** The action lists are AWS's
  * own, from the "Grant Firehose access to Amazon S3 Tables" policy under IAM
  * access control; what is narrowed is the resources, which that policy writes
  * with wildcards over the whole account.
  *
- * Two of the four are easy to get subtly wrong and are worth stating:
+ * Three of the five are easy to get subtly wrong and are worth stating:
  *
  * - the error-bucket statement names the bucket **and** `<bucket>/*`. Bucket
  *   actions (`s3:ListBucket`, `s3:GetBucketLocation`) authorise against the
@@ -2110,11 +2127,19 @@ function glueGrantResources(ctx: AnalyticsContext): string[] {
  *   unqualified invoke, so copying it would deny every transform call and send
  *   every record to the error bucket.
  *
- * There is no fifth statement. AWS's policy carries three more - Kinesis (this
- * stream is `DirectPut`), KMS (no customer-managed key is configured anywhere
- * in this pipeline) and CloudWatch Logs (no `CloudWatchLoggingOptions` is sent,
- * so Firehose writes no log stream to grant on) - and each of the three is
- * conditional on a feature this pipeline does not use.
+ * - the CloudWatch Logs statement names the **one log stream** Firehose writes
+ *   its delivery errors to, `<firehose log group>:log-stream:DestinationDelivery`,
+ *   and not the group's `:*` form. `logs:PutLogEvents` authorises against the
+ *   stream ARN, and this role writes to exactly one stream, so the wildcard the
+ *   group ARN carries would grant every stream a future group ever holds. Only
+ *   `PutLogEvents`: `analytics-firehose-log-group` creates the group *and* the
+ *   stream, so the role has nothing to create - the shape
+ *   `analytics-transform-role`'s grant has, one action shorter.
+ *
+ * That fifth statement is the only one of the three AWS's own policy adds that
+ * this pipeline needs. The other two stay out: Kinesis (this stream is
+ * `DirectPut`) and KMS (no customer-managed key is configured anywhere in this
+ * pipeline), each conditional on a feature this pipeline does not use.
  */
 async function applyFirehoseRolePolicy(ctx: AnalyticsContext): Promise<void> {
   const errorBucketArn = requireErrorBucketArn(ctx, FIREHOSE_ROLE_NODE);
@@ -2172,6 +2197,14 @@ async function applyFirehoseRolePolicy(ctx: AnalyticsContext): Promise<void> {
         ],
         Resource: [errorBucketArn, `${errorBucketArn}/*`],
       },
+      {
+        // Without this the destination's `CloudWatchLoggingOptions` are inert:
+        // Firehose is told where to write its delivery errors and is not allowed
+        // to, so the failure it was meant to explain stays as silent as before.
+        Effect: 'Allow',
+        Action: ['logs:PutLogEvents'],
+        Resource: firehoseLogStreamArn(ctx),
+      },
     ],
   });
 }
@@ -2207,6 +2240,12 @@ function firehoseDestination(ctx: AnalyticsContext): IcebergDestinationInput {
     bufferIntervalSeconds: STREAM_BUFFER_INTERVAL_SECONDS,
     bufferSizeMb: STREAM_BUFFER_SIZE_MB,
     transformLambdaArn: requireTransformFunctionArn(ctx, FIREHOSE_STREAM_NODE),
+    // Both through the helpers `analytics-firehose-log-group` creates the group and
+    // the stream under, and the delivery role grants on - one string each. Firehose
+    // writes to whatever group its logging options name and creates nothing, so a
+    // second spelling of either would fail as an empty group rather than as an error.
+    logGroupName: firehoseLogGroupName(ctx),
+    logStreamName: DESTINATION_DELIVERY_STREAM,
   };
 }
 
@@ -2233,13 +2272,42 @@ function recordOptional(
 }
 
 /**
+ * What the reconcile is about to change, named for the operator reading the log
+ * line, and only what actually differs.
+ *
+ * A single "AppendOnly <recorded> -> <desired>" would report a transition on
+ * every reconcile, including the logging-only one where `AppendOnly` is `true`
+ * on both sides - "AppendOnly true -> true", an operator told the reason for a
+ * call is a field that did not move. The caller reaches this only past a guard
+ * that returned on both flags matching, so at least one clause always fires and
+ * the result is never empty.
+ */
+function destinationDrift(
+  appendOnly: boolean | undefined,
+  loggingEnabled: boolean | undefined,
+): string {
+  const parts: string[] = [];
+  if (appendOnly !== STREAM_APPEND_ONLY) {
+    parts.push(`AppendOnly ${String(appendOnly)} -> ${String(STREAM_APPEND_ONLY)}`);
+  }
+  if (loggingEnabled !== true) {
+    parts.push(`error logging ${loggingEnabled === false ? 'off' : 'unrecorded'} -> on`);
+  }
+  return parts.join(', ');
+}
+
+/**
  * Record the delivery stream's identity and health from a `DescribeDeliveryStream`.
  *
  * `state` and `failure` are what `analytics status` reports (task 55), so the
  * stream's health is hydrated by the same `read` the reconcile runs and there is
  * no second describe path. `versionId` and `destinationId` are what
- * `UpdateDestination` cannot be called without, and `appendOnly` is the live
- * flag the reconcile compares against {@link STREAM_APPEND_ONLY}.
+ * `UpdateDestination` cannot be called without, and `appendOnly` and
+ * `loggingEnabled` are the two live flags the reconcile compares - the first
+ * against {@link STREAM_APPEND_ONLY}, the second against error logging simply
+ * being on. Both go through {@link recordOptional}, so a describe that stops
+ * reporting one clears it rather than leaving a stale `true` that would make the
+ * reconcile skip work it should do.
  *
  * The ARN is guarded on its value, the guard `analytics-table` and
  * `analytics-catalog-integration` both put on theirs: `describeDeliveryStream`
@@ -2254,6 +2322,7 @@ function recordStream(ctx: AnalyticsContext, status: DeliveryStreamStatus): void
   recordOptional(out, 'versionId', status.versionId);
   recordOptional(out, 'destinationId', status.destinationId);
   recordOptional(out, 'appendOnly', status.appendOnly);
+  recordOptional(out, 'loggingEnabled', status.loggingEnabled);
   recordOptional(out, 'failure', status.failure);
 }
 
@@ -2445,8 +2514,8 @@ export function analyticsFirehoseLogGroupNode(): AnalyticsNode {
 
 /**
  * The role Firehose assumes to read the catalog, write the table, invoke the
- * transform and store what it could not deliver - four grants, four concrete
- * resources, no `*`.
+ * transform, store what it could not deliver and say so in one log stream -
+ * five grants, five concrete resources, no `*`.
  *
  * It declares `dependsOn` on the three nodes whose recorded ARNs those grants
  * interpolate. `topoSort` drains zero-indegree nodes alphabetically
@@ -2561,10 +2630,11 @@ export function analyticsFirehoseStreamNode(): AnalyticsNode {
       // "already exists", and the reconcile would go green over a stream that
       // accepts nothing.
       //
-      // What `update` then does with such a stream is *nothing*: it branches on
-      // the recorded `AppendOnly` flag alone, so a `CREATING_FAILED` or
-      // `DELETING` stream whose flag already matches is reconciled with zero AWS
-      // calls and reported done. That is stated rather than guarded because this
+      // What `update` then does with such a stream may be *nothing*: it branches
+      // on the two recorded flags and nothing else, so a `CREATING_FAILED` or
+      // `DELETING` stream that is already append-only with error logging on is
+      // reconciled with zero AWS calls and reported done - the state is not part
+      // of the comparison. That is stated rather than guarded because this
       // `read` is the hydration path - `recordStream` puts `state` and `failure`
       // into the plugin's scoped state, and reporting an unusable stream from
       // them is `analytics status`' job (task 55). Do not read this comment as a
@@ -2584,12 +2654,22 @@ export function analyticsFirehoseStreamNode(): AnalyticsNode {
       const recorded = ctx.state.resources[FIREHOSE_STREAM_NODE];
       const appendOnly =
         typeof recorded?.['appendOnly'] === 'boolean' ? recorded['appendOnly'] : undefined;
-      // The live flag already matches what this pipeline wants, so there is
-      // nothing to reconcile and no AWS call at all. `undefined` does NOT match:
-      // a stream whose destination reported no flag, or a state file that lost
-      // it, is a stream this node cannot claim is append-only, and pushing the
-      // desired configuration is the safe direction.
-      if (appendOnly === STREAM_APPEND_ONLY) return;
+      const loggingEnabled =
+        typeof recorded?.['loggingEnabled'] === 'boolean' ? recorded['loggingEnabled'] : undefined;
+      // Both live flags already match what this pipeline wants, so there is
+      // nothing to reconcile and no AWS call at all. `undefined` does NOT match
+      // either: a stream whose destination reported no flag, or a state file that
+      // lost one, is a stream this node cannot claim is configured, and pushing
+      // the desired configuration is the safe direction.
+      //
+      // **The logging half is what reaches the installed base.** Every stream
+      // this plugin has created is append-only, so on `appendOnly` alone this
+      // return fires for all of them and no already-deployed stream would ever
+      // be switched from silent delivery failures to logged ones. The second
+      // condition is what makes an existing stream reconcile exactly once: the
+      // update sends `CloudWatchLoggingOptions`, the re-read records
+      // `loggingEnabled: true`, and the next apply returns here.
+      if (appendOnly === STREAM_APPEND_ONLY && loggingEnabled === true) return;
 
       const name = streamName(ctx);
       const client = firehose(ctx);
@@ -2614,7 +2694,7 @@ export function analyticsFirehoseStreamNode(): AnalyticsNode {
         let refusal: string | undefined;
         try {
           ctx.logger.step(
-            `updating the analytics delivery stream "${name}" in place (AppendOnly ${String(appendOnly)} -> ${STREAM_APPEND_ONLY}) - UpdateDestination keeps the stream's ARN, so the CloudFront log delivery pointed at it is untouched`,
+            `updating the analytics delivery stream "${name}" in place (${destinationDrift(appendOnly, loggingEnabled)}) - UpdateDestination keeps the stream's ARN, so the CloudFront log delivery pointed at it is untouched`,
           );
           await whileRoleIsPropagating(() =>
             client.updateDestination(name, destination, { versionId, destinationId }),

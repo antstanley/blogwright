@@ -142,6 +142,25 @@ export interface IcebergDestinationInput {
    * without this processor would fail every record with nothing surfacing as an error.
    */
   readonly transformLambdaArn: string;
+  /**
+   * The CloudWatch log group Firehose writes its delivery errors into, sent as
+   * `CloudWatchLoggingOptions.LogGroupName`. Firehose creates neither the group nor the
+   * stream inside it, so both have to exist before a record can fail into them.
+   *
+   * Required rather than optional, for {@link STREAM_APPEND_ONLY}'s reason: this client
+   * builds exactly one shape of destination and always enables logging, so an optional
+   * field would model a call site that does not exist. A destination that quietly
+   * omitted the options is the failure this field exists to remove - one where the only
+   * account of an undelivered record is the record's absence.
+   */
+  readonly logGroupName: string;
+  /**
+   * The log stream inside {@link IcebergDestinationInput.logGroupName}, sent as
+   * `CloudWatchLoggingOptions.LogStreamName`. Named explicitly because enabling logging
+   * through the API - rather than through the console - creates neither the group nor
+   * the stream, so the caller owns both names.
+   */
+  readonly logStreamName: string;
 }
 
 /**
@@ -163,7 +182,7 @@ export type DeliveryState =
  * The narrow view of `DescribeDeliveryStream` that `analytics status` needs, plus the
  * three fields {@link FirehoseClient.updateDestination} cannot be called without.
  *
- * The last three are optional and are set only when the response actually carried them.
+ * The last four are optional and are set only when the response actually carried them.
  * `VersionId` and `Destinations` are documented as required members of
  * `DeliveryStreamDescription`, so on the service's own response model they are always
  * there - but an absent one must reach the caller as absent rather than as `''` or
@@ -202,6 +221,18 @@ export interface DeliveryStreamStatus {
    * that omits the flag.
    */
   readonly appendOnly?: boolean | undefined;
+  /**
+   * Whether the live destination has CloudWatch error logging switched on, off
+   * `Destinations[0].IcebergDestinationDescription.CloudWatchLoggingOptions.Enabled`.
+   *
+   * Read back rather than assumed, for {@link DeliveryStreamStatus.appendOnly}'s reason:
+   * it is the second flag the stream node compares to decide whether the destination
+   * needs reconciling, and assuming a stream this plugin created carries the
+   * configuration this plugin sends today is exactly wrong for every stream created
+   * before it sent this one. Absent for a destination that is not an Iceberg one, or for
+   * a response that reports no logging options at all.
+   */
+  readonly loggingEnabled?: boolean | undefined;
 }
 
 /**
@@ -225,7 +256,10 @@ interface FailureDescriptionResponse {
 
 interface DestinationDescriptionResponse {
   DestinationId?: string;
-  IcebergDestinationDescription?: { AppendOnly?: boolean };
+  IcebergDestinationDescription?: {
+    AppendOnly?: boolean;
+    CloudWatchLoggingOptions?: { Enabled?: boolean };
+  };
 }
 
 interface DescribeDeliveryStreamResponse {
@@ -313,6 +347,15 @@ function buildIcebergDestination(input: IcebergDestinationInput): object {
       ErrorOutputPrefix: input.errorOutputPrefix,
     },
     AppendOnly: STREAM_APPEND_ONLY,
+    // Firehose's only account of a record it could not deliver. Off by default, and
+    // `IcebergDestinationConfiguration` and `IcebergDestinationUpdate` both accept the
+    // member, so the one builder enables it on the create and on the reconcile alike -
+    // an existing stream is switched on in place rather than replaced.
+    CloudWatchLoggingOptions: {
+      Enabled: true,
+      LogGroupName: input.logGroupName,
+      LogStreamName: input.logStreamName,
+    },
     BufferingHints: {
       IntervalInSeconds: input.bufferIntervalSeconds,
       SizeInMBs: input.bufferSizeMb,
@@ -417,6 +460,8 @@ export class FirehoseClient {
       const versionId = description?.VersionId;
       const destinationId = destination?.DestinationId;
       const appendOnly = destination?.IcebergDestinationDescription?.AppendOnly;
+      const loggingEnabled =
+        destination?.IcebergDestinationDescription?.CloudWatchLoggingOptions?.Enabled;
       return {
         name: description?.DeliveryStreamName ?? name,
         arn: description?.DeliveryStreamARN ?? '',
@@ -425,6 +470,7 @@ export class FirehoseClient {
         ...(versionId !== undefined ? { versionId } : {}),
         ...(destinationId !== undefined ? { destinationId } : {}),
         ...(appendOnly !== undefined ? { appendOnly } : {}),
+        ...(loggingEnabled !== undefined ? { loggingEnabled } : {}),
       };
     } catch (err) {
       if (err instanceof AwsError && err.isNotFound) return undefined;

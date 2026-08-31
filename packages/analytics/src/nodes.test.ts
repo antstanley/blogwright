@@ -652,6 +652,13 @@ function makeContext(
     /** Collected `logger.warn` lines, when a test asserts on them. */
     warnings?: string[];
     /**
+     * Collected `logger.step` lines, when a test asserts on them. Separate from
+     * {@link warnings} because they are separate channels: a `step` reports what
+     * a reconcile is doing and a `warn` reports what it cost, and a case that
+     * pinned one against the other would pass on the wrong line.
+     */
+    steps?: string[];
+    /**
      * The site's own recorded outputs, as `ctx.siteState` exposes them. Defaults
      * to `{}` - an unbootstrapped site - so every case that does not name one
      * exercises the absence.
@@ -712,6 +719,7 @@ function makeContext(
   const names = deriveNames(env, ACCOUNT_ID, config);
   const state = emptyState(env);
   const warnings = overrides.warnings;
+  const steps = overrides.steps;
 
   return {
     requests,
@@ -729,10 +737,11 @@ function makeContext(
         fs: createMemoryFileSystem(overrides.files ?? BUNDLED_ARTIFACTS),
         terminal: SILENT_TERMINAL,
       },
-      logger:
-        warnings === undefined
-          ? NOOP_LOGGER
-          : { ...NOOP_LOGGER, warn: (msg) => warnings.push(msg) },
+      logger: {
+        ...NOOP_LOGGER,
+        ...(warnings === undefined ? {} : { warn: (msg: string) => warnings.push(msg) }),
+        ...(steps === undefined ? {} : { step: (msg: string) => steps.push(msg) }),
+      },
       store: new StateStore(clients.s3, names.bucket, env, 'analytics'),
       state,
       siteState: { resources: overrides.site ?? {} },
@@ -2448,18 +2457,29 @@ function streamDescription(
       DeliveryStreamType: 'DirectPut',
       VersionId: '1',
       HasMoreDestinations: false,
-      Destinations: [
-        { DestinationId: DESTINATION_ID, IcebergDestinationDescription: { AppendOnly: true } },
-      ],
+      Destinations: destinationWith(true, true),
       ...extra,
     },
   };
 }
 
-/** One `Destinations` entry carrying a given live `AppendOnly` flag. */
-function destinationWith(appendOnly: boolean): Record<string, unknown>[] {
+/**
+ * One `Destinations` entry carrying the two live flags `update` compares: the
+ * `AppendOnly` flag and whether the destination has CloudWatch error logging on.
+ *
+ * Both are named at every call site rather than one defaulted, because the whole
+ * point of the second is that a stream can be right about the first and silent
+ * about the second - which is what every already-deployed stream is.
+ */
+function destinationWith(appendOnly: boolean, loggingEnabled: boolean): Record<string, unknown>[] {
   return [
-    { DestinationId: DESTINATION_ID, IcebergDestinationDescription: { AppendOnly: appendOnly } },
+    {
+      DestinationId: DESTINATION_ID,
+      IcebergDestinationDescription: {
+        AppendOnly: appendOnly,
+        CloudWatchLoggingOptions: { Enabled: loggingEnabled },
+      },
+    },
   ];
 }
 
@@ -2801,14 +2821,15 @@ describe('analytics-firehose-role', () => {
     });
   });
 
-  it('grants exactly four capabilities, each on concrete ARNs and none on a wildcard', async () => {
+  it('grants exactly five capabilities, each on concrete ARNs and none on a wildcard', async () => {
     // Enumerated by capability rather than counted, and asserted on the parsed
     // document rather than on the call: a `Resource: '*'` grants strictly more
     // than the correct document, so every functional test in this file still
     // passes with one. This role can read the Glue catalog, write the Iceberg
-    // table, invoke a Lambda and write an S3 bucket - a wildcard on any of the
-    // four would hand it every table, every function or every bucket in the
-    // account, including the other environments' analytics data.
+    // table, invoke a Lambda, write an S3 bucket and write one log stream - a
+    // wildcard on any of the five would hand it every table, every function,
+    // every bucket or every log group in the account, including the other
+    // environments' analytics data.
     const { ctx, requests } = makeContext([
       createdRole(FIREHOSE_ROLE_ARN),
       iamDone('PutRolePolicy'),
@@ -2816,7 +2837,7 @@ describe('analytics-firehose-role', () => {
     await analyticsFirehoseRoleNode().create(withRoleDependencies(ctx));
     const statements = policyStatements(requests[1] as RecordedRequest);
 
-    expect(statements).toHaveLength(4);
+    expect(statements).toHaveLength(5);
 
     expect(capability(statements, 'glue')).toStrictEqual({
       Effect: 'Allow',
@@ -2872,6 +2893,23 @@ describe('analytics-firehose-role', () => {
       // bucket named, `PutObject` is denied and every failed record is lost.
       Resource: [ERROR_BUCKET_ARN, `${ERROR_BUCKET_ARN}/*`],
     });
+
+    expect(capability(statements, 'logs')).toStrictEqual({
+      Effect: 'Allow',
+      // `PutLogEvents` alone: `analytics-firehose-log-group` creates the group AND
+      // the DestinationDelivery stream, so this role has nothing to create.
+      Action: ['logs:PutLogEvents'],
+      // The ONE log stream, `…:log-group:<group>:log-stream:DestinationDelivery`,
+      // and not the group's `:*` form - `PutLogEvents` authorises against the
+      // stream ARN, so the group's trailing wildcard would grant every stream the
+      // group ever holds. Spelled out here rather than derived from the module
+      // under test, so a helper that started naming the wrong stream would show.
+      Resource: FIREHOSE_LOG_STREAM_ARN,
+    });
+    // Belt and braces on the shape the wildcard sweep below cannot see: that
+    // resource is a log-STREAM ARN, so it must not end in the group ARN's `:*`.
+    expect(capability(statements, 'logs').Resource).not.toMatch(/:\*$/);
+    expect(capability(statements, 'logs').Resource).not.toBe(FIREHOSE_LOG_GROUP_ARN);
 
     for (const resource of policyResources(statements)) {
       expect(resource.startsWith('arn:aws:')).toBe(true);
@@ -2974,7 +3012,7 @@ describe('analytics-firehose-stream', () => {
       ok(
         streamDescription('CREATING_FAILED', {
           VersionId: '2',
-          Destinations: destinationWith(false),
+          Destinations: destinationWith(false, false),
           FailureDescription: { Type: 'CREATE_KMS_GRANT_FAILED', Details: 'no grant' },
         }),
       ),
@@ -2990,6 +3028,7 @@ describe('analytics-firehose-stream', () => {
       versionId: '2',
       destinationId: DESTINATION_ID,
       appendOnly: false,
+      loggingEnabled: false,
       failure: 'CREATE_KMS_GRANT_FAILED: no grant',
     });
   });
@@ -3084,6 +3123,15 @@ describe('analytics-firehose-stream', () => {
           ErrorOutputPrefix: ERROR_PREFIX,
         },
         AppendOnly: true,
+        // Firehose's only account of a record it could not deliver, and both names
+        // are the ones `analytics-firehose-log-group` creates - asserted on the
+        // request BODY, so a wrong key spelling in the builder cannot pass by
+        // agreeing with an input object.
+        CloudWatchLoggingOptions: {
+          Enabled: true,
+          LogGroupName: FIREHOSE_LOG_GROUP,
+          LogStreamName: DESTINATION_DELIVERY,
+        },
         BufferingHints: { IntervalInSeconds: 900, SizeInMBs: 128 },
         DestinationTableConfigurationList: [
           {
@@ -3113,6 +3161,7 @@ describe('analytics-firehose-stream', () => {
       versionId: '1',
       destinationId: DESTINATION_ID,
       appendOnly: true,
+      loggingEnabled: true,
     });
   });
 
@@ -3149,10 +3198,129 @@ describe('analytics-firehose-stream', () => {
     expect(requests).toStrictEqual([]);
   });
 
-  it('performs no AWS call at all when the live AppendOnly flag already matches', async () => {
+  it('reconciles an already-deployed append-only stream into error logging, in place', async () => {
+    // **This fixture is production's stream.** Every stream this plugin has ever
+    // created is append-only, and none created before this change records
+    // `loggingEnabled` - so on the recorded `AppendOnly` flag alone the reconcile
+    // returned here with zero AWS calls, and the whole installed base would have
+    // gone on losing records with no account of why. Recorded state, not a freshly
+    // created stream: a create sends the logging options anyway, so a case built on
+    // one proves nothing about the streams that already exist.
+    const warnings: string[] = [];
+    const steps: string[] = [];
+    const { ctx, requests } = makeContext(
+      [
+        encode(''),
+        ok(
+          streamDescription('ACTIVE', {
+            VersionId: '4',
+            Destinations: destinationWith(true, true),
+          }),
+        ),
+      ],
+      { warnings, steps },
+    );
+    const node = analyticsFirehoseStreamNode();
+    expect(node.update).toBeDefined();
+    const recorded = withRecordedStream(withStreamDependencies(ctx), { appendOnly: true });
+    // Non-vacuity, and the point of the fixture: the recorded stream is
+    // append-only and says NOTHING about logging, which is the state every stream
+    // deployed before this change is in. `undefined` matches neither condition.
+    expect(Object.keys(recorded.state.resources['analytics-firehose-stream'] ?? {})).not.toContain(
+      'loggingEnabled',
+    );
+    await node.update?.(recorded);
+
+    // The update plus the mandatory post-update re-read. TWO requests, not one:
+    // the re-read sits outside the update's `try` on purpose, because by then the
+    // update has already succeeded.
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    // In place, NOT the replacement path: a replaced stream carries a new ARN, so
+    // the CloudFront log delivery would have to be repointed and the records in
+    // flight would be lost - over a log setting. `IcebergDestinationUpdate` accepts
+    // `CloudWatchLoggingOptions`, so the fallback has no reason to fire.
+    expect(targets(requests)).not.toContain('Firehose_20150804.DeleteDeliveryStream');
+    expect(targets(requests)).not.toContain('Firehose_20150804.CreateDeliveryStream');
+    expect(warnings.join('\n')).not.toMatch(/UpdateDestination was refused/);
+    expect(warnings.join('\n')).not.toMatch(/NEW ARN/);
+    // Asserted on the request BODY, and on the same two strings the log-group node
+    // creates and the role grants on - the update path goes through the create's
+    // one builder, so this is the create's payload reaching an existing stream.
+    expect(requests[0]?.body).toMatchObject({
+      DeliveryStreamName: STREAM,
+      CurrentDeliveryStreamVersionId: '3',
+      DestinationId: DESTINATION_ID,
+      IcebergDestinationUpdate: {
+        AppendOnly: true,
+        CloudWatchLoggingOptions: {
+          Enabled: true,
+          LogGroupName: FIREHOSE_LOG_GROUP,
+          LogStreamName: DESTINATION_DELIVERY,
+        },
+      },
+    });
+    // The re-read converges the recorded state, which is what makes this reconcile
+    // run exactly once rather than on every apply forever.
+    expect(ctx.state.resources['analytics-firehose-stream']).toMatchObject({
+      versionId: '4',
+      appendOnly: true,
+      loggingEnabled: true,
+    });
+    // The line names what actually differs. A single "AppendOnly <recorded> ->
+    // <desired>" would read "AppendOnly true -> true" here - an operator told the
+    // reason for the call is a field that did not move.
+    expect(steps.join('\n')).toMatch(/error logging unrecorded -> on/);
+    expect(steps.join('\n')).not.toMatch(/AppendOnly/);
+  });
+
+  it('reconciles a stream whose recorded logging flag is explicitly false', async () => {
+    // The other half of "not `true`": a stream whose destination reported
+    // `CloudWatchLoggingOptions.Enabled: false`, so the flag is recorded and
+    // recorded as off. A guard written as `loggingEnabled !== undefined` would
+    // return here and leave that stream silent forever.
+    const steps: string[] = [];
+    const { ctx, requests } = makeContext(
+      [
+        encode(''),
+        ok(
+          streamDescription('ACTIVE', {
+            VersionId: '4',
+            Destinations: destinationWith(true, true),
+          }),
+        ),
+      ],
+      { steps },
+    );
+    const node = analyticsFirehoseStreamNode();
+    expect(node.update).toBeDefined();
+    await node.update?.(
+      withRecordedStream(withStreamDependencies(ctx), { appendOnly: true, loggingEnabled: false }),
+    );
+
+    expect(targets(requests)).toStrictEqual([
+      'Firehose_20150804.UpdateDestination',
+      'Firehose_20150804.DescribeDeliveryStream',
+    ]);
+    expect(steps.join('\n')).toMatch(/error logging off -> on/);
+    expect(ctx.state.resources['analytics-firehose-stream']).toMatchObject({
+      loggingEnabled: true,
+    });
+  });
+
+  it('performs no AWS call at all once both live flags already match', async () => {
+    // The other direction, and it is not optional: a guard that never returns early
+    // passes the reconciling case above on its own, so without this one the second
+    // condition could be `true` and nothing would say so. A stream that is
+    // append-only WITH logging on is fully converged, and re-sending
+    // `UpdateDestination` on every apply forever is what this asserts against.
     const { ctx, requests } = makeContext([]);
-    await analyticsFirehoseStreamNode().update?.(
-      withRecordedStream(withStreamDependencies(ctx), { appendOnly: true }),
+    const node = analyticsFirehoseStreamNode();
+    expect(node.update).toBeDefined();
+    await node.update?.(
+      withRecordedStream(withStreamDependencies(ctx), { appendOnly: true, loggingEnabled: true }),
     );
     expect(requests).toStrictEqual([]);
   });
@@ -3164,12 +3332,18 @@ describe('analytics-firehose-stream', () => {
     // UpdateDestination accepts. This is the reading that holds if the reference
     // is right - and it is tried first because it keeps the stream's ARN.
     const warnings: string[] = [];
+    const steps: string[] = [];
     const { ctx, requests } = makeContext(
       [
         encode(''),
-        ok(streamDescription('ACTIVE', { VersionId: '4', Destinations: destinationWith(true) })),
+        ok(
+          streamDescription('ACTIVE', {
+            VersionId: '4',
+            Destinations: destinationWith(true, true),
+          }),
+        ),
       ],
-      { warnings },
+      { warnings, steps },
     );
     await analyticsFirehoseStreamNode().update?.(withRecordedStream(withStreamDependencies(ctx)));
 
@@ -3177,6 +3351,9 @@ describe('analytics-firehose-stream', () => {
       'Firehose_20150804.UpdateDestination',
       'Firehose_20150804.DescribeDeliveryStream',
     ]);
+    // The converse of the logging-only case above: here AppendOnly really is the
+    // field that moved, so the line says so.
+    expect(steps.join('\n')).toMatch(/AppendOnly false -> true/);
     expect(requests[0]?.body).toMatchObject({
       DeliveryStreamName: STREAM,
       // The recorded version, under the key UpdateDestination wants - not the
@@ -3195,6 +3372,35 @@ describe('analytics-firehose-stream', () => {
     expect(warnings.join('\n')).not.toMatch(/NEW ARN/);
   });
 
+  it('names only AppendOnly when logging is already on and only the flag differs', async () => {
+    // The third state the drift line has to get right, and the one that closes
+    // the loop: a stream whose logging is already enabled but whose AppendOnly is
+    // not what this pipeline wants. It still reconciles - the guard needs BOTH -
+    // and the line must not invent an "error logging" transition for a setting
+    // that did not move, the same fault in the other direction.
+    const steps: string[] = [];
+    const { ctx } = makeContext(
+      [
+        encode(''),
+        ok(
+          streamDescription('ACTIVE', {
+            VersionId: '4',
+            Destinations: destinationWith(true, true),
+          }),
+        ),
+      ],
+      { steps },
+    );
+    const node = analyticsFirehoseStreamNode();
+    expect(node.update).toBeDefined();
+    await node.update?.(
+      withRecordedStream(withStreamDependencies(ctx), { appendOnly: false, loggingEnabled: true }),
+    );
+
+    expect(steps.join('\n')).toMatch(/AppendOnly false -> true/);
+    expect(steps.join('\n')).not.toMatch(/error logging/);
+  });
+
   // The most consequential of the four retry cases. The fallback below is
   // deliberately NOT narrowed to one exception - any refused update reaches it -
   // so before the retry a transient role-propagation 400 was indistinguishable
@@ -3208,7 +3414,12 @@ describe('analytics-firehose-stream', () => {
       [
         firehoseRoleNotYetAssumable(),
         encode(''),
-        ok(streamDescription('ACTIVE', { VersionId: '4', Destinations: destinationWith(true) })),
+        ok(
+          streamDescription('ACTIVE', {
+            VersionId: '4',
+            Destinations: destinationWith(true, true),
+          }),
+        ),
       ],
       { warnings },
     );
@@ -3237,7 +3448,12 @@ describe('analytics-firehose-stream', () => {
         firehoseFailure('InvalidArgumentException', 'AppendOnly cannot be updated'),
         encode(''),
         ok({ DeliveryStreamARN: STREAM_ARN }),
-        ok(streamDescription('CREATING', { VersionId: '1', Destinations: destinationWith(true) })),
+        ok(
+          streamDescription('CREATING', {
+            VersionId: '1',
+            Destinations: destinationWith(true, true),
+          }),
+        ),
       ],
       { warnings },
     );
@@ -3292,7 +3508,7 @@ describe('analytics-firehose-stream', () => {
     const { ctx, requests } = makeContext([
       encode(''),
       ok({ DeliveryStreamARN: STREAM_ARN }),
-      ok(streamDescription('CREATING', { Destinations: destinationWith(true) })),
+      ok(streamDescription('CREATING', { Destinations: destinationWith(true, true) })),
     ]);
     await analyticsFirehoseStreamNode().update?.(
       withRecordedStream(withStreamDependencies(ctx), { versionId: '', destinationId: '' }),
@@ -4056,6 +4272,16 @@ const FIREHOSE_LOG_GROUP_ARN = `arn:aws:logs:us-east-1:${ACCOUNT_ID}:log-group:$
 const DESTINATION_DELIVERY = 'DestinationDelivery';
 
 /**
+ * The ARN of that one stream, which the delivery role's `logs:PutLogEvents` is
+ * scoped to - spelled out here rather than derived from the module under test.
+ *
+ * A log-STREAM ARN, deliberately not {@link FIREHOSE_LOG_GROUP_ARN}'s `:*` form:
+ * `PutLogEvents` authorises against the stream, so the group ARN's trailing
+ * wildcard would grant every stream the group ever holds.
+ */
+const FIREHOSE_LOG_STREAM_ARN = `arn:aws:logs:us-east-1:${ACCOUNT_ID}:log-group:${FIREHOSE_LOG_GROUP}:log-stream:${DESTINATION_DELIVERY}`;
+
+/**
  * The retention both groups carry, written out here rather than imported: a
  * test that read the module's constant would agree with whatever it was set to,
  * and the point of this number is that it is 365 rather than the forever a
@@ -4377,6 +4603,54 @@ describe('each log group name has exactly one home', () => {
     expect(typeof described).toBe('string');
     expect(described).not.toBe('');
     expect(group).toBe(`/aws/kinesisfirehose/${String(described)}`);
+  });
+
+  it('writes delivery errors to the very stream it creates and the very stream it grants on', async () => {
+    // Three production paths, one string each, compared to EACH OTHER rather than
+    // to a literal any of them was handed: the group and stream
+    // `analytics-firehose-log-group` creates, the log-stream ARN the delivery
+    // role's policy document grants `logs:PutLogEvents` on, and the
+    // `CloudWatchLoggingOptions` the stream's own destination carries. Firehose
+    // creates nothing and writes to whatever its options name, so a second
+    // spelling anywhere in that chain fails as an empty log group - never as an
+    // error - which is exactly the silence this whole change exists to remove.
+    const { ctx, requests } = makeContext([
+      ok({}),
+      ok({}),
+      ok({}),
+      createdRole(FIREHOSE_ROLE_ARN),
+      iamDone('PutRolePolicy'),
+      ok({ DeliveryStreamARN: STREAM_ARN }),
+      ok(streamDescription('CREATING')),
+    ]);
+
+    await analyticsFirehoseLogGroupNode().create(ctx);
+    await analyticsFirehoseRoleNode().create(withRoleDependencies(ctx));
+    await analyticsFirehoseStreamNode().create(withStreamDependencies(ctx));
+
+    const group = jsonBody(requests[0])['logGroupName'];
+    const streamInside = jsonBody(requests[2])['logStreamName'];
+    const granted = capability(policyStatements(requests[4] as RecordedRequest), 'logs');
+    const options = (
+      jsonBody(requests[5])['IcebergDestinationConfiguration'] as {
+        CloudWatchLoggingOptions: Record<string, unknown>;
+      }
+    ).CloudWatchLoggingOptions;
+
+    // Non-vacuity: neither name is empty or absent, and the destination really did
+    // enable logging - so the equalities below cannot hold by comparing nothing to
+    // nothing, or by comparing two halves of a feature that is switched off.
+    expect(typeof group).toBe('string');
+    expect(group).not.toBe('');
+    expect(typeof streamInside).toBe('string');
+    expect(streamInside).not.toBe('');
+    expect(options['Enabled']).toBe(true);
+
+    expect(options['LogGroupName']).toBe(group);
+    expect(options['LogStreamName']).toBe(streamInside);
+    expect(granted.Resource).toBe(
+      `arn:aws:logs:us-east-1:${ACCOUNT_ID}:log-group:${String(group)}:log-stream:${String(streamInside)}`,
+    );
   });
 
   it("raises on a derived name over AWS's limit before naming a group, for both groups", async () => {
