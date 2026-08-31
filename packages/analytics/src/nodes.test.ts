@@ -25,6 +25,8 @@ import {
   analyticsErrorBucketNode,
   analyticsFirehoseRoleNode,
   analyticsFirehoseStreamNode,
+  analyticsLogDeliveryNode,
+  analyticsLogDestinationNode,
   analyticsNamespaceNode,
   analyticsSaltSecretNode,
   analyticsTableBucketNode,
@@ -34,6 +36,7 @@ import {
   transformUpdate,
 } from './nodes.js';
 import { ANALYTICS_PACKAGE_DIR } from './paths.js';
+import { CLOUDFRONT_RECORD_FIELDS } from './schema.js';
 import { SALT_SECRET_NAME_ENV } from './transform/handler.js';
 import {
   TRANSFORM_BUNDLE_DIR,
@@ -388,6 +391,241 @@ function targets(requests: RecordedRequest[]): (string | undefined)[] {
   return requests.map((request) => request.headers['x-amz-target']);
 }
 
+/** CloudWatch Logs is AWS-JSON: every operation is `POST /`, told apart by `x-amz-target`. */
+const LOGS_TARGET = 'Logs_20140328';
+
+const LOGS_HOST = 'https://logs.us-east-1.amazonaws.com';
+const LOGS_ENDPOINT = `${LOGS_HOST}/`;
+
+/**
+ * A `delivery-destination` ARN. Its final `:`-separated segment is the
+ * destination's name, which is the only thing distinguishing two deliveries
+ * hanging off one shared source - so this form is what both the site's guard
+ * (`packages/cli/src/nodes.ts`'s `isOwnDelivery`) and the plugin's own
+ * attribution read.
+ */
+function destinationArn(name: string): string {
+  return `arn:aws:logs:us-east-1:${ACCOUNT_ID}:delivery-destination:${name}`;
+}
+
+/** `deriveNames`' `<prefix>-cf-source`: the delivery source the SITE owns and this plugin only reads. */
+const SITE_DELIVERY_SOURCE = `${PREFIX}-cf-source`;
+
+/** `deriveNames`' `<prefix>-cf-dest`: the site's OWN delivery destination, never this plugin's. */
+const SITE_DELIVERY_DESTINATION = `${PREFIX}-cf-dest`;
+
+/**
+ * The plugin's delivery destination name, spelled out here rather than derived
+ * from the module under test - and deliberately compared against
+ * {@link SITE_DELIVERY_DESTINATION} below, because the two being different is
+ * the single property the site's teardown guard rests on.
+ */
+const LOG_DESTINATION = `${PREFIX}-analytics-cf-dest`;
+const LOG_DESTINATION_ARN = destinationArn(LOG_DESTINATION);
+
+/** The site's own CloudWatch delivery, seeded on the shared source by every case below. */
+const SITE_DELIVERY = {
+  id: 'site-d',
+  deliveryDestinationArn: destinationArn(SITE_DELIVERY_DESTINATION),
+};
+
+/** This plugin's delivery, as AWS lists it beside the site's on the same source. */
+const PLUGIN_DELIVERY = { id: 'analytics-d', deliveryDestinationArn: LOG_DESTINATION_ARN };
+
+/** The site's CloudFront distribution ARN, as its own node records it in `state/<env>.json`. */
+const DISTRIBUTION_ARN = `arn:aws:cloudfront::${ACCOUNT_ID}:distribution/E2ABCDEF`;
+
+/** A site that has been bootstrapped: the one recorded output this plugin reads off it. */
+const BOOTSTRAPPED_SITE: Record<string, ResourceOutputs> = {
+  'cloudfront-distribution': { arn: DISTRIBUTION_ARN },
+};
+
+/**
+ * The CloudWatch Logs half of AWS as these two nodes meet it: one shared
+ * delivery source carrying any number of deliveries, and a set of delivery
+ * destinations.
+ *
+ * Stateful rather than a scripted queue, modelled on the recording fake at
+ * `packages/cli/src/nodes.test.ts:36-77` and for that fake's stated reason -
+ * **the refusals AWS actually makes are what a guard-less implementation would
+ * sail straight through.** `DeleteDeliverySource` is rejected while any
+ * delivery is still attached, and so is `DeleteDeliveryDestination`; neither
+ * `deleteDeliverySource` nor `deleteDeliveryDestination` catches that Conflict,
+ * since both swallow only a not-found. A fake answering 200 to either would let
+ * a destination replacement that never detached its delivery pass every
+ * assertion below.
+ */
+interface LogsWorld {
+  /** Every delivery on the site's shared source, in the order AWS lists them. */
+  deliveries: { id: string; deliveryDestinationArn: string }[];
+  /** The delivery destinations that exist, by name. */
+  destinations: string[];
+  /** True while the site's shared delivery source exists. */
+  sourcePresent: boolean;
+  /** Failures to answer the next `PutDeliveryDestination` calls with, one each, oldest first. */
+  putFailures: { code: string; message: string }[];
+  /** The id the next delivery this fake creates is given. */
+  nextDeliveryId: number;
+}
+
+/** A {@link LogsWorld} with an empty shared source, before any case seeds it. */
+function logsWorld(overrides: Partial<LogsWorld> = {}): LogsWorld {
+  return {
+    deliveries: [],
+    destinations: [],
+    sourcePresent: true,
+    putFailures: [],
+    nextDeliveryId: 1,
+    ...overrides,
+  };
+}
+
+/**
+ * The failure shape CloudWatch Logs puts on the wire - AWS-JSON 1.1, like Glue
+ * and Firehose, so the exception name travels in the body's `__type` and
+ * reaches `AwsError.code`. HTTP 400 throughout: `AwsError.isNotFound` matches
+ * `ResourceNotFoundException` on the code, and `isAlreadyExists` matches
+ * `/Conflict/i` on it, so the status separates nothing here.
+ */
+function logsFailure(code: string, message: string): RawResponse {
+  const text = JSON.stringify({ __type: code, message });
+  return {
+    statusCode: 400,
+    headers: {},
+    body: new TextEncoder().encode(text),
+    text: () => text,
+  };
+}
+
+/** Narrow a recorded request body to its JSON object form - no cast. */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Answer one CloudWatch Logs operation against {@link LogsWorld}, mutating it as AWS would. */
+function answerLogs(
+  world: LogsWorld,
+  operation: string,
+  body: Record<string, unknown>,
+): RawResponse {
+  switch (operation) {
+    case 'DescribeDeliveries':
+      // Every delivery in this fake hangs off the one shared source, which is
+      // the situation under test: `DescribeDeliveries` takes no source filter,
+      // and `deliveriesForSource` is what narrows the list.
+      return ok({
+        deliveries: world.deliveries.map((delivery) => ({
+          id: delivery.id,
+          deliverySourceName: SITE_DELIVERY_SOURCE,
+          deliveryDestinationArn: delivery.deliveryDestinationArn,
+        })),
+      });
+    case 'PutDeliveryDestination': {
+      const name = String(body['name']);
+      const scripted = world.putFailures.shift();
+      if (scripted !== undefined) return logsFailure(scripted.code, scripted.message);
+      if (!world.destinations.includes(name)) world.destinations.push(name);
+      return ok({ deliveryDestination: { name, arn: destinationArn(name) } });
+    }
+    case 'PutDeliverySource':
+      // Present so a node that called it would be recorded rather than crash
+      // the fixture: `putSource` appearing in a call log is the failure this
+      // plugin's tests are looking for, not an unscripted-request error.
+      world.sourcePresent = true;
+      return ok({
+        deliverySource: { arn: `arn:aws:logs:us-east-1:${ACCOUNT_ID}:delivery-source:x` },
+      });
+    case 'CreateDelivery': {
+      const arn = String(body['deliveryDestinationArn']);
+      if (world.deliveries.some((delivery) => delivery.deliveryDestinationArn === arn)) {
+        return logsFailure('ConflictException', 'A delivery to this destination already exists.');
+      }
+      world.deliveries.push({ id: `d-${world.nextDeliveryId}`, deliveryDestinationArn: arn });
+      world.nextDeliveryId += 1;
+      return ok({});
+    }
+    case 'DeleteDelivery': {
+      const id = String(body['id']);
+      if (!world.deliveries.some((delivery) => delivery.id === id)) {
+        return logsFailure('ResourceNotFoundException', `No delivery ${id}.`);
+      }
+      world.deliveries = world.deliveries.filter((delivery) => delivery.id !== id);
+      return ok({});
+    }
+    case 'DeleteDeliverySource':
+      // AWS rejects this while a delivery is attached - see {@link LogsWorld}.
+      // No case below asserts on this branch, because no call reaches it; it is
+      // here so that one ever making it would fail loudly rather than pass.
+      if (world.deliveries.length > 0) {
+        return logsFailure('ConflictException', 'Delivery Source still has deliveries attached.');
+      }
+      world.sourcePresent = false;
+      return ok({});
+    case 'DeleteDeliveryDestination': {
+      const name = String(body['name']);
+      if (
+        world.deliveries.some(
+          (delivery) => delivery.deliveryDestinationArn === destinationArn(name),
+        )
+      ) {
+        return logsFailure(
+          'ConflictException',
+          `Delivery destination ${name} still has deliveries attached.`,
+        );
+      }
+      if (!world.destinations.includes(name)) {
+        return logsFailure('ResourceNotFoundException', `No delivery destination ${name}.`);
+      }
+      world.destinations = world.destinations.filter((existing) => existing !== name);
+      return ok({});
+    }
+    default:
+      throw new Error(`the CloudWatch Logs fake has no answer for ${operation}`);
+  }
+}
+
+/**
+ * The vended-delivery call log, in the vocabulary
+ * `packages/cli/src/nodes.test.ts`'s recording fake uses, so the two suites'
+ * call logs read the same and the reviewable "no `deleteSource` entry in any
+ * case" check is a literal one. Firehose's describe is named too, because the
+ * wait for an `ACTIVE` stream is part of the sequence under test.
+ */
+const CALL_NAMES: Record<string, string> = {
+  [`${LOGS_TARGET}.DescribeDeliveries`]: 'listDeliveries',
+  [`${LOGS_TARGET}.PutDeliverySource`]: 'putSource',
+  [`${LOGS_TARGET}.PutDeliveryDestination`]: 'putDest',
+  [`${LOGS_TARGET}.CreateDelivery`]: 'createDelivery',
+  [`${LOGS_TARGET}.DeleteDelivery`]: 'deleteDelivery',
+  [`${LOGS_TARGET}.DeleteDeliverySource`]: 'deleteSource',
+  [`${LOGS_TARGET}.DeleteDeliveryDestination`]: 'deleteDest',
+  'Firehose_20150804.DescribeDeliveryStream': 'describeStream',
+};
+
+/** Every recorded request as a call-log entry; `deleteDelivery` carries the id it removed. */
+function deliveryCalls(requests: RecordedRequest[]): string[] {
+  return requests.map((request) => {
+    const target = request.headers['x-amz-target'] ?? '';
+    const name = CALL_NAMES[target];
+    if (name === undefined) {
+      throw new Error(`unnamed operation in the delivery call log: ${target || request.url}`);
+    }
+    if (name !== 'deleteDelivery') return name;
+    const body = request.body;
+    return `${name}:${isJsonObject(body) ? String(body['id']) : '?'}`;
+  });
+}
+
+/**
+ * The local-time day of an instant, `YYYY-MM-DD` - the value `createdDay` must
+ * never take. Used to assert that a test's zone pin actually took effect, so
+ * the pin cannot rot into a no-op without saying so.
+ */
+function localDay(at: Date): string {
+  const pad = (part: number): string => String(part).padStart(2, '0');
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
+
 /**
  * A `PluginContext<AnalyticsConfig>` over a transport that records every
  * request and answers them from `replies`, in order.
@@ -411,17 +649,41 @@ function makeContext(
     files?: Record<string, string>;
     /** Collected `logger.warn` lines, when a test asserts on them. */
     warnings?: string[];
+    /**
+     * The site's own recorded outputs, as `ctx.siteState` exposes them. Defaults
+     * to `{}` - an unbootstrapped site - so every case that does not name one
+     * exercises the absence.
+     */
+    site?: Record<string, ResourceOutputs>;
+    /**
+     * The stateful CloudWatch Logs fake. When present it answers every
+     * `Logs_20140328.*` request instead of the scripted queue; see
+     * {@link LogsWorld}.
+     */
+    logs?: LogsWorld;
   } = {},
 ): { ctx: PluginContext<AnalyticsConfig>; requests: RecordedRequest[] } {
   const requests: RecordedRequest[] = [];
   const queue = [...replies];
+  const world = overrides.logs;
   const transport: Transport = async (req) => {
-    requests.push({
+    const recorded = {
       method: req.method,
       url: req.url,
       headers: req.headers,
       body: req.body === undefined ? undefined : parseBody(String(req.body)),
-    });
+    };
+    requests.push(recorded);
+    // The CloudWatch Logs fake answers its own service statefully; every other
+    // service still comes off the scripted queue, so nothing above this line
+    // changes for the cases that do not pass one.
+    const target = recorded.headers['x-amz-target'];
+    if (world !== undefined && target !== undefined && target.startsWith(`${LOGS_TARGET}.`)) {
+      if (!isJsonObject(recorded.body)) {
+        throw new Error(`CloudWatch Logs request with no JSON body: ${String(recorded.body)}`);
+      }
+      return answerLogs(world, target.slice(LOGS_TARGET.length + 1), recorded.body);
+    }
     const reply = queue.shift();
     if (reply === undefined) {
       throw new Error(
@@ -463,7 +725,7 @@ function makeContext(
           : { ...NOOP_LOGGER, warn: (msg) => warnings.push(msg) },
       store: new StateStore(clients.s3, names.bucket, env, 'analytics'),
       state,
-      siteState: { resources: {} },
+      siteState: { resources: overrides.site ?? {} },
       // The same one-line implementation the CLI's `toPluginContext` supplies
       // (`packages/cli/src/plugin-commands.ts`): outputs are stored under the
       // node id in the plugin's OWN state, never the site's.
@@ -3008,5 +3270,584 @@ describe('tearing the delivery chain down', () => {
       'GET',
       'DELETE',
     ]);
+  });
+});
+
+/** Record what `analytics-log-destination` records, so the delivery has a destination to name. */
+function withLogDestination(
+  ctx: PluginContext<AnalyticsConfig>,
+  overrides: ResourceOutputs = {},
+): PluginContext<AnalyticsConfig> {
+  ctx.record('analytics-log-destination', {
+    name: LOG_DESTINATION,
+    arn: LOG_DESTINATION_ARN,
+    outputFormat: 'json',
+    ...overrides,
+  });
+  return ctx;
+}
+
+/** A `DescribeDeliveryStream` reply for a stream in `status`, which the wait below reads. */
+function stream(status: string): RawResponse {
+  return ok(streamDescription(status));
+}
+
+describe('the analytics vended-delivery graph', () => {
+  it('chains firehose-stream -> log-destination -> log-delivery', () => {
+    // The destination's edge is the ARN it interpolates, and the accident does
+    // NOT save it: `analytics-firehose-stream` sorts AFTER
+    // `analytics-log-destination`, so with `dependsOn: []` `topoSort` would run
+    // the destination first and point it at an unrecorded stream ARN.
+    expect(analyticsLogDestinationNode().id).toBe('analytics-log-destination');
+    expect(analyticsLogDestinationNode().dependsOn).toStrictEqual(['analytics-firehose-stream']);
+    expect(analyticsLogDeliveryNode().id).toBe('analytics-log-delivery');
+    expect(analyticsLogDeliveryNode().dependsOn).toStrictEqual(['analytics-log-destination']);
+  });
+
+  it("is assignable to the SPI's own ResourceNode[], so the CLI engine runs it unchanged", () => {
+    const nodes: ResourceNode[] = [analyticsLogDestinationNode(), analyticsLogDeliveryNode()];
+    expect(nodes.map((node) => node.id)).toStrictEqual([
+      'analytics-log-destination',
+      'analytics-log-delivery',
+    ]);
+  });
+
+  it("names its destination something the site's own delivery guard will not claim", async () => {
+    // The one property task 52's guards rest on. `isOwnDelivery`
+    // (`packages/cli/src/nodes.ts`) attributes a delivery by the final
+    // `:`-separated segment of its destination ARN, compared against
+    // `names.deliveryDestination`; if the plugin's destination resolved to that
+    // name, `blogwright destroy` would treat this delivery as the site's own and
+    // remove the shared source without refusing.
+    //
+    // Asserted against the name the node actually PUT, not against this file's
+    // own constants: the relationship has to hold for what `nodes.ts` derives.
+    const world = logsWorld({ deliveries: [SITE_DELIVERY] });
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    await analyticsLogDestinationNode().create(withRecordedStream(ctx));
+    const put = isJsonObject(requests[1]?.body) ? String(requests[1]?.body['name']) : '';
+
+    expect(ctx.names.deliveryDestination).toBe(SITE_DELIVERY_DESTINATION);
+    expect(put).not.toBe(ctx.names.deliveryDestination);
+    // What the site's guard would attribute the plugin's delivery to, and what
+    // it attributes the site's own to - the two must not be the same string.
+    expect(destinationArn(put).split(':').pop()).not.toBe(ctx.names.deliveryDestination);
+    expect(SITE_DELIVERY.deliveryDestinationArn.split(':').pop()).toBe(
+      ctx.names.deliveryDestination,
+    );
+  });
+});
+
+describe('analytics-log-destination', () => {
+  it('reads false without an AWS call when nothing is recorded', async () => {
+    const { ctx, requests } = makeContext([]);
+    await expect(analyticsLogDestinationNode().read(ctx)).resolves.toBe(false);
+    expect(requests).toStrictEqual([]);
+    // An empty entry here would claim a destination that does not exist.
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it('reads true off the recorded ARN, and false over an empty one', async () => {
+    const { ctx, requests } = makeContext([]);
+    await expect(analyticsLogDestinationNode().read(withLogDestination(ctx))).resolves.toBe(true);
+    await expect(
+      analyticsLogDestinationNode().read(withLogDestination(ctx, { arn: '' })),
+    ).resolves.toBe(false);
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('creates the destination against the stream, in JSON, once the stream is active', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [] });
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    await analyticsLogDestinationNode().create(withRecordedStream(ctx));
+
+    expect(deliveryCalls(requests)).toStrictEqual(['describeStream', 'putDest']);
+    expect(requests[1]?.url).toBe(LOGS_ENDPOINT);
+    // `toStrictEqual`, not `toMatchObject`: an added key is a body this test
+    // must not pass, and `fieldDelimiter` is deliberately not one of them.
+    expect(requests[1]?.body).toStrictEqual({
+      name: LOG_DESTINATION,
+      deliveryDestinationConfiguration: { destinationResourceArn: STREAM_ARN },
+      outputFormat: 'json',
+    });
+    expect(ctx.state.resources['analytics-log-destination']).toStrictEqual({
+      name: LOG_DESTINATION,
+      arn: LOG_DESTINATION_ARN,
+      outputFormat: 'json',
+    });
+    // The site's delivery is still there and nothing was deleted at all.
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d']);
+    expect(deliveryCalls(requests)).not.toContain('deleteSource');
+  });
+
+  it('signs the destination against us-east-1 while config.region says otherwise', async () => {
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: logsWorld(),
+    });
+    await analyticsLogDestinationNode().create(withRecordedStream(ctx));
+    expect(ctx.config.region).toBe(CONFIG_REGION);
+    expect(credentialScope(requests[1]?.headers ?? {})).toStrictEqual({
+      region: 'us-east-1',
+      service: 'logs',
+    });
+  });
+
+  it('waits for a stream that is still creating before pointing a destination at it', async () => {
+    // Task 51's routed finding: `createStream` reports a `CREATING` stream as
+    // created, so without this wait the destination and the delivery would be
+    // built over a stream accepting no records - and nothing would say so.
+    const world = logsWorld();
+    const { ctx, requests } = makeContext([stream('CREATING'), stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    vi.useFakeTimers();
+    try {
+      const pending = analyticsLogDestinationNode().create(withRecordedStream(ctx));
+      // The interval `nodes.ts` polls on, restated rather than imported.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(deliveryCalls(requests)).toStrictEqual(['describeStream', 'describeStream', 'putDest']);
+    expect(world.destinations).toStrictEqual([LOG_DESTINATION]);
+  });
+
+  it('refuses rather than pointing a destination at a stream that never became active', async () => {
+    const world = logsWorld();
+    const { ctx, requests } = makeContext([stream('CREATING_FAILED')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    await expect(analyticsLogDestinationNode().create(withRecordedStream(ctx))).rejects.toThrow(
+      /is create-failed rather than active/,
+    );
+    // Nothing was wired: the refusal lands before the put, so no destination
+    // exists to be found later and believed healthy.
+    expect(deliveryCalls(requests)).toStrictEqual(['describeStream']);
+    expect(world.destinations).toStrictEqual([]);
+    expect(ctx.state.resources['analytics-log-destination']).toBeUndefined();
+  });
+
+  it('refuses to create the destination when the stream ARN is not recorded', async () => {
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: logsWorld() });
+    await expect(analyticsLogDestinationNode().create(ctx)).rejects.toThrow(
+      /analytics-firehose-stream/,
+    );
+    // Nothing went out at all - not even the describe the wait would make.
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('clears its own delivery and destination on a Conflict, never the shared source', async () => {
+    // The self-heal, and the deliberate divergence from
+    // `packages/cli/src/nodes.ts:751-759`: the site's retry deletes the delivery
+    // SOURCE at `:758`, which here would take the site's own CloudWatch delivery
+    // with it. The site's delivery is listed FIRST, so a guard picking by
+    // position would remove the wrong one.
+    const world = logsWorld({
+      deliveries: [SITE_DELIVERY, PLUGIN_DELIVERY],
+      destinations: [SITE_DELIVERY_DESTINATION, LOG_DESTINATION],
+      putFailures: [
+        { code: 'ConflictException', message: 'Output format cannot be changed for a destination' },
+      ],
+    });
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    await analyticsLogDestinationNode().create(withRecordedStream(ctx));
+
+    expect(deliveryCalls(requests)).toStrictEqual([
+      'describeStream',
+      'putDest',
+      'listDeliveries',
+      'deleteDelivery:analytics-d',
+      'deleteDest',
+      'putDest',
+    ]);
+    expect(deliveryCalls(requests)).not.toContain('deleteSource');
+    expect(deliveryCalls(requests)).not.toContain('deleteDelivery:site-d');
+    // The site's delivery, its destination and the shared source are untouched.
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d']);
+    expect(world.destinations).toStrictEqual([SITE_DELIVERY_DESTINATION, LOG_DESTINATION]);
+    expect(world.sourcePresent).toBe(true);
+    expect(ctx.state.resources['analytics-log-destination']?.['arn']).toBe(LOG_DESTINATION_ARN);
+  });
+
+  it('rethrows a non-conflict failure from the put untouched', async () => {
+    const world = logsWorld({
+      deliveries: [SITE_DELIVERY],
+      putFailures: [{ code: 'AccessDeniedException', message: 'no logs:PutDeliveryDestination' }],
+    });
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    await expect(analyticsLogDestinationNode().create(withRecordedStream(ctx))).rejects.toThrow(
+      /AccessDenied/,
+    );
+    expect(deliveryCalls(requests)).toStrictEqual(['describeStream', 'putDest']);
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d']);
+  });
+
+  it('replaces the destination when the recorded output format differs', async () => {
+    // The output format is immutable once a destination exists, so this is a
+    // delete-then-create and not a second put. The plugin's own delivery has to
+    // come off first: the fake rejects `DeleteDeliveryDestination` while a
+    // delivery points at it, exactly as AWS does.
+    const world = logsWorld({
+      deliveries: [SITE_DELIVERY, PLUGIN_DELIVERY],
+      destinations: [SITE_DELIVERY_DESTINATION, LOG_DESTINATION],
+    });
+    const warnings: string[] = [];
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+      warnings,
+    });
+    await analyticsLogDestinationNode().update?.(
+      withLogDestination(withRecordedStream(ctx), { outputFormat: 'w3c' }),
+    );
+
+    expect(deliveryCalls(requests)).toStrictEqual([
+      'listDeliveries',
+      'deleteDelivery:analytics-d',
+      'deleteDest',
+      'describeStream',
+      'putDest',
+    ]);
+    expect(deliveryCalls(requests)).not.toContain('deleteSource');
+    expect(warnings.join('\n')).toMatch(/cannot be changed in place - replacing it/);
+    expect(ctx.state.resources['analytics-log-destination']?.['outputFormat']).toBe('json');
+    // The site's delivery and its own destination survive the replacement.
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d']);
+    expect(world.destinations).toStrictEqual([SITE_DELIVERY_DESTINATION, LOG_DESTINATION]);
+  });
+
+  it('re-puts the destination on a matching format, so a replaced stream is repointed', async () => {
+    // `analytics-firehose-stream`'s own fallback replaces the stream, and a
+    // replacement carries a NEW ARN. This reconcile is what points the
+    // destination at it; nothing is deleted on this path.
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [LOG_DESTINATION] });
+    const replaced = `${STREAM_ARN}-2`;
+    const { ctx, requests } = makeContext([stream('ACTIVE')], {
+      site: BOOTSTRAPPED_SITE,
+      logs: world,
+    });
+    await analyticsLogDestinationNode().update?.(
+      withLogDestination(withRecordedStream(ctx, { arn: replaced })),
+    );
+    expect(deliveryCalls(requests)).toStrictEqual(['describeStream', 'putDest']);
+    expect(requests[1]?.body).toStrictEqual({
+      name: LOG_DESTINATION,
+      deliveryDestinationConfiguration: { destinationResourceArn: replaced },
+      outputFormat: 'json',
+    });
+  });
+
+  it("deletes only its own destination, leaving the site's delivery and source alone", async () => {
+    const world = logsWorld({
+      deliveries: [SITE_DELIVERY],
+      destinations: [SITE_DELIVERY_DESTINATION, LOG_DESTINATION],
+    });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await expect(analyticsLogDestinationNode().delete(ctx)).resolves.toBeUndefined();
+    expect(deliveryCalls(requests)).toStrictEqual(['deleteDest']);
+    expect(requests[0]?.body).toStrictEqual({ name: LOG_DESTINATION });
+    expect(world.destinations).toStrictEqual([SITE_DELIVERY_DESTINATION]);
+    expect(world.sourcePresent).toBe(true);
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d']);
+  });
+
+  it('deletes an already-absent destination without throwing', async () => {
+    const world = logsWorld({ destinations: [] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await expect(analyticsLogDestinationNode().delete(ctx)).resolves.toBeUndefined();
+    expect(deliveryCalls(requests)).toStrictEqual(['deleteDest']);
+  });
+});
+
+describe('analytics-log-delivery', () => {
+  it('reads false when the shared source carries no delivery of its own, recording nothing', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await expect(analyticsLogDeliveryNode().read(ctx)).resolves.toBe(false);
+    expect(deliveryCalls(requests)).toStrictEqual(['listDeliveries']);
+    expect(ctx.state.resources).toStrictEqual({});
+  });
+
+  it('reads its own delivery off the shared source and hydrates it, never createdDay', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY, PLUGIN_DELIVERY] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await expect(analyticsLogDeliveryNode().read(ctx)).resolves.toBe(true);
+    expect(deliveryCalls(requests)).toStrictEqual(['listDeliveries']);
+    // `DescribeDeliveries` reports no creation date, so a delivery found
+    // already attached leaves the backfill bound absent rather than fabricated
+    // at today's date - which would be a bound that had moved later.
+    expect(ctx.state.resources['analytics-log-delivery']).toStrictEqual({
+      source: SITE_DELIVERY_SOURCE,
+      destination: LOG_DESTINATION_ARN,
+      distribution: DISTRIBUTION_ARN,
+      delivery: 'configured',
+    });
+  });
+
+  it('leaves a createdDay already in state alone when it hydrates', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY, PLUGIN_DELIVERY] });
+    const { ctx } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    ctx.record('analytics-log-delivery', { createdDay: '2024-05-06' });
+    await analyticsLogDeliveryNode().read(ctx);
+    expect(ctx.state.resources['analytics-log-delivery']?.['createdDay']).toBe('2024-05-06');
+  });
+
+  it("creates the delivery on the site's source with schema.ts's fields, and no putDeliverySource", async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [LOG_DESTINATION] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await analyticsLogDeliveryNode().create(withLogDestination(ctx));
+
+    expect(deliveryCalls(requests)).toStrictEqual(['createDelivery']);
+    expect(deliveryCalls(requests)).not.toContain('putSource');
+    expect(requests[0]?.url).toBe(LOGS_ENDPOINT);
+    // `toStrictEqual`, so an added key fails: `fieldDelimiter` is deliberately
+    // absent, because AWS applies it only to a `plain`/`w3c`/`raw` delivery and
+    // this one is `json` - the format the transform Lambda's `JSON.parse` needs.
+    expect(requests[0]?.body).toStrictEqual({
+      deliverySourceName: SITE_DELIVERY_SOURCE,
+      deliveryDestinationArn: LOG_DESTINATION_ARN,
+      recordFields: [...CLOUDFRONT_RECORD_FIELDS],
+    });
+    // The selection is `schema.ts`'s, not a list restated in `nodes.ts`: these
+    // spot checks pin the two exclusions and the two derivation-only inputs
+    // that make it that file's list rather than any other.
+    const fields = [...CLOUDFRONT_RECORD_FIELDS];
+    expect(fields).toContain('c-ip');
+    expect(fields).toContain('timestamp(ms)');
+    expect(fields).not.toContain('cs(Cookie)');
+    expect(fields).not.toContain('x-forwarded-for');
+    // The site's delivery is untouched and its own is now beside it.
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d', 'd-1']);
+  });
+
+  it('records the UTC day the delivery was created, in a pinned non-UTC zone', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [LOG_DESTINATION] });
+    const { ctx } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    // **The zone is pinned, not inherited.** An instant late in the UTC day
+    // separates a UTC derivation from a local one only where the host sits east
+    // of Greenwich: on a `TZ=UTC` CI runner - the case this assertion has to
+    // hold in, because that is where it runs unattended - the two days coincide
+    // and a local-time derivation would pass it untouched. Pinned to
+    // `Asia/Kolkata`, which is UTC+5:30 the whole year round so no DST
+    // transition can move it, the separation holds on every host.
+    // Restored by name rather than by deleting the key, which the host may
+    // never have set: `Intl` reports the zone the runtime resolved, so putting
+    // that back leaves every later test on the zone it would have had.
+    const hostTz = process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    process.env.TZ = 'Asia/Kolkata';
+    let dayWhileCreating = '';
+    vi.useFakeTimers();
+    try {
+      // 05:15 on 2026-09-01 in the pinned zone; 23:45 on 2026-08-31 in UTC.
+      vi.setSystemTime(new Date('2026-08-31T23:45:00Z'));
+      dayWhileCreating = localDay(new Date());
+      await analyticsLogDeliveryNode().create(withLogDestination(ctx));
+    } finally {
+      vi.useRealTimers();
+      process.env.TZ = hostTz;
+    }
+    // The pin carries the whole guard, so it is asserted rather than assumed:
+    // were a runtime to stop honouring a mid-process `TZ` change, this test
+    // would quietly go back to proving nothing and this line is what says so.
+    expect(dayWhileCreating).toBe('2026-09-01');
+    expect(ctx.state.resources['analytics-log-delivery']).toStrictEqual({
+      source: SITE_DELIVERY_SOURCE,
+      destination: LOG_DESTINATION_ARN,
+      distribution: DISTRIBUTION_ARN,
+      delivery: 'configured',
+      createdDay: '2026-08-31',
+    });
+  });
+
+  it('never advances createdDay when the delivery is created again', async () => {
+    // A bound that moved later would let task 61's backfill insert days
+    // Firehose had already delivered, doubling every row in them.
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [LOG_DESTINATION] });
+    const { ctx } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    ctx.record('analytics-log-delivery', { createdDay: '2020-01-01' });
+    await analyticsLogDeliveryNode().create(withLogDestination(ctx));
+    await analyticsLogDeliveryNode().create(ctx);
+    expect(ctx.state.resources['analytics-log-delivery']?.['createdDay']).toBe('2020-01-01');
+  });
+
+  it("never advances createdDay through the destination's Conflict retry", async () => {
+    // The retry deletes this delivery so the destination can be replaced, and
+    // the next reconcile re-creates it. The bound must survive that untouched.
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [LOG_DESTINATION] });
+    const { ctx } = makeContext([stream('ACTIVE')], { site: BOOTSTRAPPED_SITE, logs: world });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-03-04T00:00:00Z'));
+      await analyticsLogDeliveryNode().create(withLogDestination(withRecordedStream(ctx)));
+      expect(ctx.state.resources['analytics-log-delivery']?.['createdDay']).toBe('2026-03-04');
+
+      // Weeks later, a stale destination forces the retry.
+      vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+      world.putFailures = [{ code: 'ConflictException', message: 'stale destination' }];
+      await analyticsLogDestinationNode().create(ctx);
+      // The retry removed this plugin's delivery, so `read` sees it gone and
+      // the same reconcile pass re-creates it.
+      await expect(analyticsLogDeliveryNode().read(ctx)).resolves.toBe(false);
+      await analyticsLogDeliveryNode().create(ctx);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(ctx.state.resources['analytics-log-delivery']?.['createdDay']).toBe('2026-03-04');
+    expect(world.deliveries.map((delivery) => delivery.id)).toStrictEqual(['site-d', 'd-2']);
+  });
+
+  it('refuses before any AWS call when the site has not been bootstrapped', async () => {
+    const { ctx, requests } = makeContext([], { logs: logsWorld() });
+    await expect(analyticsLogDeliveryNode().create(withLogDestination(ctx))).rejects.toThrow(
+      'run `blogwright bootstrap test` first',
+    );
+    await expect(analyticsLogDeliveryNode().create(ctx)).rejects.toThrow(
+      /cloudfront-distribution has no recorded ARN/,
+    );
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('refuses before any AWS call when no delivery source name was derived', async () => {
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: logsWorld() });
+    const sourceless: PluginContext<AnalyticsConfig> = {
+      ...ctx,
+      names: { ...ctx.names, deliverySource: '' },
+    };
+    await expect(analyticsLogDeliveryNode().create(withLogDestination(sourceless))).rejects.toThrow(
+      /no delivery source name was derived/,
+    );
+    expect(requests).toStrictEqual([]);
+  });
+
+  it('refuses before any AWS call when the destination ARN is not recorded', async () => {
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: logsWorld() });
+    await expect(analyticsLogDeliveryNode().create(ctx)).rejects.toThrow(
+      /analytics-log-destination/,
+    );
+    expect(requests).toStrictEqual([]);
+  });
+
+  it("leaves the site's CloudWatch delivery listed and undeleted once its own exists", async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [LOG_DESTINATION] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await analyticsLogDeliveryNode().create(withLogDestination(ctx));
+    // The read re-lists the shared source, which is `deliveriesForSource` itself.
+    await expect(analyticsLogDeliveryNode().read(ctx)).resolves.toBe(true);
+    expect(world.deliveries).toStrictEqual([
+      SITE_DELIVERY,
+      { id: 'd-1', deliveryDestinationArn: LOG_DESTINATION_ARN },
+    ]);
+    expect(deliveryCalls(requests)).toStrictEqual(['createDelivery', 'listDeliveries']);
+    expect(deliveryCalls(requests)).not.toContain('deleteDelivery:site-d');
+    expect(deliveryCalls(requests)).not.toContain('deleteSource');
+    expect(world.sourcePresent).toBe(true);
+  });
+
+  it('deletes only its own delivery, never the shared source', async () => {
+    // The site's delivery is listed FIRST, so a teardown taking whichever
+    // delivery AWS lists first - which is what `findDeliveryIdBySource` does -
+    // would remove the site's instead of its own.
+    const world = logsWorld({ deliveries: [SITE_DELIVERY, PLUGIN_DELIVERY] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await expect(analyticsLogDeliveryNode().delete(ctx)).resolves.toBeUndefined();
+    expect(deliveryCalls(requests)).toStrictEqual(['listDeliveries', 'deleteDelivery:analytics-d']);
+    expect(deliveryCalls(requests)).not.toContain('deleteSource');
+    expect(world.deliveries).toStrictEqual([SITE_DELIVERY]);
+    expect(world.sourcePresent).toBe(true);
+  });
+
+  it('is re-runnable when its delivery is already gone', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await expect(analyticsLogDeliveryNode().delete(ctx)).resolves.toBeUndefined();
+    expect(deliveryCalls(requests)).toStrictEqual(['listDeliveries']);
+    expect(world.deliveries).toStrictEqual([SITE_DELIVERY]);
+  });
+
+  it('leaves a delivery it cannot attribute exactly where it found it', async () => {
+    // The `?? ''` fallback in `deliveriesForSource` is fail-closed here too: a
+    // delivery AWS reports without a destination ARN matches no name, so it is
+    // not this plugin's and is not removed on a guess.
+    const unattributable = { id: 'unknown-d', deliveryDestinationArn: '' };
+    const world = logsWorld({ deliveries: [unattributable, SITE_DELIVERY, PLUGIN_DELIVERY] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    await analyticsLogDeliveryNode().delete(ctx);
+    expect(deliveryCalls(requests)).toStrictEqual(['listDeliveries', 'deleteDelivery:analytics-d']);
+    expect(world.deliveries).toStrictEqual([unattributable, SITE_DELIVERY]);
+  });
+});
+
+describe('tearing the vended-delivery chain down', () => {
+  /** The chain in `dependsOn` order; `destroyGraph` walks the reverse. */
+  const CHAIN = [analyticsLogDestinationNode(), analyticsLogDeliveryNode()];
+
+  it('removes the delivery, then the destination, and never the shared source', async () => {
+    // The delivery has to go first: AWS rejects `DeleteDeliveryDestination`
+    // while a delivery still points at it - the fake rejects it too - so the
+    // reverse walk is what makes this teardown work at all. That is the
+    // ordering `packages/cli/src/nodes.ts:763-768` documents for the site's own
+    // trio, expressed here as an edge between two nodes. `destroyGraph` lives
+    // in the CLI package, which this one cannot import, so the reverse walk is
+    // spelled out.
+    const world = logsWorld({
+      deliveries: [SITE_DELIVERY, PLUGIN_DELIVERY],
+      destinations: [SITE_DELIVERY_DESTINATION, LOG_DESTINATION],
+    });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    for (const node of [...CHAIN].reverse()) {
+      await expect(node.delete(ctx)).resolves.toBeUndefined();
+    }
+    expect(deliveryCalls(requests)).toStrictEqual([
+      'listDeliveries',
+      'deleteDelivery:analytics-d',
+      'deleteDest',
+    ]);
+    expect(deliveryCalls(requests)).not.toContain('deleteSource');
+    // Everything the site owns is exactly as it was.
+    expect(world.deliveries).toStrictEqual([SITE_DELIVERY]);
+    expect(world.destinations).toStrictEqual([SITE_DELIVERY_DESTINATION]);
+    expect(world.sourcePresent).toBe(true);
+  });
+
+  it('is re-runnable once the whole chain is gone', async () => {
+    const world = logsWorld({ deliveries: [SITE_DELIVERY], destinations: [] });
+    const { ctx, requests } = makeContext([], { site: BOOTSTRAPPED_SITE, logs: world });
+    for (const node of [...CHAIN].reverse()) {
+      await expect(node.delete(ctx)).resolves.toBeUndefined();
+    }
+    expect(deliveryCalls(requests)).toStrictEqual(['listDeliveries', 'deleteDest']);
+    expect(world.deliveries).toStrictEqual([SITE_DELIVERY]);
+  });
+
+  it("raises on a derived destination name over the service's limit, before any call", async () => {
+    // Long enough that the derived destination name overruns 60, short enough
+    // that `deriveNames`' own 63-char check on the site bucket does not fire
+    // first - the guard under test is this module's, not core's.
+    const longName = 'a'.repeat(45);
+    const { ctx, requests } = makeContext([], {
+      config: { siteName: longName },
+      site: BOOTSTRAPPED_SITE,
+      logs: logsWorld(),
+    });
+    await expect(analyticsLogDestinationNode().delete(ctx)).rejects.toThrow(
+      /derived analytics log delivery destination name .* over AWS's 60-character limit/,
+    );
+    expect(requests).toStrictEqual([]);
   });
 });

@@ -595,6 +595,28 @@ task 59, whose role rewrite is what its warning backs.
 
 **Open questions**
 
+- *A LIVE production bug, pre-existing and outside this plan: `blogwright
+  deploy` throws for any operator west of Greenwich.* Found by task 53's
+  timezone sweep 2026-08-31 and reproduced independently at the tip.
+  `zipSync(..., { mtime: new Date('1980-01-01T00:00:00Z') })` throws
+  `date not in range 1980-2099` under any zone whose **1980** UTC offset was
+  negative, because fflate reads the date with local-time getters and sees
+  year 1979. Verified: `TZ=America/New_York` throws, `TZ=UTC` packs.
+  Two sites. `packages/cli/src/agent-package.ts:53` is **pre-existing** - it
+  predates this plan and breaks `blogwright bootstrap` and `deploy` today for
+  every operator in the Americas, and for Pacific/Kiritimati, which was UTC-10
+  in 1980. `packages/analytics/src/nodes.ts:705` is task 50's, the same
+  literal, and would break the analytics transform the same way.
+  **CI cannot see it.** The runner is `TZ=UTC`, which is the one condition
+  under which the call succeeds - the identical shape as the test defect that
+  uncovered it, where a mutant survived under UTC and died only on a non-UTC
+  host. Every gate in this build has been green while this was true.
+  The fix is small - pass epoch-relative components, or a date whose local
+  rendering is inside the range in every zone - but it is a core change with
+  two call sites and deserves its own task and its own gate rather than riding
+  along in an analytics node. It is also the strongest argument yet for running
+  the suite under at least one non-UTC zone in CI: this bug is invisible to
+  every check the repo currently runs.
 - *Tasks 27 and 29 had no edge between them, and landing 27 first would have
   left a malformed `pds` block validated by nothing.* Found by task 27's gate
   2026-08-31, after the fact. Task 27 removes core's validation of the `pds`

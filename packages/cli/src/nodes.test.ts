@@ -50,9 +50,6 @@ describe('cloudfront log delivery self-heal', () => {
     return `arn:aws:logs:us-east-1:123456789012:delivery-destination:${name}`;
   }
 
-  /** The analytics plugin's delivery: a second delivery hung off the site's shared source. */
-  const FOREIGN = { id: 'analytics-d', deliveryDestinationArn: destArn('staging-analytics-dest') };
-
   /**
    * Stands in for the delivery source as AWS actually behaves: `DeleteDeliverySource`
    * is REJECTED while any delivery is still attached (a Conflict that
@@ -128,11 +125,21 @@ describe('cloudfront log delivery self-heal', () => {
     // derived destination name. The foreign delivery is listed FIRST, so a guard
     // that picked its own delivery by position would pick the wrong one.
     const own = { id: 'd-1', deliveryDestinationArn: destArn(ctx.names.deliveryDestination) };
+    // The analytics plugin's delivery: a second delivery hung off this same
+    // shared source, under the destination name `packages/analytics/src/nodes.ts`
+    // derives (`<prefix>-analytics-cf-dest`). Built from `names.prefix` here
+    // rather than written out, so what the guard is proved to refuse over is the
+    // plugin's real delivery and not a plausible stand-in for one - this package
+    // cannot import that one, so the derivation is restated instead.
+    const foreign = {
+      id: 'analytics-d',
+      deliveryDestinationArn: destArn(`${ctx.names.prefix}-analytics-cf-dest`),
+    };
     // An empty ARN is what `deliveriesForSource` yields for a delivery AWS returns
     // without a `deliveryDestinationArn` - unattributable, and so not the site's.
     const unattributable = { id: 'unknown-d', deliveryDestinationArn: '' };
     aws.deliveries = opts.foreign
-      ? [FOREIGN, own]
+      ? [foreign, own]
       : opts.unattributable
         ? [unattributable, own]
         : [own];

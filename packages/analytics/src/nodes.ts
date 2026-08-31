@@ -3,7 +3,7 @@
  * CloudFront-logs-to-Iceberg pipeline is built from and nothing else: the
  * site's own bucket, distribution and log group stay in the CLI's graph
  * (`packages/cli/src/nodes.ts`) and are never touched from here. This module
- * carries ten of them, in three chains. The table chain - the S3 Tables bucket,
+ * carries all twelve of them, in four chains. The table chain - the S3 Tables bucket,
  * the namespace inside it, the `page_views` table, and the Glue federation
  * Firehose reads that table through - runs `analytics-table-bucket` ->
  * `analytics-namespace` -> `analytics-table` ->
@@ -15,13 +15,23 @@
  * Firehose cannot deliver lands in, the role it assumes, and the stream itself
  * - runs `analytics-error-bucket` -> `analytics-firehose-role` ->
  * `analytics-firehose-stream`, and joins the other two chains through the
- * role's four grants and the stream's destination. All three are wired through
+ * role's four grants and the stream's destination. The vended-delivery chain -
+ * the CloudWatch delivery destination pointing at that stream and the delivery
+ * joining it to the site's log source - runs `analytics-log-destination` ->
+ * `analytics-log-delivery` and hangs off the stream. All four are wired through
  * `dependsOn`, and a node depends on every node whose recorded ARN it
- * interpolates. The remaining two of the spec's twelve - the CloudWatch
- * delivery destination and the delivery joining it to the site's log source -
- * are appended to this module as later tasks land,
- * and a later `buildAnalyticsNodes(ctx)` returns the assembled set to the SPI's
- * `Plugin.nodes`; nothing here assembles or reconciles anything itself.
+ * interpolates. A later `buildAnalyticsNodes(ctx)` returns the assembled set to
+ * the SPI's `Plugin.nodes`; nothing here assembles or reconciles anything
+ * itself.
+ *
+ * **The delivery source the last chain hangs off is the site's, and this module
+ * only ever reads it.** AWS permits exactly one delivery source per
+ * distribution, so the site's CloudWatch delivery and this plugin's Firehose
+ * delivery necessarily share one, and `packages/cli/src/nodes.ts`'s
+ * `logDeliveryNode` owns it. Nothing here calls `putDeliverySource` or
+ * `deleteDeliverySource`; the source's name is read off `ctx.names` and the
+ * evidence that the site has been bootstrapped off `ctx.siteState`, the SPI's
+ * read-only view of the site's state.
  *
  * **Everything in this graph is created in `us-east-1`, whatever
  * `config.region` says.** CloudFront standard logging accepts a Firehose
@@ -52,12 +62,17 @@
 
 import { join } from 'node:path';
 
-import type {
-  PluginContext,
-  ResourceNode,
-  ResourceOutputs,
-  S3Client,
-  SecretsManagerClient,
+import {
+  AwsError,
+  pollUntil,
+  type DeliveryOutputFormat,
+  type DeliverySummary,
+  type LogsClient,
+  type PluginContext,
+  type ResourceNode,
+  type ResourceOutputs,
+  type S3Client,
+  type SecretsManagerClient,
 } from 'blogwright-core';
 import { zipSync } from 'fflate';
 
@@ -78,7 +93,11 @@ import type {
 } from './aws/s3tables.js';
 import { resolveAnalyticsConfig, type AnalyticsConfig } from './config.js';
 import { ANALYTICS_PACKAGE_DIR } from './paths.js';
-import { PAGE_VIEWS_COLUMNS, PAGE_VIEWS_PARTITION_COLUMN } from './schema.js';
+import {
+  CLOUDFRONT_RECORD_FIELDS,
+  PAGE_VIEWS_COLUMNS,
+  PAGE_VIEWS_PARTITION_COLUMN,
+} from './schema.js';
 import { SALT_SECRET_NAME_ENV } from './transform/handler.js';
 import {
   TRANSFORM_BUNDLE_DIR,
@@ -131,6 +150,12 @@ const FIREHOSE_ROLE_NODE = 'analytics-firehose-role';
 
 /** The `analytics-firehose-stream` node id. */
 const FIREHOSE_STREAM_NODE = 'analytics-firehose-stream';
+
+/** The `analytics-log-destination` node id. */
+const LOG_DESTINATION_NODE = 'analytics-log-destination';
+
+/** The `analytics-log-delivery` node id. */
+const LOG_DELIVERY_NODE = 'analytics-log-delivery';
 
 /**
  * The Glue catalog the S3 Tables integration registers itself under. The one
@@ -2317,6 +2342,591 @@ export function analyticsFirehoseStreamNode(): AnalyticsNode {
       // reverse, so this runs before `analytics-firehose-role` removes the role
       // the stream assumes.
       await firehose(ctx).deleteDeliveryStream(streamName(ctx));
+    },
+  };
+}
+
+/**
+ * The suffix the plugin's own CloudWatch delivery destination carries,
+ * appended to `ctx.names.prefix`. See {@link ERROR_BUCKET_SUFFIX} for why the
+ * prefix rather than {@link resolveAnalyticsConfig} is the source of the
+ * environment: the `analytics` block owns six settings and this is not one of
+ * them, so there is no operator override to honour.
+ *
+ * **It must not resolve to `ctx.names.deliveryDestination`, and that single
+ * property is what the site's own teardown guard rests on.** AWS permits
+ * exactly one delivery source per distribution, so this plugin's delivery
+ * necessarily hangs off the source the site created, and
+ * `packages/cli/src/nodes.ts`'s `isOwnDelivery` tells the two apart by the one
+ * thing that distinguishes them: the final `:`-separated segment of a
+ * delivery's `deliveryDestinationArn`, which is the destination's name,
+ * compared against `ctx.names.deliveryDestination` (`<env>-<siteName>-cf-dest`,
+ * `packages/core/src/config.ts`). A suffix that made the two names equal would
+ * make `blogwright destroy` treat this plugin's delivery as the site's own and
+ * tear the shared source out from under it without refusing - the exact
+ * failure task 52's two guards exist to prevent, and the reason this name is
+ * `-analytics-cf-dest` and not `-cf-dest`.
+ */
+const LOG_DESTINATION_SUFFIX = '-analytics-cf-dest';
+
+/**
+ * The longest name CloudWatch Logs accepts for a delivery destination
+ * (`PutDeliveryDestination`'s `name`: 1..60 characters, `[\w-]*`). Checked
+ * where the name is derived, the guard {@link boundedName} applies to every
+ * other derived name in this module - `ctx.names.prefix` is bounded only by
+ * the site bucket's 63, so an environment and site name that fit everywhere
+ * else can still overrun this one.
+ */
+const LOG_DESTINATION_NAME_MAX_LENGTH = 60;
+
+/**
+ * The format CloudWatch Logs renders each CloudFront record in before handing
+ * it to the Firehose stream, and the one value here the transform Lambda makes
+ * non-negotiable: `transform/handler.ts` base64-decodes each record and
+ * `JSON.parse`s it, and `transform/map-record.ts` reads CloudFront field names
+ * (`timestamp(ms)`, `c-ip`, `cs-uri-stem`) off the parsed object. `plain`,
+ * `w3c` and `raw` all deliver delimited text that `JSON.parse` throws on, which
+ * the handler reports as `ProcessingFailed` for every record: the error bucket
+ * fills, the dashboard stays empty, and nothing names this constant as the
+ * cause. `parquet` is an S3-destination format and has no meaning for a
+ * Firehose destination at all.
+ *
+ * Because the format is `json`, `createDelivery`'s `fieldDelimiter` is
+ * deliberately **not** sent - see {@link analyticsLogDeliveryNode}'s `create`.
+ *
+ * It is recorded beside the destination's ARN because it is immutable once the
+ * destination exists; {@link analyticsLogDestinationNode}'s `update` is what
+ * that recording is for.
+ */
+const DELIVERY_OUTPUT_FORMAT: DeliveryOutputFormat = 'json';
+
+/**
+ * How often {@link requireActiveStream} re-describes a delivery stream that is
+ * still `CREATING`, and how long it waits before refusing. Firehose brings a
+ * `DirectPut` stream to `ACTIVE` in well under a minute, so five minutes is
+ * generous enough that a first bootstrap does not fail on a slow account and
+ * short enough that a stream which is never going to become active is reported
+ * rather than waited on indefinitely.
+ */
+const STREAM_ACTIVE_POLL_INTERVAL_MS = 5_000;
+
+/** See {@link STREAM_ACTIVE_POLL_INTERVAL_MS} - the two are chosen as a pair. */
+const STREAM_ACTIVE_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * The site's CloudFront distribution node, as `packages/cli/src/nodes.ts`
+ * names it. A node id from the **site's** graph, spelled here rather than
+ * imported because this package does not depend on `blogwright` and never
+ * will: the site's outputs are reached read-only through
+ * {@link requireSiteDeliverySource}.
+ */
+const SITE_DISTRIBUTION_NODE = 'cloudfront-distribution';
+
+/**
+ * The state key holding the UTC day this plugin's delivery was **first**
+ * created - the idempotency bound the change spec's §Backfill of historical
+ * logs defines and task 61 reads.
+ *
+ * Written once and never advanced. Backfill inserts only whole days *strictly
+ * before* it, on the reasoning that Firehose received nothing before its
+ * delivery existed, so the two paths' row sets are disjoint. The two error
+ * directions are not symmetric, which is why the rule is write-once rather
+ * than keep-current: a bound that is too *early* loses at most the day at the
+ * seam, which the spec states and accepts, while a bound that moved *later*
+ * would let backfill insert days Firehose had already delivered and silently
+ * double every row in them. So a second reconcile, a re-created delivery and
+ * the destination node's Conflict retry all leave it exactly as it was.
+ *
+ * `read` never writes it either, even though it hydrates the rest of this
+ * node's outputs off the live delivery: `DescribeDeliveries` reports no
+ * creation date, so a delivery found already attached to a state file that
+ * lost this key leaves task 61 with no bound and an actionable refusal. That
+ * is the loud direction, and it is preferred to today's date, which would be a
+ * bound that moved later.
+ */
+const CREATED_DAY_KEY = 'createdDay';
+
+/** `YYYY-MM-DD` - the leading characters of an ISO-8601 timestamp that are its UTC day. */
+const ISO_DAY_LENGTH = 10;
+
+/**
+ * The CloudWatch Logs client, taken off `ctx.clients` unchanged rather than
+ * built by {@link createAnalyticsClients}, and the only client in this module
+ * that is core's own instance. The change spec says why: `LogsClient` stays in
+ * core because the *site* graph owns it, and `logsUsEast1` is already the
+ * us-east-1 instance core built for CloudFront vended log delivery - the same
+ * reason `ctx.clients.iam` is used unchanged for this plugin's two roles.
+ * `ctx.clients.logs` would sign in `config.region`, where neither the site's
+ * delivery source nor this plugin's stream exists.
+ */
+function logs(ctx: AnalyticsContext): LogsClient {
+  return ctx.clients.logsUsEast1;
+}
+
+/** The plugin's own CloudWatch delivery destination name. See {@link LOG_DESTINATION_SUFFIX}. */
+function logDestinationName(ctx: AnalyticsContext): string {
+  return boundedName(
+    `${ctx.names.prefix}${LOG_DESTINATION_SUFFIX}`,
+    LOG_DESTINATION_NAME_MAX_LENGTH,
+    'log delivery destination',
+  );
+}
+
+/**
+ * True when `delivery` is the one this plugin created.
+ *
+ * The mirror image of `packages/cli/src/nodes.ts`'s `isOwnDelivery`, and
+ * deliberately the same test, because the two have to partition one shared
+ * list: the final `:`-separated segment of a `delivery-destination` ARN is the
+ * destination's name, and the destination a delivery feeds is the only thing
+ * that distinguishes two deliveries hanging off one source. The names the two
+ * predicates compare against are kept distinct by
+ * {@link LOG_DESTINATION_SUFFIX}, so each selects exactly what the other
+ * rejects.
+ *
+ * Position cannot stand in for it - `findDeliveryIdBySource` returns whichever
+ * delivery AWS lists first, which on this source may well be the site's - and
+ * neither can this node's recorded destination ARN, which is empty precisely
+ * when the Conflict retry needs it, because `putDeliveryDestination` threw
+ * before anything was recorded. A delivery AWS reports without a destination
+ * ARN matches no name and so is not this plugin's: fail-closed, which here
+ * means this plugin deletes only what it can attribute to itself.
+ */
+function isPluginDelivery(delivery: DeliverySummary, destinationName: string): boolean {
+  return delivery.deliveryDestinationArn.split(':').pop() === destinationName;
+}
+
+/**
+ * The ids of this plugin's own deliveries on the site's shared delivery
+ * source. Every other delivery on it - the site's own CloudWatch copy above
+ * all - is filtered out and left exactly as it was found.
+ *
+ * There is no refusal here, and the asymmetry with
+ * `packages/cli/src/nodes.ts`'s `ownDeliveryIdsOrRefuse` is the point rather
+ * than an omission. That function refuses outright when the shared source
+ * carries a delivery the site does not own, because both of its callers go on
+ * to delete the *source*, which AWS rejects while any delivery is still
+ * attached - so a foreign delivery forecloses what it was about to do.
+ * Nothing in this module ever deletes that source, so a delivery this plugin
+ * does not own obstructs nothing here; it is simply not this plugin's to
+ * touch, and the filter is the whole of the answer.
+ */
+async function pluginDeliveryIds(ctx: AnalyticsContext): Promise<string[]> {
+  const destinationName = logDestinationName(ctx);
+  const deliveries = await logs(ctx).deliveriesForSource(ctx.names.deliverySource);
+  return deliveries.filter((d) => isPluginDelivery(d, destinationName)).map((d) => d.id);
+}
+
+/** Remove every delivery this plugin owns off the shared source, and nothing else. */
+async function clearPluginDeliveries(ctx: AnalyticsContext): Promise<void> {
+  for (const id of await pluginDeliveryIds(ctx)) {
+    await logs(ctx).deleteDelivery(id);
+  }
+}
+
+/**
+ * The delivery stream's ARN as `analytics-firehose-stream` recorded it. See
+ * {@link requireRecordedArn}.
+ *
+ * Read back rather than derived, which is what makes this node's one declared
+ * edge load-bearing: `analytics-firehose-stream` sorts *after*
+ * `analytics-log-destination` alphabetically, so `topoSort`'s zero-indegree
+ * ordering would run this node first if the edge were dropped, and the
+ * destination would be created pointing at `undefined`.
+ */
+function requireStreamArn(ctx: AnalyticsContext): string {
+  return requireRecordedArn(ctx, {
+    what: 'delivery stream',
+    node: FIREHOSE_STREAM_NODE,
+    dependent: LOG_DESTINATION_NODE,
+    lack: 'stream to point the CloudWatch delivery destination at',
+  });
+}
+
+/**
+ * The delivery destination's ARN as `analytics-log-destination` recorded it.
+ * See {@link requireRecordedArn}.
+ */
+function requireLogDestinationArn(ctx: AnalyticsContext): string {
+  return requireRecordedArn(ctx, {
+    what: 'log delivery destination',
+    node: LOG_DESTINATION_NODE,
+    dependent: LOG_DELIVERY_NODE,
+    lack: 'destination to deliver the CloudFront records to',
+  });
+}
+
+/**
+ * Wait for the delivery stream to reach `ACTIVE`, and refuse rather than build
+ * a delivery over one that never got there.
+ *
+ * **This is task 51's routed finding, discharged here rather than left
+ * implicit.** `createStream` rejects only `deleting` and `delete-failed`, so
+ * `applyGraph` reports `analytics-firehose-stream` done over a stream that is
+ * still `CREATING`. That is right for *that* node - the stream is being
+ * created, and nothing it does needs the stream to accept a record - and wrong
+ * for this one, which is the first consumer that cares. The destination and
+ * the delivery are where CloudWatch starts pushing records at the stream:
+ * pointed at one that is not yet accepting them, the records are refused, no
+ * node fails, `analytics status` reports every resource present, and the only
+ * symptom is an empty dashboard with no error anywhere.
+ *
+ * **Waiting rather than refusing outright is the deliberate half.** A fresh
+ * `analytics bootstrap` creates the stream and reaches this node seconds
+ * later, so a bare refusal would fail every first run and be re-run into
+ * success - which teaches an operator to re-run past this message rather than
+ * read it. `pollUntil` is the precedent task 51's contract names, and the
+ * CLI's own (`packages/cli/src/nodes.ts:705`, the distribution's deployment
+ * wait).
+ *
+ * The `done` predicate settles on anything that is no longer `creating`, not
+ * on `active` alone, so a stream that has already failed to create is reported
+ * at once instead of being waited out for {@link STREAM_ACTIVE_TIMEOUT_MS}.
+ * The check after it is what turns every non-`active` outcome into one message:
+ * a `create-failed` stream, a stream deleted from under the run, and a stream
+ * still `creating` when the deadline passed - `pollUntil` returns its last
+ * value rather than throwing, so without this check a timeout would fall
+ * straight through into creating the delivery.
+ */
+async function requireActiveStream(ctx: AnalyticsContext): Promise<void> {
+  const name = streamName(ctx);
+  const settled = await pollUntil(
+    () => firehose(ctx).describeDeliveryStream(name),
+    (status) => status === undefined || status.state !== 'creating',
+    { intervalMs: STREAM_ACTIVE_POLL_INTERVAL_MS, timeoutMs: STREAM_ACTIVE_TIMEOUT_MS },
+  );
+  if (settled?.state === 'active') return;
+  throw new Error(
+    `the analytics delivery stream "${name}" is ${settled === undefined ? 'not readable' : settled.state} rather than active, so a CloudFront log delivery pointed at it would accept no records and nothing would report it - refusing to wire one. ${settled?.state === 'creating' ? `The stream is still being created; re-run \`blogwright analytics bootstrap ${ctx.env}\` in a minute.` : `Check the stream in the Firehose console, then re-run \`blogwright analytics bootstrap ${ctx.env}\`.`}`,
+  );
+}
+
+/**
+ * Create or repoint the delivery destination and record what it is.
+ *
+ * **Record ordering**, which this module decides per node: all three values
+ * land after the one call returns, because there is exactly one call. The
+ * incremental recording `packages/cli/src/nodes.ts:717-719` performs - which
+ * `analytics-table` and `analytics-firehose-stream` both copy - exists to
+ * survive a crash *between* two mutating calls, and this node makes no such
+ * pair. Recording earlier would only claim a destination the service has not
+ * confirmed; recording later is impossible, since the ARN arrives in the
+ * response.
+ *
+ * The ARN carries this module's standing guard against recording `''` as
+ * though it were an ARN (`putDeliveryDestination` falls back to the empty
+ * string for a body carrying none). An unrecorded ARN makes `read` answer
+ * false and the next reconcile re-put the destination, which is idempotent; an
+ * empty one recorded under `arn` reads downstream as a real one, and
+ * `analytics-log-delivery` would create its delivery against it.
+ */
+async function putLogDestination(
+  ctx: AnalyticsContext,
+  name: string,
+  streamArn: string,
+): Promise<void> {
+  const arn = await logs(ctx).putDeliveryDestination(name, streamArn, {
+    outputFormat: DELIVERY_OUTPUT_FORMAT,
+  });
+  const out = output(ctx, LOG_DESTINATION_NODE);
+  out.name = name;
+  recordOptional(out, 'arn', arn === '' ? undefined : arn);
+  out.outputFormat = DELIVERY_OUTPUT_FORMAT;
+}
+
+/**
+ * The CloudWatch delivery destination the site's CloudFront records are
+ * delivered to - **this plugin's own, alongside the site's and never in place
+ * of it.**
+ *
+ * Its one edge is the node whose recorded ARN it points at. `PutDeliveryDestination`
+ * accepts a `destinationResourceArn` for a resource that does not exist yet, so
+ * without the edge the destination would be created against `undefined` and the
+ * first symptom would be records going nowhere - see {@link requireStreamArn}.
+ *
+ * The output format is the one thing about a destination that cannot be
+ * changed once it exists, which is why `update` replaces rather than mutates
+ * and why the configured format is recorded beside the ARN in the first place.
+ */
+export function analyticsLogDestinationNode(): AnalyticsNode {
+  return {
+    id: LOG_DESTINATION_NODE,
+    dependsOn: [FIREHOSE_STREAM_NODE],
+    title: `CloudWatch delivery destination (${ANALYTICS_REGION})`,
+    async read(ctx) {
+      // State, not AWS: core's `LogsClient` exposes no describe for a delivery
+      // destination, and adding one is a change to core this task does not own.
+      // `update` is what makes that safe rather than merely cheap - it re-puts
+      // unconditionally, so a destination deleted outside this tool is restored
+      // on the next reconcile instead of being believed present forever on the
+      // strength of this answer. No `output()` call here: a `read` that finds
+      // nothing must not leave an empty entry in the state file.
+      const arn = ctx.state.resources[LOG_DESTINATION_NODE]?.arn;
+      return typeof arn === 'string' && arn !== '';
+    },
+    async create(ctx) {
+      const name = logDestinationName(ctx);
+      // Resolved before the wait, so a missing edge fails with no AWS call at all.
+      const streamArn = requireStreamArn(ctx);
+      await requireActiveStream(ctx);
+      try {
+        await putLogDestination(ctx, name, streamArn);
+      } catch (err) {
+        // A destination left behind by a previous stack carries an output format
+        // that cannot be changed, and `PutDeliveryDestination` answers a Conflict
+        // rather than replacing it. Clear this plugin's own delivery and its own
+        // destination and retry once - the shape of
+        // `packages/cli/src/nodes.ts:743-761`, minus the one call in it that
+        // would take the site down too.
+        //
+        // **The deliberate divergence is the absent `deleteDeliverySource`.**
+        // The site's retry deletes the source at
+        // `packages/cli/src/nodes.ts:758` because removing the source *is* its
+        // retry: `PutDeliverySource` will not repoint an existing one. This
+        // plugin never creates, repoints or deletes that source - it is the
+        // site's, and the site's own CloudWatch delivery hangs off it. Copying
+        // that line here would either throw (AWS rejects the delete while the
+        // site's delivery is attached, and `deleteDeliverySource` swallows only
+        // a not-found) or, once the site's delivery had gone with it, stop the
+        // site's log delivery while the site's state still recorded it as
+        // `configured`.
+        //
+        // The delivery is cleared before the destination for the same reason
+        // the site's teardown deletes deliveries before the source
+        // (`packages/cli/src/nodes.ts:763-768`): AWS rejects
+        // `DeleteDeliveryDestination` while a delivery still points at it, and
+        // `deleteDeliveryDestination` swallows only a not-found.
+        if (!(err instanceof AwsError && /Conflict/i.test(err.code))) throw err;
+        ctx.logger.step(
+          `stale analytics delivery destination "${name}" from a previous stack - removing it and its delivery, and retrying`,
+        );
+        await clearPluginDeliveries(ctx);
+        await logs(ctx).deleteDeliveryDestination(name);
+        await putLogDestination(ctx, name, streamArn);
+      }
+    },
+    async update(ctx) {
+      const name = logDestinationName(ctx);
+      const recorded = recordedText(ctx, LOG_DESTINATION_NODE, 'outputFormat');
+      // A state file carrying no recorded format is NOT treated as a mismatch,
+      // which is the opposite of `analytics-firehose-stream`'s `undefined`
+      // handling and for the opposite reason. There, pushing the desired
+      // configuration is an in-place `UpdateDestination` that costs nothing;
+      // here it is a delete and a re-create that drops the delivery and loses
+      // the records arriving in the gap. Destructive on a guess is the wrong
+      // direction, and the re-put below still converges everything mutable.
+      if (recorded !== undefined && recorded !== DELIVERY_OUTPUT_FORMAT) {
+        // **The output format is immutable once a destination exists**, so this
+        // is a replacement and not an update: `PutDeliveryDestination` over a
+        // live destination does not change the format it renders records in
+        // (the change spec's §`LogsClient` delivery configuration says so in as
+        // many words). Delete, then re-create.
+        //
+        // This plugin's own delivery has to come off first - AWS rejects
+        // `DeleteDeliveryDestination` while a delivery points at it. That
+        // leaves the delivery missing, which is exactly what
+        // `analytics-log-delivery`'s `read` is written to notice: it lists the
+        // deliveries on the site's source rather than trusting its own state,
+        // so the same reconcile pass re-creates it. This node is its declared
+        // dependency, so it always runs first.
+        ctx.logger.warn(
+          `the analytics delivery destination "${name}" was created with output format "${recorded}" and this build needs "${DELIVERY_OUTPUT_FORMAT}", which cannot be changed in place - replacing it, and the records arriving during the gap are lost`,
+        );
+        await clearPluginDeliveries(ctx);
+        await logs(ctx).deleteDeliveryDestination(name);
+      }
+      // Re-put on every reconcile, `bucketPolicyNode`'s discipline
+      // (`packages/cli/src/nodes.ts`): `PutDeliveryDestination` is an
+      // idempotent upsert and the resource ARN it carries is not fixed.
+      // `analytics-firehose-stream`'s own `update` falls back to *replacing*
+      // the stream, and a replacement carries a NEW ARN - "the CloudFront log
+      // delivery has to be reconciled against it", in that node's own words.
+      // This is the reconcile that does it.
+      const streamArn = requireStreamArn(ctx);
+      await requireActiveStream(ctx);
+      await putLogDestination(ctx, name, streamArn);
+    },
+    async delete(ctx) {
+      // Only this plugin's destination, and never the shared delivery source.
+      // The delivery pointing at it is gone by now: `destroyGraph` walks the
+      // topological order in reverse (`packages/cli/src/graph.ts`), so
+      // `analytics-log-delivery` - which declares this node as its dependency -
+      // has already run. That is the same delivery-before-destination ordering
+      // the site's own teardown comment documents at
+      // `packages/cli/src/nodes.ts:763-768`, expressed as an edge rather than
+      // as two statements in one node, because here the two resources are two
+      // nodes. `deleteDeliveryDestination` swallows a not-found, so a
+      // half-finished teardown is re-runnable.
+      await logs(ctx).deleteDeliveryDestination(logDestinationName(ctx));
+    },
+  };
+}
+
+/**
+ * The site's half of the wiring: the shared delivery source, and the
+ * distribution whose logs travel through it.
+ */
+interface SiteDeliverySource {
+  /** `ctx.names.deliverySource` - the source the site's own node created. */
+  readonly source: string;
+  /** The site's CloudFront distribution ARN, read from the site's recorded outputs. */
+  readonly distribution: string;
+}
+
+/**
+ * The site's delivery source and the distribution behind it, or a throw naming
+ * `blogwright bootstrap` as the fix.
+ *
+ * **Both are read off the site and neither is written.** The name comes from
+ * `ctx.names`, the deterministic set core derived for this environment, and
+ * the distribution ARN from `ctx.siteState` - the read-only view of
+ * `state/<env>.json` the SPI provides, every property `readonly` all the way
+ * into the map values. Never from a `StateStore` constructed over the site's
+ * key: `ctx.store`, `ctx.state` and `ctx.save()` are all scoped to
+ * `state/<env>.analytics.json`, and `siteState` is the only route to the
+ * site's own file. That distinction typechecks either way, so it is stated
+ * here rather than left to be noticed in an S3 key.
+ *
+ * The distribution ARN is what makes this a bootstrap check rather than a
+ * derivation. `ctx.names.deliverySource` is a pure function of the
+ * environment, so it names a source whether or not one exists; the site's
+ * recorded distribution ARN is the observable saying the site graph has
+ * actually run, and the site's node creates the delivery source in the same
+ * `wire()` that records it (`packages/cli/src/nodes.ts:713-734`).
+ *
+ * The source is checked too, even though `deriveNames` cannot produce an empty
+ * one, so that the guard's name and its body agree on their own - the same
+ * re-application `packages/cli/src/nodes.ts`'s `ownDeliveryIdsOrRefuse` makes
+ * of its own predicate, and for the same reason.
+ */
+function requireSiteDeliverySource(ctx: AnalyticsContext): SiteDeliverySource {
+  const source = ctx.names.deliverySource;
+  const distribution = ctx.siteState.resources[SITE_DISTRIBUTION_NODE]?.arn;
+  if (source === '' || typeof distribution !== 'string' || distribution === '') {
+    const missing =
+      source === ''
+        ? 'no delivery source name was derived for this environment'
+        : `${SITE_DISTRIBUTION_NODE} has no recorded ARN in the site's state`;
+    throw new Error(
+      `the "${ctx.env}" site's CloudFront log delivery source is not available (${missing}), and this plugin never creates one - it hangs its delivery off the source the site already owns; run \`blogwright bootstrap ${ctx.env}\` first`,
+    );
+  }
+  return { source, distribution };
+}
+
+/**
+ * Today's UTC day as `YYYY-MM-DD`. `Date.prototype.toISOString` renders in UTC
+ * by definition, so the day recorded here is in the same calendar as the
+ * table's `day` partition, which `transform/map-record.ts` derives from
+ * CloudFront's `timestamp(ms)` - also UTC. The two have to agree, because task
+ * 61's backfill compares partition days against this bound.
+ */
+function utcDay(now: Date): string {
+  return now.toISOString().slice(0, ISO_DAY_LENGTH);
+}
+
+/**
+ * The delivery joining the site's existing delivery source to this plugin's
+ * destination - **a second delivery on a source the plugin reads, never
+ * creates, never repoints and never deletes.**
+ *
+ * `putDeliverySource` is not called here and must never be. AWS permits one
+ * delivery source per distribution and the site's node owns it
+ * (`packages/cli/src/nodes.ts`'s `logDeliveryNode`); this node reads its name
+ * off `ctx.names` and attaches a second delivery beside the site's CloudWatch
+ * one. The site's copy is left with the field list AWS defaults to, which is
+ * deliberate and is `schema.ts`'s to explain.
+ *
+ * There is no `update`. CloudWatch Logs has no `UpdateDelivery`: the record
+ * fields a delivery selects are fixed when it is created, exactly as the
+ * `page_views` table's schema is fixed when *it* is created
+ * (`aws/s3tables.ts`'s `createTable` reconciles no existing schema). Changing
+ * the column set is a rebuild of this pipeline in both places, not a
+ * reconcile, and pretending otherwise in one of the two would be worse than
+ * saying so in both.
+ */
+export function analyticsLogDeliveryNode(): AnalyticsNode {
+  return {
+    id: LOG_DELIVERY_NODE,
+    dependsOn: [LOG_DESTINATION_NODE],
+    title: 'CloudFront log delivery to the analytics stream',
+    async read(ctx) {
+      // AWS, not state, and for a reason the state cannot cover: this
+      // delivery lives on a source two stacks share, so it can go missing
+      // without this plugin doing anything - the destination replacement below
+      // detaches it on purpose, and a site re-bootstrap can reach it too.
+      // Listing is also what `delete` has to do anyway (`createDelivery`
+      // returns no id, so there is nothing to record and look up later), so
+      // this costs one call that the teardown path already pays.
+      const site = requireSiteDeliverySource(ctx);
+      const destinationName = logDestinationName(ctx);
+      const found = (await logs(ctx).deliveriesForSource(site.source)).find((delivery) =>
+        isPluginDelivery(delivery, destinationName),
+      );
+      if (found === undefined) return false;
+      const out = output(ctx, LOG_DELIVERY_NODE);
+      out.source = site.source;
+      out.destination = found.deliveryDestinationArn;
+      out.distribution = site.distribution;
+      out.delivery = 'configured';
+      // `createdDay` is deliberately absent from this hydration - see
+      // {@link CREATED_DAY_KEY}. `output` re-records rather than replaces, so
+      // one already in state survives this untouched.
+      return true;
+    },
+    async create(ctx) {
+      // Both reads happen before the call, so an unbootstrapped site and a
+      // missing destination each fail with nothing sent.
+      const site = requireSiteDeliverySource(ctx);
+      const destinationArn = requireLogDestinationArn(ctx);
+      await logs(ctx).createDelivery(site.source, destinationArn, {
+        // `CLOUDFRONT_RECORD_FIELDS`, never a list restated here: `schema.ts`
+        // owns which CloudFront fields exist, which ones fill a column, and
+        // which two (`cs(Cookie)`, `x-forwarded-for`) are excluded because they
+        // carry personal data with no analytic use.
+        //
+        // No `fieldDelimiter`, deliberately. AWS documents `createDelivery`'s
+        // delimiter as applying "when the final output format of a delivery is
+        // in plain, w3c, or raw format", and {@link DELIVERY_OUTPUT_FORMAT} is
+        // `json` because the transform Lambda parses each record with
+        // `JSON.parse`. Sending a delimiter with a JSON delivery would be a
+        // request field with no meaning for this delivery at best, and a
+        // `ValidationException` that fails every bootstrap at worst.
+        recordFields: CLOUDFRONT_RECORD_FIELDS,
+      });
+      // **Record ordering.** Everything lands after the one call returns, for
+      // {@link putLogDestination}'s reason: this node makes a single mutating
+      // call, so there is no interval between two of them for a crash to fall
+      // into, and the incremental recording at
+      // `packages/cli/src/nodes.ts:717-719` is answering a problem this node
+      // does not have. `createdDay` in particular must not be written ahead of
+      // the call: a day recorded for a delivery that was never created is a
+      // backfill bound covering records Firehose never received.
+      const out = output(ctx, LOG_DELIVERY_NODE);
+      out.source = site.source;
+      out.destination = destinationArn;
+      out.distribution = site.distribution;
+      out.delivery = 'configured';
+      // Write-once, and the only place this key is ever written. See
+      // {@link CREATED_DAY_KEY} for why moving it later is the one direction
+      // that corrupts data rather than merely losing some.
+      if (typeof out[CREATED_DAY_KEY] !== 'string') out[CREATED_DAY_KEY] = utcDay(new Date());
+    },
+    async delete(ctx) {
+      // This plugin's own deliveries and nothing else - **never
+      // `deleteDeliverySource`**. The site's teardown deletes the source
+      // (`packages/cli/src/nodes.ts:773`) because the site owns it; this one
+      // must not, and task 52's guard on that node is what stops the site's
+      // teardown running while this delivery still exists. Removing the source
+      // from here would take the site's own CloudWatch delivery with it.
+      //
+      // Looked up by destination rather than recorded at create time, because
+      // `createDelivery` answers with nothing - there is no id to record - and
+      // rather than by `findDeliveryIdBySource`, which returns whichever
+      // delivery AWS lists first and on this shared source may well return the
+      // site's. `deleteDelivery` swallows a not-found, so a half-finished
+      // teardown is re-runnable.
+      await clearPluginDeliveries(ctx);
     },
   };
 }
