@@ -20,6 +20,7 @@
     "core-transport-service-descriptor",
     "generic-plugin-dispatch",
     "init-wizard-plugin-blocks",
+    "lambda-role-propagation-retry",
     "logs-delivery-output-format",
     "pds-config-validation-timing",
     "pds-discoverable-as-a-plugin",
