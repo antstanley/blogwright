@@ -53,6 +53,27 @@
  * `QueryName` the lookup just proved - and its `sql` is deliberately untouched:
  * a statement is the adapter's business, and an edge module that held one
  * would be one refactor away from letting a request shape it.
+ *
+ * **Loopback is not an origin, so the `Host` header is checked too.** Binding
+ * {@link LOOPBACK_ADDRESS} keeps other *machines* out; it does nothing about
+ * other *origins* in the operator's own browser. A page the operator visits
+ * can point a hostname it controls at 127.0.0.1 and fetch this server through
+ * that name - the DNS-rebinding shape - and because a browser judges
+ * same-origin by hostname, that page reads the responses. This module sends no
+ * CORS headers, and their absence is what refuses an ordinary cross-origin
+ * read; the rebinding case defeats that precisely by making the origin match,
+ * so no response header can answer it. What answers it is
+ * {@link ALLOWED_HOST_NAMES}: a request whose `Host` is not this listener's own
+ * address is refused with a 403 before anything else about it is read. The
+ * exposure that closes is bounded - the site's own traffic figures, nothing
+ * writable, no route that takes SQL - which is why it is three lines here
+ * rather than a design.
+ *
+ * {@link COMMON_HEADERS} carries `X-Content-Type-Options: nosniff` on every
+ * response for a neighbouring reason: `dist/app` is a build output whose file
+ * names this module does not choose, and an extension {@link CONTENT_TYPES}
+ * does not know is served as {@link DEFAULT_CONTENT_TYPE}, which a sniffing
+ * browser is otherwise free to re-read as something it will execute.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -72,6 +93,31 @@ import { prepareQuery, type QueryParams, queryDefinition } from './queries.js';
  * service, so it can be `::1`, both, or whatever a `/etc/hosts` entry says.
  */
 const LOOPBACK_ADDRESS = '127.0.0.1';
+
+/**
+ * The host names a request may be addressed to, each paired with the bound
+ * port to make the `Host` values this server answers. Two spellings because
+ * both reach a loopback listener from a browser's address bar and the
+ * dashboard prints one of them; anything else - a name that merely *resolves*
+ * to 127.0.0.1 - is a different origin wearing this server's address, and is
+ * refused. See this module's doc comment for why the bind alone does not cover
+ * it.
+ *
+ * No entry is portless. Task 44 floors `dashboard.port` at 1024, so this
+ * listener never holds a default port and a browser therefore always sends the
+ * port in `Host`.
+ */
+const ALLOWED_HOST_NAMES = ['127.0.0.1', 'localhost'] as const;
+
+/**
+ * Headers on every response this module writes, whatever it is answering.
+ * `nosniff` is here rather than beside one route because the reason for it -
+ * a served file whose extension nothing in this module recognised - reaches
+ * both the asset route and the refusals written about it.
+ */
+const COMMON_HEADERS: Readonly<Record<string, string>> = {
+  'x-content-type-options': 'nosniff',
+};
 
 /** Path prefix under which the named queries - and nothing else - are answered. */
 const QUERY_ROUTE_PREFIX = '/api/queries/';
@@ -247,6 +293,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   if (!writable(res)) return;
   const text = JSON.stringify(body);
   res.writeHead(status, {
+    ...COMMON_HEADERS,
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(text),
     // Traffic figures change under the reader; a cached chart is a wrong chart.
@@ -262,7 +309,11 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
  */
 function sendAsset(res: ServerResponse, contentType: string, bytes: Uint8Array): void {
   if (!writable(res)) return;
-  res.writeHead(200, { 'content-type': contentType, 'content-length': bytes.byteLength });
+  res.writeHead(200, {
+    ...COMMON_HEADERS,
+    'content-type': contentType,
+    'content-length': bytes.byteLength,
+  });
   res.end(Buffer.from(bytes));
 }
 
@@ -374,6 +425,33 @@ export async function createDashboardServer(
    */
   let listing: Promise<ReadonlyMap<string, string>> | undefined;
 
+  /**
+   * The `Host` values this listener answers - {@link ALLOWED_HOST_NAMES}, each
+   * with the port the socket actually bound. Built from the *bound* port and
+   * not from `opts.port`, so a caller that asks for port 0 gets an allow-list
+   * naming the port it really got; assigned inside the `listen` callback,
+   * before the promise below resolves, so it is already set by the time the
+   * listener can be connected to at all. `undefined` therefore refuses rather
+   * than admitting: a request this server cannot name its own address for is
+   * not one it should answer.
+   */
+  let allowedHostHeaders: ReadonlySet<string> | undefined;
+
+  /**
+   * Refuse a request addressed to a name that is not this listener's own. The
+   * body is drained rather than left unread, for the reason the 405 path
+   * drains it: nothing here reads a body, and an undrained socket stalls.
+   */
+  function rejectForeignHost(req: IncomingMessage): void {
+    const host = req.headers.host?.toLowerCase();
+    if (host !== undefined && allowedHostHeaders?.has(host) === true) return;
+    req.resume();
+    throw new RequestRejected(
+      403,
+      `this dashboard answers only ${[...(allowedHostHeaders ?? [])].join(' and ')} - a request for host ${host === undefined ? '<absent>' : `"${host}"`} is addressed to some other origin that resolved to this address`,
+    );
+  }
+
   async function readAppFiles(): Promise<ReadonlyMap<string, string>> {
     const entries = await opts.fs.listFiles(opts.appDir);
     // `listFiles` answers platform-separated relative paths; a URL path is
@@ -458,6 +536,11 @@ export async function createDashboardServer(
   }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // First, and before the method: "is this addressed to me" precedes "may
+    // you do that here", and a page on some other origin should learn nothing
+    // about this server - not even which methods it answers.
+    rejectForeignHost(req);
+
     if (!ALLOWED_METHODS.some((allowed) => allowed === req.method)) {
       // Refused on the method alone, before anything about the request is
       // read. No handler in this module attaches a `data` listener, so a body
@@ -516,6 +599,7 @@ export async function createDashboardServer(
         reject(new Error(`analytics dashboard bound no TCP address on port ${opts.port}`));
         return;
       }
+      allowedHostHeaders = new Set(ALLOWED_HOST_NAMES.map((name) => `${name}:${bound.port}`));
       resolve({ host: bound.address, port: bound.port });
     });
   });

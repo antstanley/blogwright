@@ -26,6 +26,21 @@
 > pds` answered yes, on a repo with no `pds` block. Impact is a confusing
 > message and a refused teardown, not data loss - but it is live, and task 19's
 > shipped changeset explicitly promises the behaviour it breaks.
+>
+> **REFINEMENT 2026-08-31 from task 29's verification gate.** Your DoD asks for
+> "unchanged" messages, and a bare `(raw ?? {})` guard discharges that
+> **literally** while still leaving the wrong outcome: an absent `pds` block
+> would then say `config.pds.name is required` rather than the actionable
+> `config has no "pds" section - add it to config/production.jsonc` an operator
+> used to get. The DoD does not distinguish an ABSENT block from a MALFORMED
+> one, and they want different answers - absent is an ordinary first-run state
+> and should name the missing section; malformed is a real defect and should
+> name the offending key.
+> Task 29 left a pin for you at `cli.test.ts:1433` asserting the current
+> `TypeError` and its `cause`, with an in-file comment telling you to **update
+> it, not delete it**. It fails under `(raw ?? {})`, so you cannot close this
+> without seeing it - and if you land only that guard, the pin will go green
+> over a message that is still wrong.
 
 ## Steps
 

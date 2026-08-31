@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- A dashboard bound to loopback has no icon to serve; an empty data URL
+         answers the browser's request without a round trip that would 404. -->
+    <link rel="icon" href="data:," />
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="tap">
+    %sveltekit.body%
+  </body>
+</html>

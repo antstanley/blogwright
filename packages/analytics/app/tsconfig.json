@@ -1,0 +1,21 @@
+{
+  "//": "Standalone on purpose: it does not extend SvelteKit's generated .svelte-kit/tsconfig.json, so `pnpm typecheck` works on a clean checkout without a build having run first. The app imports no `$app/*` module and no generated `$types`, which is what makes that possible - if one is ever needed, extend the generated config and make the build a prerequisite of the typecheck.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"]
+}

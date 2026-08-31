@@ -84,5 +84,30 @@
       "rules": { "no-restricted-imports": "off" }
     }
   ],
+  // Build output only. The analytics dashboard's `app/` tree is *linted*, not
+  // excluded: `blogwright-analytics`' lint script is `oxlint src app`, so the
+  // application's TypeScript, JavaScript and Svelte are all held to the rules
+  // the package's own sources are.
+  //
+  // The three `.svelte` files are not a hole. oxlint parses their
+  // `<script lang="ts">` block: `oxlint app` reports "11 files", which is the
+  // eight `.ts`/`.js` under `app/` plus those three components, and violations
+  // planted in `QueryPanel.svelte` are reported against the `.svelte` path -
+  // `no-restricted-imports` (the hexagonal-architecture guard above) and
+  // `no-dupe-keys` as errors, `typescript/no-explicit-any` as a warning. The
+  // architecture guard does reach the components.
+  //
+  // What oxlint misses there is narrower, and is recorded rather than closed
+  // because closing it means a second linter for three files. First,
+  // `no-unused-vars` is suppressed inside `.svelte`: the same
+  // `const neverUsedAnywhere = 42;` is an error in `app/src/lib/format.ts` and
+  // silent in `app/src/lib/QueryPanel.svelte`. Second, the markup outside the
+  // script block is not parsed at all: an unclosed `{#if}` over an undeclared
+  // name left `oxlint app` at exit 0, while `svelte-check` under
+  // `pnpm typecheck` reported the unbalanced tag. Template correctness is
+  // svelte-check's job, not oxlint's.
+  //
+  // SvelteKit's generated `app/.svelte-kit/` needs no entry below: it is
+  // gitignored and oxlint respects ignore files.
   "ignorePatterns": ["dist", "node_modules"]
 }

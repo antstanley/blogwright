@@ -23,7 +23,8 @@
  *     against the bindings a later stage derived.
  */
 
-import { createServer as createSocketServer } from 'node:net';
+import { request as sendRequest } from 'node:http';
+import { connect as connectSocket, createServer as createSocketServer } from 'node:net';
 import { networkInterfaces } from 'node:os';
 
 import { createMemoryFileSystem, type FileSystem } from 'blogwright-core';
@@ -172,6 +173,83 @@ async function request(
     contentType: response.headers.get('content-type') ?? undefined,
     headers: response.headers,
   };
+}
+
+/**
+ * Make a request carrying a `Host` header of the test's own choosing - or
+ * none at all.
+ *
+ * `fetch` cannot do this and a test written with it could not fail: the fetch
+ * standard makes `host` a forbidden header name, so undici drops whatever a
+ * test sets and sends the socket's own address instead, which is exactly the
+ * value the server accepts. This connects to the loopback listener directly
+ * and writes the header itself; `setHost: false` is what makes an *absent*
+ * `Host` reachable, since Node otherwise adds one.
+ */
+function requestWithHost(
+  server: DashboardServer,
+  path: string,
+  host: string | undefined,
+  method = 'GET',
+): Promise<Answer> {
+  return new Promise<Answer>((resolve, reject) => {
+    const outgoing = sendRequest(
+      {
+        host: LOOPBACK,
+        port: server.address.port,
+        path,
+        method,
+        setHost: false,
+        headers: host === undefined ? {} : { host },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('error', reject);
+        response.on('end', () => {
+          const headers = new Headers();
+          for (const [name, value] of Object.entries(response.headers)) {
+            if (typeof value === 'string') headers.set(name, value);
+            else if (Array.isArray(value)) for (const item of value) headers.append(name, item);
+          }
+          resolve({
+            status: response.statusCode ?? 0,
+            text: Buffer.concat(chunks).toString('utf8'),
+            contentType: response.headers['content-type'],
+            headers,
+          });
+        });
+      },
+    );
+    outgoing.once('error', reject);
+    outgoing.end();
+  });
+}
+
+/**
+ * Send a request line and headers over a bare socket, answering with the whole
+ * raw response.
+ *
+ * This exists for one request Node's own client will not make: an HTTP/1.0
+ * request with no `Host` header. Node's server refuses an HTTP/1.1 request
+ * that omits `Host` with a 400 of its own, before any handler runs, so the
+ * server's absent-host branch is only reachable over 1.0 - and a test that
+ * used the higher-level client would be asserting on Node's parser instead of
+ * on this module.
+ */
+function rawRequest(server: DashboardServer, lines: readonly string[]): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    let text = '';
+    const socket = connectSocket(server.address.port, LOOPBACK, () => {
+      socket.write(`${lines.join('\r\n')}\r\n\r\n`);
+    });
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      text += chunk;
+    });
+    socket.on('error', reject);
+    socket.on('end', () => resolve(text));
+  });
 }
 
 /** The `error` string a refusal answers with. */
@@ -342,6 +420,118 @@ describe('where the dashboard listens', () => {
         fs: appFileSystem(),
       }),
     ).rejects.toThrow(`cannot bind ${LOOPBACK}:${held.address.port}`);
+  });
+});
+
+describe('the origin a request is addressed to', () => {
+  /** A range good enough to reach the port, so a refusal is never about the range. */
+  const QUERY_PATH = `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}`;
+
+  it('refuses a host that is not its own, without reaching the port', async () => {
+    // The DNS-rebinding shape: the connection lands on the loopback socket
+    // because a name the attacker controls resolves to 127.0.0.1, and the
+    // browser treats the response as same-origin with that name.
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await requestWithHost(
+      server,
+      QUERY_PATH,
+      `rebound.example:${server.address.port}`,
+    );
+    expect(answer.status).toBe(403);
+    expect(errorOf(answer)).toContain('rebound.example');
+    expect(query.runs).toEqual([]);
+  });
+
+  it('refuses the host before it refuses the method, so a rebound page learns no methods', async () => {
+    // Pins the *ordering*: `rejectForeignHost` is the first statement of
+    // `route()`, above the method gate. Both checks refuse this request, so
+    // only their order decides which answer it gets - and a 405 would hand a
+    // page on rebound.example the `allow` header, telling it exactly what this
+    // server takes. Move the host check below the method gate and this reads
+    // 405 with `allow: GET, HEAD`.
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await requestWithHost(
+      server,
+      QUERY_PATH,
+      `rebound.example:${server.address.port}`,
+      'DELETE',
+    );
+    expect(answer.status, answer.text).toBe(403);
+    expect(answer.headers.get('allow')).toBeNull();
+    expect(errorOf(answer)).toContain('rebound.example');
+    expect(query.runs).toEqual([]);
+  });
+
+  it('refuses that host on the static route too, so the application is not readable either', async () => {
+    const server = await serve();
+    const answer = await requestWithHost(server, '/', `rebound.example:${server.address.port}`);
+    expect(answer.status).toBe(403);
+    expect(answer.text).not.toContain('<!doctype html>');
+  });
+
+  it('refuses a request carrying no host at all, without reaching the port', async () => {
+    // Over HTTP/1.0, where an absent `Host` is legal and reaches this module.
+    // Node's own parser refuses the same omission over 1.1 with a 400 before a
+    // handler runs, which is why this one is written down at the socket.
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const raw = await rawRequest(server, [`GET ${QUERY_PATH} HTTP/1.0`]);
+    expect(raw).toContain('403');
+    expect(raw).toContain('<absent>');
+    expect(query.runs).toEqual([]);
+  });
+
+  it('is refused by Node itself when HTTP/1.1 omits the host the protocol requires', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await requestWithHost(server, QUERY_PATH, undefined);
+    expect(answer.status).toBe(400);
+    expect(query.runs).toEqual([]);
+  });
+
+  it("refuses its own name on somebody else's port", async () => {
+    // The port is half the address: a listener on 4317 must not answer for a
+    // page served from 127.0.0.1 on some other port of this machine.
+    const server = await serve();
+    const answer = await requestWithHost(
+      server,
+      QUERY_PATH,
+      `${LOOPBACK}:${server.address.port + 1}`,
+    );
+    expect(answer.status).toBe(403);
+  });
+
+  it('answers localhost, the other spelling an operator types', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await requestWithHost(server, QUERY_PATH, `localhost:${server.address.port}`);
+    expect(answer.status).toBe(200);
+    expect(query.runs).toHaveLength(1);
+  });
+
+  it('answers its bound address, whatever port it was given', async () => {
+    const port = await freePort();
+    const server = await serve({ port });
+    expect((await requestWithHost(server, '/', `${LOOPBACK}:${port}`)).status).toBe(200);
+  });
+
+  it('sends nosniff on a query answer and on a served file alike', async () => {
+    const server = await serve();
+    const answered = await request(server, QUERY_PATH);
+    const served = await request(server, '/');
+    expect(answered.status).toBe(200);
+    expect(served.status).toBe(200);
+    expect(answered.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(served.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('sends nosniff on a refusal as well, since a refusal is a body too', async () => {
+    const server = await serve();
+    const answer = await request(server, '/api/queries/no-such-query?from=x&to=y');
+    expect(answer.status).toBe(404);
+    expect(answer.headers.get('x-content-type-options')).toBe('nosniff');
   });
 });
 

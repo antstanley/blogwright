@@ -1,0 +1,176 @@
+/*
+  The dashboard's own styling, and the four custom properties LayerChart reads.
+
+  LayerChart 2 ships its component styles in `layerchart/core.css` and colours
+  them through `--color-surface-content`, `--color-surface-100` and
+  `--color-primary`, falling back to `currentColor` when they are unset. Setting
+  them here is what lets the charts inherit this page's palette without pulling
+  Tailwind - which LayerChart supports but does not require - into a package
+  whose only reason to hold a front-end toolchain is this one page.
+*/
+
+:root {
+  color-scheme: light dark;
+
+  --color-surface-100: light-dark(#ffffff, #16181d);
+  --color-surface-200: light-dark(#f4f5f7, #1d2026);
+  --color-surface-content: light-dark(#1b1f27, #e6e8ee);
+  --color-surface-muted: light-dark(#5b6473, #98a1b2);
+  --color-surface-border: light-dark(#dfe2e8, #2c313a);
+  --color-primary: light-dark(#2f5fd0, #7aa2f7);
+
+  --radius: 8px;
+  --gap: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface-200);
+  color: var(--color-surface-content);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.page {
+  margin: 0 auto;
+  max-width: 1200px;
+  padding: var(--gap);
+}
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: var(--gap);
+}
+
+.page-header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.page-header p {
+  color: var(--color-surface-muted);
+  margin: 4px 0 0;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.control span {
+  color: var(--color-surface-muted);
+  font-size: 12px;
+}
+
+.control input,
+.control select {
+  background: var(--color-surface-100);
+  border: 1px solid var(--color-surface-border);
+  border-radius: var(--radius);
+  color: inherit;
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.range-error {
+  border: 1px solid var(--color-surface-border);
+  border-left: 3px solid #d04a4a;
+  border-radius: var(--radius);
+  background: var(--color-surface-100);
+  margin-bottom: var(--gap);
+  padding: 10px 12px;
+}
+
+.panels {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+.panel {
+  background: var(--color-surface-100);
+  border: 1px solid var(--color-surface-border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 16px;
+}
+
+.panel h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.panel-meaning {
+  color: var(--color-surface-muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.panel-state {
+  align-items: center;
+  color: var(--color-surface-muted);
+  display: flex;
+  height: 220px;
+  justify-content: center;
+  text-align: center;
+}
+
+.panel-error {
+  color: #c0392b;
+}
+
+.panel-chart {
+  height: 220px;
+}
+
+.panel-total {
+  border-top: 1px solid var(--color-surface-border);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin: 0;
+  padding-top: 8px;
+}
+
+.panel-total dt {
+  color: var(--color-surface-muted);
+}
+
+.panel-total dd {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  margin: 0;
+}
+
+.panel-note {
+  color: var(--color-surface-muted);
+  font-size: 12px;
+  margin: 0;
+}
