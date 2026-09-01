@@ -30,6 +30,8 @@ const DESTINATION: IcebergDestinationInput = {
   bufferIntervalSeconds: 60,
   bufferSizeMb: 5,
   transformLambdaArn: 'arn:aws:lambda:us-east-1:123456789012:function:preview-example-analytics',
+  logGroupName: '/aws/kinesisfirehose/preview-example-analytics',
+  logStreamName: 'DestinationDelivery',
 };
 
 /** The `IcebergDestinationConfiguration` `DESTINATION` must produce, spelled out independently of the builder. */
@@ -42,6 +44,11 @@ const EXPECTED_DESTINATION = {
     ErrorOutputPrefix: 'firehose-errors/',
   },
   AppendOnly: true,
+  CloudWatchLoggingOptions: {
+    Enabled: true,
+    LogGroupName: '/aws/kinesisfirehose/preview-example-analytics',
+    LogStreamName: 'DestinationDelivery',
+  },
   BufferingHints: { IntervalInSeconds: 60, SizeInMBs: 5 },
   DestinationTableConfigurationList: [
     {
@@ -343,7 +350,7 @@ describe('FirehoseClient.describeDeliveryStream', () => {
     expect(Object.keys(status!)).not.toContain('failure');
   });
 
-  it('surfaces the version, destination id and live AppendOnly flag UpdateDestination needs', async () => {
+  it('surfaces the version, destination id and both live destination flags the node compares', async () => {
     const transport: Transport = async () =>
       response(
         200,
@@ -353,7 +360,10 @@ describe('FirehoseClient.describeDeliveryStream', () => {
             Destinations: [
               {
                 DestinationId: 'destinationId-000000000001',
-                IcebergDestinationDescription: { AppendOnly: false },
+                IcebergDestinationDescription: {
+                  AppendOnly: false,
+                  CloudWatchLoggingOptions: { Enabled: true },
+                },
               },
             ],
           }),
@@ -362,7 +372,9 @@ describe('FirehoseClient.describeDeliveryStream', () => {
     // `appendOnly: false` is the interesting value: a stream whose flag is not what this
     // pipeline wants is exactly the case the node's reconcile exists for, and reading it
     // back off the live stream is the only way to know. A client that dropped it would
-    // leave the node comparing its own constant against itself.
+    // leave the node comparing its own constant against itself. `loggingEnabled` is the
+    // second half of the same comparison, off the destination's own
+    // `CloudWatchLoggingOptions.Enabled`.
     expect(await firehoseWith(transport).describeDeliveryStream(STREAM)).toStrictEqual({
       name: STREAM,
       arn: STREAM_ARN,
@@ -370,7 +382,58 @@ describe('FirehoseClient.describeDeliveryStream', () => {
       versionId: '4',
       destinationId: 'destinationId-000000000001',
       appendOnly: false,
+      loggingEnabled: true,
     });
+  });
+
+  it('leaves loggingEnabled absent for a destination that reports no CloudWatchLoggingOptions', async () => {
+    // Every stream this plugin created before it sent logging options looks exactly like
+    // this: append-only, and silent about logging. Absent has to reach the caller as
+    // absent - a fabricated `loggingEnabled: false` would be a guess, and a fabricated
+    // `true` would tell the node the reconcile it exists for is already done.
+    const transport: Transport = async () =>
+      response(
+        200,
+        JSON.stringify(
+          describeResponse('ACTIVE', {
+            Destinations: [
+              {
+                DestinationId: 'destinationId-000000000001',
+                IcebergDestinationDescription: { AppendOnly: true },
+              },
+            ],
+          }),
+        ),
+      );
+    const status = await firehoseWith(transport).describeDeliveryStream(STREAM);
+    expect(status?.appendOnly).toBe(true);
+    expect(Object.keys(status!)).not.toContain('loggingEnabled');
+  });
+
+  it('reads loggingEnabled back as false when the destination reports logging switched off', async () => {
+    const transport: Transport = async () =>
+      response(
+        200,
+        JSON.stringify(
+          describeResponse('ACTIVE', {
+            Destinations: [
+              {
+                DestinationId: 'destinationId-000000000001',
+                IcebergDestinationDescription: {
+                  AppendOnly: true,
+                  CloudWatchLoggingOptions: { Enabled: false },
+                },
+              },
+            ],
+          }),
+        ),
+      );
+    // Recorded as `false` rather than dropped: the spread is conditional on `undefined`,
+    // not on falsiness, and a `false` swallowed as absent would be indistinguishable from
+    // a destination that reported nothing.
+    expect((await firehoseWith(transport).describeDeliveryStream(STREAM))?.loggingEnabled).toBe(
+      false,
+    );
   });
 
   it('leaves the destination keys absent when the response carries no destinations', async () => {
@@ -382,6 +445,7 @@ describe('FirehoseClient.describeDeliveryStream', () => {
     // stream node replace a stream that needed nothing done to it.
     expect(Object.keys(status!)).not.toContain('destinationId');
     expect(Object.keys(status!)).not.toContain('appendOnly');
+    expect(Object.keys(status!)).not.toContain('loggingEnabled');
   });
 
   it('returns undefined on ResourceNotFoundException rather than throwing', async () => {

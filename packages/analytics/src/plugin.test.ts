@@ -85,7 +85,7 @@ const RESERVED_ACTIONS = ['bootstrap', 'destroy', 'init'];
 const DECLARED_ACTIONS = ['status', 'dashboard', 'backfill'];
 
 /** The node count the change spec's §Analytics pipeline -> Resource nodes table states. */
-const ANALYTICS_NODE_COUNT = 12;
+const ANALYTICS_NODE_COUNT = 14;
 
 /** `renderPluginSection` (`packages/cli/src/cli.ts`) indents an action line by four spaces. */
 const HELP_LINE_INDENT = 4;
@@ -277,7 +277,7 @@ describe('the command table', () => {
     // Identity, not merely presence, and for `validateConfig`'s reason one
     // block down: a wrapper could filter or re-order the set on its way to
     // the engine and no other assertion in this file would see it. The set
-    // itself - the twelve ids, their edges and their titles - belongs to
+    // itself - the fourteen ids, their edges and their titles - belongs to
     // `commands.test.ts`, which owns the graph-shape suite.
     expect(analyticsPlugin.nodes).toBe(buildAnalyticsNodes);
     expect(buildAnalyticsNodes()).toHaveLength(ANALYTICS_NODE_COUNT);

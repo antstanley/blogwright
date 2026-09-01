@@ -1322,12 +1322,11 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
   });
 
   /*
-   * TASK 54's half of the same property, at the size the analytics plugin
-   * actually is. The case above proves it for one plugin node; this one
-   * proves the site's graph is unchanged by a plugin contributing TWELVE,
-   * which is the shape an operator will really have installed - and it
-   * names the ids, so a `buildNodes` that started consulting discovery
-   * would be caught by what it gained rather than only by a count.
+   * TASK 54's half of the same property, at a whole plugin graph's size
+   * rather than one node's. The case above proves it for one plugin node;
+   * this one proves the site's graph is unchanged by a plugin contributing
+   * TWELVE - and it names the ids, so a `buildNodes` that started consulting
+   * discovery would be caught by what it gained rather than only by a count.
    */
   it('leaves buildNodes returning the site ids alone with a twelve-node plugin installed, and provisions none of the twelve', async () => {
     const run = newGraphRun();
@@ -2386,7 +2385,7 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
 });
 
 /* ------------------------------------------------------------------------- *
- * TASK 54 - the engine-level half of the analytics plugin's twelve-node graph.
+ * TASK 54 - the engine-level half of a plugin-contributed resource graph.
  *
  * `blogwright-analytics` cannot be imported here (the CLI does not depend on
  * it, and `pluginDependencyNames` would turn even a devDependency into a
@@ -2394,8 +2393,8 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
  * either. So the task's properties are split, and the split is real rather
  * than a duplication:
  *
- *   - `packages/analytics/src/commands.test.ts` owns the SET - the twelve ids,
- *     the edges, and that every title states the `us-east-1` pin - against the
+ *   - `packages/analytics/src/commands.test.ts` owns the SET - its ids, its
+ *     edges, and that every title states the `us-east-1` pin - against the
  *     real `buildAnalyticsNodes`.
  *   - This file owns the ENGINE - that `applyGraph`/`destroyGraph` reconcile a
  *     twelve-node plugin against its own scoped state key, print a
@@ -2407,19 +2406,23 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
  * pin reaches an operator's bootstrap output. Neither half asserts it alone,
  * and neither is the other restated.
  *
- * {@link ANALYTICS_GRAPH} mirrors the real graph's ids, edges and titles. It is
- * a stand-in and says so: what it has to be faithful about is the SHAPE the
- * engine walks (twelve nodes, four chains, the joins between them), because
- * that is what `topoSort` is being run over here.
+ * {@link ANALYTICS_GRAPH} is a stand-in and nothing more. It does **not** track
+ * the real set - that set has grown since this graph was written, and this file
+ * is deliberately not the place a reader learns how large it is. What the
+ * stand-in has to be faithful about is the SHAPE the engine walks (a dozen
+ * nodes, several chains, joins between them), because that is what `topoSort`
+ * is being run over here; the ids and titles are realistic only so the output
+ * assertions read like real output.
  * ------------------------------------------------------------------------- */
 
 /** The plugin namespace the stand-in claims, so the site teardown's refusal names the real remedy. */
 const ANALYTICS_NAMESPACE = 'analytics';
 
 /**
- * The analytics graph as the engine sees it: id, edges, title. Copied from
- * `packages/analytics/src/nodes.ts`'s twelve factories rather than imported,
- * because importing it is what this package must not do.
+ * A plugin graph as the engine sees it: id, edges, title. Modelled on the
+ * analytics plugin's rather than imported from it, because importing it is what
+ * this package must not do - and, for the same reason, deliberately not kept in
+ * step with it. Nothing here asserts anything about the real set's contents.
  */
 const ANALYTICS_GRAPH: { id: string; dependsOn: string[]; title: string }[] = [
   { id: 'analytics-table-bucket', dependsOn: [], title: 'S3 Tables bucket (us-east-1)' },

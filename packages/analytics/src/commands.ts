@@ -219,7 +219,7 @@ function logStreamHealth(
  * A failed read degrades to a warning, which is the whole point of doing it
  * last: the table is the one part of this listing that needs credentials the
  * node reads do not (the vendor library attaches the catalog itself), so an
- * operator with no session still gets all twelve nodes and the stream's health.
+ * operator with no session still gets all fourteen nodes and the stream's health.
  */
 async function logRowCount(
   ctx: PluginContext<AnalyticsConfig>,

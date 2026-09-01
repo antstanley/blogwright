@@ -264,7 +264,7 @@ describe('analytics dashboard', () => {
  * engine-level half of this task - `analytics bootstrap` and `analytics destroy
  * --yes` dispatched through `runPlugin`, the `create <title>` lines the verb
  * prints, and the refusal without `--yes` - is asserted in
- * `packages/cli/src/plugin-commands.test.ts` against a twelve-node stand-in.
+ * `packages/cli/src/plugin-commands.test.ts` against a stand-in graph of its own.
  * What connects the two halves is the title assertion below: the CLI's engine is
  * proved to print `create <title>` for every node it walks, and these titles are
  * proved to carry `us-east-1`, so the region statement reaches an operator's
@@ -286,9 +286,11 @@ const ANALYTICS_NODE_IDS = [
   'analytics-table',
   'analytics-catalog-integration',
   'analytics-salt-secret',
+  'analytics-transform-log-group',
   'analytics-transform-role',
   'analytics-transform-function',
   'analytics-error-bucket',
+  'analytics-firehose-log-group',
   'analytics-firehose-role',
   'analytics-firehose-stream',
   'analytics-log-destination',
@@ -307,6 +309,20 @@ const ANALYTICS_NODE_IDS = [
  * `analytics-catalog-integration` because its destination does. Drop any of
  * them and `topoSort`'s alphabetical drain of zero-indegree nodes runs the
  * dependent first, and the ARN it interpolates is not there yet.
+ *
+ * Two more are of a different kind: `analytics-transform-function` names
+ * `analytics-transform-log-group` and `analytics-firehose-stream` names
+ * `analytics-firehose-log-group`, and neither reads an ARN off the group it
+ * names. They order a writer behind the group that holds its output, and on
+ * teardown they order the group's removal behind the writer's. Alphabetically
+ * both groups would drain early anyway, which is exactly why the edges are
+ * declared rather than left to that.
+ *
+ * **Neither role names a group**, and this table asserts by equality rather
+ * than containment so that adding one would fail here. A role's policy derives
+ * its log group ARN from the function or stream name rather than reading a
+ * recorded one, so there is no output to wait for and an edge would state a
+ * dependency that does not exist.
  */
 const ANALYTICS_EDGES: Record<string, string[]> = {
   'analytics-table-bucket': [],
@@ -314,9 +330,11 @@ const ANALYTICS_EDGES: Record<string, string[]> = {
   'analytics-table': ['analytics-namespace'],
   'analytics-catalog-integration': ['analytics-table'],
   'analytics-salt-secret': [],
+  'analytics-transform-log-group': [],
   'analytics-transform-role': ['analytics-salt-secret'],
-  'analytics-transform-function': ['analytics-transform-role'],
+  'analytics-transform-function': ['analytics-transform-role', 'analytics-transform-log-group'],
   'analytics-error-bucket': [],
+  'analytics-firehose-log-group': [],
   'analytics-firehose-role': [
     'analytics-error-bucket',
     'analytics-table',
@@ -327,6 +345,7 @@ const ANALYTICS_EDGES: Record<string, string[]> = {
     'analytics-table',
     'analytics-catalog-integration',
     'analytics-transform-function',
+    'analytics-firehose-log-group',
   ],
   'analytics-log-destination': ['analytics-firehose-stream'],
   'analytics-log-delivery': ['analytics-log-destination'],
@@ -340,8 +359,8 @@ const ANALYTICS_EDGES: Record<string, string[]> = {
 const PINNED_REGION = 'us-east-1';
 
 describe('buildAnalyticsNodes - the graph the plugin contributes', () => {
-  it("returns the spec table's twelve nodes, by id, in its order", () => {
-    expect(ANALYTICS_NODE_IDS).toHaveLength(12);
+  it("returns the spec table's fourteen nodes, by id, in its order", () => {
+    expect(ANALYTICS_NODE_IDS).toHaveLength(14);
     expect(buildAnalyticsNodes().map((node) => node.id)).toEqual(ANALYTICS_NODE_IDS);
   });
 
@@ -541,6 +560,23 @@ function bodyErrorReply(statusCode: number, code: string, message: string): RawR
   };
 }
 
+/**
+ * The log group a `DescribeLogGroups` asked about, out of its AWS-JSON body.
+ * Throws rather than answering a sentinel: a request the fixture cannot read
+ * must fail the test that made it, not be answered with a group named nothing.
+ */
+function describedLogGroup(body: unknown): string {
+  const parsed: unknown = JSON.parse(String(body ?? ''));
+  const prefix =
+    typeof parsed === 'object' && parsed !== null
+      ? (parsed as { logGroupNamePrefix?: unknown }).logGroupNamePrefix
+      : undefined;
+  if (typeof prefix !== 'string' || prefix === '') {
+    throw new Error(`DescribeLogGroups with no logGroupNamePrefix: ${String(body)}`);
+  }
+  return prefix;
+}
+
 /** IAM's REST-XML failure - the one service whose not-found is read off a `<Code>` element. */
 function iamErrorReply(statusCode: number, code: string, message: string): RawResponse {
   const text = `<ErrorResponse><Error><Type>Sender</Type><Code>${code}</Code><Message>${message}</Message></Error><RequestId>req</RequestId></ErrorResponse>`;
@@ -553,7 +589,7 @@ function iamErrorReply(statusCode: number, code: string, message: string): RawRe
 }
 
 /**
- * A permissive stand-in for the nine AWS services the twelve nodes talk to,
+ * A permissive stand-in for the nine AWS services the fourteen nodes talk to,
  * answering "this already exists" to every lookup and success to every
  * mutation.
  *
@@ -561,9 +597,9 @@ function iamErrorReply(statusCode: number, code: string, message: string): RawRe
  * because of what these tests assert.** They do not assert what the nodes sent
  * - `nodes.test.ts` owns that, request by request, against scripted replies
  * that run out if a node makes a call the test did not account for. What these
- * assert is which STATE OBJECTS were written while all twelve ran, and for that
- * the fixture's job is only to let all twelve run to completion. The
- * non-vacuity check is separate and explicit: every one of the twelve has to
+ * assert is which STATE OBJECTS were written while all fourteen ran, and for
+ * that the fixture's job is only to let all fourteen run to completion. The
+ * non-vacuity check is separate and explicit: every one of the fourteen has to
  * appear in the plugin's own `state.resources` afterwards, so a world permissive
  * enough to let a node no-op silently would fail the test rather than pass it.
  *
@@ -692,6 +728,17 @@ function analyticsWorld(options: WorldOptions = {}): {
     }
 
     if (host.startsWith('logs.')) {
+      if (target.endsWith('.DescribeLogGroups')) {
+        // Keyed on `absent`, the way every other service in this oracle is. The
+        // fall-through at the foot of this branch answers `{}`, which carries no
+        // `logGroups` key at all - and `logGroupExists` reads that as absent, so
+        // both log group nodes would report missing even in the bootstrapped
+        // world and every assertion that they are present would pass for the
+        // wrong reason. The group is echoed back under the name it was asked
+        // for, which is what AWS answers for a group that exists.
+        if (absent) return jsonReply({ logGroups: [] });
+        return jsonReply({ logGroups: [{ logGroupName: describedLogGroup(req.body) }] });
+      }
       if (target.endsWith('.DescribeDeliveries')) return jsonReply({ deliveries: [] });
       if (target.endsWith('.PutDeliveryDestination')) {
         return jsonReply({
@@ -857,7 +904,7 @@ describe("reconciling the analytics graph against the plugin's own scoped state 
 
     await reconcile(buildAnalyticsNodes(), ctx);
 
-    // Non-vacuity first: every one of the twelve genuinely ran and recorded
+    // Non-vacuity first: every one of the fourteen genuinely ran and recorded
     // itself. A world permissive enough to let a node no-op silently fails
     // here, so the key assertions below are about a run that happened.
     expect(Object.keys(ctx.state.resources).sort()).toEqual([...ANALYTICS_NODE_IDS].sort());
@@ -897,10 +944,10 @@ describe("reconciling the analytics graph against the plugin's own scoped state 
 });
 
 /* ------------------------------------------------------------------------- *
- * TASK 55 - `analytics status`: the twelve nodes against the plugin's own
+ * TASK 55 - `analytics status`: the fourteen nodes against the plugin's own
  * scoped state, then the stream's delivery health and the table's row count.
  *
- * Every case here drives the real command over the real twelve nodes. The one
+ * Every case here drives the real command over the real fourteen nodes. The one
  * thing substituted is the `AnalyticsQuery` port, which is where the vendor
  * library would otherwise attach a catalog: the command takes it as a
  * defaulted parameter for the reason the site's own `status(ctx, nodes =
@@ -909,7 +956,7 @@ describe("reconciling the analytics graph against the plugin's own scoped state 
  * ------------------------------------------------------------------------- */
 
 /**
- * The twelve titles, in the order `buildAnalyticsNodes` returns them and
+ * The fourteen titles, in the order `buildAnalyticsNodes` returns them and
  * exactly as an operator reads them. Hand-written rather than mapped off the
  * module under test: a listing derived from `buildAnalyticsNodes()` would
  * agree with a listing that dropped a node, which is the assertion this suite
@@ -921,9 +968,11 @@ const ANALYTICS_NODE_TITLES = [
   'Iceberg table (us-east-1)',
   'Glue s3tablescatalog federation (shared - account-and-region scoped, us-east-1)',
   'visitor_key salt secret (us-east-1 - created once, never replaced, kept on teardown)',
+  'Transform Lambda log group (us-east-1)',
   'IAM transform execution role (global - IAM is not regional; it serves the us-east-1 pipeline)',
   'Record-transform Lambda (us-east-1)',
   'Firehose failed-record bucket (us-east-1)',
+  'Firehose delivery-error log group (us-east-1)',
   'IAM Firehose delivery role (global - IAM is not regional; it serves the us-east-1 pipeline)',
   'Firehose delivery stream (us-east-1)',
   'CloudWatch delivery destination (us-east-1)',
@@ -1026,9 +1075,11 @@ describe('analytics status - the plain form, which is the contract for CI and ag
       '  present  Iceberg table (us-east-1)',
       '  present  Glue s3tablescatalog federation (shared - account-and-region scoped, us-east-1)',
       '  present  visitor_key salt secret (us-east-1 - created once, never replaced, kept on teardown)',
+      '  present  Transform Lambda log group (us-east-1)',
       '  present  IAM transform execution role (global - IAM is not regional; it serves the us-east-1 pipeline)',
       '  present  Record-transform Lambda (us-east-1)',
       '  present  Firehose failed-record bucket (us-east-1)',
+      '  present  Firehose delivery-error log group (us-east-1)',
       '  present  IAM Firehose delivery role (global - IAM is not regional; it serves the us-east-1 pipeline)',
       '  present  Firehose delivery stream (us-east-1)',
       '  missing  CloudWatch delivery destination (us-east-1)',
@@ -1046,7 +1097,7 @@ describe('analytics status - the plain form, which is the contract for CI and ag
     expect(linesAt(logger, 'warn')).toEqual([]);
   });
 
-  it('reads the twelve nodes and writes nothing back to the scoped state object', async () => {
+  it('reads the fourteen nodes and writes nothing back to the scoped state object', async () => {
     const { ctx, calls } = await analyticsContext();
 
     await status(ctx, [], rowCountQuery());
@@ -1111,7 +1162,7 @@ describe('analytics status - the stream health line', () => {
 });
 
 describe('analytics status - a read that fails degrades to a warning', () => {
-  it('warns for an unreadable stream and still lists all twelve nodes', async () => {
+  it('warns for an unreadable stream and still lists all fourteen nodes', async () => {
     const { ctx, logger } = await analyticsContext({ streamReadDenied: true });
 
     await status(ctx, [], rowCountQuery());
@@ -1126,7 +1177,7 @@ describe('analytics status - a read that fails degrades to a warning', () => {
       `Firehose delivery stream (us-east-1): read failed (${denied})`,
       `Firehose delivery: unavailable - reading the stream failed (${denied})`,
     ]);
-    // The listing completed: every one of the twelve was reported exactly once,
+    // The listing completed: every one of the fourteen was reported exactly once,
     // across both levels, and the row count still ran.
     for (const title of ANALYTICS_NODE_TITLES) {
       expect(allLines(logger).filter((line) => line.includes(title))).toHaveLength(1);
@@ -1136,7 +1187,7 @@ describe('analytics status - a read that fails degrades to a warning', () => {
     );
   });
 
-  it('warns for an unreadable table and still lists all twelve nodes', async () => {
+  it('warns for an unreadable table and still lists all fourteen nodes', async () => {
     const { ctx, logger } = await analyticsContext();
 
     await status(ctx, [], failingQuery);
@@ -1162,7 +1213,7 @@ describe('analytics status - an environment that was never bootstrapped', () => 
     expect(await runToExitCode(() => status(ctx, [], failingQuery))).toEqual({ exitCode: 0 });
   });
 
-  it('reports every one of the twelve nodes missing, against an empty scoped state', async () => {
+  it('reports every one of the fourteen nodes missing, against an empty scoped state', async () => {
     const { ctx, logger } = await analyticsContext({ unbootstrapped: true });
     // Empty, and asserted before the command runs: the whole claim is about a
     // state object that does not exist, and a fixture that had seeded one
