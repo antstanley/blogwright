@@ -451,6 +451,19 @@ and stand as listed.
 
 ## Assumptions and open questions
 
+> **Which tree these citations name.** Assumptions and Decisions cite the code **as
+> this change leaves it** - the merged state, where `ensureLogStream` exists and the
+> stream node's guard takes two conditions. §Implementation notes cite `main@3d47969`
+> as it stood *before*, because that is the tree an implementer edits. The split is
+> deliberate and the two sets will not agree.
+>
+> Three pointers here were stale on first merge and are corrected: `logs.ts:73` ->
+> `:87`, `nodes.ts:922` -> `:963`, `firehose.ts:198-204` -> `:216-223`. The first was
+> broken by this change itself - inserting `ensureLogStream` above `putRetentionPolicy`
+> moved it fourteen lines - which is the tidiest illustration available of why a
+> citation needs a stated baseline rather than a number alone.
+
+
 **Assumptions**
 
 - Firehose creates neither the log group nor the log stream when error logging
@@ -470,7 +483,7 @@ and stand as listed.
   `CreateLogStream` and `PutLogEvents` and no group appeared at all.
 - `365` is an accepted `retentionInDays` value. CloudWatch Logs takes a fixed
   set and 365 is in it; `putRetentionPolicy`
-  ([`logs.ts:73`](../../../packages/core/src/aws/logs.ts)) passes the number
+  ([`logs.ts:87`](../../../packages/core/src/aws/logs.ts)) passes the number
   through unvalidated, so an unaccepted value would fail at the API.
 - Deleting a log group deletes the log streams inside it, so
   `analytics-firehose-log-group`'s `delete()` needs no separate stream
@@ -502,7 +515,7 @@ and stand as listed.
 - *The two writers declare edges to their groups; the two roles do not.*
   **An edge is declared where an ordering is needed, not where an ARN is
   spelled.** A role derives its log group ARN from a name it already knows
-  ([`nodes.ts:922`](../../../packages/analytics/src/nodes.ts)), so it has nothing
+  ([`nodes.ts:963`](../../../packages/analytics/src/nodes.ts)), so it has nothing
   to wait for; a writer that runs before its group exists loses output with
   nothing raised. Declaring both would be noise, declaring neither would rest
   on `topoSort`'s alphabetical drain
@@ -528,7 +541,7 @@ and stand as listed.
   grows, and this change is the first to grow one. Comparing the live value
   read back off the stream - rather than assuming a stream this plugin created
   has the configuration this plugin sends - is the rule `appendOnly` already
-  follows ([`firehose.ts:198-204`](../../../packages/analytics/src/aws/firehose.ts));
+  follows ([`firehose.ts:216-223`](../../../packages/analytics/src/aws/firehose.ts));
   the new field follows it for the same reason.
 - *The Firehose group's `update()` re-ensures the stream.* **Reconcile on every
   apply, the bucket node's pattern rather than the site log group's.** A group
