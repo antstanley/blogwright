@@ -12,6 +12,7 @@
   "changesets": [
     "analytics-backfill-action",
     "analytics-lifecycle-verbs",
+    "analytics-owned-log-groups",
     "analytics-plugin-package",
     "analytics-status-command",
     "cli-help-plugin-sections",
