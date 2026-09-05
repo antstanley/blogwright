@@ -120,3 +120,17 @@ gaps. These are being implemented, not removed from the requirements:
 Task63 now depends on64/65. The graph has66tasks/130edges, remains acyclic, and
 its topological completion order ends64,65,63. Two five-obligation certificates
 bring current completion claims to35. No historical verdict was changed.
+
+## Final disposition — 2026-09-05
+
+All reported required gaps are resolved. Tasks59/60/62/64/65 supplied the verified
+runtime corrections; task63 supplied canonical contracts/schema, consumer guidance,
+explicit source reconciliations and current conformance evidence. Every one of
+these six tasks passed independent CORRECT + DONE gates before integration.
+The plan is Done:66tasks,66certificates,130matching dependency edges.
+
+See [final independent verification](63-verification.md) and the
+[current source conformance report](../../../reviews/2026-09-05-specification-closure.md).
+The source specs are merged, their required merge steps have concrete artifacts,
+and only their expressly non-required open questions remain open. Historical
+findings and old certificate verdicts above remain records of their reviewed trees.

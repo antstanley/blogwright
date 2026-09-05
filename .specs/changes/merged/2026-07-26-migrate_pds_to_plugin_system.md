@@ -1,6 +1,10 @@
 # Change: Migrate blogwright-pds onto the plugin system
 
-**Status:** Proposed · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Target:** packages/pds (plugin export, config ownership, one IAM node) + packages/cli (dispatch, site-graph pds removal, a bootstrap warning) + packages/core (config)
+**Status:** Merged · **Date:** 2026-07-26 · **Merged:** 2026-09-05 · **Owner:** Ant Stanley · **Target:** packages/pds (plugin export, config ownership, one IAM node) + packages/cli (dispatch, site-graph pds removal, a bootstrap warning) + packages/core (config)
+
+Current implementation contracts are folded into the [internal canonical set](../../blogwright/README.md).
+[Final closure evidence](../../reviews/2026-09-05-specification-closure.md) maps every merge step.
+Proposal-era motivation and migration ordering below remain dated history.
 
 `blogwright-pds` becomes a plugin: it declares a manifest field, exports a
 `Plugin`, owns and validates its `pds` config key, contributes the one resource
@@ -39,9 +43,9 @@ one place plugin topography still lives outside its plugin. Moving it is what
 makes "a plugin owns its own topography" true rather than aspirational.
 
 The migration is also a straightforward simplification. `runPds`
-([`cli.ts:187`](../../packages/cli/src/cli.ts)) hand-rolls positional shifting
+([`cli.ts:187`](../../../packages/cli/src/cli.ts)) hand-rolls positional shifting
 for the `secret` sub-action and maintains its own set of known actions; core's
-`validateConfig` ([`config.ts:314`](../../packages/core/src/config.ts)) knows
+`validateConfig` ([`config.ts:314`](../../../packages/core/src/config.ts)) knows
 about handle resolvers and secret-name character classes, which is pds domain
 knowledge living in the package that should know least about it. Both move to
 where they belong.
@@ -52,8 +56,8 @@ where they belong.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none - no canonical page for CLI dispatch or the pds feature yet)* | `pds` dispatch moves from hardcoded to plugin-provided; `pds` config validation moves from core into the plugin; `blogwright bootstrap` warns while a plugin's scoped state exists |
-| [DEVELOPMENT.md](../../DEVELOPMENT.md) → Hexagonal architecture | The "features live in their own packages" note gains the plugin manifest as the mechanism |
+| [PDS](../../blogwright/specs/03-pds.md) and [plugin architecture](../../blogwright/specs/02-plugin-architecture.md) | `pds` dispatch moves from hardcoded to plugin-provided; `pds` config validation moves from core into the plugin; `blogwright bootstrap` warns while a plugin's scoped state exists |
+| [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Hexagonal architecture | The "features live in their own packages" note gains the plugin manifest as the mechanism |
 
 Depends on [`2026-07-26-cli_plugin_system.md`](2026-07-26-cli_plugin_system.md);
 this change cannot land before it.
@@ -92,7 +96,7 @@ this change cannot land before it.
 > The narrowing is stated positively, as a `Pick` of exactly the members
 > `PdsContext` has today: `env`, `domain`, `config`, `clients` (narrowed to
 > `{ secrets }`, because
-> [`test-support.ts:102`](../../packages/pds/src/test-support.ts) supplies only
+> [`test-support.ts:102`](../../../packages/pds/src/test-support.ts) supplies only
 > that one client), `ports` (narrowed to `fs` and `terminal`), `logger`, and
 > optional `tags`. Everything else on `PluginContext` is left out - nine of its
 > sixteen members, not the six a dispatch boundary builds: `preview`, `names`
@@ -101,16 +105,16 @@ this change cannot land before it.
 > dispatch boundary that no pds command function runs behind. `save()` belongs
 > in that second group even though an `OpsContext` carries one: the host's
 > closes over the site's store and the site's state object
-> ([`context.ts:153-155`](../../packages/cli/src/context.ts)), so a plugin graph
+> ([`context.ts:153-155`](../../../packages/cli/src/context.ts)), so a plugin graph
 > handed it would persist into `state/<env>.json`. `deploy` calls
 > `syncAfterDeploy(ctx)` with its plain `OpsContext`
-> ([`commands.ts:97`](../../packages/cli/src/commands.ts)), which reaches
+> ([`commands.ts:97`](../../../packages/cli/src/commands.ts)), which reaches
 > `syncPds` and `requirePdsConfig` with nothing having built a plugin context.
 >
 > Picking rather than omitting is what preserves the structural-satisfaction
 > property and keeps
-> [`createTestContext`](../../packages/pds/src/test-support.ts) buildable:
-> `OpsContext` ([`context.ts:25-51`](../../packages/cli/src/context.ts)) still
+> [`createTestContext`](../../../packages/pds/src/test-support.ts) buildable:
+> `OpsContext` ([`context.ts:25-51`](../../../packages/cli/src/context.ts)) still
 > satisfies `PdsContext` by plain assignment, the pds test factory still builds
 > a complete context from one client and two ports, and the package still
 > imports no CLI type. An `Omit` of the six dispatch-boundary members would
@@ -136,13 +140,18 @@ this change cannot land before it.
 > plugin's IAM node uses the same resolver. All command/OAuth/secret consumers
 > retain total string types, including the post-deploy path that receives an
 > `OpsContext` without `pluginConfig`. No default is duplicated in core.
+> This preserved direct-call/PdsContext requirement is the specific exception
+> to the generic pluginConfig-only rule: PDS command consumers and its IAM
+> contributor retain the existing typed config.pds block and shared resolver.
+> It grants no arbitrary config-key access, adds no other typed plugin keys,
+> and never permits the site graph to read plugin configuration.
 
 ### `blogwright-pds` → Its own IAM policy node (Add)
 
 > The plugin contributes one resource node. The site's GitHub-OIDC deploy role
 > currently carries a Secrets Manager statement that exists only for pds - the
 > site graph branches on `ctx.config.pds`
-> ([`nodes.ts:913`](../../packages/cli/src/nodes.ts)) and interpolates that
+> ([`nodes.ts:913`](../../../packages/cli/src/nodes.ts)) and interpolates that
 > plugin's secret name into the ARN at `nodes.ts:925`. That is plugin topography
 > in the site graph, and it moves.
 >
@@ -150,15 +159,15 @@ this change cannot land before it.
 > `putRolePolicy(role, 'blogwright-pds', …)` - granting `GetSecretValue`,
 > `PutSecretValue` and `CreateSecret` on its own secret's ARN. `IamClient`
 > already exposes `putRolePolicy`, `listRolePolicies` and `deleteRolePolicy`
-> ([`iam.ts:84,93,108`](../../packages/core/src/aws/iam.ts)), so the site's node
+> ([`iam.ts:84,93,108`](../../../packages/core/src/aws/iam.ts)), so the site's node
 > keeps managing only its own document and the plugin's grant is created and
 > removed with the plugin.
 >
 > The node needs the role's **name**, and today that name has no home. It is
 > derived privately inside `githubOidcRoleNode` as `` `${ctx.names.prefix}-gh` ``
-> ([`nodes.ts:826`](../../packages/cli/src/nodes.ts)); only the ARN reaches
+> ([`nodes.ts:826`](../../../packages/cli/src/nodes.ts)); only the ARN reaches
 > state (`nodes.ts:966`), and `Names`
-> ([`config.ts:333-345`](../../packages/core/src/config.ts)) does not carry it.
+> ([`config.ts:333-345`](../../../packages/core/src/config.ts)) does not carry it.
 > Core's `deriveNames` therefore gains `githubRole: '<prefix>-gh'` and the CLI's
 > node reads it from there, so the derivation has one home - the rule
 > DEVELOPMENT.md §Limits and bounds states for every derived AWS name. The
@@ -167,7 +176,7 @@ this change cannot land before it.
 >
 > The node is **skipped** when `config.githubRepo` is unset, because the site
 > graph only adds `githubOidcRoleNode` for a non-preview stack when it is set
-> ([`nodes.ts:1082`](../../packages/cli/src/nodes.ts)) - a site with no CI
+> ([`nodes.ts:1082`](../../../packages/cli/src/nodes.ts)) - a site with no CI
 > deploys is fully bootstrapped and simply has no deploy role to attach to.
 > When `githubRepo` *is* set and the role is absent from the site's state, the
 > node fails with an actionable message naming `blogwright bootstrap`.
@@ -178,7 +187,7 @@ this change cannot land before it.
 
 ### `blogwright-cli` → The site graph drops its pds branch (Remove)
 
-> `oidcRolePolicyStatements` ([`nodes.ts:863`](../../packages/cli/src/nodes.ts))
+> `oidcRolePolicyStatements` ([`nodes.ts:863`](../../../packages/cli/src/nodes.ts))
 > loses its `if (ctx.config.pds)` branch entirely. The CLI's resource graph
 > continues to import nothing from `blogwright-pds` - it imports nothing from it
 > today, and this change is what keeps that true once the grant exists, since
@@ -191,7 +200,7 @@ this change cannot land before it.
 > independent objects on the same role and both grants can be live at once. But
 > nothing about a repository ordering puts the second one on a real role:
 > `applyOidcRole` rewrites `<env>-deploy` wholesale on every
-> `blogwright bootstrap` ([`nodes.ts:840-842,962`](../../packages/cli/src/nodes.ts)),
+> `blogwright bootstrap` ([`nodes.ts:840-842,962`](../../../packages/cli/src/nodes.ts)),
 > and the plugin's document appears only when the operator runs
 > `blogwright pds bootstrap`. So the release that removes the site's statement
 > must not be the release that introduces the plugin's node: the migration ships
@@ -211,7 +220,7 @@ this change cannot land before it.
 > `blogwright <plugin> bootstrap` is what re-reconciles them. The deploy role
 > is the worked case: `applyOidcRole` rewrites the whole `<env>-deploy`
 > document on every bootstrap
-> ([`nodes.ts:840-842,962`](../../packages/cli/src/nodes.ts)), and once §The
+> ([`nodes.ts:840-842,962`](../../../packages/cli/src/nodes.ts)), and once §The
 > site graph drops its pds branch lands, the pds grant survives only as the
 > plugin's own named policy - so the warning puts the re-run instruction on
 > the operator's terminal at the exact command whose rewrite makes it matter.
@@ -244,7 +253,7 @@ this change cannot land before it.
 > Widening the type leaves one reader outside the plugin, and it is the reader
 > that matters: the site's own Secrets Manager statement interpolates
 > `config.pds.secretName` into a Resource ARN
-> ([`nodes.ts:925`](../../packages/cli/src/nodes.ts)) and lives until
+> ([`nodes.ts:925`](../../../packages/cli/src/nodes.ts)) and lives until
 > §The site graph drops its pds branch removes it, a release later. A `string |
 > undefined` in a template literal is not a type error, so nothing would fail to
 > compile and every `blogwright bootstrap` in between would write
@@ -269,14 +278,14 @@ this change cannot land before it.
 > removed; the same six actions are produced at runtime from the plugin's
 > `description` and its commands' `summary` fields. That section gets shorter:
 > the SPI gives a plugin one line of `description` and one line of `summary` per
-> action, while [`cli.ts:33-47`](../../packages/cli/src/cli.ts) is fifteen lines
+> action, while [`cli.ts:33-47`](../../../packages/cli/src/cli.ts) is fifteen lines
 > of prose - four of them explaining `pds login`'s paste flow and three
 > explaining what `pds sync` reconciles. That guidance moves into the summaries
 > where it fits and into the docs where it does not; the alternative is a
 > multi-line `details` field on `PluginCommand`, which the SPI deliberately does
 > not have. pds is a default dependency, so the generated section always renders
 > and every user sees the shorter form - a small, deliberate, user-visible
-> change, and one of the four this migration makes to an operator's experience
+> change, and one of the five this migration makes to an operator's experience
 > ([§Upgrading a deployed stack](#upgrading-a-deployed-stack)).
 > Multi-word actions such as
 > `secret status` are declared as such by the plugin, so the positional shifting
@@ -290,8 +299,8 @@ this change cannot land before it.
 ### `blogwright-cli` → Post-deploy sync (Modify)
 
 > `deploy` keeps importing `syncAfterDeploy` from `blogwright-pds` directly
-> ([`commands.ts:2`](../../packages/cli/src/commands.ts)) and calling it with
-> its own `OpsContext` ([`commands.ts:97`](../../packages/cli/src/commands.ts)).
+> ([`commands.ts:2`](../../../packages/cli/src/commands.ts)) and calling it with
+> its own `OpsContext` ([`commands.ts:97`](../../../packages/cli/src/commands.ts)).
 > The plugin SPI has no lifecycle hooks, and pds remains a default dependency,
 > so the static import resolves. This path is why `PdsContext` narrows
 > `PluginContext` without `pluginConfig` and why `requirePdsConfig` resolves
@@ -329,8 +338,9 @@ this change cannot land before it.
 The on-disk config file shape is unchanged. Only where the default and the
 validation live changes. Inside the package the resolved shape is a distinct
 type, `ResolvedPdsConfig` - the same block with `secretName` narrowed to
-`string` - which is what `requirePdsConfig` returns and what `validateConfig`
-puts on `pluginConfig`.
+`string` - which is what `requirePdsConfig` returns. `validateConfig` puts the raw-validated
+`PdsConfig` on `pluginConfig`, preserving optional `secretName`; the siteName-aware
+consumer resolver supplies the default.
 
 ---
 
@@ -454,7 +464,7 @@ carry all five.
 1. Apply the `Proposed changes` blocks to whichever canonical page documents
    CLI dispatch and the pds feature, once one exists.
 2. Fold the modified `PdsConfig` `$def` into the canonical schema.
-3. Note in [DEVELOPMENT.md](../../DEVELOPMENT.md) §Hexagonal architecture that
+3. Note in [DEVELOPMENT.md](../../../DEVELOPMENT.md) §Hexagonal architecture that
    the feature-package pattern is now realised by the plugin manifest.
 4. Flip this file's **Status:** to `Merged`, add **Merged:** date, move to
    `.specs/changes/merged/`.
@@ -498,7 +508,7 @@ carry all five.
   which is the sole thing that reconciles a plugin's nodes. Ordering the two
   commits proves nothing on a deployed stack, because
   `applyOidcRole` replaces `<env>-deploy` wholesale on every
-  `blogwright bootstrap` ([`nodes.ts:840-842,962`](../../packages/cli/src/nodes.ts));
+  `blogwright bootstrap` ([`nodes.ts:840-842,962`](../../../packages/cli/src/nodes.ts));
   ordering the two *releases* gives the instruction a vehicle and the operator a
   window. Doing both in one release would be a real outage for every stack whose
   operator upgraded and deployed before reading the notes.
@@ -540,7 +550,7 @@ carry all five.
   disturb.
 - *The deploy role's name joins `deriveNames`.* **One home for a derived AWS
   name.** It is currently a private lambda inside `githubOidcRoleNode`
-  ([`nodes.ts:826`](../../packages/cli/src/nodes.ts)) and only the ARN reaches
+  ([`nodes.ts:826`](../../../packages/cli/src/nodes.ts)) and only the ARN reaches
   state, so the plugin's node would otherwise re-derive `<prefix>-gh`
   independently - the duplication DEVELOPMENT.md's derived-name rule exists to
   prevent. The value does not change, so no role is renamed.
@@ -571,3 +581,10 @@ by the raw-only SPI and implemented by tasks 21–22. Tasks 59–60 finish runti
 requirements; task 63 folds the result into internal canonical documentation
 and closes this spec. The published migration notice is in v0.4.0-beta.0; the
 plugin policy is present in the published v0.4.0-beta.2 tarball.
+
+## Canonical merge execution — 2026-09-05
+
+Tasks59/60/62/64/65 are integrated. Task63 folded all required contracts and JSON
+entities into the internal canonical set and corrected consumer documentation.
+The [closure report](../../reviews/2026-09-05-specification-closure.md) maps each
+Merge plan step and records fresh checks separately from historical evidence.

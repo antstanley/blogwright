@@ -1,6 +1,6 @@
 # Development Guidelines
 
-**Status: Canonical · Date: 2026-07-11 · Owner: Ant Stanley · Scope: Repo-wide**
+**Status: Canonical · Date: 2026-09-05 · Owner: Ant Stanley · Scope: Repo-wide**
 
 The rules of the road for everyone - humans and AI agents - writing code in this
 repository. Covers the toolchain, the pervasive coding style (Clean Code), error
@@ -13,16 +13,16 @@ repository hygiene, agent-specific emphases, and the definition of done.
 | ---------- | ------------------------ | --------------------------------------------------------------------- |
 | TypeScript | ^6 (strict)              | shared `tsconfig.base.json`; see [TypeScript conventions](#typescript-conventions) |
 | Node       | ≥ 22 (CI runs 24)        | `engines` in every package; ESM only (`"type": "module"`)             |
-| pnpm       | 11                       | workspace of five packages under `packages/`                         |
-| oxlint     | latest                   | linter; per-package `pnpm lint`, config in `.oxlintrc.json`           |
-| oxfmt      | latest                   | formatter; config in `.oxfmtrc.json`, run via `pnpm exec oxfmt`       |
+| pnpm       | 11                       | five packages under `packages/`, plus private docs workspace                         |
+| oxlint     | ^1.72                   | linter; per-package `pnpm lint`, config in `.oxlintrc.json`           |
+| oxfmt      | ^0.57                   | formatter; config in `.oxfmtrc.json`, run via `pnpm exec oxfmt`       |
 | vitest     | 4                        | test runner in every package; `pnpm test` at the root runs all        |
 | knip       | 6                        | dead code / unused dependency check; `pnpm knip` at the root          |
-| rolldown   | latest                   | bundles the build-agent server only (`packages/build-agent`)          |
+| rolldown   | ^1.1                   | bundles the build-agent server and analytics transform Lambda          |
 | Vite / SvelteKit | 8 / 2 (Svelte 5)   | builds the analytics dashboard only (`packages/analytics/app` → `dist/app`); static adapter, no server |
 | jj         | 0.43+                    | version-control front end (colocated Git backend)                     |
 
-CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `pnpm test`,
+CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `TZ=America/New_York pnpm test`,
 `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` on every push to `main`
 and every pull request. There are no local pre-commit or pre-push hooks; CI is
 the enforcement gate.
@@ -83,6 +83,7 @@ Existing ports are the model for new ones:
 | `ModuleLoader`              | `cli/src/ports.ts`            | `createNodeModuleLoader` (`cli/src/adapters/node-module-loader.ts`) | fail-fast fake via `createTestContext` `ports.loader` overrides |
 | `PackageManager`            | `cli/src/ports.ts`            | `createProcessPackageManager` (`cli/src/adapters/process-package-manager.ts`) | `createRecordingPackageManager` (`cli/src/test-support.ts`), passed as `main`'s `PackageManagerFactory` |
 | `AnalyticsQuery`            | `analytics/src/ports.ts`      | `createDuckDbAnalyticsQuery` (`analytics/src/adapters/duckdb-query.ts`) | `createFixtureAnalyticsQuery` (`analytics/src/fixture-query.ts`), fixture-backed |
+| `TransformDiagnostics`      | `analytics/src/transform/diagnostics.ts` | JSON-line adapter wired to console.info in Lambda entry | recording callback |
 | `AnalyticsIngest`           | `analytics/src/ports.ts`      | `createDuckDbAnalyticsIngest` (`analytics/src/adapters/duckdb-ingest.ts`) | `createRecordingAnalyticsIngest` (`analytics/src/fixture-ingest.ts`), recording |
 
 Conventions:
@@ -131,7 +132,7 @@ translate the failure into the repo's own vocabulary at that line.
 | Config file → CLI             | Shape, required fields, value ranges   | `parseConfig` / `mergeConfig` / `validateConfig` in `blogwright-core` - the parsed JSONC never escapes unvalidated |
 | AWS API → core                | Status, body shape                     | Per-service clients in `blogwright-core` over the SigV4 transport; the CLI never issues a raw AWS call |
 | PDS / OAuth → pds package     | Token responses, record shapes         | `blogwright-pds` owns the atproto surface; nothing outside it touches OAuth state |
-| S3 state read                 | Round-trip integrity                   | The state store re-parses `state/<env>.json` on read and fails typed on mismatch |
+| S3 state read                 | Round-trip integrity                   | StateStore parses site/plugin JSON and validates envelope/output shapes; malformed data raises bucket/key/field context instead of empty state |
 | CLI arguments                 | Command, positionals, flags            | `parseArgs` plus a `KNOWN_COMMANDS` membership test in `cli.ts`; every other first word is taken as a plugin namespace and dispatched generically by `runPlugin` (`cli/src/plugin-commands.ts`), which refuses an unknown namespace by naming `blogwright plugin list` and an unknown action by listing that plugin's own actions. Only a bare invocation with no command prints usage |
 
 ### Error handling in TypeScript
@@ -330,8 +331,8 @@ A change is done when:
 - Errors are raised with context; no `null` is returned or passed for a domain value.
 - New external interactions (network, disk, process, terminal) go through a port;
   no direct Node API or vendor-SDK calls were added to domain modules.
-- `pnpm build`, `pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip`
-  all pass locally - the same gates CI runs (CI adds `pnpm typecheck`).
+- `pnpm build`, `pnpm typecheck`, `TZ=America/New_York pnpm test`, `pnpm lint`,
+  `pnpm exec oxfmt --check .`, and `pnpm knip` all pass locally - the same six gates CI runs.
 - A user-facing change ships with a changeset (`pnpm changeset`) describing its
   semver impact; internal-only changes (docs, tests, refactors) do not need one.
 - Pinned rkey vectors and derived AWS resource names are unchanged for existing
@@ -353,13 +354,12 @@ A change is done when:
 **Decisions**
 
 - *Style.* **Clean Code.** The codebase already practices it - exceptions with
-  contextual messages throughout, no assertion discipline, vitest (153 tests) as the
+  contextual messages throughout, no assertion discipline, vitest as the
   correctness net - so the guidelines codify the existing style rather than impose a
   migration.
-- *Placement.* **Repo root, not `.specs/`.** The repo has no spec set; a single
-  root-level `DEVELOPMENT.md` was chosen for visibility. If a `.specs/` set is created
-  later, this page moves to `.specs/development-guidelines.md` and the root file
-  becomes a pointer.
+- *Placement.* **Retain root DEVELOPMENT.md.** The canonical spec set indexes this
+  page as its rules-of-road source. Keeping the established root path preserves
+  contributor visibility and avoids a duplicated guidelines page.
 - *VCS.* **jujutsu only.** The repo is jj-colocated and driven with jj; git
   conventions are deliberately not documented to avoid prescribing two workflows.
 - *Enforcement.* **CI as the sole gate.** No local hooks;
@@ -387,9 +387,8 @@ A change is done when:
 
 **Open questions**
 
-- oxfmt is installed and configured (`.oxfmtrc.json`) but wired into no package
-  script and not run in CI - should a root `fmt`/`fmt:check` script be added and
-  enforced in CI?
+- oxfmt already runs in CI via `pnpm exec oxfmt --check .`; should root
+  `fmt`/`fmt:check` convenience scripts also be added?
 - Should a pre-push hook mirror the six CI gates locally, or is CI-only enforcement
   sufficient at this repo's size?
 - Commit subjects follow an imperative sentence-case convention, not Conventional

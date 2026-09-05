@@ -1,6 +1,6 @@
 # Plan: Plugin system and analytics
 
-**Status:** In progress · **Layout:** kanban · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Source spec:** [Plugin SPI](../../changes/merged/2026-07-26-cli_plugin_system.md) · [PDS migration](../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics](../../changes/merged/2026-07-26-analytics_plugin.md)
+**Status:** Done · **Layout:** kanban · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Source spec:** [Plugin SPI](../../changes/merged/2026-07-26-cli_plugin_system.md) · [PDS migration](../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics](../../changes/merged/2026-07-26-analytics_plugin.md)
 
 Complete the plugin/PDS/analytics specifications on published beta.3. Tasks 00–58
 and 61 are implemented preconditions; tasks 59–60 finish the migration, task 62

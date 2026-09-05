@@ -48,7 +48,7 @@ blogwright history                          # deployment history
 blogwright logs <hash>                      # CloudWatch build logs for a hash
 blogwright rollback <hash>                  # re-deploy an earlier build
 blogwright delete                           # empty site/ only
-blogwright destroy --yes                    # tear everything down
+blogwright destroy --yes                    # tear down site infrastructure (plugin state blocks)
 
 blogwright preview …                        # per-PR preview stack
 blogwright pds …                            # standard.site (AT Protocol) publishing
@@ -64,9 +64,10 @@ Environment defaults to `production`; pass another as the positional `[env]` or
 [CLI reference](https://blogwright.iamstan.dev/reference/cli/).
 
 An installed plugin claims its own namespace: `blogwright <plugin> <action>` runs
-one of its commands, `blogwright <plugin> init` splices that plugin's block into
-the environment's config file, and `blogwright <plugin> bootstrap|status|destroy`
-reconciles that plugin's own resources, recorded in its own state object rather
+one of its commands. For a plugin with an init contributor, `blogwright <plugin> init`
+splices its config block into the environment's config file; PDS instead declares
+publication setup as its own `init` command. The verbs `blogwright <plugin> bootstrap|status|destroy`
+reconcile that plugin's own resources, recorded in its own state object rather
 than the site's. `blogwright plugin add analytics` installs the package
 `blogwright-analytics` at this CLI's own version and pins it exactly, so every
 checkout of the repo gets the same pair. The pin is taken at install time, not
@@ -75,11 +76,21 @@ pinned to, and nothing declares or checks an interface version, so nothing
 reports the gap - re-running `blogwright plugin add` will not close it either,
 since a package the manifest already declares is left untouched.
 
-The plugin interface itself is **internal and unversioned**: it is deliberately
-undocumented, it can change in any release without a major version, and it is not
-a public contract - so no third party should write a plugin against it yet. It
-becomes a documented, versioned API only once it has carried two features through
-a release cycle.
+The plugin interface itself is **internal and unversioned**: [internal implementation docs](.specs/blogwright/README.md) record how it works,
+but it can change in any release without a major version and is not a supported
+third-party contract. Publishing a versioned API remains a separate decision.
+
+Plugin resources use `state/<env>.<plugin>.json` in the site bucket. Site bootstrap
+warns to re-run each recorded plugin's bootstrap for that environment; site destroy
+and preview teardown refuse until plugin teardown removes those keys. For GitHub
+OIDC publishing, run `blogwright pds bootstrap <env>` once per eligible stack to
+install PDS's own secret-access policy. `plugin remove --yes` uninstalls while
+**keeping** resources; run `<plugin> destroy <env> --yes` first when teardown is wanted.
+
+The optional [analytics plugin](packages/analytics/README.md) provides a fourteen-node
+us-east-1 pipeline and a local dashboard. Its `page_views` table excludes raw viewer
+IP, while failed Firehose objects can retain original payloads and the site's
+CloudWatch copy remains separate.
 
 ## Documentation
 
@@ -111,14 +122,19 @@ start from [blogwright.iamstan.dev/llms.txt](https://blogwright.iamstan.dev/llms
 | `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, dispatch - plus the `blogwright/rkey` subpath export (a re-export of `blogwright-pds/rkey`) |
 | `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store, shared ports (filesystem, terminal)          |
 | `blogwright-pds`         | standard.site (AT Protocol) publishing: OAuth client, secret store, PDS record sync, URL-derived rkeys           |
+| `blogwright-analytics`   | Optional plugin: CloudFront/Firehose to S3 Tables Iceberg, transform Lambda and local DuckDB dashboard |
 | `blogwright-build-agent` | HTTP build server baked into the builder MicroVM image (not published - its bundle ships inside the CLI package) |
 
 ## Testing
 
 ```sh
 pnpm install
-pnpm build                          # core -> build-agent -> cli (and the docs site)
-pnpm test                           # unit tests (transport mocks) - no cloud needed
+pnpm build                          # all workspace packages, dashboard/transform and docs
+pnpm typecheck
+TZ=America/New_York pnpm test        # transport mocks; no cloud needed
+pnpm lint
+pnpm exec oxfmt --check .
+pnpm knip
 
 # Integration tests against the floci emulator:
 docker run -d --name floci -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock floci/floci:latest
@@ -141,7 +157,7 @@ publishing** - no npm token anywhere (see `.github/workflows/version-pr.yml`
 and `release.yml`):
 
 1. Every user-facing change ships with a changeset: `pnpm changeset`, pick the
-   impact, write a one-liner. The three publishable packages are version-fixed,
+   impact, write a one-liner. The four publishable packages are version-fixed,
    so any bump moves them together.
 2. CI maintains a **"Release: version packages"** PR that folds pending
    changesets into a version bump + per-package CHANGELOGs. Merge it when
@@ -150,7 +166,7 @@ and `release.yml`):
    are the one place plain git is used - jj does not author tags; the version
    is previewed in the PR).
 4. CI validates versions match the tag, builds, runs the full gate set plus
-   `publint` and `arethetypeswrong`, then **stages** all three packages to npm
+   `publint` and `arethetypeswrong`, then **stages** all four packages to npm
    via OIDC trusted publishing with provenance, and cuts a GitHub Release from
    the changesets CHANGELOG entry.
 5. Nothing is live yet: approve the staged packages (`npm stage approve`, or
@@ -158,7 +174,7 @@ and `release.yml`):
    already-published packages are skipped.
 
 One-time setup on npmjs.com: each package (`blogwright-core`, `blogwright-pds`,
-`blogwright`) needs a Trusted Publisher pointing at this repository, the
+`blogwright-analytics`, `blogwright`) needs a Trusted Publisher pointing at this repository, the
 `release.yml` workflow, and the `publish` environment. The repository needs a
 `publish` GitHub environment (add a required reviewer there for an extra
 approval gate if wanted).

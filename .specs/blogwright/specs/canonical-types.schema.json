@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blogwright.iamstan.dev/specs/blogwright/canonical-types.schema.json",
+  "title": "Blogwright internal JSON contracts",
+  "$comment": "Documentation sidecar, not runtime validation. Choose a $defs entity explicitly. Callable interfaces and private-symbol TypeScript values are prose/source contracts.",
+  "$defs": {
+    "PluginManifest": {
+      "type": "object",
+      "required": [
+        "plugin"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "plugin": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "The CLI namespace this package claims. `analytics` answers `blogwright analytics <action>`."
+        }
+      }
+    },
+    "PdsConfig": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "description": {
+          "type": "string"
+        },
+        "handleResolver": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "secretName": {
+          "type": "string",
+          "pattern": "^[\\w/+=.@-]+$",
+          "description": "Optional on disk and in the validated block; requirePdsConfig and the IAM node use resolvePdsSecretName with siteName to apply the `<siteName>/atproto` default."
+        }
+      }
+    },
+    "AnalyticsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tableBucket": {
+          "type": "string",
+          "pattern": "^[0-9a-z-]{3,63}$",
+          "description": "Defaults in the consumer resolver to <env>-<siteName>-analytics."
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "default": "web"
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "default": "page_views"
+        },
+        "bots": {
+          "enum": [
+            "flag",
+            "filter"
+          ],
+          "default": "flag"
+        },
+        "saltSecretName": {
+          "type": "string",
+          "pattern": "^[\\w/+=.@-]+$",
+          "description": "Defaults to `<siteName>/<env>/analytics-salt`."
+        },
+        "dashboard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535,
+              "default": 4317
+            }
+          }
+        }
+      },
+      "description": "On-disk analytics config. Distinct from the private-symbol-bearing exported TypeScript AnalyticsConfig."
+    },
+    "PageView": {
+      "$comment": "The page_views Iceberg table, partitioned by `day`. Column names are lowercase - an S3 Tables catalog requirement.",
+      "type": "object",
+      "required": [
+        "event_time",
+        "day",
+        "host",
+        "uri",
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "event_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "day": {
+          "type": "string",
+          "format": "date"
+        },
+        "host": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "status": {
+          "type": "integer"
+        },
+        "referrer": {
+          "type": "string"
+        },
+        "user_agent": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "asn": {
+          "type": "string"
+        },
+        "edge_location": {
+          "type": "string"
+        },
+        "result_type": {
+          "type": "string"
+        },
+        "bytes_sent": {
+          "type": "integer"
+        },
+        "time_taken": {
+          "type": "number"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "visitor_key": {
+          "type": "string",
+          "description": "SHA-256 of viewer IP + user agent + HMAC-SHA256(root secret, day). The root secret lives in Secrets Manager; the raw IP is never stored in page_views and the salt is not derivable from the row."
+        },
+        "is_bot": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ResolvedPdsConfig": {
+      "type": "object",
+      "required": [
+        "name",
+        "secretName"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "description": {
+          "type": "string"
+        },
+        "handleResolver": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "secretName": {
+          "type": "string",
+          "pattern": "^[\\w/+=.@-]+$",
+          "description": "Optional on disk and in the validated block; requirePdsConfig and the IAM node use resolvePdsSecretName with siteName to apply the `<siteName>/atproto` default."
+        }
+      },
+      "description": "Resolved JSON projection; all environment/site-derived defaults applied."
+    },
+    "ResolvedAnalyticsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tableBucket": {
+          "type": "string",
+          "pattern": "^[0-9a-z-]{3,63}$",
+          "description": "Defaults in the consumer resolver to <env>-<siteName>-analytics."
+        },
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "default": "web"
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "default": "page_views"
+        },
+        "bots": {
+          "enum": [
+            "flag",
+            "filter"
+          ],
+          "default": "flag"
+        },
+        "saltSecretName": {
+          "type": "string",
+          "pattern": "^[\\w/+=.@-]+$",
+          "description": "Defaults to `<siteName>/<env>/analytics-salt`."
+        },
+        "dashboard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535,
+              "default": 4317
+            }
+          },
+          "required": [
+            "port"
+          ]
+        }
+      },
+      "description": "Resolved JSON projection; all environment/site-derived defaults applied.",
+      "required": [
+        "tableBucket",
+        "namespace",
+        "table",
+        "bots",
+        "saltSecretName",
+        "dashboard"
+      ]
+    },
+    "ResourceOutputs": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "OpsState": {
+      "type": "object",
+      "required": [
+        "version",
+        "env",
+        "resources"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "version": {
+          "type": "number",
+          "default": 1
+        },
+        "env": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Absent in empty JSON state; save writes current ISO timestamp."
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ResourceOutputs"
+          }
+        }
+      },
+      "description": "Persisted envelope; unknown envelope fields are preserved for compatibility. Runtime accepts string timestamps without format/version/env equality restrictions."
+    }
+  }
+}

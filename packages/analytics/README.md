@@ -22,8 +22,8 @@ blogwright plugin add analytics
 ```
 
 `analytics` resolves to the package `blogwright-analytics`, installed at the running
-CLI's own version and pinned exactly, so the CLI and its plugins cannot drift apart
-between two checkouts of the same repo. `blogwright plugin list` shows it once installed,
+CLI's own version and pinned exactly, so each checkout installs the recorded pair. This is an install-time pin, not an
+upgrade mechanism: updating the CLI alone can still leave a plugin at an older version. `blogwright plugin list` shows it once installed,
 and `blogwright plugin remove analytics` offers to tear its resources down first.
 
 ## Commands
@@ -38,7 +38,7 @@ command. Five actions are the steady state:
 | `blogwright analytics bootstrap [env]` | Provisions the pipeline: the S3 Tables bucket, its namespace and the `page_views` table, the Glue `s3tablescatalog` federation, the `visitor_key` salt secret, the transform Lambda and its execution role, the Firehose error bucket, delivery role and delivery stream, and the CloudWatch delivery destination and delivery. |
 | `blogwright analytics status [env]` | Reports each node present or missing, then the Firehose stream's delivery health and the table's current row count. An environment that was never bootstrapped is not an error: every node reports missing and the command exits 0. |
 | `blogwright analytics dashboard [env]` | Serves the prebuilt dashboard from `dist/app` on `127.0.0.1` (port 4317 by default) and answers its named queries against the table. |
-| `blogwright analytics destroy [env] --yes` | Removes the plugin's own resources. The Glue federation is the one exception and is never deleted - see below. |
+| `blogwright analytics destroy [env] --yes` | Removes the plugin's own resources. The Glue federation and salt secret are retained - see below. |
 
 Two things the table does not say. The plugin's resources are recorded in their own state
 object, `state/<env>.analytics.json`: `blogwright bootstrap` provisions none of them, and
@@ -61,8 +61,8 @@ It reads the CloudWatch log group the site's own delivery already writes -
 maps every event through the same code the transform Lambda runs, so a record
 produces the same `page_views` row whichever path carried it, `visitor_key`
 included: the day's salt is `HMAC-SHA256(secret, day)` over the same stored
-secret, so a historical day's salt is derivable and the raw IP is no more
-stored here than it is there.
+secret, so a historical day's salt is derivable. Successful table rows contain
+no raw viewer-IP column; the source CloudWatch copy remains separate.
 
 **It cannot double-count, and not by de-duplicating.** The
 `analytics-log-delivery` node records the UTC day it first created the
@@ -106,7 +106,7 @@ in a region the transform function cannot read from.
 
 ## Privacy
 
-**The raw viewer IP is never stored.** `c-ip` is selected from CloudFront only so the
+**The `page_views` table has no raw viewer-IP column.** `c-ip` is selected from CloudFront only so the
 transform Lambda can derive `visitor_key` from it, and no column of the `page_views` table
 holds it: it has no entry in the field-to-column map, and the transform discards it after
 hashing. `visitor_key` is a SHA-256 digest over the viewer IP, the user agent and that
@@ -126,15 +126,23 @@ No cookie is set and no identifier is written to a visitor's browser. Bot traffi
 flagged rather than dropped (`is_bot` is a column, and filtering is a query default), so
 a heuristic that turns out to be wrong is a query change and not lost data.
 
+Failed transformation records are different: `ProcessingFailed` sends the original
+record to Firehose's failed-record S3 output. Its `rawData` can therefore retain
+`c-ip`, even though successful table rows do not. This is deliberate failure
+visibility, not a `Dropped` response. See [AWS failure handling](https://docs.aws.amazon.com/firehose/latest/dev/data-transformation-failure-handling.html).
+The error bucket has no automatic expiry policy and is emptied during plugin teardown.
+The site's existing CloudWatch log copy is a separate store with its own retention.
+
 ## Shared state, and what teardown leaves behind
 
 One resource is account-and-region scoped rather than per-environment: the Glue
 `s3tablescatalog` federation that Firehose reaches S3 Tables through. Two environments of
 the same site share it. Its node therefore adopts an existing federation rather than
 failing, and its `delete()` is a no-op - tearing down staging must not break production,
-and the Glue API this package speaks exposes no delete operation at all. Everything else
-the plugin creates is per-environment and is removed by
-`blogwright analytics destroy <env> --yes`.
+and the Glue API this package speaks exposes no delete operation at all. The long-lived salt secret is also retained: replacing it would break comparison
+with surviving rows and historical backfill. Teardown prints manual cleanup guidance.
+Other plugin-created resources are per-environment and removed by
+`blogwright analytics destroy <env> --yes`; the table and failed-record objects are deleted.
 
 Rows are never aged out. The table is append-only and partitioned by `day`, so expiring
 old data would mean whole-partition deletes issued on a schedule; S3 Tables offers no
@@ -160,3 +168,21 @@ them into the block by hand to override either, where the same validator still c
 them. Do not take the environment out of either default: without it two environments
 resolve to the same Iceberg table and the same salt, and `blogwright analytics destroy`
 in staging would delete production's data.
+
+## Diagnostic logs
+
+The pipeline has fourteen resource nodes, including two log groups in us-east-1:
+`/aws/lambda/<env>-<siteName>-analytics-transform` and
+`/aws/kinesisfirehose/<env>-<siteName>-analytics-firehose`. Both retain logs for
+365 days, reconciled on each bootstrap. The Firehose node ensures its
+`DestinationDelivery` stream on create and update; delivery errors are enabled
+on both new and existing streams. Transform diagnostics report per-batch mapped
+and failed counts with fixed failure categories, plus success/failure of uncached
+salt reads. They contain no original record fields or secret/error details.
+These bounded diagnostics are separate from Firehose failed-record objects,
+which can retain raw payloads. No retention config field is added.
+
+`blogwright plugin remove analytics --yes` keeps provisioned resources. To remove
+them first, run `blogwright analytics destroy <env> --yes`, then uninstall; config
+is preserved. A noninteractive remove of the loadable node plugin without `--yes`
+refuses because it cannot ask about teardown.

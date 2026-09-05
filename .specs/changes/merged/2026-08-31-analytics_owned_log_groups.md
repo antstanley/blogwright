@@ -53,13 +53,11 @@ wrong, and the comment is why the omission was read as cosmetic for a month.
 | [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → Analytics pipeline → Observability | **New block.** What each group holds, who writes to it, and the retention it carries |
 | [`changes/merged/2026-07-26-analytics_plugin.md`](2026-07-26-analytics_plugin.md) → `blogwright-core` → `LogsClient` delivery configuration | `LogsClient` gains `ensureLogStream`, the second core operation this pipeline needs |
 
-The repo has no canonical spec pages for resource nodes, AWS clients or the
-CLI surface - the merged analytics change spec is the record, and its own
-`Affected spec pages` table says so. This change therefore amends that merged
-document in place, the mechanism it already used on itself when its
-§Its own service clients block was corrected from four operations to five at
-merge time. If canonical pages are created later, both documents fold into
-them together.
+At the original merge, the repo had no canonical pages for resource nodes, AWS
+clients or the CLI surface, so this change amended the merged analytics proposal
+in place. Both source documents now fold together into the internal
+[analytics specification](../../blogwright/specs/04-analytics.md); their original
+merge dates and implementation history remain intact.
 
 ---
 

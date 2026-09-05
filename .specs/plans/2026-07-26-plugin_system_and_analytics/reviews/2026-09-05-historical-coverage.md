@@ -44,3 +44,14 @@ Task58 certificate explicitly records O4 and O6 UNSATISFIED and VERDICT PARTIAL,
 ## Other active-plan corrections already sent to root
 
 Task60's existing eight-item DoD vs seven-obligation certificate is obsolete; new split should assign warning semantics to60 and docs/spec closure to63. Existing task60 release ordering sentence is inverted: a violation is60 shipping later than59. Existing task59 says only O5 needs rechecking after unpark; all affected current obligations/regressions should instead be verified after rebase. Type-claim retirement has now moved from the plan's prose-only task60 decision to explicit task63 ownership.
+
+## Current closure — 2026-09-05
+
+The outstanding current checks listed above are discharged in task63's
+[certificate](../done/63-specification_closure-certificate.md),
+[independent review](63-verification.md), and
+[conformance report](../../../reviews/2026-09-05-specification-closure.md).
+Those new records contain the actual exported-type negative probe, current
+bundled-dispatch/context/helper evidence, every source merge-step mapping, and
+six-gate results. This addendum does not change any historical verdict or claim
+that the original reviewer ran these later checks.
