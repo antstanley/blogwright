@@ -48,7 +48,7 @@
     readonly value: number;
   }
 
-  let { panel, request }: { panel: Panel; request: QueryRequest } = $props();
+  let { panel, request, refreshVersion = 0 }: { panel: Panel; request: QueryRequest; refreshVersion?: number } = $props();
 
   let countryView = $state<'map' | 'bars'>('map');
 
@@ -60,7 +60,11 @@
   }));
 
   let granularity = $state<ViewGranularity>('24h');
-  const answer = $derived(runNamedQuery(panel.name, panel.name === 'views-over-time' ? { ...request, granularity } : request));
+  // A new revision reruns this request without resetting the panel's local controls.
+  const answer = $derived({
+    version: refreshVersion,
+    promise: runNamedQuery(panel.name, panel.name === 'views-over-time' ? { ...request, granularity } : request),
+  });
 
   /** Render a value the way this panel's value column reads. */
   function formatValue(value: number): string {
@@ -127,7 +131,7 @@
     {/if}
   </div>
 
-  {#await answer}
+  {#await answer.promise}
     <p class="panel-meaning">&nbsp;</p>
     <div class="panel-state" role="status">Loading report…</div>
   {:then result}

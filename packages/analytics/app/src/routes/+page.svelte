@@ -8,7 +8,7 @@
   seven identical refusals.
 -->
 <script lang="ts">
-  import { CalendarDays } from '@lucide/svelte';
+  import { CalendarDays, RefreshCw } from '@lucide/svelte';
   import type { BotInclusion, QueryRequest } from '../lib/api.js';
   import { PANELS } from '../lib/panels.js';
   import PillRadio from '../lib/PillRadio.svelte';
@@ -28,6 +28,7 @@
 
   let from = $state(OPENING_RANGE.from);
   let to = $state(OPENING_RANGE.to);
+  let refreshVersion = $state(0);
   let bots = $state<BotInclusion>('site-default');
 
   let selectedPeriod = $state<Period | 'custom'>('custom');
@@ -54,7 +55,13 @@
       <h1>Traffic overview</h1>
       <p>Understand how readers reach your site. All days are grouped in UTC.</p>
     </div>
-    <div class="header-actions"><ThemeToggle /></div>
+    <div class="header-actions">
+      <ThemeToggle />
+      <button class="refresh-button" type="button" aria-label="Refresh data" title="Refresh data"
+        onclick={() => refreshVersion += 1}>
+        <RefreshCw size={18} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </div>
   </header>
 
   <div class="filter-bar">
@@ -96,7 +103,7 @@
   {:else}
     <div class="panels">
       {#each PANELS as panel (panel.name)}
-        <QueryPanel {panel} {request} />
+        <QueryPanel {panel} {request} {refreshVersion} />
       {/each}
     </div>
   {/if}
