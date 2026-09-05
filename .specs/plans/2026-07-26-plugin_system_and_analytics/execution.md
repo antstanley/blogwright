@@ -9,7 +9,7 @@ Baseline: all six gates passed. Tests: 1,533 passed and one opt-in Floci test sk
 
 | Task | State | Correctness | Completeness | Evidence |
 |---|---|---|---|---|
-| 59 | Independent verification | pending | pending | seven-path implementation; six gates green; policy mutation killed |
+| 59 | Done | CORRECT | DONE | [review](reviews/59-verification.md); six gates pass, 1,533 tests |
 | 62 | Independent verification | pending | pending | three-path implementation; six gates green; midnight mutation killed |
-| 60 | Waiting for59 | pending | pending | current task/certificate |
+| 60 | Implementing | pending | pending | isolated complete-60 workspace |
 | 63 | Waiting for60/62 | pending | pending | current task/certificate |
