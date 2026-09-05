@@ -878,7 +878,13 @@ const GITHUB_OIDC_THUMBPRINT = '6938fd4d98bab03faadb97b34396831e3780aea1';
 /**
  * IAM role a GitHub Actions workflow assumes via OIDC - to deploy/destroy previews
  * (preview stack, any ref) or to deploy production (main branch only, plus CloudFront
- * invalidation and read access to the PDS credentials secret).
+ * invalidation).
+ *
+ * The role carries the site's own grants and nothing else. A plugin needing the deploy
+ * role to reach one of *its* resources attaches its own **named** inline policy to this
+ * same role from its own graph, reconciled by its own `<plugin> bootstrap` - so this
+ * document never names a plugin's resource, and `applyOidcRole` rewriting it wholesale
+ * on every `blogwright bootstrap` cannot disturb the plugin's.
  */
 function githubOidcRoleNode(preview: boolean): ResourceNode {
   const roleName = (ctx: OpsContext) => ctx.names.githubRole;
@@ -968,33 +974,6 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       Action: ['cloudfront:CreateInvalidation'],
       Resource: String(output(ctx, 'cloudfront-distribution').arn),
     });
-    if (ctx.config.pds) {
-      // The post-deploy PDS sync reads the OAuth secret and writes it back:
-      // refresh tokens are single-use, so every sync persists the rotated
-      // session (PutSecretValue via the upsert helper, which tries CreateSecret
-      // first when the secret is missing).
-      //
-      // The `??` default duplicates the pds plugin's own `resolvePdsSecretName`
-      // deliberately, and must NOT be replaced by an import of it: this
-      // resource graph carries no plugin knowledge, which is the whole point of
-      // the plugin owning its own node (`packages/pds/src/nodes.ts`). Core
-      // stopped defaulting `pds.secretName`, so without this default the
-      // template literal would happily interpolate `undefined` into a live IAM
-      // policy - `applyOidcRole` rewrites this whole document on every
-      // `blogwright bootstrap`, so a wrong ARN here is a broken permission and
-      // not a test failure. Task 59 deletes this statement together with the
-      // `ctx.config.pds` branch around it; the duplication lives only until
-      // then.
-      statements.push({
-        Effect: 'Allow',
-        Action: [
-          'secretsmanager:GetSecretValue',
-          'secretsmanager:PutSecretValue',
-          'secretsmanager:CreateSecret',
-        ],
-        Resource: `arn:aws:secretsmanager:${ctx.config.region}:${ctx.accountId}:secret:${ctx.config.pds.secretName ?? `${ctx.config.siteName}/atproto`}-*`,
-      });
-    }
   }
   return statements;
 }

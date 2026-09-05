@@ -200,12 +200,15 @@ async function runEveryNode(ctx: PluginContext<PdsConfig>): Promise<void> {
 }
 
 /**
- * The statement the site's own graph produces for this grant today, copied
- * field for field from the expectation in `packages/cli/src/nodes.test.ts`
- * (`oidcRolePolicyStatements` … "grants secret read/write scoped to the pds
- * secret when configured"). The move to this package is behaviour-preserving
- * only if this literal and the node's output agree, so it is written out here
- * rather than derived from the code under test.
+ * The statement the site's own graph produced for this grant before it was
+ * removed, copied field for field from the expectation that pinned it in
+ * `packages/cli/src/nodes.test.ts` (`oidcRolePolicyStatements`, "grants secret
+ * read/write scoped to the pds secret when configured"). That test is gone with
+ * the branch it covered - `oidcRolePolicyStatements` now emits no Secrets
+ * Manager statement for any input - so this frozen literal is the only surviving
+ * record of what a deployed `<env>-deploy` policy carried. The move to this
+ * package is behaviour-preserving only if it and the node's output agree, which
+ * is why it is written out here rather than derived from the code under test.
  */
 const SITE_SECRET_STATEMENT = {
   Effect: 'Allow',
@@ -217,7 +220,10 @@ const SITE_SECRET_STATEMENT = {
   Resource: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:example/atproto-*',
 };
 
-/** The document the node writes: the site's statement, under its own policy name. */
+/**
+ * The document the node writes: the statement the site used to emit, under this
+ * plugin's own policy name.
+ */
 const SITE_EQUIVALENT_DOCUMENT = { Version: '2012-10-17', Statement: [SITE_SECRET_STATEMENT] };
 
 /** The same document scoped to another secret - the one field a config change moves. */
@@ -264,10 +270,11 @@ describe('buildPdsNodes', () => {
     const { ctx, calls, policiesOn } = createNodeContext({ pds: {}, env: 'preview' });
     // The preview role exists and its ARN IS in state here, and both other
     // skip conditions are satisfied - so nothing but the environment check can
-    // be what withholds the grant. The site's own graph withholds the same
-    // statement from the same role, because that role's OIDC subject claim is
-    // `repo:<owner>/<repo>:*` while the secret (`<siteName>/atproto`) is
-    // shared with production.
+    // be what withholds the grant. The reason is the role's own trust policy:
+    // its OIDC subject claim is `repo:<owner>/<repo>:*` - any ref - while the
+    // secret (`<siteName>/atproto`) is shared with production. The site's own
+    // graph withheld the same statement from the same role for the same
+    // reason, for as long as it carried that statement.
     expect(ctx.config.pds).toBeDefined();
     expect(ctx.config.githubRepo).toBe('antstanley/example');
     expect(ctx.siteState.resources['gh-oidc-role']?.arn).toContain('preview-example-gh');
@@ -287,8 +294,10 @@ describe('buildPdsNodes', () => {
     expect(role).toBe('staging-example-gh');
     expect(buildPdsNodes(ctx).map((node) => node.id)).toEqual(['pds-oidc-policy']);
     await theNode(ctx).create(ctx);
-    // The same document the site's `staging-deploy` policy already carries: a
-    // skip written as "anything but production" would leave this empty.
+    // The same document the site's `staging-deploy` policy used to carry, and
+    // since that statement was removed the only thing granting it on staging
+    // at all: a skip written as "anything but production" would leave this
+    // empty and take staging's access with it.
     expect(calls).toEqual([
       {
         op: 'putRolePolicy',
@@ -301,7 +310,7 @@ describe('buildPdsNodes', () => {
 });
 
 describe('pds-oidc-policy create', () => {
-  it("writes a blogwright-pds inline policy byte-identical to the site's statement today", async () => {
+  it('writes a blogwright-pds inline policy byte-identical to the statement the site used to emit', async () => {
     const { ctx, calls } = createNodeContext({ pds: {} });
     await theNode(ctx).create(ctx);
     expect(calls).toEqual([

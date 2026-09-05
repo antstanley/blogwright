@@ -4,16 +4,17 @@
  * role, granting Secrets Manager access to the plugin's own secret.
  *
  * The grant lives here rather than in the site's resource graph because it is
- * plugin topography: the site graph currently branches on `ctx.config.pds` and
- * interpolates this plugin's secret name into an IAM ARN
- * (`packages/cli/src/nodes.ts`), which is the CLI knowing something only this
- * package should know. Moving it here is safe because IAM inline policies are
+ * plugin topography: the site graph used to branch on `ctx.config.pds` and
+ * interpolate this plugin's secret name into an IAM ARN
+ * (`packages/cli/src/nodes.ts`), which was the CLI knowing something only this
+ * package should know. That branch is gone, and this node is now the only
+ * thing that grants it. The move was safe because IAM inline policies are
  * *named*: the site's `<env>-deploy` document and this plugin's
  * `blogwright-pds` document are independent objects on the same role, created,
- * reconciled and removed with no read of each other. That is what makes the
- * migration additive - both grants are live at once until the site's statement
- * is removed a release later - and it is why `delete()` can safely remove this
- * document without touching the role's own.
+ * reconciled and removed with no read of each other. That is what made the
+ * migration additive - both grants were live at once for the release between
+ * this node landing and the site's statement being removed - and it is why
+ * `delete()` can safely remove this document without touching the role's own.
  *
  * The node's own state (the site's deploy role) is not something this plugin
  * creates, so `read()` never reports the role - only whether the policy this
@@ -168,14 +169,14 @@ function oidcPolicyNode(secretName: string): PdsNode {
  *    (`buildNodes` adds `githubOidcRoleNode(true)` for it unconditionally),
  *    but its OIDC trust policy accepts the subject claim `repo:<owner>/<repo>:*`
  *    - **any ref** - where production accepts only the release-gated
- *    `repo:...:environment:production` (`oidcSubClaim`). The site's own graph
- *    withholds exactly this Secrets Manager statement from that role for that
- *    reason, and `resolvePdsSecretName` is environment-independent
- *    (`<siteName>/atproto`), so there is ONE PDS credential for the whole
- *    site: granting it here would let anyone who can push a branch read or
- *    rotate the site's ATProto session. `staging` is NOT a preview stack -
- *    the site already grants it this statement - so the skip is on the
- *    preview environment specifically, never on "not production".
+ *    `repo:...:environment:production` (`oidcSubClaim`). `resolvePdsSecretName`
+ *    is environment-independent (`<siteName>/atproto`), so there is ONE PDS
+ *    credential for the whole site: granting it here would let anyone who can
+ *    push a branch read or rotate the site's ATProto session. The site's own
+ *    graph withheld exactly this Secrets Manager statement from that role for
+ *    that reason, for as long as it carried the statement at all. `staging` is
+ *    NOT a preview stack - the site granted it this statement - so the skip is
+ *    on the preview environment specifically, never on "not production".
  *
  * The preview check is `ctx.env === PREVIEW_ENV` and deliberately **not**
  * `ctx.preview`, which would be dead code here: `runPlugin` builds its

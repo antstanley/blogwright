@@ -6,11 +6,11 @@ import { buildNodes, builderImageAction, oidcRolePolicyStatements, oidcSubClaim 
 import { createTestContext } from './test-support.js';
 
 /**
- * The block `pds: true` stands for: a `secretName` spelled out in the config.
- * Deliberately NOT `example/atproto` - that is exactly what `siteName:
- * 'example'` derives, so a fixture spelling it out could not tell an explicit
- * read from the default, and dropping the `secretName` read altogether would
- * leave every test green.
+ * The block `pds: true` stands for: a fully populated `pds` block, `secretName`
+ * spelled out. This graph no longer reads any of it - the grant it once fed is
+ * the pds plugin's own named inline policy now - so the fixture exists to be the
+ * *most* tempting input: the shape that used to produce a Secrets Manager
+ * statement here.
  */
 const PDS_WITH_SECRET_NAME: PdsConfig = { name: 'x', secretName: 'spelled-out/pds-key' };
 
@@ -307,42 +307,21 @@ describe('oidcRolePolicyStatements', () => {
     expect(actionsOf(statements)).not.toContain('secretsmanager:GetSecretValue');
   });
 
-  it('grants secret read/write scoped to the pds secret when configured', () => {
-    const statements = oidcRolePolicyStatements(ctx({ preview: false, pds: true }));
-    const secret = statements.find((s) =>
-      actionsOf([s]).includes('secretsmanager:GetSecretValue'),
-    ) as { Action: string[]; Resource: string };
-    // write access too: every sync persists the rotated OAuth refresh token
-    expect(secret.Action).toEqual([
-      'secretsmanager:GetSecretValue',
-      'secretsmanager:PutSecretValue',
-      'secretsmanager:CreateSecret',
-    ]);
-    // The block's own `secretName`, not the `<siteName>/atproto` default the
-    // test below covers: `example` would derive `example/atproto`, so this
-    // value is the only thing that fails if the `??`'s left operand is dropped.
-    expect(secret.Resource).toBe(
-      'arn:aws:secretsmanager:us-east-1:123456789012:secret:spelled-out/pds-key-*',
-    );
-  });
-
-  it('derives the secret ARN from siteName when the pds block omits secretName', () => {
-    // Core stopped defaulting `pds.secretName`, so this block is the shape a
-    // real config now produces. The statement's `??` default is what keeps the
-    // ARN total.
-    const statements = oidcRolePolicyStatements(ctx({ preview: false, pds: { name: 'x' } }));
-    const secret = statements.find((s) =>
-      actionsOf([s]).includes('secretsmanager:GetSecretValue'),
-    ) as { Resource: string };
-    // Named explicitly because the failure mode is a valid-looking ARN, not an
-    // exception: a template literal interpolates `undefined` silently, and
-    // `applyOidcRole` rewrites the whole live `<env>-deploy` document on every
-    // `blogwright bootstrap`.
-    expect(secret.Resource).not.toContain('undefined');
-    expect(secret.Resource).toBe(
-      'arn:aws:secretsmanager:us-east-1:123456789012:secret:example/atproto-*',
-    );
-  });
+  it.each([false, true])(
+    'ignores PDS config in the complete site policy (preview: %s)',
+    (preview) => {
+      const unconfigured = oidcRolePolicyStatements(ctx({ preview }));
+      // Cover both the explicit name and the default the removed branch derived.
+      const blocks: PdsConfig[] = [PDS_WITH_SECRET_NAME, { name: 'x' }];
+      for (const pds of blocks) {
+        const statements = oidcRolePolicyStatements(ctx({ preview, pds }));
+        expect(statements).toEqual(unconfigured);
+        expect(
+          actionsOf(statements).filter((action) => action.startsWith('secretsmanager:')),
+        ).toEqual([]);
+      }
+    },
+  );
 });
 
 describe('distributionNode.update', () => {

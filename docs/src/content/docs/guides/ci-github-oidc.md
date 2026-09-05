@@ -58,7 +58,9 @@ The role is scoped to one environment's resources, not the account:
 - Run and manage builder MicroVMs, and rebuild the builder image when the agent bundle changed - so build-agent updates ship through CI without a separate `bootstrap`.
 - Read the MicroVM build logs, and pass the environment's build and exec roles.
 - Create CloudFront invalidations on the environment's distribution (previews are never cached, so the preview role omits this).
-- When [standard.site publishing](/guides/publishing-standard-site/) is configured, read and write the OAuth secret in Secrets Manager - the post-deploy sync rotates the session on every run.
+- When [standard.site publishing](/guides/publishing-standard-site/) is configured **and `blogwright pds bootstrap <env>` has been run once for the environment**, read and write the OAuth secret in Secrets Manager - the post-deploy sync rotates the session on every run. That grant is no longer part of the role's `<env>-deploy` policy: it is a separate inline policy named `blogwright-pds`, owned and reconciled by the pds plugin. The preview role never gets it - its subject claim accepts any ref, while the secret is shared across environments - so preview deploys of a standard.site do not rotate the session.
+
+When upgrading from the additive PDS migration release, run `blogwright pds bootstrap <env>` before the next `blogwright bootstrap <env>` in every configured non-preview environment (for example, `production` or `staging`). Site bootstrap rewrites the entire `<env>-deploy` policy, removing the old secret statement. If this step was missed, run `blogwright pds bootstrap <env>` to restore secret access; the next deploy can sync to the PDS again. The site deploy itself still succeeds while sync is unavailable.
 
 ## Finding the role ARN
 

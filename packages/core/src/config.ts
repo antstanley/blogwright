@@ -34,9 +34,12 @@ export interface SeoConfig {
  * A *shape*, not a contract core enforces: `blogwright-pds` owns this key end
  * to end - it validates the block (`validatePdsConfig`) and derives the
  * `<siteName>/atproto` default `secretName` (`resolvePdsSecretName`). Core
- * parses the block through untouched. The type stays here only because
- * `OpsConfig.pds` is still declared, which is what lets the CLI's deploy-role
- * statement read it until that statement moves to the plugin.
+ * parses the block through untouched. The CLI's own resource graph no longer
+ * reads the block at all: its deploy-role statement for the secret is gone,
+ * and that grant is now the plugin's own named inline policy
+ * (`buildPdsNodes`, `packages/pds/src/nodes.ts`). The type stays here because
+ * `OpsConfig.pds` is still a declared member, and it is through
+ * `ctx.config.pds` that the plugin itself reads the block.
  */
 export interface PdsConfig {
   /** Publication display name (site.standard.publication `name`). */
