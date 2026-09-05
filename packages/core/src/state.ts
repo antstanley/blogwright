@@ -1,3 +1,4 @@
+/** S3-backed topology state and validation of its persisted boundary. */
 import type { S3Client } from './aws/s3.js';
 
 export type ResourceOutputs = Record<string, string | number | boolean | string[]>;
@@ -12,6 +13,44 @@ export interface OpsState {
 
 export function emptyState(env: string): OpsState {
   return { version: 1, env, updatedAt: undefined, resources: {} };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isOutputValue(value: unknown): boolean {
+  return (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    (Array.isArray(value) && value.every((item: unknown) => typeof item === 'string'))
+  );
+}
+
+function invalidStateField(value: unknown): string | undefined {
+  if (!isRecord(value)) return 'state';
+  if (typeof value.version !== 'number') return 'version';
+  if (typeof value.env !== 'string') return 'env';
+  if (value.updatedAt !== undefined && typeof value.updatedAt !== 'string') return 'updatedAt';
+  if (!isRecord(value.resources)) return 'resources';
+  for (const [nodeId, outputs] of Object.entries(value.resources)) {
+    const field = `resources[${JSON.stringify(nodeId)}]`;
+    if (!isRecord(outputs)) return field;
+    for (const [name, output] of Object.entries(outputs)) {
+      if (!isOutputValue(output)) return `${field}[${JSON.stringify(name)}]`;
+    }
+  }
+  return undefined;
+}
+
+function validateState(value: unknown, location: string): asserts value is OpsState {
+  const field = invalidStateField(value);
+  if (field !== undefined) {
+    throw new Error(
+      `${location} has invalid state field ${field} - refusing to proceed with empty state`,
+    );
+  }
 }
 
 /** Namespace shape a plugin manifest declares - reused here so a scope can't smuggle a `/` or `..` into the key. */
@@ -70,14 +109,17 @@ export class StateStore {
     // Strictly undefined: a present-but-empty (zero-byte) state object is
     // corruption, not a fresh environment, and must hit the guard below.
     if (text === undefined) return emptyState(this.env);
+    let state: unknown;
     try {
-      return JSON.parse(text) as OpsState;
+      state = JSON.parse(text);
     } catch (err) {
       throw new Error(
         `${this.key} in s3://${this.bucket} is not valid JSON - refusing to proceed with empty state`,
         { cause: err },
       );
     }
+    validateState(state, `${this.key} in s3://${this.bucket}`);
+    return state;
   }
 
   async save(state: OpsState): Promise<void> {
