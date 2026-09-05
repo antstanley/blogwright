@@ -42,6 +42,7 @@
 
 import { createCredentialProvider, SecretsManagerClient, SigningClient } from 'blogwright-core';
 
+import { createTransformDiagnostics } from '../adapters/transform-diagnostics.js';
 import { createTransformHandler } from './handler.js';
 
 /** Where the salt secret lives, and therefore where this function signs. */
@@ -57,4 +58,8 @@ const signing = new SigningClient({
  * without the salt secret's name in the environment fails at initialisation
  * with the message `handler.ts` writes, rather than once per batch.
  */
-export const handler = createTransformHandler(new SecretsManagerClient(signing));
+export const handler = createTransformHandler(
+  new SecretsManagerClient(signing),
+  process.env,
+  createTransformDiagnostics((line) => console.info(line)),
+);

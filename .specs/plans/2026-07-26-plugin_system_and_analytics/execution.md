@@ -12,7 +12,7 @@ Baseline: all six gates passed. Tests: 1,533 passed and one opt-in Floci test sk
 | 59 | Done | CORRECT | DONE | [review](reviews/59-verification.md); six gates pass, 1,533 tests |
 | 62 | Done | CORRECT | DONE | [review](reviews/62-verification.md); six gates pass, 1,536 tests; midnight mutation killed |
 | 60 | Done | CORRECT | DONE | [review](reviews/60-verification.md); six gates pass, 1,539 tests; five negative-control failures |
-| 64 | Implementing | pending | pending | normative transform diagnostic gap |
+| 64 | Done | CORRECT | DONE | [review](reviews/64-verification.md); six gates pass, 1,550 tests; eight negative-control failures |
 | 65 | Implementing | pending | pending | pre-existing state-validation policy gap |
 | 63 | Implementing documentation; awaiting64/65 | pending | pending | current task/certificate; runtime dependencies integrated; temporary type gate passed and retired |
 

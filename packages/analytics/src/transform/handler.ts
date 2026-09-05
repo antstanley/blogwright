@@ -6,9 +6,10 @@
  * prefix rather than failing the batch" - plus the cold-start secret read step
  * 3 calls for.
  *
- * It owns four things and nothing else: the envelope types, the base64 and
+ * It owns the envelope types, the base64 and
  * JSON boundary, the cold-start read of the long-lived salt secret, and the
- * translation of one `MapRecordResult` into one Firehose response entry. Every
+ * translation of one `MapRecordResult` into one Firehose response entry, plus
+ * bounded diagnostics through an injected port. Every
  * decision about *what a row is* - which field fills which column, which
  * values are unusable, how `visitor_key` is derived and under which day's salt
  * - belongs to `map-record.ts` and is forwarded here, never re-decided.
@@ -42,8 +43,7 @@
  * over a 2^32 space. A blanket catch around `mapRecord` would convert those
  * throws into `ProcessingFailed` for every record - the whole batch to the
  * error prefix, no error anywhere, an empty dashboard, and nothing to say why.
- * So the only `try` in this module is the one around `JSON.parse`, which is
- * this module's own boundary. A throw from the mapping propagates, the
+ * The mapping remains outside the JSON boundary catch. A throw from the mapping propagates, the
  * invocation fails, and Firehose retries the batch and raises its own error
  * metric. Loudly is the point.
  *
@@ -71,6 +71,7 @@
 
 import type { SecretsManagerClient } from 'blogwright-core';
 
+import type { TransformBatchDiagnostic, TransformDiagnostics } from './diagnostics.js';
 import { type CloudFrontRecord, mapRecord } from './map-record.js';
 
 /**
@@ -198,12 +199,22 @@ function decodePayload(data: string): CloudFrontRecord | undefined {
 function transformRecord(
   record: FirehoseTransformRecord,
   saltSecret: string,
+  counts: TransformBatchDiagnostic,
 ): FirehoseTransformedRecord {
   const payload = decodePayload(record.data);
-  if (payload === undefined) return { recordId: record.recordId, result: PROCESSING_FAILED };
+  if (payload === undefined) {
+    counts.processingFailed += 1;
+    counts.reasons.invalid_payload += 1;
+    return { recordId: record.recordId, result: PROCESSING_FAILED };
+  }
 
   const mapped = mapRecord(payload, saltSecret);
-  if (!mapped.mapped) return { recordId: record.recordId, result: PROCESSING_FAILED };
+  if (!mapped.mapped) {
+    counts.processingFailed += 1;
+    counts.reasons.schema_rejected += 1;
+    return { recordId: record.recordId, result: PROCESSING_FAILED };
+  }
+  counts.mapped += 1;
 
   return {
     recordId: record.recordId,
@@ -228,18 +239,35 @@ function transformRecord(
  */
 export function createTransformHandler(
   secrets: SaltSecretStore,
-  env: Environment = process.env,
+  env: Environment,
+  diagnostics: TransformDiagnostics = () => {},
 ): (request: FirehoseTransformRequest) => Promise<FirehoseTransformResponse> {
   const secretName = requireSaltSecretName(env);
   let cached: string | undefined;
 
   async function readSaltSecret(): Promise<string> {
-    if (cached === undefined) cached = await loadSaltSecret(secrets, secretName);
+    if (cached === undefined) {
+      try {
+        cached = await loadSaltSecret(secrets, secretName);
+      } catch (error) {
+        diagnostics({ event: 'salt_read', outcome: 'failure' });
+        throw error;
+      }
+      diagnostics({ event: 'salt_read', outcome: 'success' });
+    }
     return cached;
   }
 
   return async function transformFirehoseRecords(request) {
     const saltSecret = await readSaltSecret();
-    return { records: request.records.map((record) => transformRecord(record, saltSecret)) };
+    const counts: TransformBatchDiagnostic = {
+      event: 'transform_batch',
+      mapped: 0,
+      processingFailed: 0,
+      reasons: { invalid_payload: 0, schema_rejected: 0 },
+    };
+    const records = request.records.map((record) => transformRecord(record, saltSecret, counts));
+    diagnostics(counts);
+    return { records };
   };
 }
