@@ -104,7 +104,7 @@ visual snapshot suite. The [task review](../../reviews/2026-09-05-dashboard-desi
 
 The shared `PillRadio` component owns compact radio styling, sliding selection,
 keyboard focus, and reduced-motion behavior. Traffic uses the same component
-with All (the site default), Include bots, and Exclude bots, in a row above the From/To date
+with All (explicitly including bots), Include bots, and Exclude bots, in a row above the From/To date
 inputs in Reporting window. Radio groups remain independent.
 
 Reporting window uses minute-step datetime inputs explicitly labelled UTC. Presets
@@ -117,3 +117,10 @@ Manual edits select Custom. Clicking Custom keeps the current bounds for editing
 The initial thirty-day window also selects Custom. Presets do not continuously move while
 the report is being read. Exact timestamp bounds apply to all charts; the end is
 exclusive. The initial window remains thirty days ending at the current minute.
+
+All traffic displays stacked Non-bot and Bot series in Views over time and every
+bar view, including Countries. Colours and series order are shared across charts,
+and both contributions remain available in data tables. Pie and map views retain
+total values. Include bots shows combined totals; Exclude bots omits flagged rows.
+Daily unique keys present in both groups count once as Non-bot. Cache-hit stacks
+show each group's cache hits divided by all requests, preserving the overall ratio.

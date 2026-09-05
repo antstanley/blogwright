@@ -49,6 +49,7 @@
  * `fetch`. Nothing here runs a statement - that is `AnalyticsQuery`'s adapter.
  */
 
+import { withTrafficBreakdown } from './traffic-breakdown.js';
 import {
   parseViewGranularity,
   VIEW_GRANULARITIES,
@@ -132,6 +133,8 @@ interface DateRange {
  * `config.analytics.bots` (task 44) through {@link BOTS_INCLUDED_BY_DEFAULT}.
  */
 export interface QueryParams {
+  /** Include disjoint bot/non-bot contributions; requires bots to be included. */
+  readonly splitBots?: boolean | undefined;
   /** The UTC reporting window. */
   readonly range: DateRange;
   /**
@@ -563,6 +566,10 @@ export function prepareQuery(
   const granularity = parseViewGranularity(params.granularity);
   const intraday = name === 'views-over-time' && granularity !== '24h';
   const includeBots = params.includeBots ?? BOTS_INCLUDED_BY_DEFAULT[config.bots];
+  if (params.splitBots !== undefined && typeof params.splitBots !== 'boolean') {
+    throw new Error('splitBots must be a boolean');
+  }
+  if (params.splitBots && !includeBots) throw new Error('splitBots requires includeBots=true');
   const available: Record<QueryParamName, BindValue> = {
     from: range.from.slice(0, 10),
     to: range.to.slice(0, 10),
@@ -584,12 +591,15 @@ export function prepareQuery(
       'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE) AND event_time >= CAST($from_time AS TIMESTAMP) AND event_time < CAST($to_time AS TIMESTAMP)',
     );
   }
+  if (params.splitBots) statement = withTrafficBreakdown(name, statement);
   return {
     // Justified by `queryDefinition` above: it raised unless `name` is one of
     // the table's own keys, which is exactly what `QueryName` enumerates.
     name: name as QueryName,
     sql: statement,
-    resultColumns: definition.resultColumns,
+    resultColumns: params.splitBots
+      ? [...definition.resultColumns, 'non_bot', 'bot']
+      : definition.resultColumns,
     bindings,
   };
 }

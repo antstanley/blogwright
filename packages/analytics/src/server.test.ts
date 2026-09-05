@@ -1005,3 +1005,32 @@ describe('minute reporting windows', () => {
     expect(query.runs).toHaveLength(0);
   });
 });
+
+describe('traffic split transport', () => {
+  it('forwards a valid split and reports its additional columns', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}&includeBots=true&splitBots=true`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params.splitBots).toBe(true);
+    expect(answer.text).toContain('non_bot');
+  });
+  it.each([
+    'splitBots=yes',
+    'splitBots=',
+    'splitBots=true&splitBots=false',
+    'splitBots=true&includeBots=false',
+  ])('rejects %s', async (suffix) => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+    );
+    expect(answer.status).toBe(400);
+    expect(query.runs).toHaveLength(0);
+  });
+});

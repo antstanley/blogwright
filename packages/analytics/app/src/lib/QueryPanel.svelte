@@ -19,6 +19,8 @@
   import CountryMap from './CountryMap.svelte';
   import PathsPie from './PathsPie.svelte';
   import ViewsArea from './ViewsArea.svelte';
+  import TrafficLegend from './TrafficLegend.svelte';
+  import { TRAFFIC_SERIES } from './traffic-series.js';
   import PillRadio from './PillRadio.svelte';
   import { VIEW_GRANULARITIES, type ViewGranularity } from '../../../src/view-granularity.js';
 
@@ -46,6 +48,8 @@
     readonly label: string;
     /** The measured value. */
     readonly value: number;
+    readonly non_bot: number;
+    readonly bot: number;
   }
 
   let { panel, request, refreshVersion = 0 }: { panel: Panel; request: QueryRequest; refreshVersion?: number } = $props();
@@ -59,6 +63,7 @@
     accessibleLabel: option.label,
   }));
 
+  const stacked = $derived(request.bots === 'all');
   let granularity = $state<ViewGranularity>('24h');
   // A new revision reruns this request without resetting the panel's local controls.
   const answer = $derived({
@@ -102,6 +107,8 @@
     return rows.map((row) => ({
       label: labelCell(row, panel.category),
       value: numericCell(row, panel.value),
+      non_bot: numericCell(row, 'non_bot'),
+      bot: numericCell(row, 'bot'),
     }));
   }
 
@@ -135,14 +142,15 @@
     <p class="panel-meaning">&nbsp;</p>
     <div class="panel-state" role="status">Loading report…</div>
   {:then result}
-    <p class="panel-meaning">{result.rowMeaning}</p>
+    <p class="panel-meaning">{result.rowMeaning}{#if stacked && panel.name === 'cache-hit-ratio'} — segments show each traffic group's contribution to the overall hit ratio.{/if}{#if stacked && panel.name === 'unique-visitors'} — a visitor key seen in both groups counts once, as non-bot.{/if}</p>
     {#if result.rows.length === 0}
       <div class="panel-state" role="status">No rows in this range.</div>
     {:else}
       {@const points = pointsOf(result)}
       {@const total = totalOf(result)}
+      {#if stacked && panel.name !== 'top-paths' && (panel.name !== 'countries' || countryView === 'bars')}<TrafficLegend />{/if}
       {#if panel.name === 'views-over-time'}
-        {#key result}<ViewsArea rows={result.rows} {granularity} />{/key}
+        {#key result}<ViewsArea rows={result.rows} {granularity} {stacked} />{/key}
       {:else if panel.name === 'countries' && countryView === 'map'}
         <CountryMap rows={result.rows} />
       {:else if panel.name === 'top-paths'}
@@ -151,6 +159,8 @@
       <div class="panel-chart" style:height={panel.ranked ? `${Math.max(220, points.length * 28 + 40)}px` : undefined}>
         <BarChart
           data={points}
+          {...(stacked ? { series: TRAFFIC_SERIES } : {})}
+          seriesLayout={stacked ? 'stack' : 'overlap'}
           x={panel.ranked ? 'value' : 'label'}
           y={panel.ranked ? 'label' : 'value'}
           orientation={panel.ranked ? 'horizontal' : 'vertical'}
@@ -172,10 +182,10 @@
         <summary>View chart data</summary>
         <table>
           <caption>{panel.title} — {panel.name === 'countries' || panel.name === 'top-paths' ? 'all returned values' : 'plotted values'}</caption>
-          <thead><tr><th scope="col">{panel.name === 'views-over-time' ? 'Bucket start (UTC)' : humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th></tr></thead>
+          <thead><tr><th scope="col">{panel.name === 'views-over-time' ? 'Bucket start (UTC)' : humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th>{#if stacked}<th scope="col">Non-bot</th><th scope="col">Bot</th>{/if}</tr></thead>
           <tbody>
-            {#each (panel.name === 'countries' || panel.name === 'top-paths' ? result.rows.map(row => ({ label: labelCell(row, panel.category), value: numericCell(row, panel.value) })) : points) as point, index (index)}
-              <tr><th scope="row">{point.label}</th><td>{formatValue(point.value)}</td></tr>
+            {#each (panel.name === 'countries' || panel.name === 'top-paths' ? result.rows.map(row => ({ label: labelCell(row, panel.category), value: numericCell(row, panel.value), non_bot: numericCell(row, 'non_bot'), bot: numericCell(row, 'bot') })) : points) as point, index (index)}
+              <tr><th scope="row">{point.label}</th><td>{formatValue(point.value)}</td>{#if stacked}<td>{formatValue(point.non_bot)}</td><td>{formatValue(point.bot)}</td>{/if}</tr>
             {/each}
           </tbody>
         </table>

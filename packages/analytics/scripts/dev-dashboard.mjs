@@ -75,6 +75,23 @@ function previewViews(params, minutes) {
 }
 const query = {
   async run(name, params) {
+    const rows = await previewQuery.run(name, params);
+    if (!params.splitBots) return rows;
+    const value =
+      name === 'unique-visitors'
+        ? 'daily_unique_visitors'
+        : name === 'cache-hit-ratio'
+          ? 'cache_hit_ratio'
+          : 'views';
+    return rows.map((row, index) => {
+      const share = 0.15 + (index % 5) * 0.04;
+      const bot = name === 'cache-hit-ratio' ? row[value] * share : Math.round(row[value] * share);
+      return { ...row, bot, non_bot: row[value] - bot };
+    });
+  },
+};
+const previewQuery = {
+  async run(name, params) {
     const rows = await fixtureQuery.run(name, params);
     if (name === 'views-over-time') {
       return previewViews(

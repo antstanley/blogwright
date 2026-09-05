@@ -705,3 +705,7 @@ body {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+:root {
+  --color-bot: light-dark(#157765, #72c7b3);
+}

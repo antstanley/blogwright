@@ -270,3 +270,14 @@ and from the Iceberg table, whose rows have no automatic ageing in this code.
 - Should the mapper reject fractional int/long values and seconds-shaped timestamp inputs?
 
 Dashboard layout and visual acceptance are documented in [dashboard design](05-design.md).
+
+### Traffic breakdown
+
+The optional `splitBots=true` query parameter adds `non_bot` and `bot` contributions
+to every row while preserving existing total columns. It requires effective bot
+inclusion. Invalid/duplicate flags and a split with excluded bots return 400.
+Null bot flags are Non-bot. Unique visitor keys appearing in both groups count once
+as Non-bot; Bot contains only keys not observed as Non-bot that day. Cache-hit
+contributions share the all-request denominator, so the segments sum to the overall
+ratio. All traffic in the dashboard explicitly sends `includeBots=true&splitBots=true`.
+The existing API default without either flag still follows site configuration.

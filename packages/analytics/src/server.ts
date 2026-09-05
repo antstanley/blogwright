@@ -132,7 +132,7 @@ const QUERY_ROUTE_PREFIX = '/api/queries/';
  * because its default is `config.analytics.bots`, applied inside the port -
  * this module must not restate it.
  */
-const QUERY_STRING_PARAMS = ['from', 'to', 'includeBots', 'granularity'] as const;
+const QUERY_STRING_PARAMS = ['from', 'to', 'includeBots', 'granularity', 'splitBots'] as const;
 
 /** The two spellings the bot-inclusion flag takes, mapped to what it means. */
 const INCLUDE_BOTS_VALUES: Readonly<Record<string, boolean>> = { true: true, false: false };
@@ -399,7 +399,17 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
       throw new RequestRejected(400, describeError(err));
     }
   }
-  const extra = granularity === undefined ? {} : { granularity };
+  const split = search.get('splitBots');
+  if (
+    split !== null &&
+    (search.getAll('splitBots').length !== 1 || !Object.hasOwn(INCLUDE_BOTS_VALUES, split))
+  ) {
+    throw new RequestRejected(400, 'splitBots must be provided once as true or false');
+  }
+  const extra = {
+    ...(granularity === undefined ? {} : { granularity }),
+    ...(split === null ? {} : { splitBots: INCLUDE_BOTS_VALUES[split] }),
+  };
   const flag = search.get('includeBots');
   if (flag === null) {
     // Absent on purpose: `config.analytics.bots` decides, inside the port.
@@ -520,7 +530,7 @@ export async function createDashboardServer(
         params.granularity !== '24h'
           ? `one UTC bucket of ${VIEW_GRANULARITIES[params.granularity].label}, labelled by its start, and the number of requests served in it`
           : definition.rowMeaning,
-      resultColumns: definition.resultColumns,
+      resultColumns: resolved.resultColumns,
       rows,
     };
   }

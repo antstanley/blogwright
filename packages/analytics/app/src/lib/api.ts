@@ -37,18 +37,12 @@ interface DateRange {
   readonly to: string;
 }
 
-/**
- * What the reader chose about bot traffic. Three states rather than two,
- * because the server's `includeBots` parameter is *optional* and its absence
- * means `config.analytics.bots` decides, inside the port. Sending a flag on
- * every request would silently override a site that configured
- * `bots: "filter"`, so "the site's own setting" is a choice the reader can
- * make and this module can express.
- */
-export type BotInclusion = 'site-default' | 'include' | 'exclude';
+/** All shows bot/non-bot stacks; include shows combined totals; exclude removes bots. */
+export type BotInclusion = 'all' | 'include' | 'exclude';
 
-/** The `includeBots` value each explicit choice sends. `site-default` sends none. */
+/** The `includeBots` value each explicit choice sends. All and Include bots explicitly include bots. */
 const BOT_INCLUSION_VALUES: Readonly<Partial<Record<BotInclusion, string>>> = {
+  all: 'true',
   include: 'true',
   exclude: 'false',
 };
@@ -85,6 +79,7 @@ function searchParamsFor(request: QueryRequest): URLSearchParams {
     from: `${request.range.from}Z`,
     to: `${request.range.to}Z`,
   });
+  if (request.bots === 'all') params.set('splitBots', 'true');
   if (request.granularity !== undefined) params.set('granularity', request.granularity);
   const includeBots = BOT_INCLUSION_VALUES[request.bots];
   if (includeBots !== undefined) params.set('includeBots', includeBots);

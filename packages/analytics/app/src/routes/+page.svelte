@@ -21,7 +21,7 @@
 
   /** What each bot-inclusion choice is called on screen. */
   const botOptions: readonly { value: BotInclusion; label: string }[] = [
-    { value: 'site-default', label: 'All' },
+    { value: 'all', label: 'All' },
     { value: 'include', label: 'Include bots' },
     { value: 'exclude', label: 'Exclude bots' },
   ];
@@ -29,7 +29,7 @@
   let from = $state(OPENING_RANGE.from);
   let to = $state(OPENING_RANGE.to);
   let refreshVersion = $state(0);
-  let bots = $state<BotInclusion>('site-default');
+  let bots = $state<BotInclusion>('all');
 
   let selectedPeriod = $state<Period | 'custom'>('custom');
 

@@ -4,13 +4,16 @@
   import { scaleUtc } from 'd3-scale';
   import type { QueryRow } from '../../../src/ports.js';
   import { VIEW_GRANULARITIES, type ViewGranularity } from '../../../src/view-granularity.js';
+  import { TRAFFIC_SERIES } from './traffic-series.js';
   import { formatCount, labelCell, numericCell } from './format.js';
 
   const MINUTE_MS = 60_000;
-  let { rows, granularity }: { rows: readonly QueryRow[]; granularity: ViewGranularity } = $props();
+  let { rows, granularity, stacked = false }: { rows: readonly QueryRow[]; granularity: ViewGranularity; stacked?: boolean } = $props();
   const points = $derived(rows.map(row => ({
     day: new Date(labelCell(row, 'day').length === 10 ? `${labelCell(row, 'day')}T00:00:00Z` : labelCell(row, 'day')),
     views: numericCell(row, 'views'),
+    non_bot: numericCell(row, 'non_bot'),
+    bot: numericCell(row, 'bot'),
   })));
   let revision = $state(0);
   let selected = $state('');
@@ -35,6 +38,8 @@
     <div class="views-area-chart">
       <AreaChart
         data={points}
+        {...(stacked ? { series: TRAFFIC_SERIES } : {})}
+        seriesLayout={stacked ? 'stack' : 'overlap'}
         x="day"
         xScale={scaleUtc()}
         y="views"
@@ -58,7 +63,7 @@
           tooltip: { header: { format: (value: unknown) => value instanceof Date || typeof value === 'number' ? `${new Date(value).toISOString().slice(0, 16).replace('T', ' ')} (UTC)` : '' } },
           xAxis: { format: formatDay, ticks: granularity === '24h' ? 5 : 3 },
           yAxis: { format: formatCount, ticks: 4 },
-          area: { fill: 'var(--color-primary)', fillOpacity: 0.2, stroke: 'var(--color-primary)', strokeWidth: 2 },
+          area: { ...(stacked ? {} : { fill: 'var(--color-primary)', stroke: 'var(--color-primary)' }), fillOpacity: stacked ? 0.55 : 0.2, strokeWidth: 2 },
         }}
       />
     </div>
