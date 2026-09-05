@@ -29,6 +29,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertNoScopedState,
+  bootstrap,
   deploy,
   destroy,
   previewTeardown,
@@ -863,5 +864,113 @@ describe('deploy reaches syncAfterDeploy', () => {
     expect(manifest.optionalDependencies?.['blogwright-pds']).toBeUndefined();
     expect(manifest.peerDependencies?.['blogwright-pds']).toBeUndefined();
     expect(manifest.devDependencies?.['blogwright-pds']).toBeUndefined();
+  });
+});
+
+describe('bootstrap scoped state warnings', () => {
+  function recordingBootstrap(keys: string[] = [], listingError?: Error) {
+    const calls: string[] = [];
+    const warnings: string[] = [];
+    const output: string[] = [];
+    const ctx = createTestContext({
+      env: 'staging',
+      names: { bucket: 'my-bucket' },
+      state: { resources: { 'cloudfront-distribution': { domainName: 'site.example.com' } } },
+      logger: {
+        info: (message) => output.push(stripColors(message)),
+        ok: (message) => output.push(message),
+        warn: (message) => warnings.push(message),
+      },
+      clients: {
+        s3: {
+          listObjects: async (bucket, prefix) => {
+            calls.push(`list ${bucket} ${prefix}`);
+            if (listingError) throw listingError;
+            return keys.map((key) => ({ key, size: 0, lastModified: '', etag: '' }));
+          },
+        },
+      },
+      save: async () => {
+        calls.push('save');
+      },
+    });
+    const nodes: ResourceNode<OpsContext>[] = [
+      {
+        id: 'site',
+        title: 'site',
+        dependsOn: [],
+        read: async () => true,
+        create: async () => undefined,
+        update: async () => {
+          calls.push('reconcile');
+        },
+        delete: async () => undefined,
+      },
+    ];
+    return { ctx, nodes, calls, warnings, output };
+  }
+
+  it.each([
+    { keys: [] },
+    {
+      keys: [
+        'state/staging.json',
+        'state/production.pds.json',
+        'state/staging.pds.txt',
+        'other/staging.pds.json',
+      ],
+    },
+  ])('preserves empty-state output with no matching plugin key: %j', async ({ keys }) => {
+    const run = recordingBootstrap(keys);
+    await bootstrap(run.ctx, run.nodes);
+    expect(run.calls).toEqual(['reconcile', 'save', 'list my-bucket state/']);
+    expect(run.warnings).toEqual([]);
+    expect(run.output).toEqual([
+      'Bootstrapping "staging" (bucket my-bucket)',
+      'bootstrap complete for "staging"',
+      'Site will be served at https://site.example.com',
+    ]);
+  });
+
+  it('warns once per sorted current-environment scope, including uninstalled plugins in plain sessions', async () => {
+    const run = recordingBootstrap([
+      'state/staging.uninstalled.json',
+      'state/staging.pds.json',
+      'state/staging.pds.json',
+      'state/production.analytics.json',
+      'state/staging.json',
+    ]);
+    expect(run.ctx.ports.terminal.isInteractive).toBe(false);
+    expect(run.ctx.configDocument).toEqual({});
+    await bootstrap(run.ctx, run.nodes);
+    expect(run.calls).toEqual(['reconcile', 'save', 'list my-bucket state/']);
+    expect(run.warnings).toEqual([
+      'plugin state for "pds" still exists in "staging"; run `blogwright pds bootstrap staging` to reconcile its resources',
+      'plugin state for "uninstalled" still exists in "staging"; run `blogwright uninstalled bootstrap staging` to reconcile its resources',
+    ]);
+  });
+
+  it('does not list or warn after failed reconciliation', async () => {
+    const run = recordingBootstrap(['state/staging.pds.json']);
+    run.nodes[0]!.update = async () => {
+      throw new Error('reconcile denied');
+    };
+    await expect(bootstrap(run.ctx, run.nodes)).rejects.toThrow('reconcile denied');
+    expect(run.calls).toEqual(['save']);
+    expect(run.warnings).toEqual([]);
+    expect(run.output).not.toContain('bootstrap complete for "staging"');
+  });
+
+  it.each([
+    new Error('AccessDenied: s3:ListBucket'),
+    new AwsError({ service: 's3', statusCode: 404, code: 'NoSuchBucket', message: 'gone' }),
+  ])('reports listing failure without failing successful bootstrap: %s', async (error) => {
+    const run = recordingBootstrap([], error);
+    await expect(bootstrap(run.ctx, run.nodes)).resolves.toBeUndefined();
+    expect(run.calls).toEqual(['reconcile', 'save', 'list my-bucket state/']);
+    expect(run.warnings).toEqual([
+      `could not check plugin state for "staging" at s3://my-bucket/state/ (bootstrap succeeded): ${String(error)}`,
+    ]);
+    expect(run.output).toContain('bootstrap complete for "staging"');
   });
 });
