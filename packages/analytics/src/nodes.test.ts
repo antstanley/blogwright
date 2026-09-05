@@ -670,6 +670,7 @@ function makeContext(
      * {@link LogsWorld}.
      */
     logs?: LogsWorld;
+    onRequest?: (request: RecordedRequest) => void;
     /**
      * The environment's tags, as the host puts them on `ctx.tags`. Defaults to
      * absent - `PluginContext.tags` is optional - so a case asserting that tags
@@ -690,6 +691,7 @@ function makeContext(
       body: req.body === undefined ? undefined : parseBody(String(req.body)),
     };
     requests.push(recorded);
+    overrides.onRequest?.(recorded);
     // The CloudWatch Logs fake answers its own service statefully; every other
     // service still comes off the scripted queue, so nothing above this line
     // changes for the cases that do not pass one.
@@ -4062,6 +4064,55 @@ describe('analytics-log-delivery', () => {
       delivery: 'configured',
       createdDay: '2026-08-31',
     });
+  });
+
+  it.each([undefined, '2020-01-01'])(
+    'keeps the pre-request UTC bound across midnight with existing day %s',
+    async (existingDay) => {
+      const { ctx, requests } = makeContext([ok({})], {
+        site: BOOTSTRAPPED_SITE,
+        onRequest: (request) => {
+          expect(request.headers['x-amz-target']).toBe(`${LOGS_TARGET}.CreateDelivery`);
+          expect(ctx.state.resources['analytics-log-delivery']?.['createdDay']).toBe(existingDay);
+          vi.setSystemTime(new Date('2026-09-01T00:00:01Z'));
+        },
+      });
+      if (existingDay !== undefined) {
+        ctx.record('analytics-log-delivery', { createdDay: existingDay });
+      }
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-08-31T23:59:59Z'));
+        await analyticsLogDeliveryNode().create(withLogDestination(ctx));
+        expect(ctx.state.resources['analytics-log-delivery']?.['createdDay']).toBe(
+          existingDay ?? '2026-08-31',
+        );
+        expect(deliveryCalls(requests)).toStrictEqual(['createDelivery']);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('records no creation day when a request fails across UTC midnight', async () => {
+    const { ctx, requests } = makeContext([logsFailure('AccessDeniedException', 'denied')], {
+      site: BOOTSTRAPPED_SITE,
+      onRequest: () => {
+        expect(ctx.state.resources['analytics-log-delivery']).toBeUndefined();
+        vi.setSystemTime(new Date('2026-09-01T00:00:01Z'));
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-31T23:59:59Z'));
+      await expect(analyticsLogDeliveryNode().create(withLogDestination(ctx))).rejects.toThrow(
+        'denied',
+      );
+      expect(ctx.state.resources['analytics-log-delivery']).toBeUndefined();
+      expect(deliveryCalls(requests)).toStrictEqual(['createDelivery']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never advances createdDay when the delivery is created again', async () => {
