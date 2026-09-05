@@ -56,8 +56,7 @@
     left: 4px;
     width: calc((100% - 8px) / var(--option-count));
     border-radius: 999px;
-    background: var(--color-surface-200);
-    box-shadow: inset 0 0 0 1px var(--color-surface-border);
+    background: var(--color-primary);
     transform: translateX(calc(var(--selected-index) * 100%));
     transition: transform 180ms ease-out;
     pointer-events: none;
@@ -81,14 +80,14 @@
     place-items: center;
     min-height: 32px;
     border-radius: 999px;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 550;
     color: var(--color-surface-muted);
     transition: color 180ms ease-out;
   }
 
   .pill-option input:checked + span {
-    color: var(--color-primary);
+    color: var(--color-surface-100);
   }
 
   .pill-option input:focus-visible + span {

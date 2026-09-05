@@ -121,7 +121,7 @@
   }
 </script>
 
-<section class="panel" class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time' || panel.name === 'countries' || panel.name === 'top-paths'}>
+<section class="panel" class:panel-views={panel.name === 'views-over-time'} class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time' || panel.name === 'countries' || panel.name === 'top-paths'}>
   <div class="panel-heading">
     <h2>{panel.title}</h2>
     {#if panel.name === 'views-over-time'}
@@ -142,7 +142,7 @@
     <p class="panel-meaning">&nbsp;</p>
     <div class="panel-state" role="status">Loading report…</div>
   {:then result}
-    <p class="panel-meaning">{result.rowMeaning}{#if stacked && panel.name === 'cache-hit-ratio'} — segments show each traffic group's contribution to the overall hit ratio.{/if}{#if stacked && panel.name === 'unique-visitors'} — a visitor key seen in both groups counts once, as non-bot.{/if}</p>
+    <p class="panel-meaning">{result.rowMeaning.replace(/^one\s+/i, '')}{#if stacked && panel.name === 'cache-hit-ratio'} — segments show each traffic group's contribution to the overall hit ratio.{/if}{#if stacked && panel.name === 'unique-visitors'} — a visitor key seen in both groups counts once, as non-bot.{/if}</p>
     {#if result.rows.length === 0}
       <div class="panel-state" role="status">No rows in this range.</div>
     {:else}

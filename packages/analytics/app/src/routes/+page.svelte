@@ -8,11 +8,12 @@
   seven identical refusals.
 -->
 <script lang="ts">
-  import { CalendarDays, RefreshCw } from '@lucide/svelte';
+  import { ChevronDown, RefreshCw } from '@lucide/svelte';
   import type { BotInclusion, QueryRequest } from '../lib/api.js';
   import { PANELS } from '../lib/panels.js';
   import PillRadio from '../lib/PillRadio.svelte';
   import QueryPanel from '../lib/QueryPanel.svelte';
+  import DateTimePicker from '../lib/DateTimePicker.svelte';
   import ThemeToggle from '../lib/ThemeToggle.svelte';
   import { pathProblem } from '../../../src/path-filter.js';
   import { defaultRange, rangeProblem, presetRange, PERIODS, type Period } from '../../../src/reporting-range.js';
@@ -34,6 +35,7 @@
   let bots = $state<BotInclusion>('all');
 
   let selectedPeriod = $state<Period | 'custom'>('custom');
+  let filtersOpen = $state(true);
 
   function choosePeriod(period: Period): void {
     const range = presetRange(period);
@@ -54,8 +56,7 @@
   <header class="page-header">
     <div class="page-heading">
       <p class="eyebrow">Blogwright / Analytics</p>
-      <h1>Traffic overview</h1>
-      <p>Understand how readers reach your site. All days are grouped in UTC.</p>
+      <h1>Analytics</h1>
     </div>
     <div class="header-actions">
       <ThemeToggle />
@@ -67,8 +68,15 @@
   </header>
 
   <div class="filter-bar">
-    <div class="filter-heading"><strong>Reporting window</strong><span>Dates and times in UTC</span></div>
-    <div class="filter-controls">
+    <div class="filter-heading">
+      <button class="filter-toggle" type="button" aria-expanded={filtersOpen}
+        aria-controls="reporting-filters" onclick={() => filtersOpen = !filtersOpen}>
+        <strong>Reporting window</strong>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      <span>Dates and times in UTC</span>
+    </div>
+    <div class="filter-controls" id="reporting-filters" hidden={!filtersOpen}>
       <div class="bot-control">
         <span>Traffic</span>
         <PillRadio label="Traffic" options={botOptions} bind:value={bots} />
@@ -82,20 +90,8 @@
           onclick={() => selectedPeriod = 'custom'}>Custom</button>
       </div>
       <div class="controls">
-        <label class="control">
-          <span>From</span>
-          <span class="control-field">
-            <input type="datetime-local" step="60" oninput={() => selectedPeriod = 'custom'} bind:value={from} max={to} />
-            <CalendarDays class="control-icon" size={18} aria-hidden="true" />
-          </span>
-        </label>
-        <label class="control">
-          <span>To</span>
-          <span class="control-field">
-            <input type="datetime-local" step="60" oninput={() => selectedPeriod = 'custom'} bind:value={to} min={from} />
-            <CalendarDays class="control-icon" size={18} aria-hidden="true" />
-          </span>
-        </label>
+        <DateTimePicker label="From" bind:value={from} max={to} onchange={() => selectedPeriod = 'custom'} />
+        <DateTimePicker label="To" bind:value={to} min={from} onchange={() => selectedPeriod = 'custom'} />
       </div>
       <div class="path-filter">
         <label class="control path-control">
