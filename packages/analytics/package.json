@@ -20,7 +20,8 @@
     "build": "rolldown -c src/transform/rolldown.config.ts && node dist/write-transform-manifest.mjs && tsc -p tsconfig.json && cd app && vite build",
     "typecheck": "tsc -p tsconfig.typecheck.json && cd app && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "lint": "oxlint src app",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:mock": "node scripts/dev-dashboard.mjs"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.4",

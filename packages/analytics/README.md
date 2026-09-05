@@ -188,3 +188,27 @@ is preserved. A noninteractive remove of the loadable node plugin without `--yes
 refuses because it cannot ask about teardown.
 
 Dashboard presentation follows the [design guidelines](../../.specs/blogwright/specs/05-design.md).
+
+## Local dashboard development
+
+From the repository root, after `pnpm install`, run:
+
+```sh
+pnpm dev:analytics
+```
+
+This builds analytics and its workspace dependencies, then serves the real dashboard
+at http://127.0.0.1:4318 with synthetic data for all seven reports. No AWS account,
+credentials, DuckDB connection, or deployed infrastructure is needed. The server
+binds to loopback only. Stop it with Ctrl+C; the port is released on shutdown.
+
+Edit the dashboard under `app/src/`, then stop and rerun the command to rebuild.
+This is a built-app preview, without hot reload. If the artifacts are already
+current, `pnpm --filter blogwright-analytics dev:mock` skips the build.
+
+Fixtures live in `scripts/dev-dashboard.mjs`. Dates cover the 30 UTC days ending
+on startup day; totals are calculated from those rows. Date and bot controls use
+the real API validation, but fixture rows are fixed for the session and do not
+change with those inputs. Use an empty array for a query to inspect its empty state;
+remove its fixture entry to inspect an isolated error. Restart after fixture edits.
+Port 4318 must be free; an occupied port fails instead of silently selecting another.
