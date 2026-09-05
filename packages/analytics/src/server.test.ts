@@ -1034,3 +1034,29 @@ describe('traffic split transport', () => {
     expect(query.runs).toHaveLength(0);
   });
 });
+
+describe('path filter transport', () => {
+  it('forwards the path filter with existing query parameters', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/top-paths?from=${RANGE.from}&to=${RANGE.to}&path=%2Fdocs&includeBots=true&splitBots=true`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params.path).toBe('/docs');
+  });
+  it.each(['path=docs', 'path=%2Fdocs%3Fquery', 'path=%2Fdocs&path=%2Fother'])(
+    'rejects invalid or ambiguous paths: %s',
+    async (suffix) => {
+      const query = recordingQuery();
+      const server = await serve({ query });
+      const answer = await request(
+        server,
+        `/api/queries/top-paths?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+      );
+      expect(answer.status).toBe(400);
+      expect(query.runs).toHaveLength(0);
+    },
+  );
+});

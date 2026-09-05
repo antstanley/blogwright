@@ -49,6 +49,8 @@ const BOT_INCLUSION_VALUES: Readonly<Partial<Record<BotInclusion, string>>> = {
 
 /** Everything one request carries beyond the query's own name. */
 export interface QueryRequest {
+  /** Optional exact path and subpaths. */
+  readonly path?: string;
   /** The UTC reporting window. */
   readonly range: DateRange;
   /** What to do about bot-flagged rows. */
@@ -79,6 +81,7 @@ function searchParamsFor(request: QueryRequest): URLSearchParams {
     from: `${request.range.from}Z`,
     to: `${request.range.to}Z`,
   });
+  if (request.path?.trim()) params.set('path', request.path.trim());
   if (request.bots === 'all') params.set('splitBots', 'true');
   if (request.granularity !== undefined) params.set('granularity', request.granularity);
   const includeBots = BOT_INCLUSION_VALUES[request.bots];

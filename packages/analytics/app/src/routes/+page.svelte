@@ -14,6 +14,7 @@
   import PillRadio from '../lib/PillRadio.svelte';
   import QueryPanel from '../lib/QueryPanel.svelte';
   import ThemeToggle from '../lib/ThemeToggle.svelte';
+  import { pathProblem } from '../../../src/path-filter.js';
   import { defaultRange, rangeProblem, presetRange, PERIODS, type Period } from '../../../src/reporting-range.js';
 
   /** What the page opens on, read once so a rendering never moves the window. */
@@ -28,6 +29,7 @@
 
   let from = $state(OPENING_RANGE.from);
   let to = $state(OPENING_RANGE.to);
+  let path = $state('');
   let refreshVersion = $state(0);
   let bots = $state<BotInclusion>('all');
 
@@ -40,8 +42,8 @@
     selectedPeriod = period;
   }
 
-  const problem = $derived(rangeProblem({ from, to }));
-  const request = $derived<QueryRequest>({ range: { from, to }, bots });
+  const problem = $derived(rangeProblem({ from, to }) ?? pathProblem(path));
+  const request = $derived<QueryRequest>({ range: { from, to }, bots, path });
 </script>
 
 <svelte:head>
@@ -94,6 +96,13 @@
             <CalendarDays class="control-icon" size={18} aria-hidden="true" />
           </span>
         </label>
+      </div>
+      <div class="path-filter">
+        <label class="control path-control">
+          <span>Path</span>
+          <input type="text" bind:value={path} placeholder="/docs" aria-describedby="path-hint" spellcheck="false" />
+        </label>
+        <p id="path-hint">Includes subpaths. Leave blank for all paths.</p>
       </div>
     </div>
   </div>

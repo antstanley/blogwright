@@ -132,7 +132,14 @@ const QUERY_ROUTE_PREFIX = '/api/queries/';
  * because its default is `config.analytics.bots`, applied inside the port -
  * this module must not restate it.
  */
-const QUERY_STRING_PARAMS = ['from', 'to', 'includeBots', 'granularity', 'splitBots'] as const;
+const QUERY_STRING_PARAMS = [
+  'from',
+  'to',
+  'includeBots',
+  'granularity',
+  'splitBots',
+  'path',
+] as const;
 
 /** The two spellings the bot-inclusion flag takes, mapped to what it means. */
 const INCLUDE_BOTS_VALUES: Readonly<Record<string, boolean>> = { true: true, false: false };
@@ -399,6 +406,9 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
       throw new RequestRejected(400, describeError(err));
     }
   }
+  const path = search.get('path');
+  if (search.getAll('path').length > 1)
+    throw new RequestRejected(400, 'path must be provided once');
   const split = search.get('splitBots');
   if (
     split !== null &&
@@ -407,6 +417,7 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
     throw new RequestRejected(400, 'splitBots must be provided once as true or false');
   }
   const extra = {
+    ...(path === null ? {} : { path }),
     ...(granularity === undefined ? {} : { granularity }),
     ...(split === null ? {} : { splitBots: INCLUDE_BOTS_VALUES[split] }),
   };

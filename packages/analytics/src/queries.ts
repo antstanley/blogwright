@@ -49,6 +49,7 @@
  * `fetch`. Nothing here runs a statement - that is `AnalyticsQuery`'s adapter.
  */
 
+import { normalizePathFilter } from './path-filter.js';
 import { withTrafficBreakdown } from './traffic-breakdown.js';
 import {
   parseViewGranularity,
@@ -133,6 +134,8 @@ interface DateRange {
  * `config.analytics.bots` (task 44) through {@link BOTS_INCLUDED_BY_DEFAULT}.
  */
 export interface QueryParams {
+  /** Exact path and descendants at a slash boundary; blank means every path. */
+  readonly path?: string | undefined;
   /** Include disjoint bot/non-bot contributions; requires bots to be included. */
   readonly splitBots?: boolean | undefined;
   /** The UTC reporting window. */
@@ -560,6 +563,7 @@ export function prepareQuery(
 ): PreparedQuery {
   const definition = queryDefinition(name);
   const range = validateRange(name, params.range);
+  const path = normalizePathFilter(params.path);
   if (params.granularity !== undefined && name !== 'views-over-time') {
     throw new Error('granularity is only supported by views-over-time');
   }
@@ -589,6 +593,15 @@ export function prepareQuery(
     statement = statement.replace(
       'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)',
       'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE) AND event_time >= CAST($from_time AS TIMESTAMP) AND event_time < CAST($to_time AS TIMESTAMP)',
+    );
+  }
+  if (path !== undefined) {
+    bindings['path'] = path;
+    bindings['path_prefix'] = path === '/' ? '/' : `${path}/`;
+    // starts_with treats SQL wildcard characters as literal path characters.
+    statement = statement.replace(
+      'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)',
+      'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE) AND (uri = $path OR starts_with(uri, $path_prefix))',
     );
   }
   if (params.splitBots) statement = withTrafficBreakdown(name, statement);

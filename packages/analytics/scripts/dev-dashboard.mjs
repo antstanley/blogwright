@@ -1,4 +1,5 @@
 /** Local development entry point: serve the built dashboard with synthetic rows only. */
+import { normalizePathFilter } from '../dist/path-filter.js';
 import { VIEW_GRANULARITIES, parseViewGranularity } from '../dist/view-granularity.js';
 import { fileURLToPath } from 'node:url';
 
@@ -73,9 +74,35 @@ function previewViews(params, minutes) {
   }
   return result;
 }
+/** Scope synthetic reports by the matching path fixtures, with proportional mock counts. */
+function scopePreviewRows(name, rows, pathInput) {
+  const path = normalizePathFilter(pathInput);
+  if (path === undefined || path === '/') return rows;
+  const matching = fixtures['top-paths'].filter(
+    (row) => row.uri === path || row.uri.startsWith(`${path}/`),
+  );
+  if (name === 'top-paths') return matching;
+  if (matching.length === 0) return [];
+  const allViews = fixtures['top-paths'].reduce((sum, row) => sum + row.views, 0);
+  const share = matching.reduce((sum, row) => sum + row.views, 0) / allViews;
+  const scoped = rows.map((row) => {
+    if (name === 'cache-hit-ratio') {
+      const requests = Math.max(1, Math.round(row.requests * share));
+      const cache_hits = Math.round(requests * row.cache_hit_ratio);
+      return { ...row, requests, cache_hits, cache_hit_ratio: cache_hits / requests };
+    }
+    const column = name === 'unique-visitors' ? 'daily_unique_visitors' : 'views';
+    return { ...row, [column]: Math.round(row[column] * share) };
+  });
+  if (name === 'unique-visitors') {
+    const total = scoped.reduce((sum, row) => sum + row.daily_unique_visitors, 0);
+    return scoped.map((row) => ({ ...row, summed_daily_unique_visitors: total }));
+  }
+  return scoped;
+}
 const query = {
   async run(name, params) {
-    const rows = await previewQuery.run(name, params);
+    const rows = scopePreviewRows(name, await previewQuery.run(name, params), params.path);
     if (!params.splitBots) return rows;
     const value =
       name === 'unique-visitors'
@@ -133,5 +160,5 @@ process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
 
 console.log(
-  `Mock analytics dashboard: ${server.url}\nSynthetic data only; no AWS access. Time-series fixtures follow the selected window; ranking fixtures and bot filtering remain static.\nRe-run pnpm dev:analytics after editing the UI. Press Ctrl+C to stop.`,
+  `Mock analytics dashboard: ${server.url}\nSynthetic data only; no AWS access. Time-series fixtures follow the selected window; path filters proportionally scope mock reports; bot filtering remains synthetic.\nRe-run pnpm dev:analytics after editing the UI. Press Ctrl+C to stop.`,
 );

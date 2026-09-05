@@ -124,3 +124,9 @@ and both contributions remain available in data tables. Pie and map views retain
 total values. Include bots shows combined totals; Exclude bots omits flagged rows.
 Daily unique keys present in both groups count once as Non-bot. Cache-hit stacks
 show each group's cache hits divided by all requests, preserving the overall ratio.
+
+The filter section includes a Path text input with a subpath explanation. Editing
+it applies the scope to every report; clearing it restores all paths. Invalid
+input shows one validation message. Refresh preserves the current Path as well as
+date/time, Traffic, granularity, and view choices. The icon-only Refresh button sits
+below the 42px theme selector, which aligns to the header's top right at all sizes.

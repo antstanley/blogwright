@@ -709,3 +709,29 @@ body {
 :root {
   --color-bot: light-dark(#157765, #72c7b3);
 }
+
+.path-filter {
+  width: 100%;
+}
+.path-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.path-control input {
+  width: 100%;
+  padding-right: 12px;
+}
+.path-filter p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-surface-muted);
+  text-align: right;
+}
+@media (max-width: 720px) {
+  .path-control {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+  .path-filter p {
+    text-align: left;
+  }
+}

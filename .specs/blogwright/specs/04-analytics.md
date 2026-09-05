@@ -281,3 +281,14 @@ as Non-bot; Bot contains only keys not observed as Non-bot that day. Cache-hit
 contributions share the all-request denominator, so the segments sum to the overall
 ratio. All traffic in the dashboard explicitly sends `includeBots=true&splitBots=true`.
 The existing API default without either flag still follows site configuration.
+
+### Path filtering
+
+Optional `path` limits every named query before aggregation to an exact `uri` or
+its slash-delimited descendants. `/docs` includes `/docs` and `/docs/...`, excluding
+`/docs-old`. Trailing slashes normalize away; `/` covers the root and descendants;
+blank/absent means no restriction. Paths must start with a single `/` and contain
+no whitespace, query string, fragment, backslash, or control characters. Duplicate
+path parameters and invalid values return 400. SQL binds both exact and descendant
+prefixes and uses literal `starts_with`, so `%`, `_`, and quotes are never SQL patterns.
+The predicate composes with UTC minute, granularity, and traffic filters.

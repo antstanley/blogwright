@@ -208,8 +208,8 @@ current, `pnpm --filter blogwright-analytics dev:mock` skips the build.
 
 Fixtures live in `scripts/dev-dashboard.mjs`. Time-series rows are generated for
 the selected UTC window and granularity, including partial buckets. These counts
-are synthetic; production queries aggregate actual event timestamps. Ranking
-fixtures and bot filtering remain static. Remove a fixture entry to inspect an
+are synthetic; production queries aggregate actual event timestamps. Path filters proportionally scope the synthetic reports; bot filtering remains
+synthetic. Remove a fixture entry to inspect an
 isolated query error. Restart after fixture edits.
 Port 4318 must be free; an occupied port fails instead of silently selecting another.
 
@@ -238,5 +238,18 @@ The API also accepts `from`/`to` as `YYYY-MM-DDTHH:mmZ`: start is inclusive and
 end exclusive. Existing date-only requests retain inclusive-day behavior.
 
 The mock now generates time-series rows across the selected window, including
-partial buckets. These are synthetic counts; ranking fixtures and bot filtering
-remain static. Production queries filter actual event timestamps for every chart.
+partial buckets. These are synthetic counts; path filters proportionally scope the mock counts; bot filtering
+remains synthetic. Production queries filter actual event timestamps for every chart.
+
+### Traffic and path controls
+
+All explicitly includes bot and non-bot traffic and displays both contributions in
+stacked area/bar charts. Include bots shows combined totals; Exclude bots filters
+flagged traffic. The icon-only Refresh action refetches current queries without
+moving the selected window or changing filter values.
+
+Path limits every report to the exact path and its descendants. For example,
+`/writing` includes `/writing` and `/writing/...`, but not `/writing-old`. Clear the
+field to restore all paths. The API accepts the same optional `path` parameter,
+alongside time and traffic parameters. Mock counts are proportional illustrations;
+production queries apply the path predicate to actual events before aggregation.
