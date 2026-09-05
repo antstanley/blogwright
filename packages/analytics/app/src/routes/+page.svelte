@@ -49,12 +49,12 @@
 
 <main class="page">
   <header class="page-header">
-    <div>
+    <div class="page-heading">
       <p class="eyebrow">Blogwright / Analytics</p>
       <h1>Traffic overview</h1>
       <p>Understand how readers reach your site. All days are grouped in UTC.</p>
     </div>
-    <ThemeToggle />
+    <div class="header-actions"><ThemeToggle /></div>
   </header>
 
   <div class="filter-bar">
