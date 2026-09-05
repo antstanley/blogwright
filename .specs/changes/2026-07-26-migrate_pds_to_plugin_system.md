@@ -124,34 +124,18 @@ this change cannot land before it.
 
 ### `blogwright-pds` → Config ownership (Add)
 
-> The plugin owns the `pds` config block end to end. Its `validateConfig`
-> performs the checks core's `validateConfig` performs today - `name` is
-> required and non-empty, `handleResolver` must be an https URL when present,
-> `secretName` must match the permitted character class - applies the
-> `<siteName>/atproto` default for `secretName` when it is absent, and
-> **returns** the resolved block.
+> The plugin owns the `pds` block end to end. `validatePdsConfig(raw)` checks
+> name, HTTPS handle resolver and the optional secret-name character class,
+> returning the validated `PdsConfig` block with `secretName` still optional.
+> The SPI validator receives only the raw block, so it cannot derive a value
+> from the site's `siteName`.
 >
-> Returning it is what keeps the migration type-safe. `secretName` is read as a
-> required `string` at a dozen call sites across `commands.ts`, `oauth.ts` and
-> `secret.ts`, all of which reach it through `requirePdsConfig`
-> ([`sync.ts:50`](../../packages/pds/src/sync.ts)), which today returns
-> `ctx.config.pds` verbatim and relies on core having already applied the
-> default. Moving the default into the plugin without giving it somewhere to
-> land would widen every one of those reads to `string | undefined`.
->
-> `requirePdsConfig` instead returns a `ResolvedPdsConfig` - core's `PdsConfig`
-> with `secretName` narrowed to `string` - applying the `<siteName>/atproto`
-> default inside the package, through the same `resolvePdsSecretName` the
-> validator uses. Every call site keeps a total type, and it works on the paths
-> that have no dispatch boundary: `syncAfterDeploy(ctx)` is called with a plain
-> `OpsContext`, which has no `pluginConfig` to read. Reading `ctx.pluginConfig`
-> there would not compile - passing an `OpsContext` to a parameter typed with
-> `pluginConfig` is `TS2345`, elaborated as *"Property 'pluginConfig' is missing
-> in type 'OpsContext' but required in type …"* (checked against this repo's
-> tsc 6.0.3) - and the breakage would land on the post-deploy sync, the one
-> path this migration promises not to touch. `validateConfig` still returns the
-> resolved block for the dispatch path; the two agree because they share one
-> resolver.
+> `resolvePdsSecretName(pds, siteName)` is the single derivation of the explicit
+> secret name or `<siteName>/atproto`. `requirePdsConfig(ctx)` returns a
+> `ResolvedPdsConfig` with a required string by applying that resolver; the
+> plugin's IAM node uses the same resolver. All command/OAuth/secret consumers
+> retain total string types, including the post-deploy path that receives an
+> `OpsContext` without `pluginConfig`. No default is duplicated in core.
 
 ### `blogwright-pds` → Its own IAM policy node (Add)
 
@@ -236,7 +220,10 @@ this change cannot land before it.
 > module loads, and the plugin name in the suggested verb comes from the key
 > itself, so `bootstrap` keeps its discovery-free path and the site graph
 > gains no plugin knowledge. It costs one `listObjects` call on the `state/`
-> prefix. It is a warning, not a refusal - bootstrap's exit code is unchanged,
+> prefix. A failed listing produces a contextual warning without changing a
+> successful reconcile into a failure; destroy retains its fail-closed behavior.
+> Suggested bootstrap commands include the current environment.
+> It is a warning, not a refusal - bootstrap's exit code is unchanged,
 > and in a `--plain` or non-interactive session the same lines go through
 > `logger.warn` with nothing prompting. A stack that never ran a plugin's
 > bootstrap holds no scoped key and sees no warning: the check cannot invent
@@ -331,7 +318,7 @@ this change cannot land before it.
         "secretName": {
           "type": "string",
           "pattern": "^[\\w/+=.@-]+$",
-          "description": "Optional as written on disk; the pds plugin's validateConfig applies the `<siteName>/atproto` default and returns a resolved block in which it is always present."
+          "description": "Optional on disk and in the validated block; requirePdsConfig and the IAM node use resolvePdsSecretName with siteName to apply the `<siteName>/atproto` default."
         }
       }
     }
@@ -576,3 +563,11 @@ carry all five.
   and a breaking change to the config type.
 - Should `blogwright pds` actions get shorter aliases now that dispatch is
   generic and multi-word actions are declared rather than parsed?
+
+## Plan review clarification — 2026-09-05
+
+Config ownership now describes the validator/resolver division already required
+by the raw-only SPI and implemented by tasks 21–22. Tasks 59–60 finish runtime
+requirements; task 63 folds the result into internal canonical documentation
+and closes this spec. The published migration notice is in v0.4.0-beta.0; the
+plugin policy is present in the published v0.4.0-beta.2 tarball.

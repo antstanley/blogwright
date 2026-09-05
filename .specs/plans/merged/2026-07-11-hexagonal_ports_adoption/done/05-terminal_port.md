@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (the domain-module import rule applied to terminal I/O; composition-root wiring)
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) (the domain-module import rule applied to terminal I/O; composition-root wiring)
 **Depends on:** 01
 **Produces:** a `Terminal` port (write/error lines, `isInteractive`, `question`) with a node adapter; `Logger`, `confirm`, and the `pds login` prompt are built on it and testable with a scripted terminal
 **Pointers:** `packages/cli/src/logger.ts:5` (module-load `isTTY` capture), `packages/cli/src/logger.ts:42-56` (`confirm` readline), `packages/cli/src/pds/commands.ts:78-84` (login readline), `packages/cli/src/bin.ts:10`, `packages/cli/src/cli.ts:68` (bare `createLogger` calls)

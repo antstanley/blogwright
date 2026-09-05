@@ -15,9 +15,10 @@ spec set is created here later, that page moves to `development-guidelines.md`.
   `blogwright-core` with discovery and generic dispatch in the CLI, the migration of
   `blogwright-pds` onto it with no config-file change, and a `blogwright-analytics`
   plugin delivering CloudFront logs to an Iceberg table with a local dashboard;
-  62 tasks, eight milestones, plus a compiled type-claim gate
+  64 tasks, ten milestones, plus a compiled type-claim gate
   ([type-claims/](plans/2026-07-26-plugin_system_and_analytics/type-claims/README.md))
-  that pins the corpus's compiler claims against the repo's real types.
+  that pins the corpus's compiler claims against the repo's real types and retires at task 63.
+  The [current review](plans/2026-07-26-plugin_system_and_analytics/reviews/2026-09-05-plan-review.md) records coverage and remediation.
 - [Analytics-owned log groups](plans/2026-08-31-analytics_owned_log_groups/plan.md) -
   land the 2026-08-31 change spec: the transform Lambda's log group and Firehose's
   become plugin-owned resource nodes with 365-day retention, and the delivery
@@ -43,22 +44,22 @@ The three linked 2026-07-26 proposals:
    (proposed 2026-07-26) - plugin SPI in `blogwright-core`, discovery by a
    `package.json` manifest field, generic `blogwright <plugin> <action>` dispatch,
    and `blogwright plugin add|list|remove`. Internal and unversioned until it has
-   carried two features. **Flipped at task 60.** Its SPI, dispatch, `plugin`
+   carried two features. **Flipped at task 63.** Its SPI, dispatch, `plugin`
    commands and transport seam have all landed, but §Plugin SPI -> *A plugin owns
    its own topography* requires that no config key of a plugin's is read by a site
    node, and the site's OIDC role policy still branches on `ctx.config.pds`
    (`packages/cli/src/nodes.ts`). Task 59 removes that branch and is held for a
-   later release; task 60 ships with it and flips this header then. Task 20
+   later release; task 60 ships with it, and task 63 closes the documentation and flips this header. Task 20
    deferred the flip to task 58 for the transport seam, which is in place; task 58
    deferred it again for this second obligation, which is not.
 2. [Migrate blogwright-pds onto the plugin system](changes/2026-07-26-migrate_pds_to_plugin_system.md)
    (proposed 2026-07-26) - pds becomes a plugin architecturally while staying a
    default dependency; validates the SPI against a second consumer. No config
    file changes; five operator-visible ones, listed in its §Upgrading a deployed
-   stack. **Flipped at task 60.** Two blocks are outstanding: §The site graph
+   stack. **Flipped at task 63.** Two blocks are outstanding: §The site graph
    drops its pds branch (task 59, which must ship a release later than task 30's
    migration note) and §`bootstrap` warns while plugin state exists (task 60).
-   Task 60 is blocked behind that release rather than unstarted.
+   The migration release is published; tasks 59–60 resume together, and task 63 owns canonical documentation and final closure.
 
 Merged:
 

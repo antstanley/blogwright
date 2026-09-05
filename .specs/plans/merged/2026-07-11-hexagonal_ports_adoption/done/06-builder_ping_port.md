@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (no bare `fetch` in domain modules; function-typed ports preferred)
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) (no bare `fetch` in domain modules; function-typed ports preferred)
 **Depends on:** 01
 **Produces:** the MicroVM wake-up nudge in `deploy.ts` goes through a function-typed `PingBuilder` port; `pollBuild`'s nudge behaviour gains its first test
 **Pointers:** `packages/cli/src/deploy.ts:34-44` (`nudge` and its `fetch`), `packages/cli/src/deploy.ts:70` (the `pollBuild` call site), `packages/cli/src/deploy.test.ts` (currently covers only `microvmLogGroup`)

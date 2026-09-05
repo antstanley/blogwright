@@ -1,3 +1,5 @@
+> **Current scope reconciliation (2026-09-05):** Historical steps/evidence below describe the original execution. Any remaining canonical/spec/public-doc closure belongs to task 63 under the current [plan](../plan.md). Historical certificate verdicts are retained, not promoted to a current pass.
+
 # Task 58 - Document the analytics plugin, update the toolchain and ports tables, and close the change spec
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [58-analytics_docs_and_closure-certificate.md](58-analytics_docs_and_closure-certificate.md)

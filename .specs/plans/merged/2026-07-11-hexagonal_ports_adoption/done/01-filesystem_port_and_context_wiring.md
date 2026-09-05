@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (the port conventions and composition-root rule)
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) (the port conventions and composition-root rule)
 **Depends on:** -
 **Produces:** the ports module, the `OpsContext.ports` plumbing, a node and an in-memory `FileSystem` adapter, and a `createTestContext` factory - with `context.ts` config loading and `repo-root.ts` migrated as the first consumers
 **Pointers:** `packages/cli/src/context.ts:49` (readFile in loadConfig), `packages/cli/src/repo-root.ts:13` (existsSync walk), `packages/cli/src/pds/sync.test.ts:141`, `packages/cli/src/deploy.test.ts:10`, `packages/cli/src/pds/commands.test.ts:59` (the `as unknown as OpsContext` casts the factory replaces)

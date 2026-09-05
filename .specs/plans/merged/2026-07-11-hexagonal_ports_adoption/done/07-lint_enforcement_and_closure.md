@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (the import rule, made mechanical) and §Assumptions and open questions (retiring the migration exception list)
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) (the import rule, made mechanical) and §Assumptions and open questions (retiring the migration exception list)
 **Depends on:** 02, 03, 04, 05, 06
 **Produces:** the hexagonal import rule is a failing lint check, not a convention; DEVELOPMENT.md reflects the completed migration
 **Pointers:** `.oxlintrc.json`, `packages/cli/src/adapters/` (the allowed location), `DEVELOPMENT.md` §Assumptions and open questions (the exception list to remove), §Hexagonal architecture (the ports table to extend)

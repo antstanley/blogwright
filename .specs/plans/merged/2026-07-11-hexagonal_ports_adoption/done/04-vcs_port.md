@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (the ban on `node:child_process` in domain modules; "adapters translate errors")
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) (the ban on `node:child_process` in domain modules; "adapters translate errors")
 **Depends on:** 01
 **Produces:** a `Vcs` port (`revisionHash`, `listFiles`) with a jj/git process adapter; `buildRepoZip` reads file contents through the `FileSystem` port; deploy orchestration is testable with a fake VCS
 **Pointers:** `packages/cli/src/repo.ts:16,38,68` (revisionHash / listRepoFiles / buildRepoZip), `packages/cli/src/repo.ts:18,30,40` (jj/git execFile calls), `packages/cli/src/commands.ts` (the deploy-side consumers)

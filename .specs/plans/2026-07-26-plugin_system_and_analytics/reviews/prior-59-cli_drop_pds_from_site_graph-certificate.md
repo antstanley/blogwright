@@ -1,6 +1,8 @@
+> Historical evidence only; the active certificate was re-authored for the resumed build.
+
 # Done Certificate - Task 59: Remove the pds branch from the site's OIDC policy
 
-**Task:** [59-cli_drop_pds_from_site_graph.md](59-cli_drop_pds_from_site_graph.md) · **Plan:** [plan.md](../plan.md)
+**Task:** 59-cli_drop_pds_from_site_graph.md (historical task identity)
 **State:** Validated 2026-08-31
 
 > This certificate is a verification protocol for Task 59. A validating agent discharges it:

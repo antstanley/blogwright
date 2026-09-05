@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) (dependency direction; feature packages own their domain) and §Clean Code - the pervasive style (single responsibility at package granularity)
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) (dependency direction; feature packages own their domain) and §Clean Code - the pervasive style (single responsibility at package granularity)
 **Depends on:** 01, 03, 05, 07
 **Produces:** the standard.site integration lives in its own publishable package `blogwright-pds` (`packages/pds`); the CLI consumes it as a dependency and keeps the `blogwright/rkey` subpath export working via re-export
 **Pointers:** `packages/cli/src/pds/` (the modules to move), `packages/cli/package.json` (`exports["./rkey"]`), `packages/cli/src/cli.ts` (`runPds` dispatch), `packages/cli/src/commands.ts` (`syncAfterDeploy` call in the deploy path), `knip.json`, `.github/workflows/publish.yml`

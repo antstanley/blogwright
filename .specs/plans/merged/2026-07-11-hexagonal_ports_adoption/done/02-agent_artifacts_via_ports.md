@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md)
 
-**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../DEVELOPMENT.md) ("tests substitute at the port… If a test needs a module mock or an env-var override to isolate a side effect, that side effect is missing a port")
+**Implements:** [DEVELOPMENT.md §Hexagonal architecture - ports and adapters](../../../../../DEVELOPMENT.md) ("tests substitute at the port… If a test needs a module mock or an env-var override to isolate a side effect, that side effect is missing a port")
 **Depends on:** 01
 **Produces:** `agent-package.ts` reads its artifacts through the `FileSystem` port from a composition-root-resolved directory; `OPS_AGENT_DIR` is retired; the module gains its first test
 **Pointers:** `packages/cli/src/agent-package.ts:14` (`process.env.OPS_AGENT_DIR`), `packages/cli/src/agent-package.ts:40` (artifact reads), `packages/cli/src/context.ts` (where `agentDir` is wired)

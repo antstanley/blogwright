@@ -209,7 +209,7 @@ and, for SPI confidence, on
 > 1. maps each CloudFront field name to its column name;
 > 2. derives `event_time` from `timestamp(ms)` and the partition day from it;
 > 3. replaces the viewer IP with `visitor_key`, a SHA-256 hash of the IP, the
->    user agent, and a **secret** daily salt - the raw IP is never written. The
+>    user agent, and a **secret** daily salt - the raw IP is never written to `page_views`. The
 >    daily salt is derived, not stored: one long-lived random secret lives in
 >    Secrets Manager and the per-day value is `HMAC-SHA256(secret, day)`. That
 >    gives daily rotation with no rotation infrastructure - no rotation Lambda,
@@ -553,7 +553,7 @@ and, for SPI confidence, on
         "request_id": { "type": "string" },
         "visitor_key": {
           "type": "string",
-          "description": "SHA-256 of viewer IP + user agent + HMAC-SHA256(root secret, day). The root secret lives in Secrets Manager; the raw IP is never stored and the salt is not derivable from the row."
+          "description": "SHA-256 of viewer IP + user agent + HMAC-SHA256(root secret, day). The root secret lives in Secrets Manager; the raw IP is never stored in page_views and the salt is not derivable from the row."
         },
         "is_bot": { "type": "boolean" }
       }
@@ -755,10 +755,12 @@ rather than create when it already exists.
   JSON keys to column names exactly and drops the rest silently.** CloudFront
   emits `cs(Referer)` and `timestamp(ms)`; Iceberg columns must be lowercase
   identifiers. This was established during research, not assumed.
-- *Hash the IP in the Lambda; never store it.* **`visitor_key` is a daily-salted
-  digest of IP and user agent.** The transform is the only component that ever
-  sees the raw address, which makes unique-visitor counts possible without
-  retaining personal data or setting a cookie.
+- *Hash the IP before writing page_views.* **`visitor_key` is a daily-salted
+  digest of IP and user agent; the table has no raw-IP column.** This is a table
+  guarantee, not an absence-of-storage claim for the whole pipeline. The
+  existing CloudWatch access-log copy and Firehose processing-failed objects
+  can retain the original viewer IP. ProcessingFailed deliberately preserves
+  the source record for diagnosis; it does not insert that record into the table.
 - *The salt is a secret, not the date.* **One long-lived random secret in
   Secrets Manager; the daily salt is `HMAC-SHA256(secret, day)`.** Settled
   2026-07-26. A date-derived salt is computable by anyone holding the table, and
@@ -850,3 +852,13 @@ rather than create when it already exists.
   else the plugin owns is per-environment. Two environments therefore share it,
   and its node adopts rather than creates. Is adopt-and-never-delete the right
   contract, or should the last environment to be torn down remove it?
+
+## Plan review clarification — 2026-09-05
+
+Task 62 captures a conservative UTC creation day before the CreateDelivery
+request, recording it after success and retaining any existing earlier bound.
+A response crossing midnight must not admit the delivery's first day to backfill.
+The privacy wording above is scoped to page_views to reconcile it with the
+required ProcessingFailed path, whose S3 rawData can contain the original IP
+([Firehose failure handling](https://docs.aws.amazon.com/firehose/latest/dev/data-transformation-failure-handling.html)).
+Task 63 carries that disclosure into consumer and canonical documentation.

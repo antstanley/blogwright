@@ -1,3 +1,5 @@
+> **Current scope reconciliation (2026-09-05):** Historical steps/evidence below describe the original execution. Any remaining canonical/spec/public-doc closure belongs to task 63 under the current [plan](../plan.md). Historical certificate verdicts are retained, not promoted to a current pass.
+
 # Task 61 - The `analytics backfill` action, and the analytics spec's merge
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [61-analytics_backfill_action-certificate.md](61-analytics_backfill_action-certificate.md)

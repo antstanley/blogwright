@@ -1,3 +1,5 @@
+> **Current scope reconciliation (2026-09-05):** Historical steps/evidence below describe the original execution. Any remaining canonical/spec/public-doc closure belongs to task 63 under the current [plan](../plan.md). Historical certificate verdicts are retained, not promoted to a current pass.
+
 # Task 20 - Document the plugin surface and execute the plugin-system spec's documentation steps
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [20-plugin_system_docs_and_closure-certificate.md](20-plugin_system_docs_and_closure-certificate.md)

@@ -1,6 +1,8 @@
+> Historical evidence only; the active certificate was re-authored for the resumed build.
+
 # Done Certificate - Task 60: Warn at `blogwright bootstrap` while a plugin's scoped state exists, and merge the pds spec
 
-**Task:** [60-cli_bootstrap_plugin_state_warning.md](60-cli_bootstrap_plugin_state_warning.md) · **Plan:** [plan.md](../plan.md)
+**Task:** 60-cli_bootstrap_plugin_state_warning.md (historical task identity)
 **State:** Authored 2026-07-27 - unverified   <!-- validator sets: Validated YYYY-MM-DD -->
 
 > This certificate is a verification protocol for Task 60. A validating agent discharges it:

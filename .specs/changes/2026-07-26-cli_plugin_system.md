@@ -7,8 +7,9 @@ The CLI gains a plugin system: a small service-provider interface in
 `package.json`, and generic dispatch so that an installed plugin named `x`
 answers `blogwright x <action>`. A plugin contributes commands, resource-graph
 nodes, one config key, and an `init` contributor; it owns its own state key and
-lifecycle verbs. The SPI is internal - undocumented and unversioned - until it
-has carried two features through a release cycle.
+lifecycle verbs. The SPI is internal and unversioned until it has carried two features through
+a release cycle. Internal canonical documentation records the implementation;
+it does not offer a supported third-party plugin API.
 
 ---
 
@@ -665,11 +666,12 @@ without indexing a type that has no index signature.
    provider, endpoint override and injected transport - `credentials` and
    `transport` are private (signer.ts:85-86). (The analytics plugin is its
    first consumer and lists both in its own notes.)
-6. packages/cli/src/ports.ts:24 - add `loader: ModuleLoader` and
-   `packages: PackageManager` to Ports; define both interfaces there.
-   New adapters: adapters/node-module-loader.ts (createRequire + import),
-   adapters/process-package-manager.ts (lockfile detect + spawn), modelled on
-   adapters/process-vcs.ts. Wire both in context.ts:111-116.
+6. packages/cli/src/ports.ts - define ModuleLoader and PackageManager; add
+   loader to Ports. Wire the module loader in context.ts. Wire PackageManager
+   through main()'s PackageManagerFactory from bin.ts, before createContext:
+   plugin add/remove must work without config or AWS credentials. Do not add
+   an unused packages member to OpsContext. The adapters are
+   adapters/node-module-loader.ts and adapters/process-package-manager.ts.
 7. packages/cli - new src/plugins.ts: discover(repoRoot, cliPackageDir, ports)
    reading <repoRoot>/package.json via ports.fs, filtering `blogwright-*` deps,
    resolving each via ports.loader from repoRoot; and the CLI's own
@@ -780,7 +782,7 @@ migration follows, then analytics.
   ([`init.ts:78`](../../packages/cli/src/init.ts)) with a message naming both
   ways forward, and `--yes` is the scripted "remove, keep the resources"
   answer.
-- *The SPI is internal.* **Undocumented and unversioned until it has carried
+- *The SPI is internal.* **Not a documented public contract, and unversioned until it has carried
   two features through a release cycle.** A plugin API is a public contract
   that cannot be changed casually once third parties write against it; at 0.3.x
   that commitment is premature. Publishing it is a separate product decision.
@@ -832,3 +834,10 @@ migration follows, then analytics.
 - Does `preview` eventually become a plugin? It is the one remaining built-in
   namespace shaped like one, but it shares the site's resource graph and
   context in ways a plugin deliberately cannot.
+
+## Plan review clarification — 2026-09-05
+
+Task 20 already adopted the factory seam described above. Internal canonical
+documentation and a supported public SPI contract are distinct: task 63 owns
+Merge plan steps 1 and 3, followed by 4–5 after tasks 59 and 60. This resolves
+the previous contradiction without publishing or versioning a third-party API.
