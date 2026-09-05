@@ -235,6 +235,6 @@ jobs:
             pnpm add -D blogwright@${{ needs.validate.outputs.version }}
             ```
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(needs.validate.outputs.version, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -22,6 +22,8 @@ it.each([
   '/two words',
   '/docs\\page',
   '/docs\u0000page',
+  '/docs\u001fpage',
+  '/docs\u007fpage',
 ])('rejects malformed path %j', (input) => {
   expect(() => normalizePathFilter(input)).toThrow();
 });

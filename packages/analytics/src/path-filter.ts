@@ -4,7 +4,17 @@ export function normalizePathFilter(value: unknown): string | undefined {
   if (typeof value !== 'string') throw new Error('Path must be a string.');
   const path = value.trim();
   if (path === '') return undefined;
-  if (!path.startsWith('/') || path.startsWith('//') || /[\s?#\\\u0000-\u001f\u007f]/.test(path)) {
+  // Reject ASCII control characters without embedding them in a regular expression.
+  const hasControlCharacter = Array.from(path).some((character) => {
+    const code = character.charCodeAt(0);
+    return code < 0x20 || code === 0x7f;
+  });
+  if (
+    !path.startsWith('/') ||
+    path.startsWith('//') ||
+    /[\s?#\\]/.test(path) ||
+    hasControlCharacter
+  ) {
     throw new Error('Enter a path starting with /, without a query string, fragment, or spaces.');
   }
   return path.replace(/\/+$/, '') || '/';
