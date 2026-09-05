@@ -283,7 +283,7 @@ export interface ConfigBlockEntry {
 /**
  * Namespace pattern shared by `Plugin.name` and {@link PluginManifest}'s
  * `plugin` field, so the JSON Schema fragment
- * (`.specs/changes/2026-07-26-cli_plugin_system.md` §Type changes) and this
+ * (`.specs/changes/merged/2026-07-26-cli_plugin_system.md` §Type changes) and this
  * runtime check cannot drift apart. Lowercase alphanumerics and dashes.
  */
 export const PLUGIN_NAME_PATTERN = /^[a-z0-9-]+$/;

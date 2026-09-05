@@ -278,9 +278,32 @@ Resolver `pds login` uses to turn a handle into a DID. Must be an `https:` URL. 
 
 Name of the Secrets Manager secret holding the OAuth client key and session. Limited to the characters `A-Z a-z 0-9 _ / + = . @ -`.
 
+## Optional analytics plugin (`analytics`)
+
+The block is inert when the plugin is not installed. After
+`blogwright plugin add analytics`, an absent block or `{}` uses these defaults:
+
+| Key | Default | Rule |
+| --- | --- | --- |
+| `tableBucket` | `<env>-<siteName>-analytics` | 3–63 lowercase letters, digits or dashes |
+| `namespace` | `web` | lowercase letters, digits or underscores, nonempty |
+| `table` | `page_views` | same identifier rule |
+| `bots` | `flag` | `flag` includes bots in queries; `filter` excludes them by default; both retain rows |
+| `saltSecretName` | `<siteName>/<env>/analytics-salt` | nonempty Secrets Manager name characters |
+| `dashboard.port` | `4317` | integer 1024–65535; loopback server only |
+
+Unknown analytics keys, including unknown dashboard keys, are rejected when that
+plugin is dispatched. The wizard asks the four literal-default settings; write
+bucket/salt overrides by hand. Their defaults carry the environment, and explicit
+shared names can remove that separation. The pipeline's two diagnostic log groups
+have fixed 365-day retention; `retention.cloudfrontDays` controls the site's
+CloudWatch copy and bounds optional backfill, not Iceberg row expiry.
+
 ## Validation summary
 
-The CLI validates config at load time and fails with a specific error rather than deploying something broken:
+The CLI validates site-owned settings at load time. PDS owns the last three checks
+below and runs them on PDS dispatch; malformed PDS config no longer rejects
+unrelated built-in commands. Post-deploy PDS sync failures remain warnings:
 
 | Key | Rule |
 | --- | --- |
@@ -295,6 +318,6 @@ The CLI validates config at load time and fails with a specific error rather tha
 | `paths.app`, `paths.dist` | non-empty, repo-relative, no `..` |
 | `pds.name` | non-blank when `pds` is present |
 | `pds.handleResolver` | valid `https:` URL |
-| `pds.secretName` | characters `[\w/+=.@-]` only |
+| `pds.secretName` | optional; characters `[\w/+=.@-]` only when supplied |
 
 For the resource names derived from `siteName` and the environment, see the [architecture reference](/reference/architecture/). For the flags that interact with config (`--config`, `--env`, `--domain`), see the [CLI reference](/reference/cli/).

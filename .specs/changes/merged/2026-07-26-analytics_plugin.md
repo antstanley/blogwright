@@ -37,15 +37,15 @@ the calls involved.
 
 | Canonical page | Nature of change |
 |---|---|
-| *(none - no canonical page for the resource nodes or CLI surface yet)* | Adds a plugin package carrying fourteen resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
-| *(none - no canonical page for the site's resource nodes yet)* | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
+| [Analytics](../../blogwright/specs/04-analytics.md) | Adds a plugin package carrying fourteen resource nodes and four plugin-owned AWS service clients. The only core change this spec owns is delivery-configuration parameters on the existing `LogsClient`; the plugin-supplied service descriptor on the transport seam and `signingUsEast1` on `AwsClients` are owned by the plugin-system change spec and consumed here |
+| [Plugin architecture](../../blogwright/specs/02-plugin-architecture.md) | Two guards on `logDeliveryNode` so a shared delivery source is never torn out from under the plugin |
 | [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Toolchain | Vite/SvelteKit joins the toolchain for the dashboard build; the pnpm row's "workspace of four packages" becomes five |
 | [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Hexagonal architecture | New `AnalyticsQuery` and `AnalyticsIngest` ports join the ports table |
 | [DEVELOPMENT.md](../../../DEVELOPMENT.md) → Assumptions | The four-package-split assumption names `blogwright-analytics` as the second instance of its own feature-package exception |
 
-Depends on [`2026-07-26-cli_plugin_system.md`](../2026-07-26-cli_plugin_system.md)
+Depends on [`2026-07-26-cli_plugin_system.md`](2026-07-26-cli_plugin_system.md)
 and, for SPI confidence, on
-[`2026-07-26-migrate_pds_to_plugin_system.md`](../2026-07-26-migrate_pds_to_plugin_system.md).
+[`2026-07-26-migrate_pds_to_plugin_system.md`](2026-07-26-migrate_pds_to_plugin_system.md).
 
 ---
 
@@ -221,8 +221,11 @@ and, for SPI confidence, on
 >    environment;
 > 4. sets `is_bot` from a user-agent match, so bot traffic is flagged in place
 >    rather than discarded;
-> 5. drops records the schema cannot accept, emitting them to the Firehose error
->    prefix rather than failing the batch.
+> 5. marks records the schema cannot accept as `ProcessingFailed`, routing
+>    the original record to the Firehose error prefix without failing the batch.
+>    The error object can retain rawData including c-ip; the no-raw-IP guarantee
+>    applies to page_views, not failed-record storage. See
+>    [AWS failure handling](https://docs.aws.amazon.com/firehose/latest/dev/data-transformation-failure-handling.html).
 >
 > The function is bundled with rolldown into a single file, following the
 > build-agent's precedent, and uploaded as a zip by its resource node.
