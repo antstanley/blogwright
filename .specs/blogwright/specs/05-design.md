@@ -10,22 +10,32 @@ Read first: [global design guidelines](../../design-guidelines.md) and
 The dashboard helps a site operator inspect traffic for a UTC date range.
 [App styles](../../../packages/analytics/app/src/app.css) own exact values and
 LayerChart aliases. The observed implementation uses system sans-serif typography,
-a blue accent, neutral bordered surfaces, and automatic light/dark colors. These
+a blue accent, neutral bordered surfaces, and light/dark colors. A pill-shaped three-state control offers Lucide monitor (System), moon (Dark),
+and sun (Light) icons. Accessible names and hover titles identify each option;
+the group has an accessible Theme label without a visible heading.
+System follows live OS preference changes; explicit choices override that preference.
+The selection is stored locally per origin and restored on mount. If storage is
+unavailable, the choice applies to the current visit and the control explains this. These
 incumbent choices are preserved for this refinement; they are not a newly approved
 repo-wide brand. A different visual direction remains an open product choice.
 
 The reusable hierarchy is page heading, reporting controls, report heading, and
-muted measurement explanation. Use the accent for emphasis and keyboard focus;
+muted measurement explanation. Use accent colour for chart data, links, selected
+controls, and keyboard focus;
 use the error role for failures in both themes. Border and spacing separate
-surfaces without decorative shadows or imagery. Numeric totals use tabular figures.
+surfaces without decorative shadows or imagery. All report panels use neutral
+borders, including the primary traffic chart, following the global ban on
+decorative coloured edges. Numeric totals use tabular figures.
 
 ## Reporting surface
 
 [Page composition](../../../packages/analytics/app/src/routes/+page.svelte) keeps
-all seven reports and places the primary traffic chart across the grid. Other
+all seven reports and places the traffic and Countries reports across the grid. Other
 reports occupy two columns on larger screens and one column on narrow screens.
-Filters wrap; date fields share a row and the bot selector receives a full row on
-narrow screens. The reporting window explicitly identifies UTC.
+Filters wrap as label/field pairs, with labels beside their inputs. On narrow
+screens the pairs stack into rows with a shared label-column width. Native date and select
+controls share explicit sizing and Lucide calendar/chevron icons to avoid differing
+browser chrome; date editing and native picker/select behavior remain available. The reporting window explicitly identifies UTC.
 
 [Query panels](../../../packages/analytics/app/src/lib/QueryPanel.svelte) reserve
 more height for ranked results. Server-provided row meanings remain visible,
@@ -35,6 +45,14 @@ Expandable native disclosures expose the plotted values and full labels in seman
 tables. Chart interaction layers are contained within their report at zoom.
 Report errors do not block other panels. Invalid dates suppress requests and show
 a single message near the controls.
+
+Countries opens on an offline Equal Earth map rendered with LayerChart GeoPath.
+A Map/Bars radio group switches views without another query. Map colour intensity
+uses all country rows and a linear request-count scale; absent/zero values use a
+neutral surface. Hover titles and the full country data table expose exact values.
+Bars retain the top-twelve ranking and disclosure. Unmatched country codes remain
+in the table and are listed below the map. Bundled Natural Earth simplified
+boundaries can omit small territories; provenance lives beside the map data.
 
 ## Design definition of done
 

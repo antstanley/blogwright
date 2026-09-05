@@ -8,9 +8,11 @@
   seven identical refusals.
 -->
 <script lang="ts">
+  import { CalendarDays, ChevronDown } from '@lucide/svelte';
   import type { BotInclusion, QueryRequest } from '../lib/api.js';
   import { PANELS } from '../lib/panels.js';
   import QueryPanel from '../lib/QueryPanel.svelte';
+  import ThemeToggle from '../lib/ThemeToggle.svelte';
   import { defaultRange, rangeProblem } from '../lib/range.js';
 
   /** What the page opens on, read once so a rendering never moves the window. */
@@ -42,6 +44,7 @@
       <h1>Traffic overview</h1>
       <p>Understand how readers reach your site. All days are grouped in UTC.</p>
     </div>
+    <ThemeToggle />
   </header>
 
   <div class="filter-bar">
@@ -49,19 +52,28 @@
     <div class="controls">
       <label class="control">
         <span>From</span>
-        <input type="date" bind:value={from} max={to} />
+        <span class="control-field">
+          <input type="date" bind:value={from} max={to} />
+          <CalendarDays class="control-icon" size={18} aria-hidden="true" />
+        </span>
       </label>
       <label class="control">
         <span>To</span>
-        <input type="date" bind:value={to} min={from} />
+        <span class="control-field">
+          <input type="date" bind:value={to} min={from} />
+          <CalendarDays class="control-icon" size={18} aria-hidden="true" />
+        </span>
       </label>
       <label class="control">
         <span>Bot traffic</span>
+        <span class="control-field">
         <select bind:value={bots}>
           {#each Object.entries(BOT_INCLUSION_LABELS) as [value, label] (value)}
             <option {value}>{label}</option>
           {/each}
         </select>
+        <ChevronDown class="control-icon" size={18} aria-hidden="true" />
+        </span>
       </label>
     </div>
   </div>

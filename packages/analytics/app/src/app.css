@@ -22,6 +22,14 @@
   --color-danger: light-dark(#a52b32, #ff9ca3);
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -79,15 +87,16 @@ body {
 
 .control {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
-.control span {
+.control > span:not(.control-field) {
   color: var(--color-surface-muted);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 550;
+  white-space: nowrap;
 }
 
 .control input,
@@ -97,7 +106,12 @@ body {
   border-radius: 6px;
   color: inherit;
   font: inherit;
-  padding: 9px 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  height: 44px;
+  line-height: 22px;
+  width: 156px;
+  padding: 10px 36px 10px 12px;
   min-height: 44px;
   max-width: 100%;
 }
@@ -235,7 +249,6 @@ body {
 
 .panel-primary {
   grid-column: 1 / -1;
-  border-top: 3px solid var(--color-primary);
 }
 
 .panel-chart,
@@ -265,11 +278,12 @@ body {
   .controls {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .control:last-child {
-    grid-column: 1 / -1;
+  .control {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
   }
 
   .control input,
@@ -320,4 +334,166 @@ body {
 
 .panel-data td {
   font-variant-numeric: tabular-nums;
+}
+
+.theme-control {
+  max-width: 100%;
+}
+
+.theme-toggle {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.theme-options {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--color-surface-border);
+  border-radius: 999px;
+  background: var(--color-surface-100);
+}
+
+.theme-option {
+  position: relative;
+  cursor: pointer;
+}
+
+.theme-option input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.theme-option span {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+}
+
+.theme-option input:checked + span {
+  background: var(--color-surface-200);
+  color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--color-surface-border);
+}
+
+.theme-option input:focus-visible + span {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.page-header .theme-storage {
+  max-width: 32ch;
+  font-size: 12px;
+}
+
+/* Normalize native chrome without replacing keyboard or picker behavior. */
+.control-field {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.control-icon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-surface-muted);
+  pointer-events: none;
+}
+
+.control input[type='date']::-webkit-calendar-picker-indicator {
+  position: absolute;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.control input[type='date']::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+.control input[type='date']::-webkit-datetime-edit {
+  padding: 0;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.country-view {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.country-view label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.country-view input {
+  accent-color: var(--color-primary);
+}
+
+.country-map-plot {
+  position: relative;
+  width: 100%;
+  height: clamp(200px, 45vw, 520px);
+  overflow: clip;
+}
+
+.country-map path {
+  stroke: var(--color-surface-border);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.country-map path:hover {
+  stroke: var(--color-surface-content);
+  stroke-width: 1.2;
+}
+
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-block: 16px;
+  font-size: 12px;
+  color: var(--color-surface-muted);
+}
+
+.map-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-legend i {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--color-surface-border);
+  border-radius: 3px;
+}
+
+.country-map .panel-note + .panel-note {
+  margin-top: 8px;
 }

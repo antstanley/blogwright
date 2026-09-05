@@ -16,6 +16,7 @@
 -->
 <script lang="ts">
   import { BarChart } from 'layerchart';
+  import CountryMap from './CountryMap.svelte';
 
   import { runNamedQuery, type QueryRequest, type QueryResult } from './api.js';
   import {
@@ -44,6 +45,8 @@
   }
 
   let { panel, request }: { panel: Panel; request: QueryRequest } = $props();
+
+  let countryView = $state<'map' | 'bars'>('map');
 
   const answer = $derived(runNamedQuery(panel.name, request));
 
@@ -95,8 +98,16 @@
   }
 </script>
 
-<section class="panel" class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time'}>
-  <h2>{panel.title}</h2>
+<section class="panel" class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time' || panel.name === 'countries'}>
+  <div class="panel-heading">
+    <h2>{panel.title}</h2>
+    {#if panel.name === 'countries'}
+      <fieldset class="country-view" aria-label="Countries view">
+        <label><input type="radio" value="map" bind:group={countryView} />Map</label>
+        <label><input type="radio" value="bars" bind:group={countryView} />Bars</label>
+      </fieldset>
+    {/if}
+  </div>
 
   {#await answer}
     <p class="panel-meaning">&nbsp;</p>
@@ -108,6 +119,9 @@
     {:else}
       {@const points = pointsOf(result)}
       {@const total = totalOf(result)}
+      {#if panel.name === 'countries' && countryView === 'map'}
+        <CountryMap rows={result.rows} />
+      {:else}
       <div class="panel-chart" style:height={panel.ranked ? `${Math.max(220, points.length * 28 + 40)}px` : undefined}>
         <BarChart
           data={points}
@@ -127,13 +141,14 @@
           }}
         />
       </div>
+      {/if}
       <details class="panel-data">
         <summary>View chart data</summary>
         <table>
-          <caption>{panel.title} — plotted values</caption>
+          <caption>{panel.title} — {panel.name === 'countries' ? 'all country values' : 'plotted values'}</caption>
           <thead><tr><th scope="col">{humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th></tr></thead>
           <tbody>
-            {#each points as point, index (index)}
+            {#each (panel.name === 'countries' ? result.rows.map(row => ({ label: labelCell(row, panel.category), value: numericCell(row, panel.value) })) : points) as point, index (index)}
               <tr><th scope="row">{point.label}</th><td>{formatValue(point.value)}</td></tr>
             {/each}
           </tbody>
@@ -145,7 +160,7 @@
           <dd>{total.value}</dd>
         </dl>
       {/if}
-      {#if panel.ranked && result.rows.length > RANKING_LIMIT}
+      {#if panel.ranked && result.rows.length > RANKING_LIMIT && (panel.name !== 'countries' || countryView === 'bars')}
         <p class="panel-note">
           Showing the top {RANKING_LIMIT} of {formatCount(result.rows.length)}.
         </p>
