@@ -27,7 +27,7 @@ function capturingTransport(): { transport: Transport; requests: Captured[] } {
   const transport: Transport = async (req) => {
     requests.push({ method: req.method, path: new URL(req.url).pathname });
     if (req.method === 'GET') {
-      return response(200, '{"version":1,"env":"test","updatedAt":null,"resources":{}}');
+      return response(200, '{"version":1,"env":"test","resources":{}}');
     }
     return response(200, '');
   };
@@ -111,5 +111,115 @@ describe('StateStore scope validation', () => {
 
   it('accepts a lowercase alphanumeric/dash scope', () => {
     expect(build('analytics-2')).not.toThrow();
+  });
+});
+
+describe.each([undefined, 'analytics'])('StateStore persisted shape (scope %s)', (scope) => {
+  const key = scope === undefined ? 'state/test.json' : 'state/test.analytics.json';
+  const load = (body: string) =>
+    new StateStore(
+      s3With(async () => response(200, body)),
+      'bucket',
+      'test',
+      scope,
+    ).load();
+  const valid = { version: 7, env: 'historical-env', resources: {} };
+
+  it.each([
+    ['null envelope', null, 'state'],
+    ['array envelope', [], 'state'],
+    ['string envelope', 'secret-value', 'state'],
+    ['number envelope', 1, 'state'],
+    ['boolean envelope', false, 'state'],
+    ['missing version', { env: 'test', resources: {} }, 'version'],
+    ['string version', { ...valid, version: 'secret-value' }, 'version'],
+    ['missing env', { version: 1, resources: {} }, 'env'],
+    ['numeric env', { ...valid, env: 2 }, 'env'],
+    ['null timestamp', { ...valid, updatedAt: null }, 'updatedAt'],
+    ['numeric timestamp', { ...valid, updatedAt: 2 }, 'updatedAt'],
+    ['missing resources', { version: 1, env: 'test' }, 'resources'],
+    ['null resources', { ...valid, resources: null }, 'resources'],
+    ['array resources', { ...valid, resources: [] }, 'resources'],
+    ['string resources', { ...valid, resources: 'secret-value' }, 'resources'],
+    ...[null, [], 'secret-value', 42, false].map<[string, unknown, string]>((outputs) => [
+      'invalid output object',
+      { ...valid, resources: { node: outputs } },
+      'resources["node"]',
+    ]),
+    ...[null, {}, [1], [false], [['nested']], ['secret-value', 1]].map<[string, unknown, string]>(
+      (output) => [
+        'invalid output value',
+        { ...valid, resources: { node: { output } } },
+        'resources["node"]["output"]',
+      ],
+    ),
+  ])('rejects %s without leaking values', async (_name, state, field) => {
+    await expect(load(JSON.stringify(state))).rejects.toThrow(
+      `${key} in s3://bucket has invalid state field ${field}`,
+    );
+    await expect(load(JSON.stringify(state))).rejects.not.toThrow('secret-value');
+  });
+
+  it('preserves historical typed values, omitted timestamp and unknown fields', async () => {
+    const state = {
+      ...valid,
+      version: -2.5,
+      extra: { future: null },
+      resources: {
+        'arbitrary / node': {
+          '': '',
+          number: 3.5,
+          yes: true,
+          no: false,
+          strings: ['a', 'b'],
+          empty: [],
+        },
+      },
+    };
+    expect(await load(JSON.stringify(state))).toEqual(state);
+    expect(await load(JSON.stringify({ ...state, updatedAt: 'not an ISO date' }))).toEqual({
+      ...state,
+      updatedAt: 'not an ISO date',
+    });
+    expect(await load(JSON.stringify(emptyState('test')))).toEqual({
+      version: 1,
+      env: 'test',
+      resources: {},
+    });
+  });
+
+  it('round-trips every supported output through save and load', async () => {
+    let body = '';
+    const transport: Transport = async (request) => {
+      if (request.method === 'PUT')
+        body =
+          typeof request.body === 'string' ? request.body : new TextDecoder().decode(request.body);
+      return response(200, body);
+    };
+    const store = new StateStore(s3With(transport), 'bucket', 'test', scope);
+    const state = {
+      ...emptyState('test'),
+      resources: { node: { text: '', number: 0, yes: true, no: false, strings: ['a'], empty: [] } },
+    };
+    await store.save(state);
+    expect(await store.load()).toEqual(state);
+    expect(typeof state.updatedAt).toBe('string');
+  });
+
+  it.each(['NoSuchKey', 'NoSuchBucket'])('retains empty-state behavior for %s', async (code) => {
+    const store = new StateStore(
+      s3With(async () => response(404, `<Error><Code>${code}</Code></Error>`)),
+      'bucket',
+      'test',
+      scope,
+    );
+    expect(await store.load()).toEqual(emptyState('test'));
+  });
+
+  it.each(['', 'not json'])('preserves syntax error context and cause for %j', async (body) => {
+    await expect(load(body)).rejects.toMatchObject({
+      message: `${key} in s3://bucket is not valid JSON - refusing to proceed with empty state`,
+      cause: expect.any(SyntaxError),
+    });
   });
 });

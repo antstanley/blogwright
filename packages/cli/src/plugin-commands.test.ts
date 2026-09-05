@@ -785,6 +785,50 @@ function recordingS3(): {
  * that the command "worked".
  */
 describe('runPlugin - the generic bootstrap/status/destroy lifecycle verbs', () => {
+  it.each(['bootstrap', 'status', 'destroy'])(
+    'rejects invalid stored state before %s can build or execute a graph',
+    async (action) => {
+      const world = new Set([NODE_PLUGIN_RESOURCE_ID]);
+      const effects: string[] = [];
+      const plugin: Plugin = {
+        ...makeNodePlugin(world),
+        nodes: () => {
+          effects.push('nodes');
+          return [fakePluginNode(NODE_PLUGIN_RESOURCE_ID, world)];
+        },
+      };
+      const { calls, s3 } = recordingS3();
+      s3.getObjectText = async (_bucket, key) => {
+        calls.push({ op: 'get', key });
+        return JSON.stringify({
+          version: 1,
+          env: 'production',
+          resources: { node: { output: null } },
+        });
+      };
+      const { fs, loader } = await buildDiscoveryPorts([
+        { packageName: 'blogwright-demo', namespace: 'demo', plugin },
+      ]);
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { makeContext } = testContextFactory(terminal, { s3 });
+
+      await expect(
+        runPlugin(
+          'demo',
+          [action],
+          { ...BASE_VALUES, yes: true },
+          terminal,
+          createLogger(terminal),
+          makeContext,
+          { fs, loader },
+        ),
+      ).rejects.toThrow('invalid state field resources["node"]["output"]');
+      expect(effects).toEqual([]);
+      expect(world).toEqual(new Set([NODE_PLUGIN_RESOURCE_ID]));
+      expect(calls).toEqual([{ op: 'get', key: 'state/production.demo.json' }]);
+    },
+  );
+
   it("bootstrap runs applyGraph over the plugin's own nodes and touches only its own scoped state key", async () => {
     const world = new Set<string>();
     const { calls, s3 } = recordingS3();
