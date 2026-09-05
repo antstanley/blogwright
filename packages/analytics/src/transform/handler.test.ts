@@ -7,6 +7,8 @@ import {
   SALT_SECRET_NAME_ENV,
   type SaltSecretStore,
 } from './handler.js';
+import { createTransformDiagnostics } from '../adapters/transform-diagnostics.js';
+import type { TransformDiagnostic } from './diagnostics.js';
 import { dailySalt, visitorKey } from './visitor-key.js';
 
 /** 2026-08-30T14:23:45.123Z, as CloudFront's epoch-milliseconds field spells it. */
@@ -97,8 +99,8 @@ const FULL_ROW = {
   content_type: 'text/html',
   protocol: 'https',
   request_id: 'AbCdEf0123456789abcdefghijklmnop==',
-  visitor_key: visitorKey(VIEWER_IP, USER_AGENT, dailySalt(SALT_SECRET, LAST_DAY_OF_AUGUST)),
   is_bot: false,
+  visitor_key: visitorKey(VIEWER_IP, USER_AGENT, dailySalt(SALT_SECRET, LAST_DAY_OF_AUGUST)),
 };
 
 /** A record the schema cannot accept: no `timestamp(ms)`, so no `event_time`. */
@@ -400,5 +402,135 @@ describe('createTransformHandler salt secret', () => {
     { environment: 'a blank variable', env: { [SALT_SECRET_NAME_ENV]: '  ' } },
   ])('refuses to build a handler with $environment', ({ env }) => {
     expect(() => createTransformHandler(workingStore(), env)).toThrow(SALT_SECRET_NAME_ENV);
+  });
+});
+
+describe('transform diagnostics', () => {
+  function recordingHandler(store: SaltSecretStore = workingStore()) {
+    const events: TransformDiagnostic[] = [];
+    const handler = createTransformHandler(store, ENV, (event) => events.push(event));
+    return { events, handler };
+  }
+
+  it('summarizes a mixed batch with fixed reasons and unchanged wire envelopes', async () => {
+    const { events, handler } = recordingHandler();
+    const input = request(
+      firehoseRecord('sensitive-good-id', FULL_RECORD),
+      { recordId: 'sensitive-invalid-id', data: encode('private-malformed-json') },
+      firehoseRecord('sensitive-schema-id', {
+        ...FULL_RECORD,
+        'sc-status': 'private-invalid-number',
+      }),
+      firehoseRecord('sensitive-null-id', null),
+    );
+    expect(await handler(input)).toStrictEqual({
+      records: [
+        { recordId: 'sensitive-good-id', result: 'Ok', data: encode(JSON.stringify(FULL_ROW)) },
+        { recordId: 'sensitive-invalid-id', result: 'ProcessingFailed' },
+        { recordId: 'sensitive-schema-id', result: 'ProcessingFailed' },
+        { recordId: 'sensitive-null-id', result: 'ProcessingFailed' },
+      ],
+    });
+    expect(events).toStrictEqual([
+      { event: 'salt_read', outcome: 'success' },
+      {
+        event: 'transform_batch',
+        mapped: 1,
+        processingFailed: 3,
+        reasons: { invalid_payload: 2, schema_rejected: 1 },
+      },
+    ]);
+    const serialized = JSON.stringify(events);
+    for (const sensitive of [
+      VIEWER_IP,
+      SALT_SECRET,
+      SALT_SECRET_NAME,
+      USER_AGENT,
+      ...input.records.flatMap((record) => [record.recordId, record.data]),
+      'private-invalid-number',
+      'private-malformed-json',
+      'utm_source=rss',
+    ])
+      expect(serialized).not.toContain(sensitive);
+  });
+
+  it.each([
+    { label: 'successful', payload: FULL_RECORD, mapped: 1000, failed: 0 },
+    { label: 'failed', payload: UNMAPPABLE_RECORD, mapped: 0, failed: 1000 },
+  ])(
+    'bounds event cardinality for a large $label batch and a cached empty batch',
+    async ({ payload, mapped, failed }) => {
+      const store = workingStore();
+      const { events, handler } = recordingHandler(store);
+      await handler(
+        request(...Array.from({ length: 1000 }, (_, i) => firehoseRecord(String(i), payload))),
+      );
+      expect(await handler(request())).toStrictEqual({ records: [] });
+      expect(store.names).toStrictEqual([SALT_SECRET_NAME]);
+      expect(events).toStrictEqual([
+        { event: 'salt_read', outcome: 'success' },
+        {
+          event: 'transform_batch',
+          mapped,
+          processingFailed: failed,
+          reasons: { invalid_payload: 0, schema_rejected: failed },
+        },
+        {
+          event: 'transform_batch',
+          mapped: 0,
+          processingFailed: 0,
+          reasons: { invalid_payload: 0, schema_rejected: 0 },
+        },
+      ]);
+    },
+  );
+
+  it('reports failed reads without error text, preserves error identity, and retries then caches', async () => {
+    const error = new Error('private-error ' + SALT_SECRET + SALT_SECRET_NAME);
+    let attempts = 0;
+    const store = secretStore(() =>
+      ++attempts === 1 ? Promise.reject(error) : Promise.resolve(SALT_SECRET),
+    );
+    const { events, handler } = recordingHandler(store);
+    await expect(handler(request())).rejects.toBe(error);
+    expect(events).toStrictEqual([{ event: 'salt_read', outcome: 'failure' }]);
+    await handler(request());
+    await handler(request());
+    expect(store.names).toStrictEqual([SALT_SECRET_NAME, SALT_SECRET_NAME]);
+    expect(events.filter((event) => event.event === 'salt_read')).toStrictEqual([
+      { event: 'salt_read', outcome: 'failure' },
+      { event: 'salt_read', outcome: 'success' },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('private-error');
+    expect(JSON.stringify(events)).not.toContain(SALT_SECRET_NAME);
+    expect(JSON.stringify(events)).not.toContain(SALT_SECRET);
+  });
+
+  it.each([undefined, '', '   '])(
+    'reports unusable secret reads as failures and retries (%j)',
+    async (value) => {
+      let attempts = 0;
+      const store = secretStore(() => Promise.resolve(++attempts === 1 ? value : SALT_SECRET));
+      const { events, handler } = recordingHandler(store);
+      await expect(handler(request())).rejects.toThrow('holds no value');
+      expect(events).toStrictEqual([{ event: 'salt_read', outcome: 'failure' }]);
+      await handler(request());
+      expect(store.names).toHaveLength(2);
+      expect(events[1]).toStrictEqual({ event: 'salt_read', outcome: 'success' });
+    },
+  );
+
+  it('serializes the same handler events through the production logging adapter', async () => {
+    const lines: string[] = [];
+    const handler = createTransformHandler(
+      workingStore(),
+      ENV,
+      createTransformDiagnostics((line) => lines.push(line)),
+    );
+    await handler(request(firehoseRecord('private-id', UNMAPPABLE_RECORD)));
+    expect(lines).toStrictEqual([
+      '{"event":"salt_read","outcome":"success"}',
+      '{"event":"transform_batch","mapped":0,"processingFailed":1,"reasons":{"invalid_payload":0,"schema_rejected":1}}',
+    ]);
   });
 });
