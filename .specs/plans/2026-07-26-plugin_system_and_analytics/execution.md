@@ -12,8 +12,10 @@ Baseline: all six gates passed. Tests: 1,533 passed and one opt-in Floci test sk
 | 59 | Done | CORRECT | DONE | [review](reviews/59-verification.md); six gates pass, 1,533 tests |
 | 62 | Done | CORRECT | DONE | [review](reviews/62-verification.md); six gates pass, 1,536 tests; midnight mutation killed |
 | 60 | Done | CORRECT | DONE | [review](reviews/60-verification.md); six gates pass, 1,539 tests; five negative-control failures |
-| 64 | Preparing baseline | pending | pending | normative transform diagnostic gap |
-| 65 | Preparing baseline | pending | pending | pre-existing state-validation policy gap |
+| 64 | Implementing | pending | pending | normative transform diagnostic gap |
+| 65 | Implementing | pending | pending | pre-existing state-validation policy gap |
 | 63 | Implementing documentation; awaiting64/65 | pending | pending | current task/certificate; runtime dependencies integrated; temporary type gate passed and retired |
 
 Workspace policy: remove each isolated task workspace immediately after verified integration; task59, task60 and task62 workspaces have been removed.
+
+Tasks64/65 isolated baselines: both builds and full suites passed (1,542 tests, one opt-in skip). Current graph check:66unique tasks,66certificates,130matching table/Mermaid/task edges,35matching current DoD/certificate obligations; order00–62,64,65,63 is topological.
