@@ -10,6 +10,8 @@ Baseline: all six gates passed. Tests: 1,533 passed and one opt-in Floci test sk
 | Task | State | Correctness | Completeness | Evidence |
 |---|---|---|---|---|
 | 59 | Done | CORRECT | DONE | [review](reviews/59-verification.md); six gates pass, 1,533 tests |
-| 62 | Independent verification | pending | pending | three-path implementation; six gates green; midnight mutation killed |
+| 62 | Done | CORRECT | DONE | [review](reviews/62-verification.md); six gates pass, 1,536 tests; midnight mutation killed |
 | 60 | Implementing | pending | pending | isolated complete-60 workspace |
-| 63 | Waiting for60/62 | pending | pending | current task/certificate |
+| 63 | Waiting for 60 | pending | pending | current task/certificate |
+
+Workspace policy: remove each isolated task workspace immediately after verified integration; task59 and task62 workspaces have been removed.

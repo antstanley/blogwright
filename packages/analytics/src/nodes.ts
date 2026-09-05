@@ -3294,6 +3294,7 @@ export function analyticsLogDeliveryNode(): AnalyticsNode {
       // missing destination each fail with nothing sent.
       const site = requireSiteDeliverySource(ctx);
       const destinationArn = requireLogDestinationArn(ctx);
+      const requestDay = utcDay(new Date());
       await logs(ctx).createDelivery(site.source, destinationArn, {
         // `CLOUDFRONT_RECORD_FIELDS`, never a list restated here: `schema.ts`
         // owns which CloudFront fields exist, which ones fill a column, and
@@ -3325,7 +3326,7 @@ export function analyticsLogDeliveryNode(): AnalyticsNode {
       // Write-once, and the only place this key is ever written. See
       // {@link CREATED_DAY_KEY} for why moving it later is the one direction
       // that corrupts data rather than merely losing some.
-      if (typeof out[CREATED_DAY_KEY] !== 'string') out[CREATED_DAY_KEY] = utcDay(new Date());
+      if (typeof out[CREATED_DAY_KEY] !== 'string') out[CREATED_DAY_KEY] = requestDay;
     },
     async delete(ctx) {
       // This plugin's own deliveries and nothing else - **never
