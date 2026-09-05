@@ -76,6 +76,7 @@
  * browser is otherwise free to re-read as something it will execute.
  */
 
+import { parseViewGranularity, VIEW_GRANULARITIES } from './view-granularity.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { join, sep } from 'node:path';
 
@@ -131,7 +132,7 @@ const QUERY_ROUTE_PREFIX = '/api/queries/';
  * because its default is `config.analytics.bots`, applied inside the port -
  * this module must not restate it.
  */
-const QUERY_STRING_PARAMS = ['from', 'to', 'includeBots'] as const;
+const QUERY_STRING_PARAMS = ['from', 'to', 'includeBots', 'granularity'] as const;
 
 /** The two spellings the bot-inclusion flag takes, mapped to what it means. */
 const INCLUDE_BOTS_VALUES: Readonly<Record<string, boolean>> = { true: true, false: false };
@@ -387,10 +388,22 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
   }
 
   const range = { from: requiredParam(search, 'from'), to: requiredParam(search, 'to') };
+  const interval = search.get('granularity');
+  let granularity: QueryParams['granularity'];
+  if (interval !== null) {
+    if (search.getAll('granularity').length !== 1)
+      throw new RequestRejected(400, 'granularity must be provided once');
+    try {
+      granularity = parseViewGranularity(interval);
+    } catch (err) {
+      throw new RequestRejected(400, describeError(err));
+    }
+  }
+  const extra = granularity === undefined ? {} : { granularity };
   const flag = search.get('includeBots');
   if (flag === null) {
     // Absent on purpose: `config.analytics.bots` decides, inside the port.
-    return { range };
+    return { range, ...extra };
   }
   if (!Object.hasOwn(INCLUDE_BOTS_VALUES, flag)) {
     throw new RequestRejected(
@@ -398,7 +411,7 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
       `query parameter "includeBots" must be ${Object.keys(INCLUDE_BOTS_VALUES).join(' or ')}, got "${flag}"`,
     );
   }
-  return { range, includeBots: INCLUDE_BOTS_VALUES[flag] };
+  return { range, ...extra, includeBots: INCLUDE_BOTS_VALUES[flag] };
 }
 
 /**
@@ -501,7 +514,12 @@ export async function createDashboardServer(
     const rows: readonly QueryRow[] = await opts.query.run(resolved.name, params);
     return {
       name: resolved.name,
-      rowMeaning: definition.rowMeaning,
+      rowMeaning:
+        resolved.name === 'views-over-time' &&
+        params.granularity !== undefined &&
+        params.granularity !== '24h'
+          ? `one UTC bucket of ${VIEW_GRANULARITIES[params.granularity].label}, labelled by its start, and the number of requests served in it`
+          : definition.rowMeaning,
       resultColumns: definition.resultColumns,
       rows,
     };

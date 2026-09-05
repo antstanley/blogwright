@@ -17,6 +17,10 @@
 <script lang="ts">
   import { BarChart } from 'layerchart';
   import CountryMap from './CountryMap.svelte';
+  import PathsPie from './PathsPie.svelte';
+  import ViewsArea from './ViewsArea.svelte';
+  import PillRadio from './PillRadio.svelte';
+  import { VIEW_GRANULARITIES, type ViewGranularity } from '../../../src/view-granularity.js';
 
   import { runNamedQuery, type QueryRequest, type QueryResult } from './api.js';
   import {
@@ -48,7 +52,15 @@
 
   let countryView = $state<'map' | 'bars'>('map');
 
-  const answer = $derived(runNamedQuery(panel.name, request));
+  const granularityOptions = Object.entries(VIEW_GRANULARITIES).map(([value, option]) => ({
+    // These keys come directly from the supported granularity vocabulary.
+    value: value as ViewGranularity,
+    label: value,
+    accessibleLabel: option.label,
+  }));
+
+  let granularity = $state<ViewGranularity>('24h');
+  const answer = $derived(runNamedQuery(panel.name, panel.name === 'views-over-time' ? { ...request, granularity } : request));
 
   /** Render a value the way this panel's value column reads. */
   function formatValue(value: number): string {
@@ -98,9 +110,15 @@
   }
 </script>
 
-<section class="panel" class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time' || panel.name === 'countries'}>
+<section class="panel" class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time' || panel.name === 'countries' || panel.name === 'top-paths'}>
   <div class="panel-heading">
     <h2>{panel.title}</h2>
+    {#if panel.name === 'views-over-time'}
+      <div class="granularity-control">
+        <span>Granularity</span>
+        <PillRadio label="Granularity" options={granularityOptions} bind:value={granularity} />
+      </div>
+    {/if}
     {#if panel.name === 'countries'}
       <fieldset class="country-view" aria-label="Countries view">
         <label><input type="radio" value="map" bind:group={countryView} />Map</label>
@@ -119,8 +137,12 @@
     {:else}
       {@const points = pointsOf(result)}
       {@const total = totalOf(result)}
-      {#if panel.name === 'countries' && countryView === 'map'}
+      {#if panel.name === 'views-over-time'}
+        {#key result}<ViewsArea rows={result.rows} {granularity} />{/key}
+      {:else if panel.name === 'countries' && countryView === 'map'}
         <CountryMap rows={result.rows} />
+      {:else if panel.name === 'top-paths'}
+        <PathsPie rows={result.rows} />
       {:else}
       <div class="panel-chart" style:height={panel.ranked ? `${Math.max(220, points.length * 28 + 40)}px` : undefined}>
         <BarChart
@@ -145,10 +167,10 @@
       <details class="panel-data">
         <summary>View chart data</summary>
         <table>
-          <caption>{panel.title} — {panel.name === 'countries' ? 'all country values' : 'plotted values'}</caption>
-          <thead><tr><th scope="col">{humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th></tr></thead>
+          <caption>{panel.title} — {panel.name === 'countries' || panel.name === 'top-paths' ? 'all returned values' : 'plotted values'}</caption>
+          <thead><tr><th scope="col">{panel.name === 'views-over-time' ? 'Bucket start (UTC)' : humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th></tr></thead>
           <tbody>
-            {#each (panel.name === 'countries' ? result.rows.map(row => ({ label: labelCell(row, panel.category), value: numericCell(row, panel.value) })) : points) as point, index (index)}
+            {#each (panel.name === 'countries' || panel.name === 'top-paths' ? result.rows.map(row => ({ label: labelCell(row, panel.category), value: numericCell(row, panel.value) })) : points) as point, index (index)}
               <tr><th scope="row">{point.label}</th><td>{formatValue(point.value)}</td></tr>
             {/each}
           </tbody>
@@ -160,7 +182,7 @@
           <dd>{total.value}</dd>
         </dl>
       {/if}
-      {#if panel.ranked && result.rows.length > RANKING_LIMIT && (panel.name !== 'countries' || countryView === 'bars')}
+      {#if panel.ranked && panel.name !== 'top-paths' && result.rows.length > RANKING_LIMIT && (panel.name !== 'countries' || countryView === 'bars')}
         <p class="panel-note">
           Showing the top {RANKING_LIMIT} of {formatCount(result.rows.length)}.
         </p>

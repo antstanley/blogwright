@@ -190,8 +190,20 @@ No retention configuration key or special log-group status action is added.
 default. The SvelteKit app uses a static adapter and Vite build. The server accepts
 GET/HEAD only, validates Host against localhost/127.0.0.1 with its bound port,
 serves only enumerated app files and exposes `/api/queries/<name>`.
-Required from/to are inclusive UTC calendar dates; optional includeBots is the
-literal true/false string. Unknown names return 404, bad parameters 400, foreign
+Required from/to are either inclusive UTC calendar dates or explicit UTC minute
+timestamps (`YYYY-MM-DDTHH:mmZ`), with start inclusive and end exclusive. Mixed
+formats, invalid dates, and empty/inverted timestamp windows return 400. Timestamp
+queries bind exact event_time bounds in addition to the day partition predicate
+for every named query. Existing date-only requests retain inclusive-day behavior.
+Optional includeBots is the
+literal true/false string. Views over time alone accepts optional granularity:
+15m, 1h, 6h, 12h, or 24h (default). Invalid values, duplicate granularity parameters,
+or granularity on another query return 400. Intraday queries bind a fixed bucket
+width and group event_time using UTC midnight-aligned intervals while retaining
+the day partition and bot filters. The existing day result key carries an ISO UTC
+bucket-start timestamp for intraday results and a YYYY-MM-DD date for 24h results.
+Only populated buckets are returned. rowMeaning identifies the bucket duration.
+Unknown names return 404, bad parameters 400, foreign
 Host 403, unsupported methods 405 and missing app output 503. Query responses
 contain name, rowMeaning, resultColumns and rows; no SQL comes from the socket.
 

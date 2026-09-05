@@ -30,8 +30,8 @@ decorative coloured edges. Numeric totals use tabular figures.
 ## Reporting surface
 
 [Page composition](../../../packages/analytics/app/src/routes/+page.svelte) keeps
-all seven reports and places the traffic and Countries reports across the grid. Other
-reports occupy two columns on larger screens and one column on narrow screens.
+all seven reports and places the traffic and Countries reports across the grid. Daily unique visitors and Referrers share the next row on larger screens;
+Status codes and Cache hit ratio share the final row. Paired reports stack on narrow screens.
 Filters wrap as label/field pairs, with labels beside their inputs. On narrow
 screens the pairs stack into rows with a shared label-column width. Native date and select
 controls share explicit sizing and Lucide calendar/chevron icons to avoid differing
@@ -45,6 +45,22 @@ Expandable native disclosures expose the plotted values and full labels in seman
 tables. Chart interaction layers are contained within their report at zoom.
 Report errors do not block other panels. Invalid dates suppress requests and show
 a single message near the controls.
+
+Views over time uses a LayerChart area chart with a horizontal brush. Dragging
+zooms the local chart window; Reset zoom restores the full reporting period.
+Brushing does not change the global dates, issue queries, or truncate the table.
+A pill-shaped native radio group offers 15m, 1h, 6h, 12h, and 24h (default),
+with full-duration accessible labels. The selection highlight slides between
+options over 180ms; reduced-motion preference disables that transition. Changing it refetches only Views over time and resets its brush. Buckets
+are computed from event timestamps on the server, not interpolated from daily
+counts. Intraday axes, tooltips, and the table show UTC bucket start times.
+Date axes and the selected-window message use UTC. A new result resets the zoom.
+
+Top paths spans the full grid width, with pie and legend side by side on wide
+screens and stacked on narrow screens. It uses a pie chart with the top twelve paths and a summed Other paths
+slice for remaining returned rows. Shares use all returned requests as their
+denominator. The legend shows full paths, counts, and percentages; the data table
+retains every returned path. Zero totals show an empty state.
 
 Countries opens on an offline Equal Earth map rendered with LayerChart GeoPath.
 A Map/Bars radio group switches views without another query. Map colour intensity
@@ -85,3 +101,19 @@ visual snapshot suite. The [task review](../../reviews/2026-09-05-dashboard-desi
 
 - The optional choice of a new editorial or dense dark identity is unconfirmed;
   neither is adopted here.
+
+The shared `PillRadio` component owns compact radio styling, sliding selection,
+keyboard focus, and reduced-motion behavior. Traffic uses the same component
+with All (the site default), Include bots, and Exclude bots, in a row above the From/To date
+inputs in Reporting window. Radio groups remain independent.
+
+Reporting window uses minute-step datetime inputs explicitly labelled UTC. Presets
+sit between the Traffic selector and the date/time inputs. Preset
+buttons offer 3H, 6H, 12H, 24H, 5D, 1W, 4W, 3M, 6M,
+and 1Y. Every activation computes fresh bounds ending at the current UTC
+minute, including activation of an already selected preset. Hours/days/weeks are
+elapsed durations; months/year use calendar subtraction with month-end clamping.
+Manual edits select Custom. Clicking Custom keeps the current bounds for editing.
+The initial thirty-day window also selects Custom. Presets do not continuously move while
+the report is being read. Exact timestamp bounds apply to all charts; the end is
+exclusive. The initial window remains thirty days ending at the current minute.

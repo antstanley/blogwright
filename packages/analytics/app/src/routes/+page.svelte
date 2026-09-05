@@ -8,26 +8,36 @@
   seven identical refusals.
 -->
 <script lang="ts">
-  import { CalendarDays, ChevronDown } from '@lucide/svelte';
+  import { CalendarDays } from '@lucide/svelte';
   import type { BotInclusion, QueryRequest } from '../lib/api.js';
   import { PANELS } from '../lib/panels.js';
+  import PillRadio from '../lib/PillRadio.svelte';
   import QueryPanel from '../lib/QueryPanel.svelte';
   import ThemeToggle from '../lib/ThemeToggle.svelte';
-  import { defaultRange, rangeProblem } from '../lib/range.js';
+  import { defaultRange, rangeProblem, presetRange, PERIODS, type Period } from '../../../src/reporting-range.js';
 
   /** What the page opens on, read once so a rendering never moves the window. */
   const OPENING_RANGE = defaultRange();
 
   /** What each bot-inclusion choice is called on screen. */
-  const BOT_INCLUSION_LABELS: Readonly<Record<BotInclusion, string>> = {
-    'site-default': 'Site default',
-    include: 'Include bots',
-    exclude: 'Exclude bots',
-  };
+  const botOptions: readonly { value: BotInclusion; label: string }[] = [
+    { value: 'site-default', label: 'All' },
+    { value: 'include', label: 'Include bots' },
+    { value: 'exclude', label: 'Exclude bots' },
+  ];
 
   let from = $state(OPENING_RANGE.from);
   let to = $state(OPENING_RANGE.to);
   let bots = $state<BotInclusion>('site-default');
+
+  let selectedPeriod = $state<Period | 'custom'>('custom');
+
+  function choosePeriod(period: Period): void {
+    const range = presetRange(period);
+    from = range.from;
+    to = range.to;
+    selectedPeriod = period;
+  }
 
   const problem = $derived(rangeProblem({ from, to }));
   const request = $derived<QueryRequest>({ range: { from, to }, bots });
@@ -48,33 +58,36 @@
   </header>
 
   <div class="filter-bar">
-    <div class="filter-heading"><strong>Reporting window</strong><span>Dates in UTC</span></div>
-    <div class="controls">
-      <label class="control">
-        <span>From</span>
-        <span class="control-field">
-          <input type="date" bind:value={from} max={to} />
-          <CalendarDays class="control-icon" size={18} aria-hidden="true" />
-        </span>
-      </label>
-      <label class="control">
-        <span>To</span>
-        <span class="control-field">
-          <input type="date" bind:value={to} min={from} />
-          <CalendarDays class="control-icon" size={18} aria-hidden="true" />
-        </span>
-      </label>
-      <label class="control">
-        <span>Bot traffic</span>
-        <span class="control-field">
-        <select bind:value={bots}>
-          {#each Object.entries(BOT_INCLUSION_LABELS) as [value, label] (value)}
-            <option {value}>{label}</option>
-          {/each}
-        </select>
-        <ChevronDown class="control-icon" size={18} aria-hidden="true" />
-        </span>
-      </label>
+    <div class="filter-heading"><strong>Reporting window</strong><span>Dates and times in UTC</span></div>
+    <div class="filter-controls">
+      <div class="bot-control">
+        <span>Traffic</span>
+        <PillRadio label="Traffic" options={botOptions} bind:value={bots} />
+      </div>
+      <div class="period-presets" role="group" aria-label="Reporting period">
+        {#each PERIODS as period (period.value)}
+          <button type="button" aria-pressed={selectedPeriod === period.value}
+            onclick={() => choosePeriod(period.value)}>{period.label}</button>
+        {/each}
+        <button type="button" aria-pressed={selectedPeriod === 'custom'}
+          onclick={() => selectedPeriod = 'custom'}>Custom</button>
+      </div>
+      <div class="controls">
+        <label class="control">
+          <span>From</span>
+          <span class="control-field">
+            <input type="datetime-local" step="60" oninput={() => selectedPeriod = 'custom'} bind:value={from} max={to} />
+            <CalendarDays class="control-icon" size={18} aria-hidden="true" />
+          </span>
+        </label>
+        <label class="control">
+          <span>To</span>
+          <span class="control-field">
+            <input type="datetime-local" step="60" oninput={() => selectedPeriod = 'custom'} bind:value={to} min={from} />
+            <CalendarDays class="control-icon" size={18} aria-hidden="true" />
+          </span>
+        </label>
+      </div>
     </div>
   </div>
 

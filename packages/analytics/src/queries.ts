@@ -49,6 +49,11 @@
  * `fetch`. Nothing here runs a statement - that is `AnalyticsQuery`'s adapter.
  */
 
+import {
+  parseViewGranularity,
+  VIEW_GRANULARITIES,
+  type ViewGranularity,
+} from './view-granularity.js';
 import type { AnalyticsConfig } from './config.js';
 import type { PageViewColumnName } from './schema.js';
 
@@ -98,7 +103,14 @@ function sql(fragments: TemplateStringsArray, ...relations: SqlRelation[]): SqlT
  * all of them; the list is per-definition so a statement that forgot one is a
  * test failure naming that query rather than a filter that quietly never ran.
  */
-const QUERY_PARAM_NAMES = ['from', 'to', 'include_bots'] as const;
+const QUERY_PARAM_NAMES = [
+  'from',
+  'to',
+  'include_bots',
+  'bucket_minutes',
+  'from_time',
+  'to_time',
+] as const;
 
 /** One of {@link QUERY_PARAM_NAMES}. */
 type QueryParamName = (typeof QUERY_PARAM_NAMES)[number];
@@ -106,11 +118,11 @@ type QueryParamName = (typeof QUERY_PARAM_NAMES)[number];
 /** A value bound to a placeholder. Days are bound as text and cast in the SQL. */
 type BindValue = string | boolean;
 
-/** An inclusive range of UTC days, each `YYYY-MM-DD` - the `day` partition's own form. */
+/** UTC calendar days (inclusive) or minute timestamps (start inclusive, end exclusive). */
 interface DateRange {
-  /** First day of the range, inclusive. */
+  /** Inclusive start day or UTC minute. */
   readonly from: string;
-  /** Last day of the range, inclusive. */
+  /** Inclusive end day, or exclusive end UTC minute. */
   readonly to: string;
 }
 
@@ -120,7 +132,7 @@ interface DateRange {
  * `config.analytics.bots` (task 44) through {@link BOTS_INCLUDED_BY_DEFAULT}.
  */
 export interface QueryParams {
-  /** The days to report over. */
+  /** The UTC reporting window. */
   readonly range: DateRange;
   /**
    * Whether bot-flagged rows are counted. Absent means "whatever
@@ -129,6 +141,8 @@ export interface QueryParams {
    * spec's Decision *Flag bots, do not drop them*.
    */
   readonly includeBots?: boolean | undefined;
+  /** UTC bucket width; accepted only by views-over-time. */
+  readonly granularity?: ViewGranularity | undefined;
 }
 
 /** One named query: its statement, what it reads, what it binds, what it returns. */
@@ -435,6 +449,13 @@ function isCalendarDay(day: string): boolean {
   return new Date(time).toISOString().slice(0, DAY_LENGTH) === day;
 }
 
+/** Minute precision only; explicit UTC prevents host-timezone interpretation. */
+function isUtcMinute(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/.test(value)) return false;
+  const instant = Date.parse(value);
+  return Number.isFinite(instant) && new Date(instant).toISOString().slice(0, 16) + 'Z' === value;
+}
+
 /**
  * Resolve a name to its definition, raising with the available names when it
  * is not one of them. Takes a `string` rather than a {@link QueryName} because
@@ -473,18 +494,21 @@ export function queryDefinition(name: string): QueryDefinition {
 function validateRange(name: string, range: DateRange | undefined): DateRange {
   const from: unknown = range?.from;
   const to: unknown = range?.to;
-  if (typeof from !== 'string' || !isCalendarDay(from)) {
+  if (typeof from !== 'string' || !(isCalendarDay(from) || isUtcMinute(from))) {
     throw new Error(
-      `analytics query ${describeValue(name)}: range.from must be a YYYY-MM-DD calendar day, got ${describeValue(from)}`,
+      `analytics query ${describeValue(name)}: range.from must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got ${describeValue(from)}`,
     );
   }
-  if (typeof to !== 'string' || !isCalendarDay(to)) {
+  if (typeof to !== 'string' || !(isCalendarDay(to) || isUtcMinute(to))) {
     throw new Error(
-      `analytics query ${describeValue(name)}: range.to must be a YYYY-MM-DD calendar day, got ${describeValue(to)}`,
+      `analytics query ${describeValue(name)}: range.to must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got ${describeValue(to)}`,
     );
   }
-  // Both are `YYYY-MM-DD`, so lexical order is chronological order.
-  if (from > to) {
+  if (isUtcMinute(from) !== isUtcMinute(to)) {
+    throw new Error('range endpoints must both be calendar days or both UTC minute timestamps');
+  }
+  // Canonical UTC strings sort chronologically.
+  if (from > to || (isUtcMinute(from) && from === to)) {
     throw new Error(
       `analytics query ${describeValue(name)}: range is inverted - from ${describeValue(from)} is after to ${describeValue(to)}`,
     );
@@ -492,11 +516,22 @@ function validateRange(name: string, range: DateRange | undefined): DateRange {
   return { from, to };
 }
 
+/** Intraday alternative keeps the day partition filter for Iceberg pruning. */
+const INTRADAY_VIEWS_SQL = sql`
+SELECT strftime(time_bucket(CAST($bucket_minutes AS BIGINT) * INTERVAL '1 minute', event_time), '%Y-%m-%dT%H:%M:%SZ') AS day,
+       count(*) AS views
+FROM ${PAGE_VIEWS}
+WHERE day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)
+  AND ($include_bots OR NOT coalesce(is_bot, false))
+GROUP BY 1
+ORDER BY 1
+`;
+
 /** A named query resolved against its caller's parameters, ready for an adapter to execute. */
 export interface PreparedQuery {
   /** The name that resolved. */
   readonly name: QueryName;
-  /** The statement to execute, exactly as its definition carries it. */
+  /** The fixed statement to execute, including an intraday variant when requested. */
   readonly sql: string;
   /** The columns a row of the result carries. */
   readonly resultColumns: readonly string[];
@@ -522,19 +557,38 @@ export function prepareQuery(
 ): PreparedQuery {
   const definition = queryDefinition(name);
   const range = validateRange(name, params.range);
+  if (params.granularity !== undefined && name !== 'views-over-time') {
+    throw new Error('granularity is only supported by views-over-time');
+  }
+  const granularity = parseViewGranularity(params.granularity);
+  const intraday = name === 'views-over-time' && granularity !== '24h';
   const includeBots = params.includeBots ?? BOTS_INCLUDED_BY_DEFAULT[config.bots];
   const available: Record<QueryParamName, BindValue> = {
-    from: range.from,
-    to: range.to,
+    from: range.from.slice(0, 10),
+    to: range.to.slice(0, 10),
+    from_time: range.from,
+    to_time: range.to,
     include_bots: includeBots,
+    bucket_minutes: String(VIEW_GRANULARITIES[granularity].minutes),
   };
   const bindings: Record<string, BindValue> = {};
   for (const bind of definition.binds) bindings[bind] = available[bind];
+  if (intraday) bindings['bucket_minutes'] = available.bucket_minutes;
+  let statement: string = intraday ? INTRADAY_VIEWS_SQL : definition.sql;
+  if (isUtcMinute(range.from)) {
+    bindings['from_time'] = `${range.from.slice(0, 16)}:00Z`;
+    bindings['to_time'] = `${range.to.slice(0, 16)}:00Z`;
+    // Add a fixed predicate to the shared partition filter, including CTE queries.
+    statement = statement.replace(
+      'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)',
+      'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE) AND event_time >= CAST($from_time AS TIMESTAMP) AND event_time < CAST($to_time AS TIMESTAMP)',
+    );
+  }
   return {
     // Justified by `queryDefinition` above: it raised unless `name` is one of
     // the table's own keys, which is exactly what `QueryName` enumerates.
     name: name as QueryName,
-    sql: definition.sql,
+    sql: statement,
     resultColumns: definition.resultColumns,
     bindings,
   };

@@ -1,4 +1,5 @@
 /** Local development entry point: serve the built dashboard with synthetic rows only. */
+import { VIEW_GRANULARITIES, parseViewGranularity } from '../dist/view-granularity.js';
 import { fileURLToPath } from 'node:url';
 
 import { createDashboardServer } from '../dist/server.js';
@@ -51,10 +52,59 @@ const fixtures = {
     cache_hit_ratio: Math.floor(d.views * 0.86) / d.views,
   })),
 };
-const query = createFixtureAnalyticsQuery(fixtures);
+const fixtureQuery = createFixtureAnalyticsQuery(fixtures, { bots: 'filter' });
+const MINUTE_MS = 60_000;
+/** Synthetic buckets cover the selected window, including partially selected buckets. */
+function previewViews(params, minutes) {
+  const { from, to } = params.range;
+  const start = Date.parse(from.length === 10 ? `${from}T00:00:00Z` : from);
+  const end =
+    Date.parse(to.length === 10 ? `${to}T00:00:00Z` : to) + (to.length === 10 ? DAY_MS : 0);
+  const bucketMs = minutes * MINUTE_MS;
+  const result = [];
+  for (let bucket = Math.floor(start / bucketMs) * bucketMs; bucket < end; bucket += bucketMs) {
+    const overlap = Math.min(end, bucket + bucketMs) - Math.max(start, bucket);
+    const dayIndex = Math.floor(bucket / DAY_MS);
+    const dailyViews = 400 + (dayIndex % 7) * 60;
+    result.push({
+      day: new Date(bucket).toISOString().slice(0, minutes === 1440 ? 10 : 24),
+      views: Math.max(1, Math.round((dailyViews * overlap) / DAY_MS)),
+    });
+  }
+  return result;
+}
+const query = {
+  async run(name, params) {
+    const rows = await fixtureQuery.run(name, params);
+    if (name === 'views-over-time') {
+      return previewViews(
+        params,
+        VIEW_GRANULARITIES[parseViewGranularity(params.granularity)].minutes,
+      );
+    }
+    if (name === 'unique-visitors') {
+      const daily = previewViews(params, 1440);
+      const total = daily.reduce((sum, day) => sum + Math.round(day.views * 0.8), 0);
+      return daily.map((day) => ({
+        day: day.day,
+        daily_unique_visitors: Math.round(day.views * 0.8),
+        summed_daily_unique_visitors: total,
+      }));
+    }
+    if (name === 'cache-hit-ratio') {
+      return previewViews(params, 1440).map((day) => ({
+        day: day.day,
+        requests: day.views,
+        cache_hits: Math.floor(day.views * 0.86),
+        cache_hit_ratio: Math.floor(day.views * 0.86) / day.views,
+      }));
+    }
+    return rows;
+  },
+};
 const server = await createDashboardServer({
   query,
-  config: { bots: 'exclude' },
+  config: { bots: 'filter' },
   port: PREVIEW_PORT,
   appDir: fileURLToPath(new URL('../dist/app/', import.meta.url)),
   fs: createNodeFileSystem(),
@@ -66,5 +116,5 @@ process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
 
 console.log(
-  `Mock analytics dashboard: ${server.url}\nSynthetic data only; no AWS access. Date and bot inputs are validated but do not filter fixture rows.\nRe-run pnpm dev:analytics after editing the UI. Press Ctrl+C to stop.`,
+  `Mock analytics dashboard: ${server.url}\nSynthetic data only; no AWS access. Time-series fixtures follow the selected window; ranking fixtures and bot filtering remain static.\nRe-run pnpm dev:analytics after editing the UI. Press Ctrl+C to stop.`,
 );

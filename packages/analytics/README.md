@@ -206,9 +206,37 @@ Edit the dashboard under `app/src/`, then stop and rerun the command to rebuild.
 This is a built-app preview, without hot reload. If the artifacts are already
 current, `pnpm --filter blogwright-analytics dev:mock` skips the build.
 
-Fixtures live in `scripts/dev-dashboard.mjs`. Dates cover the 30 UTC days ending
-on startup day; totals are calculated from those rows. Date and bot controls use
-the real API validation, but fixture rows are fixed for the session and do not
-change with those inputs. Use an empty array for a query to inspect its empty state;
-remove its fixture entry to inspect an isolated error. Restart after fixture edits.
+Fixtures live in `scripts/dev-dashboard.mjs`. Time-series rows are generated for
+the selected UTC window and granularity, including partial buckets. These counts
+are synthetic; production queries aggregate actual event timestamps. Ranking
+fixtures and bot filtering remain static. Remove a fixture entry to inspect an
+isolated query error. Restart after fixture edits.
 Port 4318 must be free; an occupied port fails instead of silently selecting another.
+
+### Reusable pill radio selector
+
+The dashboard's `app/src/lib/PillRadio.svelte` component provides the compact,
+animated radio selector. Pass a group `label`, an `options` array of unique
+`{ value, label, accessibleLabel? }` entries, and bind the selected `value`:
+
+```svelte
+<PillRadio label="Interval" options={intervalOptions} bind:value={interval} />
+```
+
+Option counts determine the pill width and highlight position. Set the inherited
+`--pill-option-width` CSS property to adjust the default 60px option width. `accessibleLabel`
+can expand an abbreviated caption. Each instance uses an independent radio name
+by default; an optional `name` supports form integration. Native keyboard controls,
+focus styling, and reduced-motion support are included.
+
+### Reporting windows
+
+Date/time inputs use UTC at minute precision. Presets from 3hrs to 1 year end at
+the current minute when clicked; click again to refresh the anchor. Manual edits
+select Custom; clicking Custom keeps the current bounds for editing. Calendar month/year presets clamp month-end dates.
+The API also accepts `from`/`to` as `YYYY-MM-DDTHH:mmZ`: start is inclusive and
+end exclusive. Existing date-only requests retain inclusive-day behavior.
+
+The mock now generates time-series rows across the selected window, including
+partial buckets. These are synthetic counts; ranking fixtures and bot filtering
+remain static. Production queries filter actual event timestamps for every chart.

@@ -23,16 +23,17 @@
  */
 
 import type { QueryRow } from '../../../src/ports.js';
+import type { ViewGranularity } from '../../../src/view-granularity.js';
 import type { QueryName } from '../../../src/queries.js';
 
 /** The path prefix the local server answers named queries under. */
 const QUERY_ROUTE_PREFIX = '/api/queries/';
 
-/** An inclusive range of UTC days, each `YYYY-MM-DD` - the form the server validates. */
-export interface DateRange {
-  /** First day of the range, inclusive. */
+/** UTC input values, formatted as YYYY-MM-DDTHH:mm. */
+interface DateRange {
+  /** Inclusive start UTC minute. */
   readonly from: string;
-  /** Last day of the range, inclusive. */
+  /** Exclusive end UTC minute. */
   readonly to: string;
 }
 
@@ -54,10 +55,12 @@ const BOT_INCLUSION_VALUES: Readonly<Partial<Record<BotInclusion, string>>> = {
 
 /** Everything one request carries beyond the query's own name. */
 export interface QueryRequest {
-  /** The days to report over. */
+  /** The UTC reporting window. */
   readonly range: DateRange;
   /** What to do about bot-flagged rows. */
   readonly bots: BotInclusion;
+  /** Optional interval for the Views over time query. */
+  readonly granularity?: ViewGranularity;
 }
 
 /** One named query's answer, exactly as the local server shapes it. */
@@ -78,7 +81,11 @@ export interface QueryResult {
 
 /** The query string one request carries. Built here so no caller assembles one by hand. */
 function searchParamsFor(request: QueryRequest): URLSearchParams {
-  const params = new URLSearchParams({ from: request.range.from, to: request.range.to });
+  const params = new URLSearchParams({
+    from: `${request.range.from}Z`,
+    to: `${request.range.to}Z`,
+  });
+  if (request.granularity !== undefined) params.set('granularity', request.granularity);
   const includeBots = BOT_INCLUSION_VALUES[request.bots];
   if (includeBots !== undefined) params.set('includeBots', includeBots);
   return params;
