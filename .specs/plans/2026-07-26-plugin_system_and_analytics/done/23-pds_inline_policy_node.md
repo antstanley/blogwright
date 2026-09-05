@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [23-pds_inline_policy_node-certificate.md](23-pds_inline_policy_node-certificate.md)
 
-**Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Its own IAM policy node (Add)](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) and [2026-07-26-cli_plugin_system.md §Plugin SPI → A plugin owns its own topography (Add)](../../../changes/2026-07-26-cli_plugin_system.md)
+**Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Its own IAM policy node (Add)](../../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) and [2026-07-26-cli_plugin_system.md §Plugin SPI → A plugin owns its own topography (Add)](../../../changes/merged/2026-07-26-cli_plugin_system.md)
 **Depends on:** 22
 **Produces:** `blogwright-pds` contributes one `ResourceNode` that attaches a `blogwright-pds`-named inline policy to the site's GitHub-OIDC deploy role, granting Secrets Manager access to its own secret - a separately-named IAM object, so it coexists with the site's existing statement (removed at task 59, a release later) rather than replacing it - plus `githubRole` on `deriveNames`, so the deploy role's name has one home instead of a CLI-private lambda
 

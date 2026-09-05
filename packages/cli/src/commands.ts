@@ -1,4 +1,4 @@
-import { AwsError, colors, findRepoRoot, type ResourceNode, type S3Object } from 'blogwright-core';
+import { AwsError, colors, findRepoRoot, type ResourceNode } from 'blogwright-core';
 /*
  * A STATIC, NON-OPTIONAL IMPORT, and deliberately the last one left in the
  * CLI. Task 29 deleted every other reference to `blogwright-pds` from the
@@ -65,13 +65,17 @@ function siteBaseUrl(ctx: OpsContext): string | undefined {
 }
 
 /** Create the full infrastructure graph. */
-export async function bootstrap(ctx: OpsContext): Promise<void> {
+export async function bootstrap(
+  ctx: OpsContext,
+  nodes: ResourceNode<OpsContext>[] = buildNodes(ctx),
+): Promise<void> {
   ctx.logger.info(colors.bold(`Bootstrapping "${ctx.env}" (bucket ${ctx.names.bucket})`));
   // The state bucket must exist before anything else can persist state.
-  await applyGraph(buildNodes(ctx), ctx);
+  await applyGraph(nodes, ctx);
   ctx.logger.ok(`bootstrap complete for "${ctx.env}"`);
   const domain = ctx.state.resources['cloudfront-distribution']?.domainName;
   if (typeof domain === 'string') ctx.logger.info(`Site will be served at https://${domain}`);
+  await warnAboutScopedState(ctx);
 }
 
 /**
@@ -104,6 +108,32 @@ function scopedStateScopes(env: string, objects: readonly { key: string }[]): st
   return [...new Set(scopes)].sort();
 }
 
+/** Listing is strict; each caller decides whether a failure can be recovered. */
+async function listScopedStateScopes(ctx: OpsContext): Promise<string[]> {
+  const objects = await ctx.clients.s3.listObjects(ctx.names.bucket, STATE_PREFIX);
+  return scopedStateScopes(ctx.env, objects);
+}
+
+/** A never-bootstrapped plugin has no scoped key, so cannot produce a warning. */
+async function warnAboutScopedState(ctx: OpsContext): Promise<void> {
+  let scopes: string[];
+  try {
+    scopes = await listScopedStateScopes(ctx);
+  } catch (err) {
+    ctx.logger.warn(
+      `could not check plugin state for "${ctx.env}" at s3://${ctx.names.bucket}/${STATE_PREFIX} ` +
+        `(bootstrap succeeded): ${String(err)}`,
+    );
+    return;
+  }
+  for (const scope of scopes) {
+    ctx.logger.warn(
+      `plugin state for "${scope}" still exists in "${ctx.env}"; ` +
+        `run \`blogwright ${scope} bootstrap ${ctx.env}\` to reconcile its resources`,
+    );
+  }
+}
+
 /**
  * Refuse to destroy the site while any plugin's own state object still
  * exists in the bucket - §State → Scoped state stores' "`blogwright
@@ -122,8 +152,8 @@ function scopedStateScopes(env: string, objects: readonly { key: string }[]): st
  *
  * Reads the bucket, not the plugin registry, so the refusal holds even for
  * a plugin that has since been uninstalled. Runs inside the teardown verbs
- * themselves, not `createContext` - so no other command pays for the extra
- * `listObjects` call and plugin discovery stays lazy - and ahead of
+ * themselves, not `createContext`, sharing the listing with the post-bootstrap
+ * warning while plugin discovery stays lazy - and ahead of
  * `clearRunningMicrovms`/`destroyGraph` in each, so a refusal has zero side
  * effects: nothing is terminated, nothing is deleted.
  *
@@ -153,9 +183,9 @@ function scopedStateScopes(env: string, objects: readonly { key: string }[]): st
  * `destroy()` run over the entire production graph.
  */
 export async function assertNoScopedState(ctx: OpsContext): Promise<void> {
-  let objects: S3Object[];
+  let scopes: string[];
   try {
-    objects = await ctx.clients.s3.listObjects(ctx.names.bucket, STATE_PREFIX);
+    scopes = await listScopedStateScopes(ctx);
   } catch (err) {
     // No bucket, no state objects - see this function's doc comment. Matched
     // on the bucket's own error code rather than the broad `isNotFound`,
@@ -169,7 +199,6 @@ export async function assertNoScopedState(ctx: OpsContext): Promise<void> {
     if (err instanceof AwsError && err.code === 'NoSuchBucket') return;
     throw err;
   }
-  const scopes = scopedStateScopes(ctx.env, objects);
   if (scopes.length === 0) return;
   // The remedy MUST name the environment. `runPlugin` resolves a plugin
   // command's environment as `values.env ?? envPositional ?? DEFAULT_ENV`

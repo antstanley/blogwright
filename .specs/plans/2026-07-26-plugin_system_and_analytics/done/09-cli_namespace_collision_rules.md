@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [09-cli_namespace_collision_rules-certificate.md](09-cli_namespace_collision_rules-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §CLI → Namespace collisions](../../../changes/2026-07-26-cli_plugin_system.md) ("Built-in commands always win"; the reserved set, and two plugins claiming the same name being an error rather than a race)
+**Implements:** [2026-07-26-cli_plugin_system.md §CLI → Namespace collisions](../../../changes/merged/2026-07-26-cli_plugin_system.md) ("Built-in commands always win"; the reserved set, and two plugins claiming the same name being an error rather than a race)
 **Depends on:** 08
 **Produces:** a `RESERVED_COMMANDS` set derived from the CLI's own dispatch set, plus reserved-name and duplicate-name rejection inside `discover`, so no plugin can shadow a built-in or race another plugin for a namespace
 **Pointers:** `packages/cli/src/cli.ts:66-75` (`KNOWN_COMMANDS` - eight of the eleven reserved names), `packages/cli/src/cli.ts:107` (`init`, dispatched before `KNOWN_COMMANDS` is consulted), `:111` (`preview`, likewise), `:114` (the hardcoded `command === 'pds'` branch that shadows `pds` until task 29), `:117-121` (the `KNOWN_COMMANDS` membership test), `packages/cli/src/plugins.ts` (task 08 - where `discover` collects failures), `packages/cli/src/plugins.test.ts` (task 08 - the fake-loader harness the new tests extend)

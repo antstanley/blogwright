@@ -1,11 +1,11 @@
 # Plan: Plugin system and analytics
 
-**Status:** In progress · **Layout:** kanban · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Source spec:** [Plugin SPI](../../changes/2026-07-26-cli_plugin_system.md) · [PDS migration](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics](../../changes/merged/2026-07-26-analytics_plugin.md)
+**Status:** In progress · **Layout:** kanban · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Source spec:** [Plugin SPI](../../changes/merged/2026-07-26-cli_plugin_system.md) · [PDS migration](../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics](../../changes/merged/2026-07-26-analytics_plugin.md)
 
 Complete the plugin/PDS/analytics specifications on published beta.3. Tasks 00–58
 and 61 are implemented preconditions; tasks 59–60 finish the migration, task 62
-closes the delivery-day boundary gap, and task 63 closes current specification,
-consumer-documentation and evidence obligations. There are 64 tasks in total.
+closes the delivery-day boundary gap, tasks 64–65 close the discovered observability/state-boundary gaps, and task 63 closes current specification,
+consumer-documentation and evidence obligations. There are 66 tasks in total.
 
 ## Source and definition-of-done baseline
 
@@ -162,13 +162,19 @@ graph TD
   60 --> 63
   61 --> 63
   62 --> 63
+  42 --> 64["64 · transform diagnostics"]
+  50 --> 64
+  04 --> 65["65 · validate stored state"]
+  16 --> 65
+  64 --> 63
+  65 --> 63
 ```
 
 The dependency table is authoritative; every task is found by number across the four board folders.
 
 | Task | Depends on | Edge kind | Produces (reviewable artifact) |
 |---|---|---|---|
-| 00 · type-claim gate | - | - | [`type-claims/`](type-claims/README.md) compiles the corpus's type-level claims against the repo's real types; `check.mjs` exits non-zero naming any claim that breaks |
+| 00 · type-claim gate | - | - | [`type-claims/`](type-claims/README.md) retains the final passing 29-claim result and retirement evidence; ordinary typecheck/tests are authoritative |
 | 01 · plugin context in core | - | - | `PluginContext` exists in core and a CLI test fails the build the moment one of its members stops being suppliable - thirteen from an `OpsContext`, three from the dispatch boundary |
 | 02 · ResourceNode moves to core | 1 | build | a node typed only against core's `PluginContext` compiles as a `ResourceNode`; `nodes.ts` changed only its imports |
 | 03 · Plugin contract and validator | 1, 2 | build, contract | `validatePlugin` turns an imported module into a typed `Plugin` or raises naming the offending package |
@@ -222,7 +228,7 @@ The dependency table is authoritative; every task is found by number across the 
 | 51 · Firehose role and stream nodes | 49, 50 | build | the Iceberg delivery stream exists with its four ARN-scoped grants, its error bucket, and a role declaring every node whose ARN it grants on |
 | 52 · shared delivery-source guards | 37 | build, contract | `deliveriesForSource` carries each delivery's destination ARN, so the site's log-delivery node never removes a source it shares - in `delete()` or in its `ConflictException` retry, which also scopes its delete to the site's own delivery |
 | 53 · log destination and delivery nodes | 37, 51, 52 | build, data | CloudFront logs reach Firehose, the site's existing CloudWatch delivery survives, and the delivery's creation day is recorded once in scoped state - the backfill bound task 61 reads |
-| 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile twelve nodes against `state/<env>.analytics.json` |
+| 54 · analytics graph and lifecycle | 16, 47, 50, 53 | build, contract | `analytics bootstrap\|destroy` reconcile the initial twelve nodes (fourteen after the owned-log-groups amendment) against `state/<env>.analytics.json` |
 | 55 · analytics status | 45, 54 | build | `analytics status` reports each node, the stream's delivery health and the table's row count |
 | 56 · dashboard server and command | 46, 47 | build, contract | `analytics dashboard` serves named queries from 127.0.0.1 with no route accepting SQL |
 | 57 · dashboard app build | 56 | build | the SvelteKit app ships prebuilt in `dist/app` and consumers never run Vite |
@@ -231,19 +237,23 @@ The dependency table is authoritative; every task is found by number across the 
 | 60 · bootstrap warns about plugin state | 16, 59 | build, contract | warn after reconcile without discovery; include current environment and preserve exit status |
 | 61 · analytics backfill | 41, 46, 47, 53, 58 | build, data | `analytics backfill` fills whole pre-Firehose days from the site's CloudWatch log group with rows identical to the Firehose path's, idempotently - and the analytics change spec is merged |
 | 62 · conservative delivery day | 53, 61 | build, data | prevent a midnight-spanning delivery request from admitting live-delivery days to backfill |
-| 63 · final specification closure | 20, 30, 58, 60, 61, 62 | review | canonical docs/schema, accurate consumer docs, current evidence, both pending spec merges and type-claim retirement |
+| 63 · final specification closure | 20, 30, 58, 60, 61, 62, 64, 65 | review | canonical docs/schema, accurate consumer docs, current evidence, both pending spec merges and type-claim retirement |
+
+| 64 · transform diagnostics | 42, 50 | build, contract | bounded mapping/failure and secret-read diagnostics without record or secret disclosure |
+| 65 · validate stored state | 4, 16 | build, contract | validate persisted state at the boundary while preserving valid historical serialization |
 
 ## Implementation order and milestones
 
 Tasks 00–58 and 61 are preconditions. Resume with **59 and 62 independently**,
-then **60 after 59**, then **63 after 60 and 62**. The complete numeric order
-00 through 63 remains topological; task 61 already shipped while 59–60 waited
-for their external release prerequisite.
+then **60 after 59**. The final conformance pass discovered normative gaps now
+owned by **64 and 65 independently**; **63 closes after 60, 62, 64 and 65**.
+A topological order is 00 through 62, then 64, 65, 63. Task 61 already shipped
+while 59–60 waited for their external release prerequisite.
 
 | Milestone | Tasks | Demonstrable when complete | Review gate |
 |---|---|---|---|
 | M1–M8 — shipped foundations, plugins and analytics | 00–58, 61 | installed plugins, pipeline and dashboard work; beta.3 log groups preserved | historical evidence plus green current baseline |
-| M9 — migration and backfill correctness | 59, 60, 62 | site graph has no PDS branch, bootstrap warns for same-env plugin state, midnight bound is conservative | separate combined gate per task; all six repo checks |
+| M9 — runtime conformance | 59, 60, 62, 64, 65 | site graph has no PDS branch, bootstrap warns for same-env plugin state, midnight bound is conservative, transform diagnostics exist and stored-state shapes validate | separate combined gate per task; all six repo checks |
 | M10 — complete specification | 63 | canonical docs/schema and consumer docs describe integrated code, no required gap remains | current conformance, links/schema, type-claim retirement evidence and all six gates |
 
 ## Assumptions and open questions
@@ -265,8 +275,12 @@ for their external release prerequisite.
   retains original data for diagnosis, and documentation must disclose that limit.
 - Tasks 59 and 60 form one release unit. A listing failure after successful
   bootstrap is a warning; destroy remains fail-closed.
-- Type-claim transcriptions retire at task63, after a final successful run and
-  explicit current exported-type checks. Ordinary typecheck remains authoritative.
+- Type-claim transcriptions were retired with a final successful 29-claim run and
+  actual exported-type positive/negative checks; task63 repeats current proof.
+  Ordinary typecheck remains authoritative.
+- The final conformance pass found two normative baseline gaps: promised transform
+  diagnostics were absent, and StateStore cast parsed JSON without shape validation.
+  Tasks64/65 implement these promises; canonical prose must not erase them.
 - [Historical planning and execution notes](plan-history-2026-09-05.md) are preserved
   as dated evidence. Their superseded task58/60 closure instructions and old
   node counts do not override this plan or current task files.

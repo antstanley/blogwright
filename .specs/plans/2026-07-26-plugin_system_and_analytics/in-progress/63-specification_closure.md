@@ -2,12 +2,12 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [63-specification_closure-certificate.md](63-specification_closure-certificate.md)
 
-**Implements:** [Plugin spec](../../../changes/2026-07-26-cli_plugin_system.md), [PDS spec](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md), [analytics spec](../../../changes/merged/2026-07-26-analytics_plugin.md): all Merge plan steps; task00 retirement decision and [review reconciliation](../reviews/2026-09-05-historical-coverage.md).
-**Depends on:** 20, 30, 58, 60, 61, 62
+**Implements:** [Plugin spec](../../../changes/merged/2026-07-26-cli_plugin_system.md), [PDS spec](../../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md), [analytics spec](../../../changes/merged/2026-07-26-analytics_plugin.md): all Merge plan steps; task00 retirement decision and [review reconciliation](../reviews/2026-09-05-historical-coverage.md).
+**Depends on:** 20, 30, 58, 60, 61, 62, 64, 65
 **Produces:** Internal canonical pages/schema and accurate consumer docs cover all integrated requirements; both pending specs merge with complete evidence and the temporary type-claim gate retires.
 **Pointers:** `.specs/README.md`, source specs, `README.md`, `DEVELOPMENT.md`, docs reference/cli.md, analytics README; core exported types, CLI context/discovery tests; plan type-claims/.
 
-**Scope transfer:** this task now owns the unfulfilled closure obligations formerly assigned to tasks 20, 58 and 60; task61 analytics history stays merged. It must not flip any spec while runtime tasks59/60/62 or its own documentation obligations are incomplete.
+**Scope transfer:** this task now owns the unfulfilled closure obligations formerly assigned to tasks 20, 58 and 60; task61 analytics history stays merged. It must not flip any spec while runtime tasks59/60/62/64/65 or its own documentation obligations are incomplete.
 
 ## Steps
 
@@ -29,3 +29,5 @@
 - [ ] Both remaining change specs have Merged status/date in merged/, no pending linked specs remain, all incoming/outgoing Markdown links resolve, and all source requirements map to implemented evidence or explicitly non-required open questions.
 - [ ] Meets the repo definition of done: `pnpm build`, `pnpm typecheck`, `TZ=America/New_York pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip`; user-facing behavior has a changeset, and new assertions are demonstrated failing before the fix or under a reverted mutation.
 - [ ] Reviewable: inspect the built CLI help and built docs, run the final conformance/coverage and link/schema checks, and verify every outstanding row of the review report has named evidence and no required gap.
+
+**Current conformance additions:** Tasks 64 and 65 close the discovered normative transform-diagnostic and state-shape-validation gaps. Final canonical prose and evidence must reflect their verified implementation; do not replace those promises with the prior missing behavior.

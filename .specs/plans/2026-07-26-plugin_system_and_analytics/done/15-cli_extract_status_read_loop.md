@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [15-cli_extract_status_read_loop-certificate.md](15-cli_extract_status_read_loop-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §CLI → Plugin lifecycle (Add)](../../../changes/2026-07-26-cli_plugin_system.md) ("`blogwright <plugin> bootstrap`, `status`, and `destroy` run the same engine - `applyGraph`, `destroyGraph`, and the status read loop"; this task gives that loop one home)
+**Implements:** [2026-07-26-cli_plugin_system.md §CLI → Plugin lifecycle (Add)](../../../changes/merged/2026-07-26-cli_plugin_system.md) ("`blogwright <plugin> bootstrap`, `status`, and `destroy` run the same engine - `applyGraph`, `destroyGraph`, and the status read loop"; this task gives that loop one home)
 **Depends on:** 02
 **Produces:** a named read-loop function over a node set and a context that `commands.status` calls and task 16's plugin `status` verb reuses, with `blogwright status` output pinned by the first tests `commands.ts` has ever had (internal refactor - no changeset)
 **Pointers:** `packages/cli/src/commands.ts:301` (`status` - the function being split), `packages/cli/src/commands.ts:305-326` (the per-node read/report loop to extract), `packages/cli/src/commands.ts:327-329` (the interactive tree render that stays in the command), `packages/cli/src/render.ts:59` (`StatusEntry`), `packages/cli/src/render.ts:72` (`renderStatusTree`), `packages/cli/src/nodes.ts:1053` (`buildNodes` - the node set `status` passes today), `packages/cli/src/commands.test.ts` (new - `commands.ts` has no test file today, so the characterization tests are written first)

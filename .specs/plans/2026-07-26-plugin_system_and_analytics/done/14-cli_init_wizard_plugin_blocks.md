@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [14-cli_init_wizard_plugin_blocks-certificate.md](14-cli_init_wizard_plugin_blocks-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §CLI → `blogwright <plugin> init` (Add)](../../../changes/2026-07-26-cli_plugin_system.md) ("`blogwright init` on a repo with no config asks each discovered plugin's questions and writes one file containing every answered block")
+**Implements:** [2026-07-26-cli_plugin_system.md §CLI → `blogwright <plugin> init` (Add)](../../../changes/merged/2026-07-26-cli_plugin_system.md) ("`blogwright init` on a repo with no config asks each discovered plugin's questions and writes one file containing every answered block")
 **Depends on:** 13
 **Produces:** `blogwright init` on a repo with plugins installed writes a single `config/production.jsonc` carrying the core entries plus every answered plugin block, and is byte-for-byte unchanged on a repo with no plugins
 **Pointers:** `packages/cli/src/init.ts:72` (`initSite` - gains the discovered plugins as an argument), `packages/cli/src/init.ts:42` (`renderConfig` - the core entries and the commented style), `packages/cli/src/init.ts:87` (the existing-file guard that must not change), `packages/cli/src/init.ts:112-115` (the single `fs.writeText` - still the only write), `packages/cli/src/cli.ts:107-110` (the composition root's `init` branch, where `createNodeFileSystem()` is constructed today and the `ModuleLoader` adapter must be constructed too), `packages/cli/src/plugins.ts` (task 08 - `discover(repoRoot, cliPackageDir, ports)`), `packages/cli/src/context.ts:118` (task 08's exported `cliPackageDir()` helper, which the composition root passes as the second argument here too)

@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [12-cli_config_block_splice-certificate.md](12-cli_config_block_splice-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §CLI → `blogwright <plugin> init` (Add)](../../../changes/2026-07-26-cli_plugin_system.md) ("the insertion is textual, not a parse-and-restringify … the command refuses rather than guesses"; and §Assumptions and open questions → Decisions, *Textual JSONC insertion, not parse-and-rewrite*)
+**Implements:** [2026-07-26-cli_plugin_system.md §CLI → `blogwright <plugin> init` (Add)](../../../changes/merged/2026-07-26-cli_plugin_system.md) ("the insertion is textual, not a parse-and-restringify … the command refuses rather than guesses"; and §Assumptions and open questions → Decisions, *Textual JSONC insertion, not parse-and-rewrite*)
 **Depends on:** -
 **Produces:** `packages/cli/src/config-block.ts` - a pure `spliceConfigBlock(source, block)` that inserts a rendered block before a JSONC document's closing brace, preserving every comment and every hand-made formatting choice, and raising rather than guessing on a duplicate key or a document that is not one top-level object
 **Pointers:** `packages/cli/src/config-block.ts` (new - the splice and the block renderer live here), `packages/cli/src/init.ts:42` (`renderConfig` - the commented style, two-space indent and `// comment` suffixes the rendered block must match), `packages/cli/src/init.ts:62-68` (the comma-per-entry loop the renderer mirrors), `packages/core/src/config.ts:153` (`stripJsonComments` - the existing string- and comment-aware scanner whose discipline the position scan reuses), `packages/core/src/config.ts:242` (`parseConfig` - every spliced result must still survive it)

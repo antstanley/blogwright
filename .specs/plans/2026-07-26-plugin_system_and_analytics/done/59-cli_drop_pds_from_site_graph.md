@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [59-cli_drop_pds_from_site_graph-certificate.md](59-cli_drop_pds_from_site_graph-certificate.md)
 
-**Implements:** [PDS migration](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) §The site graph drops its pds branch; [plugin SPI](../../../changes/2026-07-26-cli_plugin_system.md) §A plugin owns its own topography.
+**Implements:** [PDS migration](../../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) §The site graph drops its pds branch; [plugin SPI](../../../changes/merged/2026-07-26-cli_plugin_system.md) §A plugin owns its own topography.
 **Depends on:** 23, 29, 30
 **Produces:** The site graph has no PDS-specific permission statement; the plugin retains its separately named grant.
 **Pointers:** `packages/cli/src/nodes.ts` oidcRolePolicyStatements; `packages/cli/src/nodes.test.ts`; `packages/pds/src/nodes.ts`; `parked/task-59` (read-only source patch).

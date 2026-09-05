@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [21-pds_config_ownership-certificate.md](21-pds_config_ownership-certificate.md)
 
-**Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Config ownership (Add)](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) (the plugin owns the `pds` block end to end: the three checks core performs today plus the `<siteName>/atproto` default)
+**Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Config ownership (Add)](../../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) (the plugin owns the `pds` block end to end: the three checks core performs today plus the `<siteName>/atproto` default)
 **Depends on:** -
 **Produces:** `packages/pds/src/config.ts`, owning the `pds` config block end to end - the three checks lifted verbatim from core plus the `<siteName>/atproto` secret-name derivation - with negative-space tests; purely additive, because core still validates at this point
 **Pointers:** `packages/core/src/config.ts:314-330` (the `cfg.pds` block in `validateConfig` - the three checks and their exact message strings), `packages/core/src/config.ts:266-271` (the `raw.pds` branch in `mergeConfig`, where `secretName: raw.pds.secretName ?? \`${cfg.siteName}/atproto\`` lives at `:269`), `packages/core/src/config.ts:31-44` (the `PdsConfig` type the validator narrows to), `packages/pds/src/config.ts` (new - the validator and the secret-name resolver live here), `packages/pds/src/config.test.ts` (new - the moved negative-space coverage)

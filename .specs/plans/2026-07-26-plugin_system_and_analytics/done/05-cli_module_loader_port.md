@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [05-cli_module_loader_port-certificate.md](05-cli_module_loader_port-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §Ports → `ModuleLoader`](../../../changes/2026-07-26-cli_plugin_system.md) (the rule that resolving and importing a plugin package crosses a port and no domain module imports `node:module`)
+**Implements:** [2026-07-26-cli_plugin_system.md §Ports → `ModuleLoader`](../../../changes/merged/2026-07-26-cli_plugin_system.md) (the rule that resolving and importing a plugin package crosses a port and no domain module imports `node:module`)
 **Depends on:** -
 **Produces:** a `ModuleLoader` port (`resolve`, `packageJsonPathFor`, `load`) with a `createRequire`-plus-dynamic-`import()` adapter, wired at `createContext`, defaulted to a fail-fast fake in `createTestContext`, and enforced by `no-restricted-imports`
 **Pointers:** `packages/cli/src/ports.ts:10-15` (the `Vcs` port the new interface sits beside), `packages/cli/src/ports.ts:24-29` (the `Ports` interface that gains `loader`), `packages/cli/src/adapters/process-vcs.ts:17-26` (`runVcsCommand` - the error-translation shape to mirror), `packages/cli/src/context.ts:111-116` (the composition root's port construction), `packages/cli/src/test-support.ts:91-102` (`rejectAllVcs` - the fail-fast fake pattern) and `:155-160` (the test-context port defaults) and `:132-139` (`makeTempDir`/`removeTempDir`), `.oxlintrc.json:53-69` (the `no-restricted-imports` path list) and `:71-84` (the adapter overrides that already cover the new file), `DEVELOPMENT.md:72-81` (the ports table), `packages/cli/src/adapters/node-module-loader.ts` (new - the adapter lives here)

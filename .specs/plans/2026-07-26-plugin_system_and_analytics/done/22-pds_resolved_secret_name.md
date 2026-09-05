@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [22-pds_resolved_secret_name-certificate.md](22-pds_resolved_secret_name-certificate.md)
 
-**Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Config ownership (Add)](../../../changes/2026-07-26-migrate_pds_to_plugin_system.md) (the plugin applies the `<siteName>/atproto` default for `secretName` when it is absent)
+**Implements:** [2026-07-26-migrate_pds_to_plugin_system.md §`blogwright-pds` → Config ownership (Add)](../../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) (the plugin applies the `<siteName>/atproto` default for `secretName` when it is absent)
 **Depends on:** 21
 **Produces:** `requirePdsConfig` returns a resolved pds config whose `secretName` is always a `string`, applied inside the package from task 21's resolver, so every pds call site keeps a total type with no cast and no `!`
 **Pointers:** `packages/pds/src/sync.ts:50` (`requirePdsConfig`, which returns core's `PdsConfig` today), `packages/pds/src/commands.ts:37,83,107,124` (the four command call sites reading `pds.secretName`), `packages/pds/src/oauth.ts:44,118,171,206` and `packages/pds/src/secret.ts:70` (the remaining consumers), `packages/pds/src/test-support.ts:97` (`mergeConfig` call in `createTestContext`, which gets the default from core today), `packages/pds/src/config.ts` (task 21 - the resolver this task consumes), `packages/pds/src/sync.test.ts:141,224` and `packages/pds/src/commands.test.ts:25,176` (fixtures that pass an explicit `secretName` and must keep working)

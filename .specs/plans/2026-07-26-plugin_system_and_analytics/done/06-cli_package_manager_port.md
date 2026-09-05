@@ -2,7 +2,7 @@
 
 **Plan:** [plan.md](../plan.md) · **Certificate:** [06-cli_package_manager_port-certificate.md](06-cli_package_manager_port-certificate.md)
 
-**Implements:** [2026-07-26-cli_plugin_system.md §Ports → `PackageManager`](../../../changes/2026-07-26-cli_plugin_system.md) (the rule that installing and removing packages crosses a port, detects the manager from the lockfile, and keeps `node:child_process` in the adapter)
+**Implements:** [2026-07-26-cli_plugin_system.md §Ports → `PackageManager`](../../../changes/merged/2026-07-26-cli_plugin_system.md) (the rule that installing and removing packages crosses a port, detects the manager from the lockfile, and keeps `node:child_process` in the adapter)
 **Depends on:** -
 **Produces:** a `PackageManager` port (`detect`, `add`, `remove`) with a lockfile-detecting process adapter, wired at `createContext` and defaulted to a recording fake in `createTestContext`
 **Pointers:** `packages/cli/src/ports.ts:10-15` (the `Vcs` port the new interface sits beside), `packages/cli/src/ports.ts:24-29` (the `Ports` interface that gains `packages`), `packages/cli/src/adapters/process-vcs.ts:7-26` (the `execFile` ownership and `runVcsCommand` error translation to mirror), `packages/cli/src/context.ts:111-116` (the composition root's port construction), `packages/cli/src/test-support.ts:91-102` (`rejectAllVcs`) and `:155-160` (the test-context port defaults), `packages/core/src/ports.ts:12-26` (the `FileSystem` port detection reads through), `packages/core/src/repo-root.ts:11` (`findRepoRoot` - what `repoRoot` means), `.oxlintrc.json:71-84` (the adapter override that already covers the new file), `DEVELOPMENT.md:72-81` (the ports table), `packages/cli/src/adapters/process-package-manager.ts` (new - the adapter lives here)

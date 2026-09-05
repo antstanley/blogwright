@@ -2,7 +2,7 @@
 
 # Plan: Plugin system and analytics
 
-**Status:** In progress · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin - CloudFront logs to Iceberg](../../changes/merged/2026-07-26-analytics_plugin.md)
+**Status:** In progress · **Layout:** kanban · **Date:** 2026-07-26 · **Owner:** Ant Stanley · **Source spec:** [An internal plugin system for the CLI](../../changes/merged/2026-07-26-cli_plugin_system.md) · [Migrate blogwright-pds onto the plugin system](../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md) · [Analytics plugin - CloudFront logs to Iceberg](../../changes/merged/2026-07-26-analytics_plugin.md)
 
 Land three linked change specs as one dependency-ordered graph of 62 tasks: an
 internal plugin SPI in `blogwright-core` with discovery and generic dispatch in
@@ -32,12 +32,12 @@ key.
 - **Spec.** The repo has no canonical spec pages, so the three change specs
   dated 2026-07-26 are the source of truth and land in the order
   `.specs/README.md` indexes them.
-  [2026-07-26-cli_plugin_system.md](../../changes/2026-07-26-cli_plugin_system.md)
+  [2026-07-26-cli_plugin_system.md](../../changes/merged/2026-07-26-cli_plugin_system.md)
   contributes the SPI (§Plugin SPI → The `Plugin` contract, §Plugin SPI →
   `PluginContext`), the graph vocabulary relocation, scoped state stores,
   discovery, namespace collisions, dispatch, config ownership, `<plugin> init`,
   plugin lifecycle, and the `ModuleLoader` and `PackageManager` ports.
-  [2026-07-26-migrate_pds_to_plugin_system.md](../../changes/2026-07-26-migrate_pds_to_plugin_system.md)
+  [2026-07-26-migrate_pds_to_plugin_system.md](../../changes/merged/2026-07-26-migrate_pds_to_plugin_system.md)
   contributes the pds manifest, plugin export, context narrowing, config
   ownership, the core-config removal, the dispatch removal, and the post-deploy
   sync. [2026-07-26-analytics_plugin.md](../../changes/merged/2026-07-26-analytics_plugin.md)

@@ -103,3 +103,20 @@ Mermaid/table edges, matching task dependencies, and all 25 current DoD claims
 matching certificate claims exactly and in order. No execution blockers.
 The two suggested follow-ups are resolved: Draft2020-12 meta-validation is
 explicit in task63, and nine archived DEVELOPMENT.md links were repaired.
+
+## Additional final-conformance findings
+
+The task63 source/code cross-check and an independent reviewer found two normative
+gaps. These are being implemented, not removed from the requirements:
+
+- The owned-log-groups amendment promises transform mapping/failure and salt-read
+  diagnostics. The handler emitted none. Task64 adds bounded fixed-category/count
+  diagnostics behind a port, preserving ProcessingFailed and excluding sensitive data.
+- DEVELOPMENT.md's boundary policy requires validating unknown parsed state;
+  StateStore.load cast JSON.parse directly to OpsState. This is a pre-existing
+  baseline gap. Task65 validates the existing shapes with historical compatibility
+  (including omitted updatedAt), contextual errors and no silent empty-state fallback.
+
+Task63 now depends on64/65. The graph has66tasks/130edges, remains acyclic, and
+its topological completion order ends64,65,63. Two five-obligation certificates
+bring current completion claims to35. No historical verdict was changed.
