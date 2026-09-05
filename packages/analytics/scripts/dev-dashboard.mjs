@@ -102,7 +102,35 @@ function scopePreviewRows(name, rows, pathInput) {
 }
 const query = {
   async run(name, params) {
-    const rows = scopePreviewRows(name, await previewQuery.run(name, params), params.path);
+    let rows = scopePreviewRows(name, await previewQuery.run(name, params), params.path);
+    if (params.country !== undefined) {
+      const match = fixtures.countries.find((row) => row.country === params.country);
+      if (!match) return [];
+      const share = match.views / fixtures.countries.reduce((sum, row) => sum + row.views, 0);
+      if (name === 'countries') rows = rows.filter((row) => row.country === params.country);
+      else if (name === 'unique-visitors') {
+        rows = rows.map((row) => ({
+          ...row,
+          daily_unique_visitors: Math.round(row.daily_unique_visitors * share),
+        }));
+        const total = rows.reduce((sum, row) => sum + row.daily_unique_visitors, 0);
+        rows = rows.map((row) => ({ ...row, summed_daily_unique_visitors: total }));
+      } else if (name === 'cache-hit-ratio') {
+        rows = rows.map((row) => {
+          const requests = Math.round(row.requests * share);
+          const cache_hits = Math.round(requests * row.cache_hit_ratio);
+          return {
+            ...row,
+            requests,
+            cache_hits,
+            cache_hit_ratio: requests > 0 ? cache_hits / requests : 0,
+          };
+        });
+      } else {
+        const column = name === 'row-count' ? 'row_count' : 'views';
+        rows = rows.map((row) => ({ ...row, [column]: Math.round(row[column] * share) }));
+      }
+    }
     if (!params.splitBots) return rows;
     const value =
       name === 'unique-visitors'

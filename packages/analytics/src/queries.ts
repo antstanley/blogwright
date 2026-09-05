@@ -134,6 +134,8 @@ interface DateRange {
  * `config.analytics.bots` (task 44) through {@link BOTS_INCLUDED_BY_DEFAULT}.
  */
 export interface QueryParams {
+  /** Optional uppercase ISO country code. */
+  readonly country?: string | undefined;
   /** Exact path and descendants at a slash boundary; blank means every path. */
   readonly path?: string | undefined;
   /** Include disjoint bot/non-bot contributions; requires bots to be included. */
@@ -564,6 +566,9 @@ export function prepareQuery(
   const definition = queryDefinition(name);
   const range = validateRange(name, params.range);
   const path = normalizePathFilter(params.path);
+  if (params.country !== undefined && !/^[A-Z]{2}$/.test(params.country)) {
+    throw new Error('country must be an uppercase two-letter country code');
+  }
   if (params.granularity !== undefined && name !== 'views-over-time') {
     throw new Error('granularity is only supported by views-over-time');
   }
@@ -602,6 +607,13 @@ export function prepareQuery(
     statement = statement.replace(
       'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)',
       'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE) AND (uri = $path OR starts_with(uri, $path_prefix))',
+    );
+  }
+  if (params.country !== undefined) {
+    bindings['country'] = params.country;
+    statement = statement.replace(
+      'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE)',
+      'day BETWEEN CAST($from AS DATE) AND CAST($to AS DATE) AND country = $country',
     );
   }
   if (params.splitBots) statement = withTrafficBreakdown(name, statement);

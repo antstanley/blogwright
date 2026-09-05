@@ -49,6 +49,8 @@ const BOT_INCLUSION_VALUES: Readonly<Partial<Record<BotInclusion, string>>> = {
 
 /** Everything one request carries beyond the query's own name. */
 export interface QueryRequest {
+  /** Optional country for a map detail report. */
+  readonly country?: string;
   /** Optional exact path and subpaths. */
   readonly path?: string;
   /** The UTC reporting window. */
@@ -81,6 +83,7 @@ function searchParamsFor(request: QueryRequest): URLSearchParams {
     from: `${request.range.from}Z`,
     to: `${request.range.to}Z`,
   });
+  if (request.country !== undefined) params.set('country', request.country);
   if (request.path?.trim()) params.set('path', request.path.trim());
   if (request.bots === 'all') params.set('splitBots', 'true');
   if (request.granularity !== undefined) params.set('granularity', request.granularity);

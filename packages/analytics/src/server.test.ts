@@ -1060,3 +1060,40 @@ describe('path filter transport', () => {
     },
   );
 });
+
+describe('country detail transport', () => {
+  it('forwards country and the selected period, path and bot filters', async () => {
+    const query = recordingQuery({ 'unique-visitors': [] });
+    const server = await serve({ query });
+    const range = { from: '2026-09-05T12:37Z', to: '2026-09-05T15:37Z' };
+    const answer = await request(
+      server,
+      `/api/queries/unique-visitors?${new URLSearchParams({ ...range, country: 'ZA', path: '/docs', includeBots: 'true', splitBots: 'true' })}`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params).toEqual({
+      range,
+      country: 'ZA',
+      path: '/docs',
+      includeBots: true,
+      splitBots: true,
+    });
+  });
+
+  it.each([
+    'country=',
+    'country=za',
+    'country=USA',
+    'country=US&country=GB',
+    'country=US%27OR%201%3D1',
+  ])('rejects %s before querying', async (suffix) => {
+    const query = recordingQuery({ 'unique-visitors': [] });
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/unique-visitors?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+    );
+    expect(answer.status).toBe(400);
+    expect(query.runs).toHaveLength(0);
+  });
+});

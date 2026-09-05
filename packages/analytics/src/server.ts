@@ -139,6 +139,7 @@ const QUERY_STRING_PARAMS = [
   'granularity',
   'splitBots',
   'path',
+  'country',
 ] as const;
 
 /** The two spellings the bot-inclusion flag takes, mapped to what it means. */
@@ -406,6 +407,9 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
       throw new RequestRejected(400, describeError(err));
     }
   }
+  const country = search.get('country');
+  if (search.getAll('country').length > 1)
+    throw new RequestRejected(400, 'country must be provided once');
   const path = search.get('path');
   if (search.getAll('path').length > 1)
     throw new RequestRejected(400, 'path must be provided once');
@@ -418,6 +422,7 @@ function parseQueryParams(search: URLSearchParams): QueryParams {
   }
   const extra = {
     ...(path === null ? {} : { path }),
+    ...(country === null ? {} : { country }),
     ...(granularity === undefined ? {} : { granularity }),
     ...(split === null ? {} : { splitBots: INCLUDE_BOTS_VALUES[split] }),
   };

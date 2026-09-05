@@ -441,3 +441,40 @@ describe('WHOLE_TABLE_RANGE', () => {
     }
   });
 });
+
+describe('country-scoped reporting', () => {
+  it.each(EVERY_QUERY_NAME)(
+    'binds a country alongside path, dates and bot settings for %s',
+    (name) => {
+      const prepared = prepareQuery(
+        name,
+        {
+          range: { from: '2026-08-01T12:00Z', to: '2026-08-03T18:00Z' },
+          country: 'ZA',
+          path: '/docs',
+          includeBots: true,
+          splitBots: true,
+        },
+        CONFIG,
+      );
+      expect(prepared.sql).toContain('country = $country');
+      expect(prepared.sql).not.toContain("'ZA'");
+      expect(prepared.bindings).toMatchObject({
+        country: 'ZA',
+        path: '/docs',
+        from_time: '2026-08-01T12:00:00Z',
+        to_time: '2026-08-03T18:00:00Z',
+        include_bots: true,
+      });
+    },
+  );
+
+  it.each(['', 'za', 'USA', '-99', "US' OR 1=1--", ' US '])(
+    'rejects invalid country %j',
+    (country) => {
+      expect(() => prepareQuery('unique-visitors', { range: RANGE, country }, CONFIG)).toThrow(
+        'country',
+      );
+    },
+  );
+});

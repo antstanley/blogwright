@@ -152,7 +152,7 @@
       {#if panel.name === 'views-over-time'}
         {#key result}<ViewsArea rows={result.rows} {granularity} {stacked} />{/key}
       {:else if panel.name === 'countries' && countryView === 'map'}
-        <CountryMap rows={result.rows} />
+        <CountryMap rows={result.rows} {request} {refreshVersion} />
       {:else if panel.name === 'top-paths'}
         <PathsPie rows={result.rows} />
       {:else}
