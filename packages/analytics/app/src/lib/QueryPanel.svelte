@@ -30,10 +30,10 @@
   import { type Panel, RANKING_LIMIT } from './panels.js';
 
   /** How many ticks a value axis carries. Enough to read a magnitude off, not a table. */
-  const VALUE_AXIS_TICKS = 5;
+  const VALUE_AXIS_TICKS = 3;
 
   /** How many ticks a category axis carries when the categories are dense - a month of days. */
-  const CATEGORY_AXIS_TICKS = 6;
+  const CATEGORY_AXIS_TICKS = 4;
 
   /** One point of the chart: a category and the value measured for it. */
   interface ChartPoint {
@@ -95,20 +95,20 @@
   }
 </script>
 
-<section class="panel">
+<section class="panel" class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time'}>
   <h2>{panel.title}</h2>
 
   {#await answer}
     <p class="panel-meaning">&nbsp;</p>
-    <div class="panel-state">Loading…</div>
+    <div class="panel-state" role="status">Loading report…</div>
   {:then result}
     <p class="panel-meaning">{result.rowMeaning}</p>
     {#if result.rows.length === 0}
-      <div class="panel-state">No rows in this range.</div>
+      <div class="panel-state" role="status">No rows in this range.</div>
     {:else}
       {@const points = pointsOf(result)}
       {@const total = totalOf(result)}
-      <div class="panel-chart">
+      <div class="panel-chart" style:height={panel.ranked ? `${Math.max(220, points.length * 28 + 40)}px` : undefined}>
         <BarChart
           data={points}
           x={panel.ranked ? 'value' : 'label'}
@@ -127,6 +127,18 @@
           }}
         />
       </div>
+      <details class="panel-data">
+        <summary>View chart data</summary>
+        <table>
+          <caption>{panel.title} — plotted values</caption>
+          <thead><tr><th scope="col">{humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th></tr></thead>
+          <tbody>
+            {#each points as point, index (index)}
+              <tr><th scope="row">{point.label}</th><td>{formatValue(point.value)}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </details>
       {#if total !== undefined}
         <dl class="panel-total">
           <dt>{total.label}</dt>
@@ -141,6 +153,6 @@
     {/if}
   {:catch error}
     <p class="panel-meaning">&nbsp;</p>
-    <div class="panel-state panel-error">{error.message}</div>
+    <div class="panel-state panel-error" role="alert">{error.message}</div>
   {/await}
 </section>

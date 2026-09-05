@@ -256,3 +256,5 @@ and from the Iceberg table, whose rows have no automatic ageing in this code.
 - Should the site's build role lose its redundant logs:CreateLogGroup grant?
 - Should analytics status give missing diagnostic groups more prominence than the generic node walk?
 - Should the mapper reject fractional int/long values and seconds-shaped timestamp inputs?
+
+Dashboard layout and visual acceptance are documented in [dashboard design](05-design.md).

@@ -41,6 +41,7 @@ CLI composition root --> core config, signing, state and ports
 | [Plugin architecture](02-plugin-architecture.md) | SPI, discovery, dispatch, ownership and ports |
 | [PDS](03-pds.md) | Publishing commands, validation and IAM lifecycle |
 | [Analytics](04-analytics.md) | Fourteen nodes, records, observability, queries and backfill |
+| [Dashboard design](05-design.md) | Visual foundations, responsive reporting and design acceptance |
 | [Canonical schema](canonical-types.schema.json) | Draft 2020-12 JSON entities; callable TypeScript contracts stay in prose/source |
 
 ## Package layout and dependency direction

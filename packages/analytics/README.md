@@ -186,3 +186,5 @@ which can retain raw payloads. No retention config field is added.
 them first, run `blogwright analytics destroy <env> --yes`, then uninstall; config
 is preserved. A noninteractive remove of the loadable node plugin without `--yes`
 refuses because it cannot ask about teardown.
+
+Dashboard presentation follows the [design guidelines](../../.specs/blogwright/specs/05-design.md).

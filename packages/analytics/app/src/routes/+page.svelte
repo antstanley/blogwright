@@ -32,16 +32,20 @@
 </script>
 
 <svelte:head>
-  <title>Analytics</title>
+  <title>Analytics · Blogwright</title>
 </svelte:head>
 
-<div class="page">
+<main class="page">
   <header class="page-header">
     <div>
-      <h1>Analytics</h1>
-      <p>Days are UTC, matching the partition the figures are grouped by.</p>
+      <p class="eyebrow">Blogwright / Analytics</p>
+      <h1>Traffic overview</h1>
+      <p>Understand how readers reach your site. All days are grouped in UTC.</p>
     </div>
+  </header>
 
+  <div class="filter-bar">
+    <div class="filter-heading"><strong>Reporting window</strong><span>Dates in UTC</span></div>
     <div class="controls">
       <label class="control">
         <span>From</span>
@@ -60,10 +64,10 @@
         </select>
       </label>
     </div>
-  </header>
+  </div>
 
   {#if problem !== undefined}
-    <p class="range-error">{problem}</p>
+    <p class="range-error" role="alert">{problem}</p>
   {:else}
     <div class="panels">
       {#each PANELS as panel (panel.name)}
@@ -71,4 +75,4 @@
       {/each}
     </div>
   {/if}
-</div>
+</main>

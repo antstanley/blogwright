@@ -8,4 +8,5 @@ These are current implementation contracts, not a supported third-party SPI.
 - [Plugin architecture](specs/02-plugin-architecture.md)
 - [PDS](specs/03-pds.md)
 - [Analytics](specs/04-analytics.md)
+- [Dashboard design](specs/05-design.md)
 - [Canonical JSON schema](specs/canonical-types.schema.json)
