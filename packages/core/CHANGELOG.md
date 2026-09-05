@@ -1,5 +1,11 @@
 # blogwright-core
 
+## 0.4.0-beta.4
+
+### Patch Changes
+
+- [`a57b3ff`](https://github.com/antstanley/blogwright/commit/a57b3ffaca704a75bc548014f2c5510936935446) Thanks [@antstanley](https://github.com/antstanley)! - Validate persisted state shapes when loading S3 state, rejecting corrupt resource outputs before graph execution while preserving valid historical state.
+
 ## 0.4.0-beta.3
 
 ### Minor Changes

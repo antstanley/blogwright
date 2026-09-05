@@ -1,5 +1,48 @@
 # blogwright-analytics
 
+## 0.4.0-beta.4
+
+### Patch Changes
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`d154c30`](https://github.com/antstanley/blogwright/commit/d154c3087a6d850d07a3189b83be40573528c5e7) Thanks [@antstanley](https://github.com/antstanley)! - Place the theme selector at the top right on desktop and mobile, and reduce its height to 42px.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`a2ff05c`](https://github.com/antstanley/blogwright/commit/a2ff05c689645f99e4fea00b4c24ba9f8a62d827) Thanks [@antstanley](https://github.com/antstanley)! - Make Countries full width and add an offline world map alongside the bar view, with a colour scale, full country data, and disclosure of unmapped codes.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`6fa0991`](https://github.com/antstanley/blogwright/commit/6fa09915d31eb8d0d200787ea038ec2524bcb640) Thanks [@antstanley](https://github.com/antstanley)! - Add a Path filter across all reports, matching the exact path and its slash-delimited descendants. Bind literal path values in SQL alongside UTC time and bot filters. Support trailing slashes and clearing the filter, reject malformed paths, and update mock reports to demonstrate scoped results.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`030a298`](https://github.com/antstanley/blogwright/commit/030a298a15376afe9f98374d089a86634276e893) Thanks [@antstanley](https://github.com/antstanley)! - Show Top paths as a pie chart with request shares, a full-label legend, and an Other paths slice retaining the remaining traffic.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`b111675`](https://github.com/antstanley/blogwright/commit/b111675d92fac335b1694c8d8ad23cf504430a37) Thanks [@antstanley](https://github.com/antstanley)! - Add an accessible icon-only Refresh button beneath the theme control. Refresh all report queries while preserving dates, selected presets, traffic options, granularity, and country view.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`030a298`](https://github.com/antstanley/blogwright/commit/030a298a15376afe9f98374d089a86634276e893) Thanks [@antstanley](https://github.com/antstanley)! - Add UTC minute-precision reporting windows and rolling presets from three hours to one year, anchored to the current minute on each selection. Apply exact start-inclusive/end-exclusive event-time filtering to every query while preserving the existing inclusive date-only API. Calendar month/year presets clamp month ends and leap days. Update mock time series to cover the selected window.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`a2ff05c`](https://github.com/antstanley/blogwright/commit/a2ff05c689645f99e4fea00b4c24ba9f8a62d827) Thanks [@antstanley](https://github.com/antstanley)! - Add a keyboard-accessible System, Dark, and Light theme selector that remembers the dashboard preference locally.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`654b9a4`](https://github.com/antstanley/blogwright/commit/654b9a4bd33e43fad87f3fddce4c8edb9074410b) Thanks [@antstanley](https://github.com/antstanley)! - Make All traffic explicitly include bots and show bot/non-bot contributions in stacked area and bar charts. Preserve aggregate totals, count overlapping visitor keys once, and stack cache-hit contributions against the common request denominator. Include contributions in accessible tables and the opt-in splitBots API response.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`030a298`](https://github.com/antstanley/blogwright/commit/030a298a15376afe9f98374d089a86634276e893) Thanks [@antstanley](https://github.com/antstanley)! - Add 15-minute, 1-hour, 6-hour, 12-hour, and 24-hour granularity for Views over time using UTC event-time buckets, with an animated, keyboard-accessible radio pill, validated API options, and matching mock preview data. The selection animation respects reduced-motion preferences.
+
+  Extract the compact animated selector into a reusable PillRadio component, and use it for Bot traffic above the reporting date inputs.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`030a298`](https://github.com/antstanley/blogwright/commit/030a298a15376afe9f98374d089a86634276e893) Thanks [@antstanley](https://github.com/antstanley)! - Render Views over time as an area chart with local brush zoom and a reset control, retaining the full reporting-period data table.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`21b41ce`](https://github.com/antstanley/blogwright/commit/21b41ce1b85e13a45e5249be89ffc40148d424be) Thanks [@antstanley](https://github.com/antstanley)! - Refine dashboard hierarchy, responsive filters and report spacing, with visible keyboard focus and theme-aware error feedback.
+
+- [`55869df`](https://github.com/antstanley/blogwright/commit/55869dfb1e02b7a4bb8df12ee1b412ca50efc07e) Thanks [@antstanley](https://github.com/antstanley)! - Capture the initial log-delivery UTC day before sending CreateDelivery, while recording it only after success. Requests that cross midnight now keep the earlier backfill bound, preventing duplicate ingestion of the day live delivery may have started.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`a2ff05c`](https://github.com/antstanley/blogwright/commit/a2ff05c689645f99e4fea00b4c24ba9f8a62d827) Thanks [@antstanley](https://github.com/antstanley)! - Normalize dashboard date and bot-filter dimensions across browsers, with consistent calendar and dropdown icons.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`2ab21a4`](https://github.com/antstanley/blogwright/commit/2ab21a4db44f91ccf57a41ebfb6f59f72a5a89ad) Thanks [@antstanley](https://github.com/antstanley)! - Open country detail dialogs from the map or search results, showing daily unique viewers for the selected reporting period and filters. Add parameterized country filtering to reporting queries, accessible area-chart details, and country-scoped preview data.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`738fbd6`](https://github.com/antstanley/blogwright/commit/738fbd6ffefd27019fff41f5564f5a6c62dbcc3b) Thanks [@antstanley](https://github.com/antstanley)! - Replace native reporting date/time pickers with themed, keyboard-accessible calendars and editable UTC date/time segments. Add collapsible reporting filters, compact controls, higher-contrast selections, and tighter chart headings. Highlight Top Paths pie slices on legend hover or keyboard focus while preserving reporting presets and range validation.
+
+- [`dc310a1`](https://github.com/antstanley/blogwright/commit/dc310a19219d8ef2a98c7dd248f5fea503acdf52) Thanks [@antstanley](https://github.com/antstanley)! - Emit bounded transform mapping and ProcessingFailed counts and uncached salt-read outcomes in the transform Lambda log group, without logging record or secret data.
+
+- [#31](https://github.com/antstanley/blogwright/pull/31) [`2ab21a4`](https://github.com/antstanley/blogwright/commit/2ab21a4db44f91ccf57a41ebfb6f59f72a5a89ad) Thanks [@antstanley](https://github.com/antstanley)! - Add offline fuzzy country search to the Countries map, with keyboard-accessible suggestions, a highlighted matching country, and request counts for the selected reporting range.
+
+- Updated dependencies [[`a57b3ff`](https://github.com/antstanley/blogwright/commit/a57b3ffaca704a75bc548014f2c5510936935446)]:
+  - blogwright-core@0.4.0-beta.4
+
 ## 0.4.0-beta.3
 
 ### Minor Changes
