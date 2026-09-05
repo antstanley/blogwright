@@ -186,3 +186,70 @@ which can retain raw payloads. No retention config field is added.
 them first, run `blogwright analytics destroy <env> --yes`, then uninstall; config
 is preserved. A noninteractive remove of the loadable node plugin without `--yes`
 refuses because it cannot ask about teardown.
+
+Dashboard presentation follows the [design guidelines](../../.specs/blogwright/specs/05-design.md).
+
+## Local dashboard development
+
+From the repository root, after `pnpm install`, run:
+
+```sh
+pnpm dev:analytics
+```
+
+This builds analytics and its workspace dependencies, then serves the real dashboard
+at http://127.0.0.1:4318 with synthetic data for all seven reports. No AWS account,
+credentials, DuckDB connection, or deployed infrastructure is needed. The server
+binds to loopback only. Stop it with Ctrl+C; the port is released on shutdown.
+
+Edit the dashboard under `app/src/`, then stop and rerun the command to rebuild.
+This is a built-app preview, without hot reload. If the artifacts are already
+current, `pnpm --filter blogwright-analytics dev:mock` skips the build.
+
+Fixtures live in `scripts/dev-dashboard.mjs`. Time-series rows are generated for
+the selected UTC window and granularity, including partial buckets. These counts
+are synthetic; production queries aggregate actual event timestamps. Path filters proportionally scope the synthetic reports; bot filtering remains
+synthetic. Remove a fixture entry to inspect an
+isolated query error. Restart after fixture edits.
+Port 4318 must be free; an occupied port fails instead of silently selecting another.
+
+### Reusable pill radio selector
+
+The dashboard's `app/src/lib/PillRadio.svelte` component provides the compact,
+animated radio selector. Pass a group `label`, an `options` array of unique
+`{ value, label, accessibleLabel? }` entries, and bind the selected `value`:
+
+```svelte
+<PillRadio label="Interval" options={intervalOptions} bind:value={interval} />
+```
+
+Option counts determine the pill width and highlight position. Set the inherited
+`--pill-option-width` CSS property to adjust the default 60px option width. `accessibleLabel`
+can expand an abbreviated caption. Each instance uses an independent radio name
+by default; an optional `name` supports form integration. Native keyboard controls,
+focus styling, and reduced-motion support are included.
+
+### Reporting windows
+
+Date/time inputs use UTC at minute precision. Presets from 3hrs to 1 year end at
+the current minute when clicked; click again to refresh the anchor. Manual edits
+select Custom; clicking Custom keeps the current bounds for editing. Calendar month/year presets clamp month-end dates.
+The API also accepts `from`/`to` as `YYYY-MM-DDTHH:mmZ`: start is inclusive and
+end exclusive. Existing date-only requests retain inclusive-day behavior.
+
+The mock now generates time-series rows across the selected window, including
+partial buckets. These are synthetic counts; path filters proportionally scope the mock counts; bot filtering
+remains synthetic. Production queries filter actual event timestamps for every chart.
+
+### Traffic and path controls
+
+All explicitly includes bot and non-bot traffic and displays both contributions in
+stacked area/bar charts. Include bots shows combined totals; Exclude bots filters
+flagged traffic. The icon-only Refresh action refetches current queries without
+moving the selected window or changing filter values.
+
+Path limits every report to the exact path and its descendants. For example,
+`/writing` includes `/writing` and `/writing/...`, but not `/writing-old`. Clear the
+field to restore all paths. The API accepts the same optional `path` parameter,
+alongside time and traffic parameters. Mock counts are proportional illustrations;
+production queries apply the path predicate to actual events before aggregation.

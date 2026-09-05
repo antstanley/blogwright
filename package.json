@@ -10,7 +10,8 @@
     "typecheck": "pnpm -r typecheck",
     "knip": "knip",
     "changeset": "changeset",
-    "changeset:version": "changeset version && pnpm install --no-frozen-lockfile"
+    "changeset:version": "changeset version && pnpm install --no-frozen-lockfile",
+    "dev:analytics": "pnpm --filter blogwright-analytics... build && pnpm --filter blogwright-analytics dev:mock"
   },
   "devDependencies": {
     "blogwright": "workspace:*",

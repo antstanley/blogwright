@@ -537,6 +537,54 @@ describe('the seven named queries, executed against a real DuckDB table', () => 
     connection.close();
   });
 
+  it('scopes daily viewers to a country before distinct counting and time/path/bot filtering', async () => {
+    expect(
+      await run('unique-visitors', { range: RANGE, country: 'GB', includeBots: true }),
+    ).toEqual([
+      { day: '2026-08-01', daily_unique_visitors: 1, summed_daily_unique_visitors: 2 },
+      { day: '2026-08-02', daily_unique_visitors: 1, summed_daily_unique_visitors: 2 },
+    ]);
+    expect(
+      await run('unique-visitors', {
+        range: { from: '2026-08-01T00:00Z', to: '2026-08-03T00:00Z' },
+        country: 'US',
+        path: '/posts',
+        includeBots: false,
+      }),
+    ).toEqual([{ day: '2026-08-02', daily_unique_visitors: 1, summed_daily_unique_visitors: 1 }]);
+    expect(await run('unique-visitors', { range: RANGE, country: 'ZA' })).toEqual([]);
+    expect(
+      await run('unique-visitors', {
+        range: RANGE,
+        country: 'US',
+        includeBots: true,
+        splitBots: true,
+      }),
+    ).toEqual([
+      {
+        day: '2026-08-01',
+        daily_unique_visitors: 1,
+        non_bot: 0,
+        bot: 1,
+        summed_daily_unique_visitors: 3,
+      },
+      {
+        day: '2026-08-02',
+        daily_unique_visitors: 1,
+        non_bot: 1,
+        bot: 0,
+        summed_daily_unique_visitors: 3,
+      },
+      {
+        day: '2026-08-03',
+        daily_unique_visitors: 1,
+        non_bot: 1,
+        bot: 0,
+        summed_daily_unique_visitors: 3,
+      },
+    ]);
+  });
+
   it('answers views-over-time with one row per day in the range', async () => {
     expect(await run('views-over-time', { range: RANGE, includeBots: false })).toEqual([
       { day: '2026-08-01', views: 3 },

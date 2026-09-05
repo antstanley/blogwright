@@ -8,67 +8,108 @@
   seven identical refusals.
 -->
 <script lang="ts">
+  import { ChevronDown, RefreshCw } from '@lucide/svelte';
   import type { BotInclusion, QueryRequest } from '../lib/api.js';
   import { PANELS } from '../lib/panels.js';
+  import PillRadio from '../lib/PillRadio.svelte';
   import QueryPanel from '../lib/QueryPanel.svelte';
-  import { defaultRange, rangeProblem } from '../lib/range.js';
+  import DateTimePicker from '../lib/DateTimePicker.svelte';
+  import ThemeToggle from '../lib/ThemeToggle.svelte';
+  import { pathProblem } from '../../../src/path-filter.js';
+  import { defaultRange, rangeProblem, presetRange, PERIODS, type Period } from '../../../src/reporting-range.js';
 
   /** What the page opens on, read once so a rendering never moves the window. */
   const OPENING_RANGE = defaultRange();
 
   /** What each bot-inclusion choice is called on screen. */
-  const BOT_INCLUSION_LABELS: Readonly<Record<BotInclusion, string>> = {
-    'site-default': 'Site default',
-    include: 'Include bots',
-    exclude: 'Exclude bots',
-  };
+  const botOptions: readonly { value: BotInclusion; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'include', label: 'Include bots' },
+    { value: 'exclude', label: 'Exclude bots' },
+  ];
 
   let from = $state(OPENING_RANGE.from);
   let to = $state(OPENING_RANGE.to);
-  let bots = $state<BotInclusion>('site-default');
+  let path = $state('');
+  let refreshVersion = $state(0);
+  let bots = $state<BotInclusion>('all');
 
-  const problem = $derived(rangeProblem({ from, to }));
-  const request = $derived<QueryRequest>({ range: { from, to }, bots });
+  let selectedPeriod = $state<Period | 'custom'>('custom');
+  let filtersOpen = $state(true);
+
+  function choosePeriod(period: Period): void {
+    const range = presetRange(period);
+    from = range.from;
+    to = range.to;
+    selectedPeriod = period;
+  }
+
+  const problem = $derived(rangeProblem({ from, to }) ?? pathProblem(path));
+  const request = $derived<QueryRequest>({ range: { from, to }, bots, path });
 </script>
 
 <svelte:head>
-  <title>Analytics</title>
+  <title>Analytics · Blogwright</title>
 </svelte:head>
 
-<div class="page">
+<main class="page">
   <header class="page-header">
-    <div>
+    <div class="page-heading">
+      <p class="eyebrow">Blogwright / Analytics</p>
       <h1>Analytics</h1>
-      <p>Days are UTC, matching the partition the figures are grouped by.</p>
     </div>
-
-    <div class="controls">
-      <label class="control">
-        <span>From</span>
-        <input type="date" bind:value={from} max={to} />
-      </label>
-      <label class="control">
-        <span>To</span>
-        <input type="date" bind:value={to} min={from} />
-      </label>
-      <label class="control">
-        <span>Bot traffic</span>
-        <select bind:value={bots}>
-          {#each Object.entries(BOT_INCLUSION_LABELS) as [value, label] (value)}
-            <option {value}>{label}</option>
-          {/each}
-        </select>
-      </label>
+    <div class="header-actions">
+      <ThemeToggle />
+      <button class="refresh-button" type="button" aria-label="Refresh data" title="Refresh data"
+        onclick={() => refreshVersion += 1}>
+        <RefreshCw size={18} strokeWidth={1.75} aria-hidden="true" />
+      </button>
     </div>
   </header>
 
+  <div class="filter-bar">
+    <div class="filter-heading">
+      <button class="filter-toggle" type="button" aria-expanded={filtersOpen}
+        aria-controls="reporting-filters" onclick={() => filtersOpen = !filtersOpen}>
+        <strong>Reporting window</strong>
+        <ChevronDown size={16} aria-hidden="true" />
+      </button>
+      <span>Dates and times in UTC</span>
+    </div>
+    <div class="filter-controls" id="reporting-filters" hidden={!filtersOpen}>
+      <div class="bot-control">
+        <span>Traffic</span>
+        <PillRadio label="Traffic" options={botOptions} bind:value={bots} />
+      </div>
+      <div class="period-presets" role="group" aria-label="Reporting period">
+        {#each PERIODS as period (period.value)}
+          <button type="button" aria-pressed={selectedPeriod === period.value}
+            onclick={() => choosePeriod(period.value)}>{period.label}</button>
+        {/each}
+        <button type="button" aria-pressed={selectedPeriod === 'custom'}
+          onclick={() => selectedPeriod = 'custom'}>Custom</button>
+      </div>
+      <div class="controls">
+        <DateTimePicker label="From" bind:value={from} max={to} onchange={() => selectedPeriod = 'custom'} />
+        <DateTimePicker label="To" bind:value={to} min={from} onchange={() => selectedPeriod = 'custom'} />
+      </div>
+      <div class="path-filter">
+        <label class="control path-control">
+          <span>Path</span>
+          <input type="text" bind:value={path} placeholder="/docs" aria-describedby="path-hint" spellcheck="false" />
+        </label>
+        <p id="path-hint">Includes subpaths. Leave blank for all paths.</p>
+      </div>
+    </div>
+  </div>
+
   {#if problem !== undefined}
-    <p class="range-error">{problem}</p>
+    <p class="range-error" role="alert">{problem}</p>
   {:else}
     <div class="panels">
       {#each PANELS as panel (panel.name)}
-        <QueryPanel {panel} {request} />
+        <QueryPanel {panel} {request} {refreshVersion} />
       {/each}
     </div>
   {/if}
-</div>
+</main>

@@ -190,8 +190,20 @@ No retention configuration key or special log-group status action is added.
 default. The SvelteKit app uses a static adapter and Vite build. The server accepts
 GET/HEAD only, validates Host against localhost/127.0.0.1 with its bound port,
 serves only enumerated app files and exposes `/api/queries/<name>`.
-Required from/to are inclusive UTC calendar dates; optional includeBots is the
-literal true/false string. Unknown names return 404, bad parameters 400, foreign
+Required from/to are either inclusive UTC calendar dates or explicit UTC minute
+timestamps (`YYYY-MM-DDTHH:mmZ`), with start inclusive and end exclusive. Mixed
+formats, invalid dates, and empty/inverted timestamp windows return 400. Timestamp
+queries bind exact event_time bounds in addition to the day partition predicate
+for every named query. Existing date-only requests retain inclusive-day behavior.
+Optional includeBots is the
+literal true/false string. Views over time alone accepts optional granularity:
+15m, 1h, 6h, 12h, or 24h (default). Invalid values, duplicate granularity parameters,
+or granularity on another query return 400. Intraday queries bind a fixed bucket
+width and group event_time using UTC midnight-aligned intervals while retaining
+the day partition and bot filters. The existing day result key carries an ISO UTC
+bucket-start timestamp for intraday results and a YYYY-MM-DD date for 24h results.
+Only populated buckets are returned. rowMeaning identifies the bucket duration.
+Unknown names return 404, bad parameters 400, foreign
 Host 403, unsupported methods 405 and missing app output 503. Query responses
 contain name, rowMeaning, resultColumns and rows; no SQL comes from the socket.
 
@@ -256,3 +268,27 @@ and from the Iceberg table, whose rows have no automatic ageing in this code.
 - Should the site's build role lose its redundant logs:CreateLogGroup grant?
 - Should analytics status give missing diagnostic groups more prominence than the generic node walk?
 - Should the mapper reject fractional int/long values and seconds-shaped timestamp inputs?
+
+Dashboard layout and visual acceptance are documented in [dashboard design](05-design.md).
+
+### Traffic breakdown
+
+The optional `splitBots=true` query parameter adds `non_bot` and `bot` contributions
+to every row while preserving existing total columns. It requires effective bot
+inclusion. Invalid/duplicate flags and a split with excluded bots return 400.
+Null bot flags are Non-bot. Unique visitor keys appearing in both groups count once
+as Non-bot; Bot contains only keys not observed as Non-bot that day. Cache-hit
+contributions share the all-request denominator, so the segments sum to the overall
+ratio. All traffic in the dashboard explicitly sends `includeBots=true&splitBots=true`.
+The existing API default without either flag still follows site configuration.
+
+### Path filtering
+
+Optional `path` limits every named query before aggregation to an exact `uri` or
+its slash-delimited descendants. `/docs` includes `/docs` and `/docs/...`, excluding
+`/docs-old`. Trailing slashes normalize away; `/` covers the root and descendants;
+blank/absent means no restriction. Paths must start with a single `/` and contain
+no whitespace, query string, fragment, backslash, or control characters. Duplicate
+path parameters and invalid values return 400. SQL binds both exact and descendant
+prefixes and uses literal `starts_with`, so `%`, `_`, and quotes are never SQL patterns.
+The predicate composes with UTC minute, granularity, and traffic filters.

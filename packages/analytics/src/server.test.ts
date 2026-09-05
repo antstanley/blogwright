@@ -943,3 +943,157 @@ describe('the static application', () => {
     expect(answer.text).toBe('<!doctype html>built later');
   });
 });
+
+describe('views granularity transport', () => {
+  it('forwards the interval and describes UTC bucket starts', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}&granularity=15m`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params.granularity).toBe('15m');
+    expect(answer.text).toContain('15 minutes');
+  });
+  it.each(['granularity=30m', 'granularity=', 'granularity=1h&granularity=6h'])(
+    'rejects malformed intervals: %s',
+    async (suffix) => {
+      const query = recordingQuery();
+      const server = await serve({ query });
+      const answer = await request(
+        server,
+        `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+      );
+      expect(answer.status).toBe(400);
+      expect(query.runs).toHaveLength(0);
+    },
+  );
+  it('refuses an interval on another query', async () => {
+    const server = await serve();
+    expect(
+      (
+        await request(
+          server,
+          `/api/queries/countries?from=${RANGE.from}&to=${RANGE.to}&granularity=1h`,
+        )
+      ).status,
+    ).toBe(400);
+  });
+});
+
+describe('minute reporting windows', () => {
+  it('forwards explicit UTC minute bounds to the query port', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const range = { from: '2026-09-05T12:37Z', to: '2026-09-05T15:37Z' };
+    const answer = await request(server, `/api/queries/top-paths?${new URLSearchParams(range)}`);
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params.range).toEqual(range);
+  });
+  it.each([
+    { from: '2026-09-05T15:37Z', to: '2026-09-05T15:37Z' },
+    { from: '2026-09-05T16:37Z', to: '2026-09-05T15:37Z' },
+    { from: '2026-02-30T12:37Z', to: '2026-09-05T15:37Z' },
+    { from: '2026-09-05', to: '2026-09-05T15:37Z' },
+    { from: '2026-09-05T12:37', to: '2026-09-05T15:37Z' },
+  ])('rejects invalid timestamp bounds before invoking the port: %j', async (range) => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(server, `/api/queries/top-paths?${new URLSearchParams(range)}`);
+    expect(answer.status).toBe(400);
+    expect(query.runs).toHaveLength(0);
+  });
+});
+
+describe('traffic split transport', () => {
+  it('forwards a valid split and reports its additional columns', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}&includeBots=true&splitBots=true`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params.splitBots).toBe(true);
+    expect(answer.text).toContain('non_bot');
+  });
+  it.each([
+    'splitBots=yes',
+    'splitBots=',
+    'splitBots=true&splitBots=false',
+    'splitBots=true&includeBots=false',
+  ])('rejects %s', async (suffix) => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/views-over-time?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+    );
+    expect(answer.status).toBe(400);
+    expect(query.runs).toHaveLength(0);
+  });
+});
+
+describe('path filter transport', () => {
+  it('forwards the path filter with existing query parameters', async () => {
+    const query = recordingQuery();
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/top-paths?from=${RANGE.from}&to=${RANGE.to}&path=%2Fdocs&includeBots=true&splitBots=true`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params.path).toBe('/docs');
+  });
+  it.each(['path=docs', 'path=%2Fdocs%3Fquery', 'path=%2Fdocs&path=%2Fother'])(
+    'rejects invalid or ambiguous paths: %s',
+    async (suffix) => {
+      const query = recordingQuery();
+      const server = await serve({ query });
+      const answer = await request(
+        server,
+        `/api/queries/top-paths?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+      );
+      expect(answer.status).toBe(400);
+      expect(query.runs).toHaveLength(0);
+    },
+  );
+});
+
+describe('country detail transport', () => {
+  it('forwards country and the selected period, path and bot filters', async () => {
+    const query = recordingQuery({ 'unique-visitors': [] });
+    const server = await serve({ query });
+    const range = { from: '2026-09-05T12:37Z', to: '2026-09-05T15:37Z' };
+    const answer = await request(
+      server,
+      `/api/queries/unique-visitors?${new URLSearchParams({ ...range, country: 'ZA', path: '/docs', includeBots: 'true', splitBots: 'true' })}`,
+    );
+    expect(answer.status).toBe(200);
+    expect(query.runs[0]?.params).toEqual({
+      range,
+      country: 'ZA',
+      path: '/docs',
+      includeBots: true,
+      splitBots: true,
+    });
+  });
+
+  it.each([
+    'country=',
+    'country=za',
+    'country=USA',
+    'country=US&country=GB',
+    'country=US%27OR%201%3D1',
+  ])('rejects %s before querying', async (suffix) => {
+    const query = recordingQuery({ 'unique-visitors': [] });
+    const server = await serve({ query });
+    const answer = await request(
+      server,
+      `/api/queries/unique-visitors?from=${RANGE.from}&to=${RANGE.to}&${suffix}`,
+    );
+    expect(answer.status).toBe(400);
+    expect(query.runs).toHaveLength(0);
+  });
+});

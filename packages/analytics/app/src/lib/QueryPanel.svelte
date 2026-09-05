@@ -16,6 +16,13 @@
 -->
 <script lang="ts">
   import { BarChart } from 'layerchart';
+  import CountryMap from './CountryMap.svelte';
+  import PathsPie from './PathsPie.svelte';
+  import ViewsArea from './ViewsArea.svelte';
+  import TrafficLegend from './TrafficLegend.svelte';
+  import { TRAFFIC_SERIES } from './traffic-series.js';
+  import PillRadio from './PillRadio.svelte';
+  import { VIEW_GRANULARITIES, type ViewGranularity } from '../../../src/view-granularity.js';
 
   import { runNamedQuery, type QueryRequest, type QueryResult } from './api.js';
   import {
@@ -30,10 +37,10 @@
   import { type Panel, RANKING_LIMIT } from './panels.js';
 
   /** How many ticks a value axis carries. Enough to read a magnitude off, not a table. */
-  const VALUE_AXIS_TICKS = 5;
+  const VALUE_AXIS_TICKS = 3;
 
   /** How many ticks a category axis carries when the categories are dense - a month of days. */
-  const CATEGORY_AXIS_TICKS = 6;
+  const CATEGORY_AXIS_TICKS = 4;
 
   /** One point of the chart: a category and the value measured for it. */
   interface ChartPoint {
@@ -41,11 +48,28 @@
     readonly label: string;
     /** The measured value. */
     readonly value: number;
+    readonly non_bot: number;
+    readonly bot: number;
   }
 
-  let { panel, request }: { panel: Panel; request: QueryRequest } = $props();
+  let { panel, request, refreshVersion = 0 }: { panel: Panel; request: QueryRequest; refreshVersion?: number } = $props();
 
-  const answer = $derived(runNamedQuery(panel.name, request));
+  let countryView = $state<'map' | 'bars'>('map');
+
+  const granularityOptions = Object.entries(VIEW_GRANULARITIES).map(([value, option]) => ({
+    // These keys come directly from the supported granularity vocabulary.
+    value: value as ViewGranularity,
+    label: value,
+    accessibleLabel: option.label,
+  }));
+
+  const stacked = $derived(request.bots === 'all');
+  let granularity = $state<ViewGranularity>('24h');
+  // A new revision reruns this request without resetting the panel's local controls.
+  const answer = $derived({
+    version: refreshVersion,
+    promise: runNamedQuery(panel.name, panel.name === 'views-over-time' ? { ...request, granularity } : request),
+  });
 
   /** Render a value the way this panel's value column reads. */
   function formatValue(value: number): string {
@@ -83,6 +107,8 @@
     return rows.map((row) => ({
       label: labelCell(row, panel.category),
       value: numericCell(row, panel.value),
+      non_bot: numericCell(row, 'non_bot'),
+      bot: numericCell(row, 'bot'),
     }));
   }
 
@@ -95,22 +121,46 @@
   }
 </script>
 
-<section class="panel">
-  <h2>{panel.title}</h2>
+<section class="panel" class:panel-views={panel.name === 'views-over-time'} class:panel-ranked={panel.ranked} class:panel-primary={panel.name === 'views-over-time' || panel.name === 'countries' || panel.name === 'top-paths'}>
+  <div class="panel-heading">
+    <h2>{panel.title}</h2>
+    {#if panel.name === 'views-over-time'}
+      <div class="granularity-control">
+        <span>Granularity</span>
+        <PillRadio label="Granularity" options={granularityOptions} bind:value={granularity} />
+      </div>
+    {/if}
+    {#if panel.name === 'countries'}
+      <fieldset class="country-view" aria-label="Countries view">
+        <label><input type="radio" value="map" bind:group={countryView} />Map</label>
+        <label><input type="radio" value="bars" bind:group={countryView} />Bars</label>
+      </fieldset>
+    {/if}
+  </div>
 
-  {#await answer}
+  {#await answer.promise}
     <p class="panel-meaning">&nbsp;</p>
-    <div class="panel-state">Loading…</div>
+    <div class="panel-state" role="status">Loading report…</div>
   {:then result}
-    <p class="panel-meaning">{result.rowMeaning}</p>
+    <p class="panel-meaning">{result.rowMeaning.replace(/^one\s+/i, '')}{#if stacked && panel.name === 'cache-hit-ratio'} — segments show each traffic group's contribution to the overall hit ratio.{/if}{#if stacked && panel.name === 'unique-visitors'} — a visitor key seen in both groups counts once, as non-bot.{/if}</p>
     {#if result.rows.length === 0}
-      <div class="panel-state">No rows in this range.</div>
+      <div class="panel-state" role="status">No rows in this range.</div>
     {:else}
       {@const points = pointsOf(result)}
       {@const total = totalOf(result)}
-      <div class="panel-chart">
+      {#if stacked && panel.name !== 'top-paths' && (panel.name !== 'countries' || countryView === 'bars')}<TrafficLegend />{/if}
+      {#if panel.name === 'views-over-time'}
+        {#key result}<ViewsArea rows={result.rows} {granularity} {stacked} />{/key}
+      {:else if panel.name === 'countries' && countryView === 'map'}
+        <CountryMap rows={result.rows} {request} {refreshVersion} />
+      {:else if panel.name === 'top-paths'}
+        <PathsPie rows={result.rows} />
+      {:else}
+      <div class="panel-chart" style:height={panel.ranked ? `${Math.max(220, points.length * 28 + 40)}px` : undefined}>
         <BarChart
           data={points}
+          {...(stacked ? { series: TRAFFIC_SERIES } : {})}
+          seriesLayout={stacked ? 'stack' : 'overlap'}
           x={panel.ranked ? 'value' : 'label'}
           y={panel.ranked ? 'label' : 'value'}
           orientation={panel.ranked ? 'horizontal' : 'vertical'}
@@ -127,13 +177,26 @@
           }}
         />
       </div>
+      {/if}
+      <details class="panel-data">
+        <summary>View chart data</summary>
+        <table>
+          <caption>{panel.title} — {panel.name === 'countries' || panel.name === 'top-paths' ? 'all returned values' : 'plotted values'}</caption>
+          <thead><tr><th scope="col">{panel.name === 'views-over-time' ? 'Bucket start (UTC)' : humaniseColumn(panel.category)}</th><th scope="col">{humaniseColumn(panel.value)}</th>{#if stacked}<th scope="col">Non-bot</th><th scope="col">Bot</th>{/if}</tr></thead>
+          <tbody>
+            {#each (panel.name === 'countries' || panel.name === 'top-paths' ? result.rows.map(row => ({ label: labelCell(row, panel.category), value: numericCell(row, panel.value), non_bot: numericCell(row, 'non_bot'), bot: numericCell(row, 'bot') })) : points) as point, index (index)}
+              <tr><th scope="row">{point.label}</th><td>{formatValue(point.value)}</td>{#if stacked}<td>{formatValue(point.non_bot)}</td><td>{formatValue(point.bot)}</td>{/if}</tr>
+            {/each}
+          </tbody>
+        </table>
+      </details>
       {#if total !== undefined}
         <dl class="panel-total">
           <dt>{total.label}</dt>
           <dd>{total.value}</dd>
         </dl>
       {/if}
-      {#if panel.ranked && result.rows.length > RANKING_LIMIT}
+      {#if panel.ranked && panel.name !== 'top-paths' && result.rows.length > RANKING_LIMIT && (panel.name !== 'countries' || countryView === 'bars')}
         <p class="panel-note">
           Showing the top {RANKING_LIMIT} of {formatCount(result.rows.length)}.
         </p>
@@ -141,6 +204,6 @@
     {/if}
   {:catch error}
     <p class="panel-meaning">&nbsp;</p>
-    <div class="panel-state panel-error">{error.message}</div>
+    <div class="panel-state panel-error" role="alert">{error.message}</div>
   {/await}
 </section>

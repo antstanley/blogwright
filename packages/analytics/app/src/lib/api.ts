@@ -23,41 +23,42 @@
  */
 
 import type { QueryRow } from '../../../src/ports.js';
+import type { ViewGranularity } from '../../../src/view-granularity.js';
 import type { QueryName } from '../../../src/queries.js';
 
 /** The path prefix the local server answers named queries under. */
 const QUERY_ROUTE_PREFIX = '/api/queries/';
 
-/** An inclusive range of UTC days, each `YYYY-MM-DD` - the form the server validates. */
-export interface DateRange {
-  /** First day of the range, inclusive. */
+/** UTC input values, formatted as YYYY-MM-DDTHH:mm. */
+interface DateRange {
+  /** Inclusive start UTC minute. */
   readonly from: string;
-  /** Last day of the range, inclusive. */
+  /** Exclusive end UTC minute. */
   readonly to: string;
 }
 
-/**
- * What the reader chose about bot traffic. Three states rather than two,
- * because the server's `includeBots` parameter is *optional* and its absence
- * means `config.analytics.bots` decides, inside the port. Sending a flag on
- * every request would silently override a site that configured
- * `bots: "filter"`, so "the site's own setting" is a choice the reader can
- * make and this module can express.
- */
-export type BotInclusion = 'site-default' | 'include' | 'exclude';
+/** All shows bot/non-bot stacks; include shows combined totals; exclude removes bots. */
+export type BotInclusion = 'all' | 'include' | 'exclude';
 
-/** The `includeBots` value each explicit choice sends. `site-default` sends none. */
+/** The `includeBots` value each explicit choice sends. All and Include bots explicitly include bots. */
 const BOT_INCLUSION_VALUES: Readonly<Partial<Record<BotInclusion, string>>> = {
+  all: 'true',
   include: 'true',
   exclude: 'false',
 };
 
 /** Everything one request carries beyond the query's own name. */
 export interface QueryRequest {
-  /** The days to report over. */
+  /** Optional country for a map detail report. */
+  readonly country?: string;
+  /** Optional exact path and subpaths. */
+  readonly path?: string;
+  /** The UTC reporting window. */
   readonly range: DateRange;
   /** What to do about bot-flagged rows. */
   readonly bots: BotInclusion;
+  /** Optional interval for the Views over time query. */
+  readonly granularity?: ViewGranularity;
 }
 
 /** One named query's answer, exactly as the local server shapes it. */
@@ -78,7 +79,14 @@ export interface QueryResult {
 
 /** The query string one request carries. Built here so no caller assembles one by hand. */
 function searchParamsFor(request: QueryRequest): URLSearchParams {
-  const params = new URLSearchParams({ from: request.range.from, to: request.range.to });
+  const params = new URLSearchParams({
+    from: `${request.range.from}Z`,
+    to: `${request.range.to}Z`,
+  });
+  if (request.country !== undefined) params.set('country', request.country);
+  if (request.path?.trim()) params.set('path', request.path.trim());
+  if (request.bots === 'all') params.set('splitBots', 'true');
+  if (request.granularity !== undefined) params.set('granularity', request.granularity);
   const includeBots = BOT_INCLUSION_VALUES[request.bots];
   if (includeBots !== undefined) params.set('includeBots', includeBots);
   return params;

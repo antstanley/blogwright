@@ -6,6 +6,9 @@ Internal documentation does not offer a supported third-party plugin API.
 
 ## Canonical product specifications
 
+- [Design guidelines](design-guidelines.md)
+- [Analytics dashboard design](blogwright/specs/05-design.md)
+
 - [Overview](blogwright/specs/00-overview.md)
 - [Domain model](blogwright/specs/01-domain-model.md)
 - [Plugin architecture and contracts](blogwright/specs/02-plugin-architecture.md)
@@ -38,6 +41,9 @@ Internal documentation does not offer a supported third-party plugin API.
   and would otherwise leave every already-deployed stream unlogged.
 
 ## Change specs
+
+- [Analytics dashboard design](changes/merged/2026-09-05-analytics_dashboard_design.md)
+  — merged 2026-09-05: responsive reporting layout, accessible chart data, and design guidelines.
 
 No pending change specs remain. All three linked July proposals are folded into
 current internal pages/schema; their dated history remains in [changes/merged/](changes/merged/).

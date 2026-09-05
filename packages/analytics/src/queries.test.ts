@@ -269,20 +269,20 @@ describe('prepareQuery', () => {
 
   it('rejects an absent range rather than standing in a default, naming the value', () => {
     expect(() => prepareQuery('views-over-time', PARAMS_WITHOUT_RANGE, CONFIG)).toThrow(
-      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day, got undefined',
+      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got undefined',
     );
   });
 
   it('rejects a range missing one end, naming the end that is missing', () => {
     expect(() => prepareQuery('views-over-time', PARAMS_WITHOUT_FROM, CONFIG)).toThrow(
-      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day, got undefined',
+      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got undefined',
     );
   });
 
   it('rejects a day that is not YYYY-MM-DD, naming it', () => {
     const params = { range: { from: '2026-8-1', to: '2026-08-07' } };
     expect(() => prepareQuery('views-over-time', params, CONFIG)).toThrow(
-      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day, got "2026-8-1"',
+      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got "2026-8-1"',
     );
   });
 
@@ -291,14 +291,14 @@ describe('prepareQuery', () => {
     // so only the `YYYY-MM-DD` pattern rejects it. Drop that line and this reddens alone.
     const params = { range: { from: '+271821-04', to: '2026-08-07' } };
     expect(() => prepareQuery('views-over-time', params, CONFIG)).toThrow(
-      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day, got "+271821-04"',
+      'analytics query "views-over-time": range.from must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got "+271821-04"',
     );
   });
 
   it('rejects a day that is not on the calendar, naming it', () => {
     const params = { range: { from: '2026-08-01', to: '2026-02-30' } };
     expect(() => prepareQuery('views-over-time', params, CONFIG)).toThrow(
-      'analytics query "views-over-time": range.to must be a YYYY-MM-DD calendar day, got "2026-02-30"',
+      'analytics query "views-over-time": range.to must be a YYYY-MM-DD calendar day or YYYY-MM-DDTHH:mmZ UTC minute, got "2026-02-30"',
     );
   });
 
@@ -440,4 +440,41 @@ describe('WHOLE_TABLE_RANGE', () => {
       expect(WHOLE_TABLE_RANGE.to >= day).toBe(true);
     }
   });
+});
+
+describe('country-scoped reporting', () => {
+  it.each(EVERY_QUERY_NAME)(
+    'binds a country alongside path, dates and bot settings for %s',
+    (name) => {
+      const prepared = prepareQuery(
+        name,
+        {
+          range: { from: '2026-08-01T12:00Z', to: '2026-08-03T18:00Z' },
+          country: 'ZA',
+          path: '/docs',
+          includeBots: true,
+          splitBots: true,
+        },
+        CONFIG,
+      );
+      expect(prepared.sql).toContain('country = $country');
+      expect(prepared.sql).not.toContain("'ZA'");
+      expect(prepared.bindings).toMatchObject({
+        country: 'ZA',
+        path: '/docs',
+        from_time: '2026-08-01T12:00:00Z',
+        to_time: '2026-08-03T18:00:00Z',
+        include_bots: true,
+      });
+    },
+  );
+
+  it.each(['', 'za', 'USA', '-99', "US' OR 1=1--", ' US '])(
+    'rejects invalid country %j',
+    (country) => {
+      expect(() => prepareQuery('unique-visitors', { range: RANGE, country }, CONFIG)).toThrow(
+        'country',
+      );
+    },
+  );
 });
