@@ -3083,6 +3083,53 @@ describe('analytics-firehose-stream', () => {
     ]);
   });
 
+  it('allows a fresh Firehose role to propagate beyond the transport retry budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctx, requests } = makeContext([
+        ...Array.from({ length: 8 }, () => firehoseRoleNotYetAssumable()),
+        ok({ DeliveryStreamARN: STREAM_ARN }),
+        ok(streamDescription('CREATING')),
+      ]);
+      const started = Date.now();
+      const creating = analyticsFirehoseStreamNode().create(withStreamDependencies(ctx));
+      await vi.runAllTimersAsync();
+      await creating;
+
+      expect(Date.now() - started).toBe(32_000);
+      expect(targets(requests)).toStrictEqual([
+        ...Array<string>(9).fill('Firehose_20150804.CreateDeliveryStream'),
+        'Firehose_20150804.DescribeDeliveryStream',
+      ]);
+      expect(ctx.state.resources['analytics-firehose-stream']?.arn).toBe(STREAM_ARN);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops retrying a persistent Firehose role refusal after a bounded wait', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ctx, requests } = makeContext(
+        Array.from({ length: 15 }, () => firehoseRoleNotYetAssumable()),
+      );
+      const started = Date.now();
+      const rejected = expect(
+        analyticsFirehoseStreamNode().create(withStreamDependencies(ctx)),
+      ).rejects.toThrow(/Firehose is unable to assume role/);
+      await vi.runAllTimersAsync();
+      await rejected;
+
+      expect(Date.now() - started).toBe(62_000);
+      expect(targets(requests)).toStrictEqual(
+        Array<string>(15).fill('Firehose_20150804.CreateDeliveryStream'),
+      );
+      expect(ctx.state.resources['analytics-firehose-stream']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Firehose words this differently from Lambda and puts nothing
   // machine-readable in the code, so the predicate matches on message. This
   // pins that a permanent InvalidArgumentException at the same status is NOT

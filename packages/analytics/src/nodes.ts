@@ -1639,8 +1639,10 @@ const ROLE_NOT_YET_ASSUMABLE = /cannot be assumed by|unable to assume role/i;
  * IAM is eventually consistent, and this graph creates each role in the node
  * immediately before the one that assumes it - the tightest window the ordering
  * can produce. Both pairings are affected: transform-role -> transform-function
- * and firehose-role -> firehose-stream. The failure is purely timing; the same
- * request succeeds seconds later with nothing changed.
+ * and firehose-role -> firehose-stream. A propagation failure succeeds later
+ * with nothing changed; a permanent trust problem still fails after the budget.
+ * Use 15 attempts with 1s exponential backoff capped at 5s (62s of waits).
+ * The transport default waits only 3s total, too short for fresh IAM roles.
  *
  * The update paths are wrapped too, because both send the role ARN: an
  * environment whose role was torn down and recreated hits the identical window
@@ -1648,6 +1650,9 @@ const ROLE_NOT_YET_ASSUMABLE = /cannot be assumed by|unable to assume role/i;
  */
 function whileRoleIsPropagating<T>(call: () => Promise<T>): Promise<T> {
   return withRetry(call, {
+    attempts: 15,
+    baseDelayMs: 1000,
+    maxDelayMs: 5000,
     retryable: (err) =>
       err instanceof AwsError && err.statusCode === 400 && ROLE_NOT_YET_ASSUMABLE.test(err.message),
   });
