@@ -1,5 +1,16 @@
 # blogwright-analytics
 
+## 0.4.0-beta.5
+
+### Patch Changes
+
+- [#32](https://github.com/antstanley/blogwright/pull/32) [`d39c8f8`](https://github.com/antstanley/blogwright/commit/d39c8f8cf3602fd7ea1d3ec0d299165cb91f9843) Thanks [@antstanley](https://github.com/antstanley)! - Allow about a minute for newly created IAM roles to propagate when bootstrapping or updating analytics Lambda functions and Firehose streams. Previously the role-assumption retries waited only three seconds in total, so fresh production environments could still fail with "Firehose is unable to assume role". Unrelated errors continue to fail immediately.
+
+- [#34](https://github.com/antstanley/blogwright/pull/34) [`9d7becb`](https://github.com/antstanley/blogwright/commit/9d7becb052904799dc680a18417f6d8677bc9042) Thanks [@antstanley](https://github.com/antstanley)! - Add keyboard-operable chart-window selection and improve date-control sizing and validation feedback in the analytics dashboard.
+
+- Updated dependencies []:
+  - blogwright-core@0.4.0-beta.5
+
 ## 0.4.0-beta.4
 
 ### Patch Changes

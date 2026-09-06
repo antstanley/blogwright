@@ -1,5 +1,12 @@
 # blogwright-pds
 
+## 0.4.0-beta.5
+
+### Patch Changes
+
+- Updated dependencies []:
+  - blogwright-core@0.4.0-beta.5
+
 ## 0.4.0-beta.4
 
 ### Patch Changes
