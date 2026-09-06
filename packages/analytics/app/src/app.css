@@ -792,10 +792,10 @@ body {
 .date-time-input {
   display: flex;
   align-items: center;
-  flex: 0 1 150px;
-  width: 150px;
+  flex: 0 1 228px;
+  width: 228px;
   min-width: 0;
-  max-width: 150px;
+  max-width: 228px;
   height: 42px;
   min-height: 42px;
   padding: 4px 6px;
@@ -1083,4 +1083,55 @@ legend,
 .country-detail-chart {
   height: clamp(220px, 45vh, 360px);
   margin-top: 12px;
+}
+
+/* Segments are individual pointer targets, not one composite date field. */
+.date-time-segment[role='spinbutton'] {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+.chart-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-block: 12px;
+}
+.chart-window label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.chart-window input,
+.chart-window button {
+  min-height: 36px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--color-surface-border);
+  border-radius: 6px;
+  background: var(--color-surface-100);
+  color: var(--color-surface-content);
+  font: inherit;
+}
+.chart-window button {
+  cursor: pointer;
+}
+.chart-window p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .date-time-control {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .date-time-input {
+    width: 100%;
+    max-width: 280px;
+  }
 }

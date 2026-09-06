@@ -1,6 +1,6 @@
 # Analytics dashboard design
 
-**Status:** Active · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Scope:** Analytics dashboard
+**Status:** Draft · **Date:** 2026-09-06 · **Owner:** Ant Stanley · **Scope:** Analytics dashboard
 
 Read first: [global design guidelines](../../design-guidelines.md) and
 [analytics contracts](04-analytics.md).
@@ -23,7 +23,7 @@ The reusable hierarchy is page heading, reporting controls, report heading, and
 muted measurement explanation. Use accent colour for chart data, links, selected
 controls, and keyboard focus;
 use the error role for failures in both themes. Border and spacing separate
-surfaces without decorative shadows or imagery. All report panels use neutral
+reporting surfaces; calendar popovers and country dialogs use functional elevation. All report panels use neutral
 borders, including the primary traffic chart, following the global ban on
 decorative coloured edges. Numeric totals use tabular figures.
 
@@ -33,9 +33,9 @@ decorative coloured edges. Numeric totals use tabular figures.
 all seven reports and places the traffic and Countries reports across the grid. Daily unique visitors and Referrers share the next row on larger screens;
 Status codes and Cache hit ratio share the final row. Paired reports stack on narrow screens.
 Filters wrap as label/field pairs, with labels beside their inputs. On narrow
-screens the pairs stack into rows with a shared label-column width. Native date and select
-controls share explicit sizing and Lucide calendar/chevron icons to avoid differing
-browser chrome; date editing and native picker/select behavior remain available. The reporting window explicitly identifies UTC.
+screens the pairs stack into rows with a shared label-column width. Bits UI date controls expose labelled segments and Lucide calendar icons.
+Each editable segment has a minimum 24px pointer target. Date fields stack on
+narrow screens; the end-aligned calendar preserves access to surrounding controls. The reporting window explicitly identifies UTC.
 
 [Query panels](../../../packages/analytics/app/src/lib/QueryPanel.svelte) reserve
 more height for ranked results. Server-provided row meanings remain visible,
@@ -46,8 +46,10 @@ tables. Chart interaction layers are contained within their report at zoom.
 Report errors do not block other panels. Invalid dates suppress requests and show
 a single message near the controls.
 
-Views over time uses a LayerChart area chart with a horizontal brush. Dragging
-zooms the local chart window; Reset zoom restores the full reporting period.
+Views over time uses a LayerChart area chart with a horizontal brush. Dragging or explicit Chart start/Chart end UTC inputs
+zoom the local chart window; Reset zoom restores the full reporting period. Both
+selection paths set the same local domain. Input validation requires ordered
+bounds inside the plotted period, at least one selected bucket apart.
 Brushing does not change the global dates, issue queries, or truncate the table.
 A pill-shaped native radio group offers 15m, 1h, 6h, 12h, and 24h (default),
 with full-duration accessible labels. The selection highlight slides between
@@ -83,24 +85,17 @@ Inherit the global definition and apply these dashboard-specific checks:
 | Loading/empty/failure | Independent panels provide distinct feedback | Controlled browser responses |
 | Keyboard | Native controls and data disclosure remain reachable with visible focus | Keyboard interaction |
 
-Repository checks cover compilation and existing query behavior, not a permanent
-visual snapshot suite. The [task review](../../reviews/2026-09-05-dashboard-design.md) records actual browser evidence separately.
+Repository browser checks cover keyboard/pointer journeys, sampled accessibility
+states and pinned Linux screenshot comparisons. The [current acceptance report](../../reviews/2026-09-06-accessibility-acceptance.md)
+records scope and remaining manual checks. The [earlier task review](../../reviews/2026-09-05-dashboard-design.md)
+remains historical evidence.
 
-## Assumptions and open questions
+Validation marks affected inputs invalid and associates them with the reporting
+error. Country-dialog dismissal returns focus to its invoking control. Browser
+fixtures cover populated/loading/empty/failure states, long labels, theme-storage
+failure and reduced motion; they preserve query meaning without accessing AWS.
 
-**Assumptions**
-
-- Existing system fonts and automatic theme preference remain appropriate defaults.
-
-**Decisions**
-
-- *Treatment.* **Refine the existing surface.** Improve hierarchy and reflow within
-  the user's styling request while retaining the incumbent framework and palette.
-
-**Open questions**
-
-- The optional choice of a new editorial or dense dark identity is unconfirmed;
-  neither is adopted here.
+## Shared controls and reporting conventions
 
 The shared `PillRadio` component owns compact radio styling, sliding selection,
 keyboard focus, and reduced-motion behavior. Traffic uses the same component
@@ -130,3 +125,19 @@ it applies the scope to every report; clearing it restores all paths. Invalid
 input shows one validation message. Refresh preserves the current Path as well as
 date/time, Traffic, granularity, and view choices. The icon-only Refresh button sits
 below the 42px theme selector, which aligns to the header's top right at all sizes.
+
+## Assumptions and open questions
+
+**Assumptions**
+
+- Existing system fonts and automatic theme preference remain appropriate defaults.
+
+**Decisions**
+
+- *Treatment.* **Refine the existing surface.** Improve hierarchy and reflow within
+  the user's styling request while retaining the incumbent framework and palette.
+
+**Open questions**
+
+- The optional choice of a new editorial or dense dark identity is unconfirmed;
+  neither is adopted here.

@@ -1,6 +1,6 @@
 # Development Guidelines
 
-**Status: Canonical · Date: 2026-09-05 · Owner: Ant Stanley · Scope: Repo-wide**
+**Status: Canonical · Date: 2026-09-06 · Owner: Ant Stanley · Scope: Repo-wide**
 
 The rules of the road for everyone - humans and AI agents - writing code in this
 repository. Covers the toolchain, the pervasive coding style (Clean Code), error
@@ -26,6 +26,14 @@ CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `TZ=America
 `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` on every push to `main`
 and every pull request. There are no local pre-commit or pre-push hooks; CI is
 the enforcement gate.
+
+Browser acceptance uses Playwright 1.63.0 and `@axe-core/playwright` 4.13.0.
+`pnpm test:ui` and `pnpm test:a11y` run against local production builds; no cloud
+credentials are needed. `pnpm test:ui:update` updates reference images for review.
+The browser CI job uses a pinned Linux ARM64 container and retains both suites'
+failure reports, traces and image diffs for 14 days. The root typecheck and lint
+scripts also cover the browser harness. [Harness details](tests/browser/README.md)
+define the exact environment and local workflow.
 
 ## Clean Code - the pervasive style
 
@@ -243,7 +251,8 @@ name is derived, with an error that says how to fix it.
 
 ### Testing
 
-- vitest is the sanctioned runner; `pnpm test` at the root runs every package.
+- Vitest is the sanctioned package-test runner; `pnpm test` runs every package.
+  Playwright owns the separate browser interaction, accessibility and screenshot commands.
 - **Unit tests run with no cloud access.** AWS interactions are covered by
   transport-level mocks. Integration tests against the floci emulator are opt-in
   (`FLOCI=1 AWS_ENDPOINT_URL=http://localhost:4566 pnpm test`); the
@@ -333,6 +342,9 @@ A change is done when:
   no direct Node API or vendor-SDK calls were added to domain modules.
 - `pnpm build`, `pnpm typecheck`, `TZ=America/New_York pnpm test`, `pnpm lint`,
   `pnpm exec oxfmt --check .`, and `pnpm knip` all pass locally - the same six gates CI runs.
+- UI changes pass `pnpm test:ui` and `pnpm test:a11y` alongside the six code gates.
+  Relevant manual design evidence accompanies the change; screenshots and scanners
+  do not replace screen-reader acceptance.
 - A user-facing change ships with a changeset (`pnpm changeset`) describing its
   semver impact; internal-only changes (docs, tests, refactors) do not need one.
 - Pinned rkey vectors and derived AWS resource names are unchanged for existing

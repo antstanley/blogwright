@@ -38,3 +38,27 @@ jobs:
       # and hand-tuned config. Fix locally with `pnpm exec oxfmt .`.
       - run: pnpm exec oxfmt --check .
       - run: pnpm knip
+
+  browser:
+    runs-on: ubuntu-24.04-arm
+    container:
+      # Playwright 1.63.0, Noble, Linux ARM64: matches the committed screenshot baselines.
+      image: mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 11.25.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:ui
+      - run: pnpm test:a11y
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: browser-acceptance
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

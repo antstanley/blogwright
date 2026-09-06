@@ -1,6 +1,6 @@
 # Blogwright implementation overview
 
-**Status:** Implemented · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-09-06 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [development guidelines](../../../DEVELOPMENT.md) and [spec index](../../README.md).
 
@@ -42,6 +42,7 @@ CLI composition root --> core config, signing, state and ports
 | [PDS](03-pds.md) | Publishing commands, validation and IAM lifecycle |
 | [Analytics](04-analytics.md) | Fourteen nodes, records, observability, queries and backfill |
 | [Dashboard design](05-design.md) | Visual foundations, responsive reporting and design acceptance |
+| [Documentation design](06-docs-design.md) | Starlight reading surface, navigation and design acceptance |
 | [Canonical schema](canonical-types.schema.json) | Draft 2020-12 JSON entities; callable TypeScript contracts stay in prose/source |
 
 ## Package layout and dependency direction
@@ -76,7 +77,7 @@ context and adds no lifecycle hook.
 | Plugins | Two manifest-declared consumers; separate state keys and resource graphs |
 | PDS | Stable config/rkeys, production sync and plugin-owned deploy-role grant |
 | Analytics | us-east-1 pipeline, fourteen nodes, daily visitor pseudonyms, fixed named queries, optional historical import |
-| Verification | Six gates including explicit typecheck and tests under `TZ=America/New_York`; source/tests linked on detail pages |
+| Verification | Six code gates plus browser interaction, accessibility and visual checks; manual acceptance remains scoped evidence; package tests retain `TZ=America/New_York` |
 
 The [closure report](../../reviews/2026-09-05-specification-closure.md) maps source
 change-spec merge steps to these current artifacts and separates historical

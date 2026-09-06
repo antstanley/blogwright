@@ -7,6 +7,10 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'blogwright',
+      components: {
+        MarkdownContent: './src/components/MarkdownContent.astro',
+        MobileMenuToggle: './src/components/MobileMenuToggle.astro',
+      },
       logo: { src: './src/assets/logo.svg', alt: '' },
       customCss: ['./src/styles/custom.css'],
       description:

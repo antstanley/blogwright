@@ -4,9 +4,15 @@ Internal current implementation contracts live in [blogwright/](blogwright/READM
 [DEVELOPMENT.md](../DEVELOPMENT.md) remains the canonical rules-of-road source.
 Internal documentation does not offer a supported third-party plugin API.
 
+## Shared guidelines
+
+- [Design guidelines](design-guidelines.md) — visual foundations, interaction conventions and design acceptance.
+- [Development guidelines](../DEVELOPMENT.md) — toolchain and code rules.
+
 ## Canonical product specifications
 
-- [Design guidelines](design-guidelines.md)
+- [Documentation design](blogwright/specs/06-docs-design.md)
+- [Accessibility acceptance evidence](reviews/2026-09-06-accessibility-acceptance.md)
 - [Analytics dashboard design](blogwright/specs/05-design.md)
 
 - [Overview](blogwright/specs/00-overview.md)
@@ -42,10 +48,13 @@ Internal documentation does not offer a supported third-party plugin API.
 
 ## Change specs
 
+- [Accessibility, visual tests, and docs-site updates](changes/2026-09-06-accessibility_visual_tests_and_docs.md)
+  — accepted, implementation in progress: both web interfaces and browser gates; manual acceptance remains open.
+
 - [Analytics dashboard design](changes/merged/2026-09-05-analytics_dashboard_design.md)
   — merged 2026-09-05: responsive reporting layout, accessible chart data, and design guidelines.
 
-No pending change specs remain. All three linked July proposals are folded into
+All three linked July proposals are folded into
 current internal pages/schema; their dated history remains in [changes/merged/](changes/merged/).
 The [closure report](reviews/2026-09-05-specification-closure.md) maps every merge step,
 records current tests, and preserves the historical PARTIAL58/delta20 verdicts.
