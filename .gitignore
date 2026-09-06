@@ -36,3 +36,7 @@ pnpm-debug.log*
 /*.jpg
 /*.jpeg
 /*.webp
+
+# Browser acceptance output (reference images under tests/browser are committed)
+/test-results/
+/playwright-report/

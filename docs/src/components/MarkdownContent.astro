@@ -1,0 +1,24 @@
+---
+import DefaultMarkdownContent from '@astrojs/starlight/components/MarkdownContent.astro';
+---
+
+<DefaultMarkdownContent><slot /></DefaultMarkdownContent>
+
+<script>
+  // Overflowing tables need a keyboard entry point to reach off-screen columns.
+  function labelTables() {
+    document.querySelectorAll<HTMLElement>('.sl-markdown-content pre').forEach((block) => {
+      block.tabIndex = 0;
+    });
+    document.querySelectorAll<HTMLTableElement>('.sl-markdown-content table').forEach((table) => {
+      table.tabIndex = 0;
+      if (!table.caption && !table.hasAttribute('aria-label')) {
+        const headers = Array.from(table.querySelectorAll('thead th'), (cell) => cell.textContent?.trim())
+          .filter(Boolean).join(', ');
+        table.setAttribute('aria-label', headers ? `Reference table: ${headers}` : 'Reference table');
+      }
+    });
+  }
+  labelTables();
+  document.addEventListener('astro:page-load', labelTables);
+</script>

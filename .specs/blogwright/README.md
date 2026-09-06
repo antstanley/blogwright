@@ -1,6 +1,7 @@
 # Blogwright internal specifications
 
-Read the [global index](../README.md) and [development guidelines](../../DEVELOPMENT.md).
+Read the [global index](../README.md), [design guidelines](../design-guidelines.md), and
+[development guidelines](../../DEVELOPMENT.md).
 These are current implementation contracts, not a supported third-party SPI.
 
 - [Overview](specs/00-overview.md)
@@ -9,4 +10,5 @@ These are current implementation contracts, not a supported third-party SPI.
 - [PDS](specs/03-pds.md)
 - [Analytics](specs/04-analytics.md)
 - [Dashboard design](specs/05-design.md)
+- [Documentation design](specs/06-docs-design.md)
 - [Canonical JSON schema](specs/canonical-types.schema.json)

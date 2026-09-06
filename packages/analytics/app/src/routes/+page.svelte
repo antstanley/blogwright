@@ -44,7 +44,9 @@
     selectedPeriod = period;
   }
 
-  const problem = $derived(rangeProblem({ from, to }) ?? pathProblem(path));
+  const dateError = $derived(rangeProblem({ from, to }));
+  const pathError = $derived(pathProblem(path));
+  const problem = $derived(dateError ?? pathError);
   const request = $derived<QueryRequest>({ range: { from, to }, bots, path });
 </script>
 
@@ -90,13 +92,13 @@
           onclick={() => selectedPeriod = 'custom'}>Custom</button>
       </div>
       <div class="controls">
-        <DateTimePicker label="From" bind:value={from} max={to} onchange={() => selectedPeriod = 'custom'} />
-        <DateTimePicker label="To" bind:value={to} min={from} onchange={() => selectedPeriod = 'custom'} />
+        <DateTimePicker errorId={dateError ? "reporting-error" : undefined} label="From" bind:value={from} max={to} onchange={() => selectedPeriod = 'custom'} />
+        <DateTimePicker errorId={dateError ? "reporting-error" : undefined} label="To" bind:value={to} min={from} onchange={() => selectedPeriod = 'custom'} />
       </div>
       <div class="path-filter">
         <label class="control path-control">
           <span>Path</span>
-          <input type="text" bind:value={path} placeholder="/docs" aria-describedby="path-hint" spellcheck="false" />
+          <input type="text" bind:value={path} placeholder="/docs" aria-invalid={pathError ? "true" : undefined} aria-describedby={pathError && !dateError ? "path-hint reporting-error" : "path-hint"} spellcheck="false" />
         </label>
         <p id="path-hint">Includes subpaths. Leave blank for all paths.</p>
       </div>
@@ -104,7 +106,7 @@
   </div>
 
   {#if problem !== undefined}
-    <p class="range-error" role="alert">{problem}</p>
+    <p id="reporting-error" class="range-error" role="alert">{problem}</p>
   {:else}
     <div class="panels">
       {#each PANELS as panel (panel.name)}

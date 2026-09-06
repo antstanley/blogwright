@@ -29,3 +29,17 @@
 .sl-markdown-content p {
   text-wrap: pretty;
 }
+
+/* Functional indigo stays in links and controls; card icons do not encode state. */
+.sl-markdown-content .card .icon {
+  border-color: var(--sl-color-hairline);
+  background: var(--sl-color-gray-6);
+  color: var(--sl-color-text);
+}
+.sl-markdown-content :is(h1, h2, h3, h4, p, li, td, th) {
+  overflow-wrap: anywhere;
+}
+.sl-markdown-content :is(table, pre):focus-visible {
+  outline: 2px solid var(--sl-color-accent-high);
+  outline-offset: 3px;
+}

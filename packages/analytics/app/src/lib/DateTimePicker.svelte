@@ -4,8 +4,9 @@
   import { pickerValue, reportingValue } from './picker-date.js';
   import { CalendarDays, ChevronLeft, ChevronRight } from '@lucide/svelte';
 
-  let { label, value = $bindable(), min, max, onchange }: {
+  let { label, value = $bindable(), min, max, onchange, errorId }: {
     label: string;
+    errorId?: string | undefined;
     value: string;
     min?: string;
     max?: string;
@@ -25,7 +26,7 @@
   fixedWeeks preventDeselect calendarLabel={`${label} date (UTC)`}>
   <div class="control date-time-control">
     <DatePicker.Label class="date-time-label">{label}</DatePicker.Label>
-    <DatePicker.Input class="date-time-input">
+    <DatePicker.Input class="date-time-input" aria-invalid={errorId ? "true" : undefined} aria-describedby={errorId}>
       {#snippet children({ segments })}
         {#each segments as segment, index (segment.part + index)}
           <DatePicker.Segment part={segment.part} class="date-time-segment">{segment.value}</DatePicker.Segment>
@@ -37,7 +38,7 @@
     </DatePicker.Input>
   </div>
   <DatePicker.Portal>
-    <DatePicker.Content class="date-time-popover" sideOffset={8} collisionPadding={12}>
+    <DatePicker.Content class="date-time-popover" align="end" sideOffset={8} collisionPadding={12}>
       <DatePicker.Calendar>
         {#snippet children({ months, weekdays })}
           <DatePicker.Header class="date-time-calendar-header">
