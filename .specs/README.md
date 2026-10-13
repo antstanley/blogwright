@@ -51,6 +51,12 @@ Internal documentation does not offer a supported third-party plugin API.
 - [Accessibility, visual tests, and docs-site updates](changes/2026-09-06-accessibility_visual_tests_and_docs.md)
   — accepted, implementation in progress: both web interfaces and browser gates; manual acceptance remains open.
 
+- [Node.js web servers and SSR on Lambda Web Functions](changes/2026-10-13-node_ssr_lambda_web_functions.md)
+  — proposed: an `ssr` config mode that packages the MicroVM build output as an
+  immutable Lambda Web Function revision and serves it through CloudFront behind
+  origin access control with a cache policy honouring the application's cache
+  headers; preview stacks and multi-region endpoints are out of scope.
+
 - [Analytics dashboard design](changes/merged/2026-09-05-analytics_dashboard_design.md)
   — merged 2026-09-05: responsive reporting layout, accessible chart data, and design guidelines.
 
