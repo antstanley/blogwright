@@ -15,6 +15,20 @@ function bodyChecksum(body: string): string {
   return createHash('sha256').update(body).digest('base64');
 }
 
+/** Base64 MD5 of a request body - DeleteObjects' required integrity header. */
+function bodyMd5(body: string): string {
+  return createHash('md5').update(body).digest('base64');
+}
+
+/** One noncurrent or current entry from ListObjectVersions. */
+export interface S3ObjectVersion {
+  key: string;
+  /** `null` for an object written before versioning was enabled. */
+  versionId: string;
+  isDeleteMarker: boolean;
+  size: number;
+}
+
 export interface S3Object {
   key: string;
   size: number;
@@ -108,8 +122,8 @@ export class S3Client {
     body: string | Uint8Array,
     contentType = 'application/octet-stream',
     tags?: ResourceTags,
-  ): Promise<void> {
-    await this.client.send({
+  ): Promise<string | undefined> {
+    const res = await this.client.send({
       service: 's3',
       method: 'PUT',
       path: this.objectPath(bucket, key),
@@ -119,6 +133,42 @@ export class S3Client {
       },
       body,
     });
+    // Present only on a versioned bucket; the Web Function artifact pin.
+    return res.headers['x-amz-version-id'];
+  }
+
+  /** Enable or suspend bucket versioning. Never suspended once enabled (see the SSR contract). */
+  async putBucketVersioning(bucket: string, status: 'Enabled' | 'Suspended'): Promise<void> {
+    const body =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+      `<Status>${status}</Status>` +
+      '</VersioningConfiguration>';
+    await this.client.send({
+      service: 's3',
+      method: 'PUT',
+      path: `/${bucket}`,
+      query: { versioning: '' },
+      headers: { 'content-type': 'application/xml', 'x-amz-checksum-sha256': bodyChecksum(body) },
+      body,
+    });
+  }
+
+  /** Current versioning status of a bucket, or undefined when the API reports none. */
+  async getBucketVersioning(bucket: string): Promise<'Enabled' | 'Suspended' | undefined> {
+    try {
+      const res = await this.client.send({
+        service: 's3',
+        method: 'GET',
+        path: `/${bucket}`,
+        query: { versioning: '' },
+      });
+      const status = textTag(res.text(), 'Status');
+      return status === 'Enabled' || status === 'Suspended' ? status : undefined;
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return undefined;
+      throw err;
+    }
   }
 
   /** Apply bucket tags (idempotent full replace). */
@@ -161,6 +211,22 @@ export class S3Client {
   async objectExists(bucket: string, key: string): Promise<boolean> {
     try {
       await this.client.send({ service: 's3', method: 'HEAD', path: this.objectPath(bucket, key) });
+      return true;
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return false;
+      throw err;
+    }
+  }
+
+  /** True when one specific object version still exists (rollback's artifact check). */
+  async objectVersionExists(bucket: string, key: string, versionId: string): Promise<boolean> {
+    try {
+      await this.client.send({
+        service: 's3',
+        method: 'HEAD',
+        path: this.objectPath(bucket, key),
+        query: { versionId },
+      });
       return true;
     } catch (err) {
       if (err instanceof AwsError && err.isNotFound) return false;
@@ -229,6 +295,120 @@ export class S3Client {
       },
       body: policy,
     });
+  }
+
+  /** The bucket's current policy document, or undefined when it has none. */
+  async getBucketPolicy(bucket: string): Promise<string | undefined> {
+    try {
+      const res = await this.client.send({
+        service: 's3',
+        method: 'GET',
+        path: `/${bucket}`,
+        query: { policy: '' },
+      });
+      return res.text();
+    } catch (err) {
+      // NoSuchBucketPolicy is a 404; read it as "no policy yet" like a fresh bucket.
+      if (err instanceof AwsError && err.isNotFound) return undefined;
+      throw err;
+    }
+  }
+
+  /**
+   * Every object version (and delete marker) under a prefix, following the
+   * ListObjectVersions key/version-id markers. Only the bucket node's teardown
+   * reads this - a plain `deletePrefix` cannot empty a versioned bucket.
+   */
+  async listObjectVersions(bucket: string, prefix: string): Promise<S3ObjectVersion[]> {
+    const out: S3ObjectVersion[] = [];
+    let keyMarker: string | undefined;
+    let versionIdMarker: string | undefined;
+    for (;;) {
+      const res = await this.client.send({
+        service: 's3',
+        method: 'GET',
+        path: `/${bucket}`,
+        query: {
+          versions: '',
+          prefix,
+          ...(keyMarker ? { 'key-marker': keyMarker } : {}),
+          ...(versionIdMarker ? { 'version-id-marker': versionIdMarker } : {}),
+        },
+      });
+      const xml = res.text();
+      for (const tag of ['Version', 'DeleteMarker'] as const) {
+        for (const block of allTags(xml, tag)) {
+          const key = rawTextTag(block, 'Key');
+          const versionId = textTag(block, 'VersionId') ?? '';
+          if (key === undefined || versionId === '') continue;
+          out.push({
+            key,
+            versionId,
+            isDeleteMarker: tag === 'DeleteMarker',
+            size: Number(textTag(block, 'Size') ?? '0'),
+          });
+        }
+      }
+      if (textTag(xml, 'IsTruncated') !== 'true') break;
+      const nextKey = textTag(xml, 'NextKeyMarker');
+      const nextVersion = textTag(xml, 'NextVersionIdMarker');
+      if (!nextKey) break;
+      keyMarker = nextKey;
+      versionIdMarker = nextVersion;
+    }
+    return out;
+  }
+
+  /**
+   * Remove every version and delete marker under a prefix with batched
+   * DeleteObjects requests. Version-aware removal is deliberately NOT what
+   * `deletePrefix` does: no role that deletes a prefix today holds
+   * `s3:ListBucketVersions`/`s3:DeleteObjectVersion`, so only the bucket's own
+   * teardown may call this. Returns the number of entries removed.
+   */
+  async deleteAllVersions(bucket: string, prefix: string): Promise<number> {
+    const versions = await this.listObjectVersions(bucket, prefix);
+    for (let i = 0; i < versions.length; i += 1000) {
+      const batch = versions.slice(i, i + 1000);
+      const objects = batch
+        .map(
+          (v) =>
+            `<Object><Key>${encodeEntities(v.key)}</Key><VersionId>${encodeEntities(
+              v.versionId,
+            )}</VersionId></Object>`,
+        )
+        .join('');
+      const body =
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+        objects +
+        '<Quiet>true</Quiet>' +
+        '</Delete>';
+      const res = await this.client.send({
+        service: 's3',
+        method: 'POST',
+        path: `/${bucket}`,
+        query: { delete: '' },
+        headers: {
+          'content-type': 'application/xml',
+          'content-md5': bodyMd5(body),
+        },
+        body,
+      });
+      // DeleteObjects answers 200 even when entries were refused; in quiet mode
+      // the body lists only those. Unread, a denied version surfaces later as an
+      // unexplained BucketNotEmpty.
+      const failures = allTags(res.text(), 'Error');
+      const first = failures[0];
+      if (first !== undefined) {
+        throw new Error(
+          `could not delete ${failures.length} object version(s) under s3://${bucket}/${prefix}: ` +
+            `${textTag(first, 'Code') ?? 'error'} on ${rawTextTag(first, 'Key') ?? 'an entry'}` +
+            `${textTag(first, 'Message') ? ` (${textTag(first, 'Message')})` : ''}`,
+        );
+      }
+    }
+    return versions.length;
   }
 
   /** Build an S3 REST-XML error-free marker; exported for callers needing entity-safe values. */

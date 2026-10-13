@@ -2,6 +2,7 @@ import { AcmClient } from './aws/acm.js';
 import { CloudFrontClient } from './aws/cloudfront.js';
 import { createCredentialProvider, type CredentialProvider } from './aws/credentials.js';
 import { IamClient } from './aws/iam.js';
+import { LambdaWebClient } from './aws/lambda-web.js';
 import { LogsClient } from './aws/logs.js';
 import { MicrovmsClient } from './aws/microvms.js';
 import { Route53Client } from './aws/route53.js';
@@ -45,6 +46,8 @@ export interface AwsClients {
   cloudfront: CloudFrontClient;
   route53: Route53Client;
   microvms: MicrovmsClient;
+  /** Lambda Web Function control plane (SSR mode). */
+  lambdaWeb: LambdaWebClient;
   secrets: SecretsManagerClient;
 }
 
@@ -77,6 +80,7 @@ export function createClients(opts: ClientBundleOptions): AwsClients {
     cloudfront: new CloudFrontClient(usEast1),
     route53: new Route53Client(usEast1),
     microvms: new MicrovmsClient(signing),
+    lambdaWeb: new LambdaWebClient(signing),
     secrets: new SecretsManagerClient(signing),
   };
 }

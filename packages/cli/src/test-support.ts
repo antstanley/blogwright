@@ -20,9 +20,9 @@ import {
   staticCredentials,
   StateStore,
   type AwsClients,
+  type ConfigInput,
   type FileSystem,
   type Names,
-  type OpsConfig,
   type OpsState,
   type Plugin,
   type PluginCommand,
@@ -54,7 +54,7 @@ export interface TestContextOverrides {
   domain?: string | undefined;
   preview?: boolean | undefined;
   accountId?: string | undefined;
-  config?: Partial<OpsConfig> | undefined;
+  config?: ConfigInput | undefined;
   configDocument?: Readonly<Record<string, unknown>> | undefined;
   names?: Partial<Names> | undefined;
   state?: Partial<OpsState> | undefined;
@@ -104,6 +104,7 @@ function testClients(region: string, overrides: ClientOverrides): AwsClients {
     cloudfront: overrideClient(base.cloudfront, overrides.cloudfront),
     route53: overrideClient(base.route53, overrides.route53),
     microvms: overrideClient(base.microvms, overrides.microvms),
+    lambdaWeb: overrideClient(base.lambdaWeb, overrides.lambdaWeb),
     secrets: overrideClient(base.secrets, overrides.secrets),
   };
 }

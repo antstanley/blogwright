@@ -9,6 +9,7 @@ export * from './aws/endpoint.js';
 export * from './aws/errors.js';
 export * from './aws/form.js';
 export * from './aws/iam.js';
+export * from './aws/lambda-web.js';
 export * from './aws/logs.js';
 export * from './aws/microvms.js';
 export * from './aws/route53.js';

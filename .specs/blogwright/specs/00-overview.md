@@ -12,6 +12,18 @@ clients. Feature packages extend commands and maintain separate resource graphs:
 PDS publishes standard.site records; analytics reads CloudFront traffic through
 Firehose, an Iceberg table and a local dashboard.
 
+An environment may instead configure `ssr`, which turns the build output into
+a Lambda Web Function. The MicroVM build is unchanged; its output directory is
+packaged as a `.zip`, stored as a versioned object in the site bucket, and
+published as an immutable Web Function revision. The same CloudFront
+distribution serves the endpoint as a private origin: requests are signed by
+an origin access control, the endpoint accepts only the distribution, and the
+SSR cache policy caches only responses the application marks cacheable.
+Static browser assets may still be published to `site/` and served from S3
+under the managed caching policy. The builder image is created and kept as
+Arm64 in every environment, so native dependencies compiled during the build
+match the Web Function runtime.
+
 ## Non-goals
 
 There is no CloudFormation, Terraform or CDK state, public/versioned plugin API,
@@ -25,12 +37,18 @@ consumer repo + config/<env>.jsonc
                   |
                   v
 CLI composition root --> core config, signing, state and ports
-  | site graph + deploy engine --> MicroVM build --> S3 site/ --> CloudFront
+  | site graph + deploy engine --> MicroVM build --+--> S3 site/ (static assets)
+  |                                               |          |
+  |                                               +--> web/artifacts/<hash>.zip
+  |                                                          |
+  |                                         Lambda Web Function revision + endpoint
+  |                                                          |
+  |                             CloudFront distribution (S3 + Web Function origins, OAC)
   | generic plugin dispatch
   +--> bundled PDS --> Secrets Manager / AT Protocol publication
   +--> optional analytics --> Firehose transform --> S3 Tables Iceberg
-                                                  ^
-                                   local DuckDB dashboard/backfill
+                                                 ^
+                                  local DuckDB dashboard/backfill
 ```
 
 ## Detail pages
@@ -43,6 +61,7 @@ CLI composition root --> core config, signing, state and ports
 | [Analytics](04-analytics.md) | Fourteen nodes, records, observability, queries and backfill |
 | [Dashboard design](05-design.md) | Visual foundations, responsive reporting and design acceptance |
 | [Documentation design](06-docs-design.md) | Starlight reading surface, navigation and design acceptance |
+| [Web Functions (SSR)](07-web-functions.md) | `SsrConfig`, package/revision/deploy contract, CloudFront origins, caching and limits |
 | [Canonical schema](canonical-types.schema.json) | Draft 2020-12 JSON entities; callable TypeScript contracts stay in prose/source |
 
 ## Package layout and dependency direction
@@ -72,7 +91,8 @@ context and adds no lifecycle hook.
 
 | Surface | Current behavior |
 | --- | --- |
-| Site lifecycle | Bootstrap, deployment, rollback, status, history, logs, live-prefix deletion and guarded destruction |
+| Site lifecycle | Bootstrap, deployment (static publish or Web Function revision), rollback, status, history, logs, live-prefix deletion and guarded destruction |
+| SSR | Optional `ssr` config mode: MicroVM-built output packaged and published as an immutable Lambda Web Function revision behind the site's CloudFront distribution; preview stacks and multi-region endpoints are not supported |
 | Preview | Separate fixed `preview` environment; shared stack with per-PR prefixes |
 | Plugins | Two manifest-declared consumers; separate state keys and resource graphs |
 | PDS | Stable config/rkeys, production sync and plugin-owned deploy-role grant |

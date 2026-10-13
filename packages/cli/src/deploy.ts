@@ -11,6 +11,7 @@ import {
 } from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
+import type { WebFunctionManifest } from './web-functions.js';
 import { formatDuration, spinnerFrame } from './render.js';
 import { resolveSeo } from './seo.js';
 
@@ -23,6 +24,84 @@ export interface DeployManifest {
   durationMs: number;
   microvmId: string;
   message?: string;
+  /**
+   * The last revision verified for this hash (or found already serving).
+   * Rollback reads it to reproduce the revision a hash is pinned to. A
+   * `failed` manifest carries it only when an earlier outcome for the same
+   * hash was verified - see {@link writeManifest}.
+   */
+  webFunction?: WebFunctionManifest;
+}
+
+/** Read one hash's deployment manifest, or undefined when there is none. */
+export async function readManifest(
+  ctx: OpsContext,
+  hash: string,
+): Promise<DeployManifest | undefined> {
+  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, manifestKey(hash));
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text) as DeployManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write a hash's manifest and return what was written. In SSR mode a `failed`
+ * outcome keeps the `webFunction` block the hash's manifest already carried:
+ * that block is the only record of the artifact version and settings a
+ * verified revision was created with, and a failed redeploy or rollback of the
+ * same hash must not erase what `rollback` reproduces it from.
+ */
+export async function writeManifest(
+  ctx: OpsContext,
+  manifest: DeployManifest,
+  opts: { ssr?: boolean | undefined } = {},
+): Promise<DeployManifest> {
+  let record = manifest;
+  if (opts.ssr && manifest.status === 'failed' && !manifest.webFunction) {
+    const verified = (await readManifest(ctx, manifest.hash))?.webFunction;
+    if (verified) record = { ...manifest, webFunction: verified };
+  }
+  await ctx.clients.s3.putObject(
+    ctx.names.bucket,
+    manifestKey(manifest.hash),
+    JSON.stringify(record, null, 2),
+    'application/json',
+  );
+  return record;
+}
+
+/** Artifact and result keys for one deploy hash. */
+export function artifactKeys(hash: string): { artifactKey: string; resultKey: string } {
+  return { artifactKey: `web/artifacts/${hash}.zip`, resultKey: `web/results/${hash}.json` };
+}
+
+/**
+ * The pending-job half of an SSR build: what to package, what to call the
+ * artifact, and where the agent writes the result the CLI's publish step reads.
+ */
+export interface WebFunctionJob {
+  packageDir: string;
+  entryPoint: string;
+  staticDir?: string | undefined;
+  artifactKey: string;
+  resultKey: string;
+}
+
+/** The SSR packaging job for a hash, from the environment's `ssr` block. */
+export function webFunctionJob(ctx: OpsContext, hash: string): WebFunctionJob {
+  const ssr = ctx.config.ssr;
+  if (!ssr) throw new Error(`environment "${ctx.env}" has no config.ssr block`);
+  const { artifactKey, resultKey } = artifactKeys(hash);
+  return {
+    packageDir: ssr.packageDir,
+    entryPoint: ssr.entryPoint,
+    ...(ssr.staticDir !== undefined ? { staticDir: ssr.staticDir } : {}),
+    artifactKey,
+    resultKey,
+  };
 }
 
 /** Terminal outcome the log poller extracts from the agent's build markers. */
@@ -185,10 +264,18 @@ export async function runBuild(
     objectTags?: Record<string, string> | undefined;
     /** Re-upload every file, so metadata-only fixes (content type, tags) land. */
     refresh?: boolean | undefined;
+    /**
+     * Package the output as a Lambda Web Function revision artifact. When set,
+     * the manifest is left to the publish step: the build outcome alone is not
+     * the deploy outcome.
+     */
+    webFunction?: WebFunctionJob | undefined;
   },
 ): Promise<DeployManifest> {
   const sitePrefix = opts.sitePrefix ?? 'site/';
-  const seo = resolveSeo(ctx, opts.baseUrl);
+  // robots.txt/sitemap.xml are the application's routes in SSR mode, so no SEO
+  // payload is sent (and the agent writes none).
+  const seo = opts.webFunction ? {} : resolveSeo(ctx, opts.baseUrl);
   const pendingKey = `build/pending/${opts.target ?? 'site'}.json`;
   const imageArn = ctx.state.resources['microvm-image']?.arn;
   const execRoleArn = ctx.state.resources['iam-exec-role']?.arn;
@@ -242,6 +329,7 @@ export async function runBuild(
         distDir: ctx.config.paths.dist,
         objectTags: opts.objectTags ?? ctx.tags,
         ...(opts.refresh ? { refresh: true } : {}),
+        ...(opts.webFunction ? { webFunction: opts.webFunction } : {}),
         ...seo,
       }),
       'application/json',
@@ -291,12 +379,12 @@ export async function runBuild(
     microvmId: run.microvmId,
     ...(result.message ? { message: result.message } : {}),
   };
-  await ctx.clients.s3.putObject(
-    ctx.names.bucket,
-    manifestKey(opts.hash),
-    JSON.stringify(manifest, null, 2),
-    'application/json',
-  );
+  // In SSR mode a successful build is NOT yet a successful deploy: the publish
+  // step writes the manifest once the revision outcome is known. A failed build
+  // has no revision to wait for, so it is recorded here.
+  if (manifest.status === 'failed' || !opts.webFunction) {
+    await writeManifest(ctx, manifest, { ssr: Boolean(opts.webFunction) });
+  }
 
   if (manifest.status === 'failed') {
     throw new Error(

@@ -72,6 +72,8 @@ Usage:
 Commands:
   init                        First-run wizard: writes config/production.jsonc
   bootstrap   [env]           Create/reconcile the infrastructure graph
+                              (--switch-mode: move a bootstrapped stack
+                              between static and SSR serving)
   deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
   rollback    <hash> [env]    Re-deploy an existing build by hash
   delete      [env]           Empty the live site/ prefix
@@ -105,6 +107,10 @@ Options:
   --refresh         Re-upload every file on deploy, even unchanged ones, so
                     metadata fixes (content types, object tags) reach live
                     objects the ETag comparison would otherwise skip.
+  --switch-mode     Allow bootstrap to change a bootstrapped stack between
+                    static and SSR serving. Without it that cutover is
+                    refused, because the distribution moves before a deploy
+                    in the new mode exists.
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -1498,6 +1504,70 @@ describe('main - status dispatch', () => {
     // catches each node's read failure - the default test context's clients
     // reject every AWS call - so the command still completes and returns 0.
     expect(terminal.writes[0]).toBe(`Status for "production" (bucket ${ctx.names.bucket})`);
+  });
+});
+
+describe('main - bootstrap --switch-mode', () => {
+  /**
+   * A context whose distribution was left in `static` serving while the config
+   * asks for `ssr` - the one state `bootstrap` refuses without the flag.
+   * `parseArgs` matches option names literally (`--switch-mode`, not a
+   * camelCase spelling), which is what this pins.
+   */
+  function modeSwitchTerminal(): ScriptedTerminal {
+    return createScriptedTerminal({ interactive: false });
+  }
+
+  function modeSwitchFactory(terminal: ScriptedTerminal): ContextFactory {
+    return async (opts) =>
+      createTestContext({
+        env: opts.env,
+        ports: opts.ports,
+        logger: createLogger(terminal),
+        config: { ssr: { entryPoint: 'index.js' } },
+        state: {
+          resources: {
+            'cloudfront-distribution': {
+              id: 'D1',
+              domainName: 'd1.cloudfront.net',
+              mode: 'static',
+            },
+          },
+        },
+      });
+  }
+
+  it('refuses the mode switch without the flag', async () => {
+    const terminal = modeSwitchTerminal();
+    await expect(
+      main(
+        ['bootstrap'],
+        fixedTerminal(terminal),
+        modeSwitchFactory(terminal),
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+      ),
+    ).rejects.toThrow(/refusing to switch "production" from static to ssr serving/);
+  });
+
+  it('parses --switch-mode, repeats the serving window as a warning, and applies the graph', async () => {
+    const terminal = modeSwitchTerminal();
+    // Past the refusal, `applyGraph` runs and the first node's AWS call hits
+    // the test transport's rejection - the point is that the flag PARSED (a
+    // kebab-case key mismatch would fail here with "Unknown option").
+    await expect(
+      main(
+        ['bootstrap', '--switch-mode'],
+        fixedTerminal(terminal),
+        modeSwitchFactory(terminal),
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+      ),
+    ).rejects.toThrow(/unexpected AWS request in test/);
+    // `logger.warn` writes to the terminal's error stream, like every warning.
+    const warnings = terminal.errors.join('\n');
+    expect(warnings).toContain('switching "production" from static to ssr serving');
+    expect(warnings).toContain('503 from the placeholder');
   });
 });
 

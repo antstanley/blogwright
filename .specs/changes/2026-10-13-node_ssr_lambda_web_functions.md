@@ -713,6 +713,7 @@ index. Its body contains these local contracts:
 | Teardown | Destroy removes the distribution, function (with revisions/endpoints), role, both log groups, cache policy and OAC, and empties every version and delete marker before the bucket |
 | Boundaries | `preview bootstrap`/`preview deploy` and `delete` refuse with actionable messages when `ssr` is set; unsupported regions fail validation naming the supported set; a package containing a symbolic link fails the build naming the path |
 | Existing behavior | The six code gates pass; static mode's distribution, bucket and deploy contracts are unchanged; `TZ=America/New_York pnpm test` output is reported |
+| Live AWS (playroom account) | A full bootstrap, deploy, no-op redeploy, settings-only revision, recorded-artifact rollback, both mode switches and destroy ran against real AWS: CloudFront served the SSR route from the `LatestRevision` endpoint (cache hit for `max-age=60`, `no-store` never cached), the `staticPaths` behavior served S3, a static path with no object returned S3's 403, the app's 404 passed through, revision settings (timeout 30/45/60, concurrency 16/32) and the pinned artifact version were read back from the service, and `destroy` left no resource behind |
 | Documentation | The config reference, architecture reference, deploy guide, new SSR guide and troubleshooting page describe only shipped behavior and the exact cache-control contract |
 
 ## Standards and testing references
@@ -787,13 +788,31 @@ The builder architecture comes from the MicroVM API's
   `AWS_LAMBDA_HTTP_ENDPOINT`, natively or through a consumer-owned shim.
   Recipes are documentation; Blogwright does not stage or hoist dependencies,
   or generate the shim, in this change.
-- An IAM authorization failure at the endpoint can be told apart from an
-  answer the application gave. The preflight depends on it, and the HTTP
-  reference says only that Lambda omits `lambda-web-error-type` for
-  authorization failures, so the implementation must pin down the signal.
-- The `lambda-web` request paths (`/2025-03-07`) and CloudFront's
-  1,024-character cache-policy quota were not confirmed against a reference
-  page while this was drafted; confirm both when the clients are written.
+- **Confirmed live.** An IAM authorization failure at the endpoint can be told
+  apart from an answer the application gave: a caller without
+  `lambda:InvokeWebFunctionEndpoint` gets HTTP 403 with no
+  `lambda-web-error-type` header, and every authorized answer (including the
+  placeholder's 503 and the application's own responses) either carries that
+  header or a status below 400. The preflight keys on exactly that pair.
+- **Confirmed during implementation, against the published service model
+  (`botocore/data/lambda-web/2025-03-07/service-2.json`) and live calls.** The
+  `lambda-web` paths are `/2025-03-07/*`, but the verbs and members differ from
+  this draft's guess: `CreateWebFunction` is `PUT /web-functions` taking
+  `revisionConfig`/`endpointConfig`, revisions carry `buildConfig` (code, as
+  `codeConfig.s3Object`, plus `runtimeConfig`) and `serviceConfig` (role,
+  limits, `environmentVariables`, `telemetryConfig`), `ListWebFunctionRevisions`
+  and `ListWebFunctionEndpoints` are POSTs on `list-revisions`/`list-endpoints`,
+  the endpoint's access field is `authType`, and the resource policy lives at
+  `/resource-policy/{functionArn}` with the body/response members spelled
+  `Policy`/`RevisionId`. There is no entry-point field: the entry file reaches
+  the runtime only as `AWS_LAMBDA_NODEJS_ENTRYPOINT`, exactly as the reserved
+  env key implied. CloudFront's cache-policy quota is 10 headers, 128
+  characters per header name, and a joined name list strictly under 1,024
+  characters (1,023 accepted, 1,024 rejected). `AWS_LAMBDA_HTTP_ENDPOINT`
+  exists on the revision, and S3 versioning of the artifact bucket is required
+  by the API itself ("You must enable S3 versioning ... when
+  S3ObjectStorageMode is set to REFERENCE"), as is the Lambda-read bucket
+  statement the bootstrap writes.
 - The site's `region` is one of the launch regions and the operator's
   credentials may create Web Functions there; `lambda-web` is not emulated by
   floci, so integration coverage stays at transport level.

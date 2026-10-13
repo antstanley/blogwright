@@ -31,7 +31,9 @@ import {
   invalidateCloudFront,
   manifestKey,
   microvmLogGroup,
+  readManifest,
   runBuild,
+  webFunctionJob,
   type DeployManifest,
 } from './deploy.js';
 import { applyGraph, destroyGraph, type GraphContext } from './graph.js';
@@ -46,6 +48,19 @@ import {
   type SummaryRow,
 } from './render.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
+import {
+  assertNotSsrForPreviews,
+  preflightWebFunction,
+  recordManifest,
+  publishRecordedRevision,
+  publishWebRevision,
+  readWebBuildResult,
+  requireSsr,
+  warnAboutSsrSeo,
+  type ManifestSource,
+  type PublishOutcome,
+  type WebFunctionBuildResult,
+} from './web-functions.js';
 
 /** One line per invalidation outcome, shared by the summary card and logs. */
 function describeInvalidation(inv: { mode: 'none' | 'paths' | 'all'; count: number }): string {
@@ -64,11 +79,76 @@ function siteBaseUrl(ctx: OpsContext): string | undefined {
   return typeof cf === 'string' ? `https://${cf}` : undefined;
 }
 
+/** The serving mode the config asks for. */
+function configuredMode(ctx: OpsContext): 'static' | 'ssr' {
+  return ctx.config.ssr ? 'ssr' : 'static';
+}
+
+/**
+ * The serving mode the live distribution was left in, or undefined before the
+ * first bootstrap. A distribution recorded without a mode was created before
+ * SSR existed, so it is static - reading that as "unknown" would let the very
+ * stacks the switch guard exists for through it.
+ */
+function recordedMode(ctx: OpsContext): 'static' | 'ssr' | undefined {
+  const distribution = ctx.state.resources['cloudfront-distribution'];
+  if (typeof distribution?.id !== 'string') return undefined;
+  return distribution.mode === 'ssr' ? 'ssr' : 'static';
+}
+
+/**
+ * Refuse to publish in a mode the distribution is not serving. The config and
+ * the stack disagree only between editing `ssr` and re-bootstrapping, and a
+ * deploy in that gap publishes where nothing serves from - or, static over
+ * SSR, deletes the `site/` assets the live revision still references.
+ */
+function assertServingModeMatches(ctx: OpsContext): void {
+  const recorded = recordedMode(ctx);
+  const configured = configuredMode(ctx);
+  if (recorded === undefined || recorded === configured) return;
+  throw new Error(
+    `"${ctx.env}" is configured for ${configured} serving but its distribution serves ` +
+      `${recorded}. Run \`blogwright bootstrap ${ctx.env} --switch-mode\` first; nothing was ` +
+      'built or published.',
+  );
+}
+
+/** What a mode switch does to the live site while the next deploy has not run. */
+function servingWindow(mode: 'static' | 'ssr'): string {
+  return mode === 'ssr'
+    ? 'the distribution answers 503 from the placeholder until the first SSR deploy completes'
+    : 'the distribution serves whatever site/ holds until the next static deploy';
+}
+
+/**
+ * Refuse a silent serving-mode switch on a bootstrapped stack unless
+ * `--switch-mode` says the window is acceptable. A mode difference is a
+ * serving cutover, not a quiet convergence - the distribution's default
+ * behavior moves before a deploy in the new mode exists.
+ */
+export function assertModeSwitchAllowed(ctx: OpsContext, switchMode: boolean): void {
+  const recorded = recordedMode(ctx);
+  if (recorded === undefined) return;
+  const configured = configuredMode(ctx);
+  if (recorded === configured) return;
+  const window = servingWindow(configured);
+  if (!switchMode) {
+    throw new Error(
+      `refusing to switch "${ctx.env}" from ${recorded} to ${configured} serving: ${window}. ` +
+        'Nothing was applied. Re-run with --switch-mode to move the distribution now.',
+    );
+  }
+  ctx.logger.warn(`switching "${ctx.env}" from ${recorded} to ${configured} serving: ${window}`);
+}
+
 /** Create the full infrastructure graph. */
 export async function bootstrap(
   ctx: OpsContext,
   nodes: ResourceNode<OpsContext>[] = buildNodes(ctx),
+  opts: { switchMode?: boolean } = {},
 ): Promise<void> {
+  // Refused before any node is applied, so a refusal has no side effects.
+  assertModeSwitchAllowed(ctx, opts.switchMode ?? false);
   ctx.logger.info(colors.bold(`Bootstrapping "${ctx.env}" (bucket ${ctx.names.bucket})`));
   // The state bucket must exist before anything else can persist state.
   await applyGraph(nodes, ctx);
@@ -236,12 +316,53 @@ export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<
   ctx.logger.ok(`destroyed "${ctx.env}"`);
 }
 
+/** The manifest source a publish step records timings under. */
+function manifestSource(
+  ctx: OpsContext,
+  hash: string,
+  startedAtMs: number,
+  microvmId: string,
+): ManifestSource {
+  return {
+    hash,
+    sourceKey: `build/${hash}.zip`,
+    startedAt: new Date(startedAtMs),
+    microvmId,
+  };
+}
+
+/**
+ * Read the agent's SSR result, recording a `failed` manifest when it is not
+ * there. A build that reported success but produced no result file has no
+ * revision outcome to wait for, and an SSR manifest's status is the outcome of
+ * the whole deploy - so the deploy cannot simply leave the hash unrecorded.
+ */
+async function webBuildResultOrFail(
+  ctx: OpsContext,
+  source: ManifestSource,
+): Promise<WebFunctionBuildResult> {
+  try {
+    return await readWebBuildResult(ctx, source.hash);
+  } catch (err) {
+    await recordManifest(ctx, source, 'failed', undefined, (err as Error).message);
+    throw err;
+  }
+}
+
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
 export async function deploy(ctx: OpsContext, opts: { refresh?: boolean } = {}): Promise<void> {
   const startedAt = Date.now();
   const cwd = await findRepoRoot(ctx.ports.fs);
   const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
+  assertServingModeMatches(ctx);
+
+  // In SSR mode the endpoint probe is mandatory and comes first: a caller that
+  // cannot invoke the endpoint is stopped before anything is built or published.
+  if (ctx.config.ssr) {
+    warnAboutSsrSeo(ctx);
+    await preflightWebFunction(ctx);
+  }
 
   const files = await listRepoFiles(
     ctx.ports,
@@ -262,15 +383,31 @@ export async function deploy(ctx: OpsContext, opts: { refresh?: boolean } = {}):
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
+    ...(ctx.config.ssr ? { webFunction: webFunctionJob(ctx, hash) } : {}),
     ...(opts.refresh ? { refresh: true } : {}),
   });
-  const invalidation = await invalidateChanged(ctx, hash);
+
+  let invalidation;
+  let outcome: PublishOutcome | undefined;
+  if (ctx.config.ssr) {
+    const source = manifestSource(ctx, hash, startedAt, manifest.microvmId);
+    const result = await webBuildResultOrFail(ctx, source);
+    outcome = await publishWebRevision(ctx, source, result);
+    invalidation = outcome.invalidation;
+  } else {
+    invalidation = await invalidateChanged(ctx, hash);
+  }
   // Production content changed - mirror it to the PDS (non-fatal; see syncAfterDeploy).
   await syncAfterDeploy(ctx);
 
   const url = siteBaseUrl(ctx);
   const rows: SummaryRow[] = [
-    { label: 'revision', value: hash },
+    {
+      label: 'revision',
+      value: outcome
+        ? `${outcome.revisionId} (${outcome.created ? 'created' : 'unchanged'})`
+        : hash,
+    },
     { label: 'environment', value: ctx.env },
     { label: 'source', value: `${files.length} files, ${(zip.byteLength / 1024).toFixed(0)} KiB` },
     { label: 'build', value: formatDuration(manifest.durationMs) },
@@ -283,12 +420,95 @@ export async function deploy(ctx: OpsContext, opts: { refresh?: boolean } = {}):
   ctx.logger.ok(`deployed ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
+/**
+ * SSR rollback: reproduce a recorded revision from its artifact and settings
+ * without a rebuild, falling back to the build path when the manifest has no
+ * `webFunction` block, the recorded artifact version is gone, or `staticDir`
+ * means the artifact does not carry the assets its pages reference.
+ */
+async function rollbackSsr(
+  ctx: OpsContext,
+  hash: string,
+  opts: { refresh?: boolean } = {},
+): Promise<void> {
+  const startedAt = Date.now();
+  warnAboutSsrSeo(ctx);
+  const config = requireSsr(ctx);
+  const manifest = await readManifest(ctx, hash);
+  const recorded = manifest?.webFunction;
+  // With staticDir configured the artifact cannot reproduce the rollback at all
+  // (it carries only the server), so the version check is not worth a request.
+  const artifactGone =
+    recorded && config.staticDir === undefined
+      ? !(await ctx.clients.s3.objectVersionExists(
+          ctx.names.bucket,
+          recorded.artifactKey,
+          recorded.artifactVersionId,
+        ))
+      : false;
+  const rebuild = !recorded || config.staticDir !== undefined || artifactGone;
+  // Both paths probe: the endpoint is the only evidence that a rollback serves.
+  await preflightWebFunction(ctx);
+
+  let outcome: PublishOutcome;
+  if (rebuild) {
+    if (!recorded) ctx.logger.warn(`${hash} has no webFunction manifest block - rebuilding`);
+    else if (config.staticDir !== undefined) {
+      ctx.logger.warn('ssr.staticDir is configured - rebuilding so its assets are republished');
+    } else ctx.logger.warn(`artifact version ${recorded.artifactVersionId} is gone - rebuilding`);
+
+    const sourceKey = `build/${hash}.zip`;
+    if (!(await ctx.clients.s3.objectExists(ctx.names.bucket, sourceKey))) {
+      throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
+    }
+    await reconcileBuilderImage(ctx);
+    const build = await runBuild(ctx, {
+      hash,
+      sourceKey,
+      baseUrl: siteBaseUrl(ctx),
+      webFunction: webFunctionJob(ctx, hash),
+      ...(opts.refresh ? { refresh: true } : {}),
+    });
+    const source = manifestSource(ctx, hash, startedAt, build.microvmId);
+    const result = await webBuildResultOrFail(ctx, source);
+    outcome = await publishWebRevision(ctx, source, result);
+  } else {
+    outcome = await publishRecordedRevision(
+      ctx,
+      {
+        hash,
+        sourceKey: `build/${hash}.zip`,
+        startedAt: new Date(startedAt),
+        microvmId: 'rollback',
+      },
+      recorded,
+    );
+  }
+
+  ctx.logger.info(
+    `  revision ${outcome.revisionId} (${outcome.created ? 'created' : 'unchanged'}), ` +
+      `${describeInvalidation(outcome.invalidation)}`,
+  );
+
+  // A rollback changes production content too, but the PDS mirrors the *working tree*
+  // content, which a rollback does not restore - so only warn about the divergence.
+  if (ctx.env === 'production' && ctx.config.pds) {
+    ctx.logger.warn(
+      'rollback does not sync the PDS (records mirror the current repo content); ' +
+        'check out the rolled-back revision and run `blogwright pds sync` if needed',
+    );
+  }
+  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
+}
+
 /** Re-run the builder against an existing source zip for the given hash. */
 export async function rollback(
   ctx: OpsContext,
   hash: string,
   opts: { refresh?: boolean } = {},
 ): Promise<void> {
+  assertServingModeMatches(ctx);
+  if (ctx.config.ssr) return rollbackSsr(ctx, hash, opts);
   const sourceKey = `build/${hash}.zip`;
   if (!(await ctx.clients.s3.objectExists(ctx.names.bucket, sourceKey))) {
     throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
@@ -321,6 +541,7 @@ function assertPreviewId(id: string): void {
 
 /** Provision the shared preview stack (one CloudFront distribution + host router + OIDC role). */
 export async function previewBootstrap(ctx: OpsContext): Promise<void> {
+  assertNotSsrForPreviews(ctx);
   if (!ctx.domain)
     throw new Error('preview bootstrap requires a domain (e.g. preview.example.com)');
   ctx.logger.info(colors.bold(`Bootstrapping preview stack (bucket ${ctx.names.bucket})`));
@@ -334,6 +555,7 @@ export async function previewDeploy(
   id: string,
   opts: { refresh?: boolean } = {},
 ): Promise<string> {
+  assertNotSsrForPreviews(ctx);
   assertPreviewId(id);
   const startedAt = Date.now();
   const cwd = await findRepoRoot(ctx.ports.fs);
@@ -405,6 +627,17 @@ export async function previewTeardown(ctx: OpsContext, opts: { yes: boolean }): 
 
 /** Empty the live site/ prefix (leaves infra and build history intact). */
 export async function deleteSite(ctx: OpsContext): Promise<void> {
+  if (ctx.config.ssr) {
+    // Emptying site/ cannot unpublish a revision: the app renders every page
+    // the revision serves, and its routes would keep answering from a server
+    // whose static assets are gone.
+    throw new Error(
+      `refusing to delete site/ for "${ctx.env}": the site is served by a Lambda Web Function ` +
+        'revision, and emptying site/ cannot unpublish it. Deploy a new revision (or roll back), ' +
+        `or switch the stack back to static serving with \`blogwright bootstrap ${ctx.env} ` +
+        '--switch-mode` and deploy before deleting.',
+    );
+  }
   const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, 'site/');
   ctx.logger.ok(`deleted ${count} object(s) under site/`);
   await invalidateCloudFront(ctx);

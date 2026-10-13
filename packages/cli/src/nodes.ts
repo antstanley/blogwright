@@ -1,14 +1,25 @@
 import {
+  ALL_VIEWER_EXCEPT_HOST_HEADER,
   AwsError,
   CACHING_DISABLED,
+  CACHING_OPTIMIZED,
   CLOUDFRONT_ALIAS_ZONE_ID,
+  MICROVM_CPU_ARCHITECTURE,
   pollUntil,
+  REPRODUCIBLE_ZIP_MTIME,
   textTag,
+  WEB_FUNCTION_RUNTIME,
+  withRetry,
   type CreateImageInput,
   type DeliverySummary,
+  type DistributionConfigInput,
   type DistributionListItem,
+  type DistributionOriginInput,
   type ResourceNode as CoreResourceNode,
+  type SsrConfig,
+  type WebFunctionEndpoint,
 } from 'blogwright-core';
+import { strToU8, zipSync } from 'fflate';
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
@@ -41,6 +52,21 @@ async function applyBucketConfiguration(ctx: OpsContext): Promise<void> {
   await ctx.clients.s3.putPublicAccessBlock(ctx.names.bucket);
 }
 
+/**
+ * Enable versioning when (and only when) the environment is in SSR mode. Once
+ * enabled it is never suspended - suspending would not remove the versions
+ * already retained and would break the artifact pins a revision depends on -
+ * so a config that drops `ssr` keeps versioning and only stops relying on it.
+ */
+async function ensureBucketVersioning(ctx: OpsContext): Promise<void> {
+  if (!ctx.config.ssr) return;
+  const out = output(ctx, 'bucket');
+  if (out.versioned === true) return;
+  const status = await ctx.clients.s3.getBucketVersioning(ctx.names.bucket);
+  if (status !== 'Enabled') await ctx.clients.s3.putBucketVersioning(ctx.names.bucket, 'Enabled');
+  out.versioned = true;
+}
+
 /** The S3 bucket holding build artifacts, the live site, and topology state. */
 function bucketNode(): ResourceNode {
   return {
@@ -58,15 +84,22 @@ function bucketNode(): ResourceNode {
       // and tagging/PAB must still leave the bucket recorded in state.
       output(ctx, 'bucket').name = ctx.names.bucket;
       await applyBucketConfiguration(ctx);
+      await ensureBucketVersioning(ctx);
     },
     async update(ctx) {
       // Reconcile on every apply: a bucket created by a crashed earlier run (before
       // its tagging/PAB calls) converges to the configured shape on the next run.
       await applyBucketConfiguration(ctx);
+      // Versioning is only ever turned ON here, so a stack that gained `ssr` after
+      // bootstrapping converges and one that lost it is left alone.
+      await ensureBucketVersioning(ctx);
     },
     async delete(ctx) {
-      // Empty every prefix (site/build/state) before removing the bucket.
-      await ctx.clients.s3.deletePrefix(ctx.names.bucket, '');
+      // Version-aware removal is the ONLY way to empty a versioned bucket: a plain
+      // delete leaves delete markers and noncurrent versions behind, and the
+      // bucket then cannot be deleted. `deletePrefix` keeps its plain-delete
+      // behaviour for every other caller (`blogwright delete`, preview destroy).
+      await ctx.clients.s3.deleteAllVersions(ctx.names.bucket, '');
       await ctx.clients.s3.deleteBucket(ctx.names.bucket);
     },
   };
@@ -118,6 +151,26 @@ const LAMBDA_TRUST = {
 };
 
 /** IAM role Lambda assumes while building the MicroVM image. */
+/**
+ * S3 write grants the agent needs in SSR mode: the artifact zip and its
+ * `web/results/<hash>.json` sidecar. Static mode's roles can write only
+ * `site/*` and their `build/` prefixes, so without these the agent's upload
+ * would be denied.
+ */
+function webArtifactWriteStatements(ctx: OpsContext): object[] {
+  if (!ctx.config.ssr) return [];
+  return [
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObject'],
+      Resource: [
+        `arn:aws:s3:::${ctx.names.bucket}/web/artifacts/*`,
+        `arn:aws:s3:::${ctx.names.bucket}/web/results/*`,
+      ],
+    },
+  ];
+}
+
 /** Apply the build role's inline policy (idempotent - used by create + update). */
 async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
   // The build role is BOTH the image-build role AND the MicroVM's ambient runtime
@@ -142,6 +195,7 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
         Action: ['s3:PutObject'],
         Resource: `arn:aws:s3:::${ctx.names.bucket}/build/changed/*`,
       },
+      ...webArtifactWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
@@ -204,6 +258,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
           `arn:aws:s3:::${ctx.names.bucket}/build/changed/*`,
         ],
       },
+      ...webArtifactWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['s3:ListBucket'],
@@ -264,9 +319,15 @@ async function imageInput(ctx: OpsContext): Promise<{ input: CreateImageInput; h
       // resolves credentials from IMDS (→ the build role identity). Hookless: hooks are
       // delivered over TLS which the agent can't satisfy, and are unnecessary here.
       environmentVariables: { BUILD_BUCKET: ctx.names.bucket, BUILD_REGION: ctx.config.region },
+      // Arm64 in every environment, so what the build compiles or installs matches
+      // the Web Function runtime (and `ARM_64` is the API's only value). Sent on
+      // create AND update, because `imageBody` emits it either way.
+      cpuConfigurations: [{ architecture: MICROVM_CPU_ARCHITECTURE }],
       // Scoped by image name, not just agent hash: two environments in one account
       // share the hash, and reusing a clientToken with different parameters is a 400.
-      clientToken: `img-${ctx.names.microvmImage}-${artifact.hash}`,
+      // The architecture is part of the token because adding it to a request that
+      // reused an older token's parameters would be exactly that 400.
+      clientToken: `img-${ctx.names.microvmImage}-arm64-${artifact.hash}`,
       description: `${ctx.config.siteName} ${ctx.env} builder`,
     },
   };
@@ -366,6 +427,10 @@ export async function reconcileBuilderImage(ctx: OpsContext): Promise<void> {
 
   out.agentHash = hash;
   out.logGroup = ctx.names.microvmLogGroup;
+  // Record the architecture the request stated. Deliberately not a rebuild
+  // reason when a legacy state record lacks it: `ARM_64` is the API's only
+  // value, so an image created before this field existed already runs it.
+  out.cpuArchitecture = MICROVM_CPU_ARCHITECTURE;
   await ctx.save();
 }
 
@@ -491,12 +556,425 @@ function oacNode(): ResourceNode {
       return typeof output(ctx, 'oac').id === 'string';
     },
     async create(ctx) {
-      const id = await ctx.clients.cloudfront.createOriginAccessControl(ctx.names.oac);
+      const id = await ctx.clients.cloudfront.createOriginAccessControl({
+        name: ctx.names.oac,
+        originType: 's3',
+      });
       output(ctx, 'oac').id = id;
     },
     async delete(ctx) {
       const id = output(ctx, 'oac').id;
       if (typeof id === 'string') await ctx.clients.cloudfront.deleteOriginAccessControl(id);
+    },
+  };
+}
+
+/**
+ * CloudFront Origin Access Control for the Web Function origin: `lambda` origin
+ * type, `always-amz-auth` signing, so every distribution request to the
+ * endpoint is SigV4-signed and the endpoint's resource policy can admit exactly
+ * this distribution.
+ */
+function webOacNode(): ResourceNode {
+  return {
+    id: 'web-oac',
+    dependsOn: [],
+    title: 'CloudFront Web Function OAC',
+    async read(ctx) {
+      return typeof output(ctx, 'web-oac').id === 'string';
+    },
+    async create(ctx) {
+      const id = await ctx.clients.cloudfront.createOriginAccessControl({
+        name: ctx.names.webOac,
+        originType: 'lambda',
+        signingBehavior: 'always-amz-auth',
+      });
+      output(ctx, 'web-oac').id = id;
+    },
+    async delete(ctx) {
+      const id = output(ctx, 'web-oac').id;
+      if (typeof id === 'string') await ctx.clients.cloudfront.deleteOriginAccessControl(id);
+    },
+  };
+}
+
+/** The environment's SSR config. Web nodes only exist when it is set. */
+function ssrConfig(ctx: OpsContext): SsrConfig {
+  const config = ctx.config.ssr;
+  if (!config) throw new Error('SSR node built for an environment without config.ssr');
+  return config;
+}
+
+/** The name of the Web Function's single endpoint (route to its newest revision). */
+const WEB_FUNCTION_ENDPOINT_NAME = 'site';
+/** Where the CLI-owned placeholder package lives, inside the Lambda-read prefix. */
+export const PLACEHOLDER_ARTIFACT_KEY = 'web/artifacts/placeholder.zip';
+
+/**
+ * The placeholder the Web Function serves until the first deploy: a tiny
+ * CLI-owned server that listens on `AWS_LAMBDA_HTTP_ENDPOINT` and answers 503.
+ * Zipped with a fixed timestamp so identical bytes never churn.
+ */
+export function placeholderPackageZip(): Uint8Array {
+  const code =
+    `import { createServer } from 'node:http';\n` +
+    `const address = process.env.AWS_LAMBDA_HTTP_ENDPOINT ?? '0.0.0.0:8080';\n` +
+    `const index = address.lastIndexOf(':');\n` +
+    `const host = address.slice(0, index);\n` +
+    `const port = Number(address.slice(index + 1));\n` +
+    `createServer((_req, res) => {\n` +
+    `  res.writeHead(503, { 'content-type': 'text/plain' });\n` +
+    `  res.end('blogwright: waiting for the first SSR deploy\\n');\n` +
+    `}).listen(port, host);\n`;
+  return zipSync({ 'index.js': strToU8(code) }, { level: 6, mtime: REPRODUCIBLE_ZIP_MTIME });
+}
+
+/**
+ * The SSR cache policy's desired shape: cache only what the application marks
+ * cacheable, key on every query string and exactly the operator-declared
+ * headers, forward cookies without keying on them, and compress.
+ */
+function ssrCachePolicyInput(ctx: OpsContext) {
+  return {
+    name: ctx.names.ssrCachePolicy,
+    comment: `${ctx.config.siteName} ${ctx.env} SSR responses`,
+    minTtl: 0,
+    defaultTtl: 0,
+    maxTtl: 31_536_000,
+    headerNames: ssrConfig(ctx).cacheKeyHeaders,
+    queryStrings: 'all' as const,
+    cookies: 'none' as const,
+    gzip: true,
+    brotli: true,
+  };
+}
+
+/** Blogwright-managed CloudFront cache policy for the SSR default behavior. */
+function webCachePolicyNode(): ResourceNode {
+  return {
+    id: 'web-cache-policy',
+    dependsOn: [],
+    title: 'CloudFront SSR cache policy',
+    async read(ctx) {
+      const id = output(ctx, 'web-cache-policy').id;
+      if (typeof id !== 'string') return false;
+      // Existence only: a policy that drifted from the config (a changed
+      // `cacheKeyHeaders`) is `update`'s to converge. Reporting it absent would
+      // send the graph to `create`, which CloudFront refuses for a taken name.
+      return Boolean(await ctx.clients.cloudfront.getCachePolicy(id));
+    },
+    async create(ctx) {
+      const { id } = await ctx.clients.cloudfront.createCachePolicy(ssrCachePolicyInput(ctx));
+      output(ctx, 'web-cache-policy').id = id;
+    },
+    async update(ctx) {
+      const id = output(ctx, 'web-cache-policy').id;
+      if (typeof id !== 'string') return;
+      const policy = await ctx.clients.cloudfront.getCachePolicy(id);
+      if (!policy) return;
+      if (ctx.clients.cloudfront.cachePolicyMatches(policy.config, ssrCachePolicyInput(ctx)))
+        return;
+      await ctx.clients.cloudfront.updateCachePolicy(id, ssrCachePolicyInput(ctx), policy.etag);
+    },
+    async delete(ctx) {
+      const id = output(ctx, 'web-cache-policy').id;
+      if (typeof id === 'string') await ctx.clients.cloudfront.deleteCachePolicy(id);
+    },
+  };
+}
+
+/**
+ * Merge one named statement into the bucket's policy, preserving every other
+ * statement - so `bucket-policy`'s `AllowCloudFrontRead` and
+ * `web-code-bucket-policy`'s `AllowLambdaWebFunctionCodeAccess` are separate
+ * Sids, each re-applied by its own node without disturbing the other.
+ */
+async function mergeBucketPolicyStatement(
+  ctx: OpsContext,
+  sid: string,
+  statement: object,
+): Promise<void> {
+  const current = await ctx.clients.s3.getBucketPolicy(ctx.names.bucket);
+  let statements: object[] = [];
+  if (current) {
+    try {
+      const parsed = JSON.parse(current) as { Statement?: object[] };
+      if (Array.isArray(parsed.Statement)) statements = parsed.Statement;
+    } catch {
+      // A corrupt policy is rewritten from the statements this stack owns.
+    }
+  }
+  const kept = statements.filter((s) => (s as { Sid?: string }).Sid !== sid);
+  await ctx.clients.s3.putBucketPolicy(
+    ctx.names.bucket,
+    JSON.stringify({ Version: '2012-10-17', Statement: [...kept, statement] }),
+  );
+}
+
+/** The Lambda-read statement: this function's revisions may read the artifact prefix. */
+function webCodeBucketPolicyStatement(ctx: OpsContext): object {
+  return {
+    Sid: 'AllowLambdaWebFunctionCodeAccess',
+    Effect: 'Allow',
+    Principal: { Service: 'lambda.amazonaws.com' },
+    Action: ['s3:GetObject', 's3:GetObjectVersion'],
+    Resource: `arn:aws:s3:::${ctx.names.bucket}/web/artifacts/*`,
+    Condition: {
+      ArnLike: {
+        // Scoped to THIS function's revisions, so no other account's function can
+        // have Lambda read this bucket on its behalf. The ARN is derivable from
+        // the function name, so the statement can be written before it exists.
+        'AWS:SourceArn': `arn:aws:lambda:${ctx.config.region}:${ctx.accountId}:web-function/${ctx.names.webFunction}/revision/*`,
+      },
+    },
+  };
+}
+
+/** Bucket statement granting Lambda read on the revision artifact prefix. */
+function webCodeBucketPolicyNode(): ResourceNode {
+  return {
+    id: 'web-code-bucket-policy',
+    dependsOn: ['bucket'],
+    title: 'S3 bucket policy (Web Function code)',
+    async read() {
+      // Always reconcile: tracks the function's derived revision ARN.
+      return false;
+    },
+    async create(ctx) {
+      await mergeBucketPolicyStatement(
+        ctx,
+        'AllowLambdaWebFunctionCodeAccess',
+        webCodeBucketPolicyStatement(ctx),
+      );
+      output(ctx, 'web-code-bucket-policy').applied = true;
+    },
+    async delete() {
+      // Removed together with the bucket during destroy.
+    },
+  };
+}
+
+/**
+ * Retry bound for the two things that lag a just-created resource: IAM has not
+ * finished making the execution role assumable, and the bucket policy has not
+ * propagated so Lambda cannot read the placeholder artifact. Both surface as a
+ * 400/403 naming the role or the S3 action; anything else is thrown at once.
+ */
+const WEB_FUNCTION_PROPAGATION_ERROR =
+  /cannot be assumed by|unable to assume role|not authorized to perform: s3:GetObject/i;
+
+function whileWebFunctionPropagating<T>(call: () => Promise<T>): Promise<T> {
+  return withRetry(call, {
+    attempts: 15,
+    baseDelayMs: 1_000,
+    maxDelayMs: 5_000,
+    retryable: (err) =>
+      err instanceof AwsError &&
+      (err.statusCode === 400 || err.statusCode === 403) &&
+      WEB_FUNCTION_PROPAGATION_ERROR.test(err.message),
+  });
+}
+
+/** True for the conflict a same-named function already existing produces. */
+function isFunctionConflict(err: unknown): boolean {
+  return err instanceof AwsError && /Conflict|AlreadyExists|ResourceInUse/i.test(err.code);
+}
+
+/** Record an endpoint's identity in the function node's outputs. */
+function recordEndpoint(ctx: OpsContext, endpoint: WebFunctionEndpoint): void {
+  const out = output(ctx, 'web-function');
+  out.endpointName = endpoint.endpointName;
+  if (endpoint.endpointArn) out.endpointArn = endpoint.endpointArn;
+  if (endpoint.domainName) out.endpointDomainName = endpoint.domainName;
+}
+
+/** Ensure the function's `site` endpoint exists, and record its identity. */
+async function ensureWebFunctionEndpoint(ctx: OpsContext): Promise<void> {
+  const name = ctx.names.webFunction;
+  const existing = await ctx.clients.lambdaWeb.getWebFunctionEndpoint(
+    name,
+    WEB_FUNCTION_ENDPOINT_NAME,
+  );
+  const endpoint =
+    existing ??
+    (await ctx.clients.lambdaWeb.createWebFunctionEndpoint({
+      functionName: name,
+      endpointName: WEB_FUNCTION_ENDPOINT_NAME,
+      endpointType: 'HomeRegion',
+      authType: 'IamAuth',
+      autoDeploymentMode: 'LatestRevision',
+    }));
+  recordEndpoint(ctx, endpoint);
+  if (!existing && endpoint.domainName) {
+    ctx.logger.info(`  endpoint: https://${endpoint.domainName}`);
+  }
+}
+
+/**
+ * The Web Function itself, with its placeholder revision and `site` endpoint.
+ * Bootstrap never cuts a real revision: the endpoint converges to whatever the
+ * first deploy creates.
+ */
+function webFunctionNode(): ResourceNode {
+  return {
+    id: 'web-function',
+    dependsOn: ['bucket', 'iam-web-role', 'web-code-bucket-policy'],
+    title: 'Lambda Web Function',
+    async read(ctx) {
+      const name = ctx.names.webFunction;
+      const fn = await ctx.clients.lambdaWeb.getWebFunction(name);
+      if (!fn) return false;
+      const out = output(ctx, 'web-function');
+      out.name = name;
+      if (fn.functionArn) out.arn = fn.functionArn;
+      const endpoint = await ctx.clients.lambdaWeb.getWebFunctionEndpoint(
+        name,
+        WEB_FUNCTION_ENDPOINT_NAME,
+      );
+      if (endpoint) recordEndpoint(ctx, endpoint);
+      return true;
+    },
+    async create(ctx) {
+      const name = ctx.names.webFunction;
+      const config = ssrConfig(ctx);
+      const out = output(ctx, 'web-function');
+      // The placeholder must be in the prefix the Lambda-read bucket statement
+      // covers BEFORE the function is created: Lambda checks its own read access
+      // when it creates the initial revision and rejects the request otherwise.
+      const version = await ctx.clients.s3.putObject(
+        ctx.names.bucket,
+        PLACEHOLDER_ARTIFACT_KEY,
+        placeholderPackageZip(),
+        'application/zip',
+      );
+      const s3Object = {
+        bucket: ctx.names.bucket,
+        key: PLACEHOLDER_ARTIFACT_KEY,
+        ...(version ? { versionId: version } : {}),
+      };
+      let fn;
+      try {
+        fn = await whileWebFunctionPropagating(() =>
+          ctx.clients.lambdaWeb.createWebFunction({
+            functionName: name,
+            revisionConfig: {
+              // Never `blogwright:<fingerprint>`: a deploy must not mistake the
+              // placeholder for a revision it already published.
+              description: 'blogwright:placeholder',
+              buildConfig: {
+                codeConfig: { s3Object },
+                runtimeConfig: { runtime: WEB_FUNCTION_RUNTIME },
+              },
+              serviceConfig: {
+                executionRoleArn: String(output(ctx, 'iam-web-role').arn),
+                timeoutSeconds: config.timeoutSeconds,
+                maxConcurrencyPerEnvironment: config.maxConcurrencyPerEnvironment,
+                environmentVariables: { NODE_ENV: 'production', ...config.env },
+                telemetryConfig: { loggingConfig: { logGroup: ctx.names.webLogGroup } },
+              },
+            },
+            endpointConfig: {
+              endpointName: WEB_FUNCTION_ENDPOINT_NAME,
+              endpointType: 'HomeRegion',
+              authType: 'IamAuth',
+              autoDeploymentMode: 'LatestRevision',
+            },
+            tags: ctx.tags,
+          }),
+        );
+      } catch (err) {
+        // A crashed earlier bootstrap can leave a function AWS has and state does
+        // not. When the name is taken by this site's function, adopt it instead of
+        // failing the whole bootstrap; a foreign function's conflict still surfaces.
+        if (!isFunctionConflict(err)) throw err;
+        fn = await ctx.clients.lambdaWeb.getWebFunction(name);
+        if (!fn) throw err;
+        ctx.logger.ok(`adopted existing web function ${name} (created by an earlier run)`);
+      }
+      // Record the ARN before the endpoint: a crash in between still leaves the
+      // function destroyable.
+      out.name = name;
+      if (fn.functionArn) out.arn = fn.functionArn;
+      if (fn.revision?.revisionId) out.placeholderRevisionId = fn.revision.revisionId;
+      if (fn.endpoint) {
+        // Create returns the initial endpoint, so a fresh bootstrap needs no
+        // second round trip to learn the domain it just made.
+        recordEndpoint(ctx, fn.endpoint);
+        await ctx.save();
+      } else {
+        await ctx.save();
+        await ensureWebFunctionEndpoint(ctx);
+      }
+    },
+    async update(ctx) {
+      await ensureWebFunctionEndpoint(ctx);
+    },
+    async delete(ctx) {
+      // Deleting the function removes its revisions and endpoints with it.
+      await ctx.clients.lambdaWeb.deleteWebFunction(ctx.names.webFunction);
+    },
+  };
+}
+
+/** The resource-policy statement admitting exactly this distribution. */
+function webFunctionPolicyStatement(ctx: OpsContext): object {
+  return {
+    Sid: 'AllowCloudFrontOACAccess',
+    Effect: 'Allow',
+    Principal: { Service: 'cloudfront.amazonaws.com' },
+    Action: 'lambda:InvokeWebFunctionEndpoint',
+    Resource: String(output(ctx, 'web-function').endpointArn),
+    Condition: { ArnLike: { 'AWS:SourceArn': String(output(ctx, 'cloudfront-distribution').arn) } },
+  };
+}
+
+function webFunctionPolicyNode(): ResourceNode {
+  return {
+    id: 'web-function-policy',
+    dependsOn: ['web-function', 'cloudfront-distribution'],
+    title: 'Web Function resource policy',
+    async read(ctx) {
+      const functionArn = String(output(ctx, 'web-function').arn);
+      const current = await ctx.clients.lambdaWeb.getResourcePolicy(functionArn);
+      if (!current?.policy) return false;
+      try {
+        const parsed = JSON.parse(current.policy) as { Statement?: object[] };
+        const existing = (parsed.Statement ?? []).find(
+          (s) => (s as { Sid?: string }).Sid === 'AllowCloudFrontOACAccess',
+        );
+        return JSON.stringify(existing) === JSON.stringify(webFunctionPolicyStatement(ctx));
+      } catch {
+        return false;
+      }
+    },
+    async create(ctx) {
+      const functionArn = String(output(ctx, 'web-function').arn);
+      const current = await ctx.clients.lambdaWeb.getResourcePolicy(functionArn);
+      let statements: object[] = [];
+      if (current?.policy) {
+        try {
+          const parsed = JSON.parse(current.policy) as { Statement?: object[] };
+          if (Array.isArray(parsed.Statement)) statements = parsed.Statement;
+        } catch {
+          // Rewrite from the statement this stack owns.
+        }
+      }
+      const kept = statements.filter(
+        (s) => (s as { Sid?: string }).Sid !== 'AllowCloudFrontOACAccess',
+      );
+      const result = await ctx.clients.lambdaWeb.putResourcePolicy(
+        functionArn,
+        JSON.stringify({
+          Version: '2012-10-17',
+          Statement: [...kept, webFunctionPolicyStatement(ctx)],
+        }),
+      );
+      const out = output(ctx, 'web-function-policy');
+      out.applied = true;
+      if (result.revisionId) out.revisionId = result.revisionId;
+    },
+    async delete() {
+      // Deleting the function removes its resource policy with it.
     },
   };
 }
@@ -589,13 +1067,107 @@ async function findAdoptableDistribution(
   return undefined;
 }
 
+/** `static` unless the environment's config carries an `ssr` block. */
+function servingMode(ctx: OpsContext): 'static' | 'ssr' {
+  return ctx.config.ssr ? 'ssr' : 'static';
+}
+
+/**
+ * The distribution shape Blogwright owns for a mode. Static mode renders
+ * exactly the single-origin, single-behavior document the builder has always
+ * produced; SSR mode adds the Web Function origin and the per-behavior
+ * policies the serving contract specifies.
+ */
+function distributionShape(
+  ctx: OpsContext,
+  mode: 'static' | 'ssr',
+  preview: boolean,
+): DistributionConfigInput {
+  const s3Origin: DistributionOriginInput = {
+    id: 's3-site',
+    domainName: `${ctx.names.bucket}.s3.${ctx.config.region}.amazonaws.com`,
+    // Preview: function rewrites the full path, so the origin path is the bucket root.
+    originPath: preview ? '' : '/site',
+    kind: 's3',
+    originAccessControlId: String(output(ctx, 'oac').id),
+  };
+  const shared = {
+    callerReference: `${ctx.names.prefix}-${ctx.accountId}`,
+    comment: `${ctx.config.siteName} ${ctx.env}`,
+    aliases: ctx.domain ? [preview ? `*.${ctx.domain}` : ctx.domain] : [],
+    acmCertificateArn: ctx.domain ? String(output(ctx, 'acm-certificate').arn) : undefined,
+  };
+
+  if (mode === 'ssr') {
+    const config = ssrConfig(ctx);
+    return {
+      ...shared,
+      // The app answers `/`; a root object would only intercept it.
+      defaultRootObject: '',
+      origins: [
+        s3Origin,
+        {
+          id: 'web-function',
+          domainName: String(output(ctx, 'web-function').endpointDomainName),
+          originPath: '',
+          kind: 'web-function',
+          originAccessControlId: String(output(ctx, 'web-oac').id),
+          // Streamed responses must not be cut at CloudFront's 30-second default.
+          originReadTimeoutSeconds: 60,
+        },
+      ],
+      defaultBehavior: {
+        targetOriginId: 'web-function',
+        cachePolicyId: String(output(ctx, 'web-cache-policy').id),
+        originRequestPolicyId: ALL_VIEWER_EXCEPT_HOST_HEADER,
+        allowedMethods: ['GET', 'HEAD', 'OPTIONS', 'PUT', 'POST', 'PATCH', 'DELETE'],
+      },
+      orderedBehaviors: config.staticPaths.map((pathPattern) => ({
+        pathPattern,
+        targetOriginId: 's3-site',
+        cachePolicyId: CACHING_OPTIMIZED,
+      })),
+      // No custom error responses: the application owns 404s, and error
+      // responses are distribution-wide, so the static behaviors have none either.
+    };
+  }
+
+  return {
+    ...shared,
+    defaultRootObject: ctx.config.defaultRootObject,
+    origins: [s3Origin],
+    defaultBehavior: {
+      targetOriginId: 's3-site',
+      // Previews are served uncached (per-PR content, host-routed); staging/production
+      // keep the default cache policy.
+      cachePolicyId: preview ? CACHING_DISABLED : CACHING_OPTIMIZED,
+      functionArn: String(output(ctx, 'cloudfront-function').arn),
+    },
+    // Non-preview stacks map the S3 REST origin's 403/404 (a missing key) to the
+    // site's 404 page - or, in SPA mode, to /index.html with a 200 so
+    // client-side routes deep-link correctly.
+    ...(preview
+      ? {}
+      : {
+          customErrorResponses: [403, 404].map((errorCode) => ({
+            errorCode,
+            responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
+            responseCode: ctx.config.spa ? 200 : 404,
+          })),
+        }),
+  };
+}
+
 /** The CloudFront distribution. Preview stacks use a host-routing function + no caching. */
-function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
+function distributionNode(hasDomain: boolean, preview: boolean, ssr: boolean): ResourceNode {
   const dependsOn = [
     'bucket',
     'oac',
     'cloudfront-function',
     ...(hasDomain ? ['acm-certificate'] : []),
+    // The SSR shapes read the function's endpoint domain, the `lambda` OAC and
+    // the cache policy, so all three must exist first.
+    ...(ssr ? ['web-function', 'web-oac', 'web-cache-policy'] : []),
   ];
   return {
     id: 'cloudfront-distribution',
@@ -613,31 +1185,9 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       // What create and adopt agree on: enough identity to record outputs and tag.
       let dist: Pick<DistributionListItem, 'id' | 'arn' | 'domainName'>;
       try {
-        dist = await ctx.clients.cloudfront.createDistribution({
-          callerReference,
-          comment,
-          bucketDomainName: `${ctx.names.bucket}.s3.${ctx.config.region}.amazonaws.com`,
-          // Preview: function rewrites the full path, so the origin path is the bucket root.
-          originPath: preview ? '' : '/site',
-          originAccessControlId: String(output(ctx, 'oac').id),
-          defaultRootObject: ctx.config.defaultRootObject,
-          aliases: ctx.domain ? [preview ? `*.${ctx.domain}` : ctx.domain] : [],
-          acmCertificateArn: hasDomain ? String(output(ctx, 'acm-certificate').arn) : undefined,
-          functionArn: String(output(ctx, 'cloudfront-function').arn),
-          // Previews are served uncached (per-PR content, host-routed); staging/production
-          // keep the default cache policy. Non-preview stacks map the S3 REST origin's
-          // 403/404 (a missing key) to the site's 404 page - or, in SPA mode, to
-          // /index.html with a 200 so client-side routes deep-link correctly.
-          ...(preview
-            ? { cachePolicyId: CACHING_DISABLED }
-            : {
-                customErrorResponses: [403, 404].map((errorCode) => ({
-                  errorCode,
-                  responsePagePath: ctx.config.spa ? '/index.html' : '/404.html',
-                  responseCode: ctx.config.spa ? 200 : 404,
-                })),
-              }),
-        });
+        dist = await ctx.clients.cloudfront.createDistribution(
+          distributionShape(ctx, servingMode(ctx), preview),
+        );
       } catch (err) {
         // A crashed earlier bootstrap can leave a distribution in AWS that state never
         // recorded. Retrying then 409s on the duplicate alias - CloudFront's CNAME
@@ -664,6 +1214,9 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       out.id = dist.id;
       out.arn = dist.arn;
       out.domainName = dist.domainName;
+      // The mode the live distribution was left serving, so a later bootstrap can
+      // tell a routine re-run from a serving cutover.
+      out.mode = servingMode(ctx);
       await ctx.clients.cloudfront.tagResource(dist.arn, ctx.tags);
       ctx.logger.info(`  CloudFront domain: ${dist.domainName}`);
       if (ctx.domain && !preview) {
@@ -673,11 +1226,35 @@ function distributionNode(hasDomain: boolean, preview: boolean): ResourceNode {
       }
     },
     async update(ctx) {
+      const id = output(ctx, 'cloudfront-distribution').id;
+      if (typeof id !== 'string') return;
+      const configured = servingMode(ctx);
+      const out = output(ctx, 'cloudfront-distribution');
+      const recorded = out.mode === 'ssr' || out.mode === 'static' ? out.mode : undefined;
+      // Full reconcile on every SSR bootstrap (so a later config change converges)
+      // and on either side of a mode switch (so the origins/behaviors move with the
+      // mode). A static stack that stays static keeps the alias-only update below:
+      // `spa` and `defaultRootObject` remain creation-time settings there.
+      if (configured === 'ssr' || (recorded !== undefined && recorded !== configured)) {
+        const changed = await ctx.clients.cloudfront.reconcileDistribution(
+          id,
+          distributionShape(ctx, configured, preview),
+        );
+        out.mode = configured;
+        if (changed) {
+          ctx.logger.ok(`reconciled the distribution for ${configured} serving`);
+          const domainName = out.domainName;
+          if (ctx.domain && !preview && typeof domainName === 'string') {
+            ctx.logger.info(`  point ${ctx.domain} (CNAME/ALIAS) at ${domainName}`);
+          }
+        } else {
+          ctx.logger.ok(`distribution already matches ${configured} serving`);
+        }
+        return;
+      }
       // A domain added (or changed) after the first bootstrap must reach the
       // existing distribution - the certificate node validates the cert, but
       // only this reconcile attaches the alias + viewer certificate.
-      const id = output(ctx, 'cloudfront-distribution').id;
-      if (typeof id !== 'string') return;
       if (!ctx.domain) {
         // Deliberately no automatic alias removal: dropping --domain from a
         // later run must not detach a live site's hostname.
@@ -760,6 +1337,57 @@ async function ownDeliveryIdsOrRefuse(ctx: OpsContext): Promise<string[]> {
   // the predicate makes the name and the body agree on their own, so softening the
   // refusal cannot silently start feeding foreign ids to the delete loop.
   return deliveries.filter((d) => isOwnDelivery(d, ctx.names.deliveryDestination)).map((d) => d.id);
+}
+
+/**
+ * The Web Function's execution role: logging and nothing else. It may create
+ * streams in, and put events to, its own two log groups - both of which are
+ * graph nodes, so no `logs:CreateLogGroup` grant is needed.
+ */
+async function applyWebRolePolicy(ctx: OpsContext): Promise<void> {
+  await ctx.clients.iam.putRolePolicy(ctx.names.webRole, 'web', {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Effect: 'Allow',
+        Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+        Resource: [
+          logGroupArn(ctx, ctx.names.webLogGroup),
+          logGroupArn(ctx, ctx.names.webLocalLogGroup),
+        ],
+      },
+    ],
+  });
+}
+
+/** IAM role the Lambda Web Function assumes; logging only, by contract. */
+function webRoleNode(): ResourceNode {
+  return {
+    id: 'iam-web-role',
+    dependsOn: ['web-log-group', 'web-local-log-group'],
+    title: 'IAM Web Function role',
+    async read(ctx) {
+      const arn = await ctx.clients.iam.getRoleArn(ctx.names.webRole);
+      if (arn) output(ctx, 'iam-web-role').arn = arn;
+      return Boolean(arn);
+    },
+    async create(ctx) {
+      const arn = await ctx.clients.iam.ensureRole(
+        ctx.names.webRole,
+        LAMBDA_TRUST,
+        `Runtime role for the ${ctx.config.siteName} Web Function`,
+        ctx.tags,
+      );
+      await applyWebRolePolicy(ctx);
+      output(ctx, 'iam-web-role').arn = arn;
+    },
+    async update(ctx) {
+      await applyWebRolePolicy(ctx);
+    },
+    async delete(ctx) {
+      await ctx.clients.iam.deleteRole(ctx.names.webRole);
+    },
+  };
 }
 
 /** Wire CloudFront access logs to the CloudWatch log group via vended log delivery. */
@@ -846,22 +1474,16 @@ function bucketPolicyNode(): ResourceNode {
     },
     async create(ctx) {
       const distArn = String(output(ctx, 'cloudfront-distribution').arn);
-      const policy = {
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Sid: 'AllowCloudFrontRead',
-            Effect: 'Allow',
-            Principal: { Service: 'cloudfront.amazonaws.com' },
-            Action: ['s3:GetObject'],
-            Resource: ctx.preview
-              ? `arn:aws:s3:::${ctx.names.bucket}/previews/*`
-              : `arn:aws:s3:::${ctx.names.bucket}/site/*`,
-            Condition: { StringEquals: { 'AWS:SourceArn': distArn } },
-          },
-        ],
-      };
-      await ctx.clients.s3.putBucketPolicy(ctx.names.bucket, JSON.stringify(policy));
+      await mergeBucketPolicyStatement(ctx, 'AllowCloudFrontRead', {
+        Sid: 'AllowCloudFrontRead',
+        Effect: 'Allow',
+        Principal: { Service: 'cloudfront.amazonaws.com' },
+        Action: ['s3:GetObject'],
+        Resource: ctx.preview
+          ? `arn:aws:s3:::${ctx.names.bucket}/previews/*`
+          : `arn:aws:s3:::${ctx.names.bucket}/site/*`,
+        Condition: { StringEquals: { 'AWS:SourceArn': distArn } },
+      });
       output(ctx, 'bucket-policy').applied = true;
     },
     async delete() {
@@ -886,12 +1508,20 @@ const GITHUB_OIDC_THUMBPRINT = '6938fd4d98bab03faadb97b34396831e3780aea1';
  * document never names a plugin's resource, and `applyOidcRole` rewriting it wholesale
  * on every `blogwright bootstrap` cannot disturb the plugin's.
  */
-function githubOidcRoleNode(preview: boolean): ResourceNode {
+function githubOidcRoleNode(preview: boolean, ssr: boolean): ResourceNode {
   const roleName = (ctx: OpsContext) => ctx.names.githubRole;
   return {
     id: 'gh-oidc-role',
     // Production deploys invalidate the distribution, so its ARN must be in state.
-    dependsOn: preview ? ['iam-exec-role'] : ['iam-exec-role', 'cloudfront-distribution'],
+    // In SSR mode the policy also names the Web Function role's ARN and the
+    // function and endpoint ARNs the service answered with.
+    dependsOn: preview
+      ? ['iam-exec-role']
+      : [
+          'iam-exec-role',
+          'cloudfront-distribution',
+          ...(ssr ? ['iam-web-role', 'web-function'] : []),
+        ],
     title: 'GitHub OIDC deploy role',
     async read(ctx) {
       const arn = await ctx.clients.iam.getRoleArn(roleName(ctx));
@@ -923,13 +1553,61 @@ export function oidcSubClaim(repo: string, env: string, preview: boolean): strin
   return `repo:${repo}:ref:refs/heads/main`;
 }
 
+/**
+ * What an SSR deploy needs from Lambda, scoped to this site's function rather
+ * than every Web Function in the account. The function ARN is the one the
+ * service recorded (derived from the name when a run has not recorded it yet,
+ * the same derivation the Lambda-read bucket statement uses); revisions and
+ * endpoints are sub-resources of it. The probes are granted on the endpoint
+ * ARN - the resource the function's own policy admits CloudFront on for the
+ * same action.
+ */
+function webFunctionDeployStatements(ctx: OpsContext): object[] {
+  const recorded = output(ctx, 'web-function');
+  const functionArn =
+    typeof recorded.arn === 'string'
+      ? recorded.arn
+      : `arn:aws:lambda:${ctx.config.region}:${ctx.accountId}:web-function/${ctx.names.webFunction}`;
+  const endpointArn =
+    typeof recorded.endpointArn === 'string' ? recorded.endpointArn : `${functionArn}/*`;
+  return [
+    {
+      // Revision publishing and the fingerprint lookup.
+      Effect: 'Allow',
+      Action: [
+        'lambda:CreateWebFunctionRevision',
+        'lambda:GetWebFunction*',
+        'lambda:ListWebFunction*',
+      ],
+      Resource: [functionArn, `${functionArn}/*`],
+    },
+    {
+      // The preflight and the readiness probe.
+      Effect: 'Allow',
+      Action: ['lambda:InvokeWebFunctionEndpoint'],
+      Resource: [endpointArn],
+    },
+    {
+      Effect: 'Allow',
+      Action: ['iam:PassRole'],
+      Resource: [String(output(ctx, 'iam-web-role').arn)],
+    },
+  ];
+}
+
 /** The deploy role's inline policy statements (exported for tests). */
 export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
   const statements: object[] = [
     { Effect: 'Allow', Action: ['sts:GetCallerIdentity'], Resource: '*' },
     {
       Effect: 'Allow',
-      Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+      // s3:GetObjectVersion is what reads an artifact a revision is pinned to.
+      Action: [
+        's3:GetObject',
+        's3:PutObject',
+        's3:DeleteObject',
+        ...(ctx.config.ssr ? ['s3:GetObjectVersion'] : []),
+      ],
       Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
     },
     { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
@@ -951,6 +1629,7 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       ],
       Resource: '*',
     },
+    ...(ctx.config.ssr ? webFunctionDeployStatements(ctx) : []),
     {
       Effect: 'Allow',
       Action: ['logs:FilterLogEvents', 'logs:GetLogEvents'],
@@ -1101,6 +1780,9 @@ function previewDnsNode(): ResourceNode {
 /** Build the full node set for the current context (production or preview stack). */
 export function buildNodes(ctx: OpsContext): ResourceNode[] {
   const hasDomain = Boolean(ctx.domain);
+  // Preview stacks never support SSR (a shared host-routed distribution cannot
+  // front a per-PR endpoint); the mode is refused by the preview verbs too.
+  const ssr = Boolean(ctx.config.ssr) && !ctx.preview;
   const nodes: ResourceNode[] = [
     bucketNode(),
     logGroupNode(
@@ -1121,16 +1803,39 @@ export function buildNodes(ctx: OpsContext): ResourceNode[] {
     microvmImageNode(),
     oacNode(),
     routerFunctionNode(ctx.preview),
-    distributionNode(hasDomain, ctx.preview),
-    logDeliveryNode(),
-    bucketPolicyNode(),
   ];
+  if (ssr) {
+    nodes.push(
+      // The `.local` companion first: Lambda writes in-Region logs there before
+      // centralising them, and would otherwise create it itself, with no
+      // retention and outside the graph.
+      logGroupNode(
+        'web-local-log-group',
+        'Web Function local log group',
+        (c) => c.names.webLocalLogGroup,
+        (c) => c.config.retention.webFunctionDays,
+      ),
+      logGroupNode(
+        'web-log-group',
+        'Web Function log group',
+        (c) => c.names.webLogGroup,
+        (c) => c.config.retention.webFunctionDays,
+      ),
+      webRoleNode(),
+      webOacNode(),
+      webCachePolicyNode(),
+      webCodeBucketPolicyNode(),
+      webFunctionNode(),
+    );
+  }
+  nodes.push(distributionNode(hasDomain, ctx.preview, ssr), logDeliveryNode(), bucketPolicyNode());
+  if (ssr) nodes.push(webFunctionPolicyNode());
   if (hasDomain) nodes.push(certificateNode());
   if (ctx.preview) {
-    nodes.push(previewDnsNode(), githubOidcRoleNode(true));
+    nodes.push(previewDnsNode(), githubOidcRoleNode(true, false));
   } else if (ctx.config.githubRepo) {
     // staging deploys on push to main; production on release (see the deploy workflows).
-    nodes.push(githubOidcRoleNode(false));
+    nodes.push(githubOidcRoleNode(false, ssr));
   }
   return nodes;
 }

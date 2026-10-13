@@ -256,8 +256,8 @@ name is derived, with an error that says how to fix it.
 - **Unit tests run with no cloud access.** AWS interactions are covered by
   transport-level mocks. Integration tests against the floci emulator are opt-in
   (`FLOCI=1 AWS_ENDPOINT_URL=http://localhost:4566 pnpm test`); the
-  `lambda-microvms` control plane is not emulated, so MicroVM orchestration stays
-  mock-covered.
+  `lambda-microvms` and `lambda-web` control planes are not emulated, so
+  MicroVM orchestration and Web Function revision publishing stay mock-covered.
 - **Positive and negative space.** Every happy-path test is paired with a test that
   the adjacent bad input is rejected (the config validator tests are the model).
 - **Test the validity boundary** - one below a limit, at the limit, one above.

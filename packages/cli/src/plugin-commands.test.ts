@@ -1261,6 +1261,7 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
           putBucketTagging: async () => undefined,
           putPublicAccessBlock: async () => undefined,
           putBucketPolicy: async () => undefined,
+          getBucketPolicy: async () => undefined,
         },
         logs: { logGroupExists: async () => true, putRetentionPolicy: async () => undefined },
         logsUsEast1: {

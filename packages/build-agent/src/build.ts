@@ -1,17 +1,46 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 
 import {
   AwsError,
+  REPRODUCIBLE_ZIP_MTIME,
   S3Client,
   SigningClient,
   type AwsCredentials,
   type CredentialProvider,
 } from 'blogwright-core';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync, type Zippable } from 'fflate';
+
+/**
+ * The SSR packaging job the CLI puts in the pending document: what to package,
+ * what to call the artifact, and where the CLI reads the result. Absent, the
+ * agent runs its static publish path unchanged.
+ */
+interface WebFunctionJob {
+  /** Repo-relative built output directory to package. */
+  packageDir: string;
+  /** Entry file inside the package; must exist. */
+  entryPoint: string;
+  /** Repo-relative directory of static browser assets to publish, when configured. */
+  staticDir?: string | undefined;
+  /** S3 key the package is uploaded to (`web/artifacts/<hash>.zip`). */
+  artifactKey: string;
+  /** S3 key the CLI reads the digest/version/stale keys from (`web/results/<hash>.json`). */
+  resultKey: string;
+}
+
+/** What the agent writes to `resultKey` before the changed-paths manifest. */
+interface WebFunctionBuildResult {
+  artifactKey: string;
+  artifactVersionId: string;
+  artifactSha256: string;
+  artifactSize: number;
+  /** `site/` keys this build did not publish, left for the CLI to remove after the revision is verified. */
+  staleStaticKeys: string[];
+}
 
 export interface BuildPayload {
   hash: string;
@@ -35,6 +64,8 @@ export interface BuildPayload {
    * never reaches objects the ETag comparison would otherwise skip.
    */
   refresh?: boolean | undefined;
+  /** Present only for an SSR environment: package the output as a Web Function revision artifact. */
+  webFunction?: WebFunctionJob | undefined;
 }
 
 /** The job document the CLI drops at s3://<bucket>/build/pending.json. */
@@ -48,6 +79,7 @@ export interface PendingJob {
   sitemapBaseUrl?: string;
   objectTags?: Record<string, string>;
   refresh?: boolean;
+  webFunction?: WebFunctionJob;
 }
 
 export type LogFn = (line: string) => void;
@@ -339,6 +371,261 @@ async function walkFiles(dir: string): Promise<string[]> {
   return out;
 }
 
+/** The unzipped package size bound Lambda enforces. */
+export const MAX_PACKAGE_BYTES = 512 * 1024 * 1024;
+
+/**
+ * A package that must be self-contained: Lambda loads nothing outside the
+ * archive, and pnpm's default `node_modules` is a symlink tree, so a symlink
+ * anywhere in the package means the app cannot load once deployed. Fail the
+ * build naming the path rather than archiving a tree that cannot run.
+ */
+async function walkPackageFiles(
+  dir: string,
+  prefix = '',
+): Promise<{ path: string; rel: string; size: number }[]> {
+  const out: { path: string; rel: string; size: number }[] = [];
+  const entries = await readdir(dir, { withFileTypes: true });
+  // Sorted so identical trees always produce identical archives.
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    const rel = `${prefix}${entry.name}`;
+    if (entry.isSymbolicLink()) {
+      throw new Error(
+        `SSR package contains a symbolic link at ${rel}: Lambda loads nothing that is not in ` +
+          'the archive, so the package must be self-contained (copy production dependencies ' +
+          "in as real files instead of relying on pnpm's symlinked node_modules)",
+      );
+    }
+    if (entry.isDirectory()) {
+      out.push(...(await walkPackageFiles(full, `${rel}/`)));
+    } else if (entry.isFile()) {
+      out.push({ path: full, rel, size: (await stat(full)).size });
+    }
+  }
+  return out;
+}
+
+/**
+ * Zip the built package with its contents at the archive root and a fixed
+ * timestamp, so identical output produces identical bytes.
+ */
+export async function packageWebFunction(
+  packageDir: string,
+  entryPoint: string,
+): Promise<{ zip: Uint8Array; size: number }> {
+  const entryPath = join(packageDir, ...entryPoint.split('/'));
+  let entry: Awaited<ReturnType<typeof lstat>>;
+  try {
+    entry = await lstat(entryPath);
+  } catch {
+    throw new Error(
+      `SSR package entry point "${entryPoint}" does not exist under ${packageDir}; ` +
+        'the build must emit it (a consumer-owned entry shim is the usual way)',
+    );
+  }
+  if (!entry.isFile()) {
+    throw new Error(`SSR package entry point "${entryPoint}" is not a file`);
+  }
+
+  const files = await walkPackageFiles(packageDir);
+  // Sized from the walk, before anything is read: an oversized package must
+  // fail with this message, not by exhausting the builder's memory first.
+  const unzipped = files.reduce((total, file) => total + file.size, 0);
+  if (unzipped > MAX_PACKAGE_BYTES) {
+    throw new Error(
+      `SSR package is ${(unzipped / (1024 * 1024)).toFixed(1)} MB unzipped, over Lambda's ` +
+        `${MAX_PACKAGE_BYTES / (1024 * 1024)} MB limit`,
+    );
+  }
+  const entries: Zippable = {};
+  for (const file of files) {
+    entries[file.rel] = new Uint8Array(await readFile(file.path));
+  }
+  const zip = zipSync(entries, { level: 6, mtime: REPRODUCIBLE_ZIP_MTIME });
+  return { zip, size: unzipped };
+}
+
+/**
+ * Upload the files under `rootDir` to the site prefix, comparing each file's
+ * MD5 to the existing object's ETag so only genuinely changed content is
+ * re-uploaded. Returns the keys this build wrote and - when `deleteStale` is
+ * false, which is the SSR mode - the keys left behind, which only the CLI may
+ * remove, after a revision is verified.
+ */
+async function publishFiles(opts: {
+  s3: S3Client;
+  log: LogFn;
+  bucket: string;
+  prefix: string;
+  rootDir: string;
+  files: string[];
+  objectTags?: Record<string, string> | undefined;
+  refresh?: boolean | undefined;
+  deleteStale: boolean;
+}): Promise<{ changedKeys: Set<string>; staleKeys: string[]; count: number }> {
+  const { s3, log } = opts;
+  const existing = new Map(
+    (await s3.listObjects(opts.bucket, opts.prefix)).map((o) => [o.key, o.etag]),
+  );
+  const uploadSiteFile = createSiteUploader(s3, log);
+  const uploaded = new Set<string>();
+  const changedKeys = new Set<string>();
+  const unmapped = new Set<string>();
+  if (opts.refresh) {
+    log('refresh: re-uploading every file (metadata - content type, tags - may have changed)');
+  }
+  for (const file of opts.files) {
+    const key = opts.prefix + relative(opts.rootDir, file).split('\\').join('/');
+    uploaded.add(key);
+    const content = await readFile(file);
+    const md5 = createHash('md5').update(content).digest('hex');
+    const type = contentType(key);
+    // Only real extensions are worth warning about: for an extensionless file
+    // (LICENSE, _headers) octet-stream is the correct answer, not a gap.
+    const ext = extensionOf(key);
+    if (type === DEFAULT_CONTENT_TYPE && ext !== undefined) unmapped.add(ext);
+    if (!shouldUpload(existing.get(key), md5, opts.refresh)) continue;
+    await uploadSiteFile(opts.bucket, key, content, type, opts.objectTags);
+    changedKeys.add(key);
+  }
+  if (unmapped.size > 0) {
+    // A silently wrong header is how the .webmanifest gap survived; say it out loud.
+    log(
+      `warning: no content type mapped for extension(s) ${[...unmapped].sort().join(', ')} - ` +
+        `serving them as ${DEFAULT_CONTENT_TYPE}`,
+    );
+  }
+  const staleKeys: string[] = [];
+  for (const key of existing.keys()) {
+    if (uploaded.has(key)) continue;
+    if (opts.deleteStale) {
+      await s3.deleteObject(opts.bucket, key);
+      changedKeys.add(key);
+    } else {
+      staleKeys.push(key);
+    }
+  }
+  return { changedKeys, staleKeys, count: opts.files.length };
+}
+
+/** Write the changed-paths manifest the CLI reads for a targeted invalidation. */
+async function writeChangedPaths(
+  s3: S3Client,
+  log: LogFn,
+  bucket: string,
+  hash: string,
+  changedKeys: Set<string>,
+  prefix: string,
+): Promise<void> {
+  const changedPaths = [...new Set([...changedKeys].flatMap((k) => invalidationPaths(k, prefix)))];
+  // The changed-paths manifest is only an invalidation optimization: if writing it fails
+  // (e.g. the runtime role lacks build/changed/* PutObject), the site is already published,
+  // so log and continue - the CLI falls back to a wildcard invalidation.
+  try {
+    await s3.putObject(
+      bucket,
+      `build/changed/${hash}.json`,
+      JSON.stringify({ paths: changedPaths }),
+      'application/json',
+    );
+  } catch (err) {
+    log(`warning: could not write changed-paths manifest (${(err as Error).message})`);
+  }
+}
+
+/**
+ * Publish the built static assets and, for an SSR environment, package the
+ * server output and upload it as the revision artifact. Returns the number of
+ * published static files and the changed keys.
+ */
+export async function publishBuild(
+  s3: S3Client,
+  payload: BuildPayload,
+  workDir: string,
+  distDir: string,
+  log: LogFn,
+): Promise<{ changedKeys: Set<string>; count: number }> {
+  const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
+  const job = payload.webFunction;
+  if (!job) {
+    const built = await walkFiles(distDir);
+    log(`uploading ${built.length} files to site/`);
+    const published = await publishFiles({
+      s3,
+      log,
+      bucket: payload.bucket,
+      prefix,
+      rootDir: distDir,
+      files: built,
+      objectTags: payload.objectTags,
+      refresh: payload.refresh,
+      deleteStale: true,
+    });
+    log(
+      `published ${built.length} files (${published.changedKeys.size} changed) to s3://${payload.bucket}/${prefix}`,
+    );
+    return published;
+  }
+
+  // SSR: package the server output first, then publish only `staticDir` (when
+  // set) - upload-only, because the revision still serving references keys this
+  // build would otherwise remove.
+  const packageDir = resolveWithin(workDir, job.packageDir, 'packageDir');
+  const { zip, size } = await packageWebFunction(packageDir, job.entryPoint);
+  const digest = createHash('sha256').update(zip).digest('hex');
+  const versionId = await s3.putObject(payload.bucket, job.artifactKey, zip, 'application/zip');
+  log(
+    `uploaded SSR package ${job.artifactKey} (${(zip.byteLength / 1024).toFixed(0)} KiB zipped, ` +
+      `${(size / (1024 * 1024)).toFixed(1)} MB unzipped, sha256 ${digest.slice(0, 12)}…)`,
+  );
+
+  let changedKeys = new Set<string>();
+  let staleKeys: string[] = [];
+  if (job.staticDir) {
+    const staticDir = resolveWithin(workDir, job.staticDir, 'staticDir');
+    const assets = await walkFiles(staticDir);
+    log(`publishing ${assets.length} static asset(s) from ${job.staticDir} to site/`);
+    const published = await publishFiles({
+      s3,
+      log,
+      bucket: payload.bucket,
+      prefix,
+      rootDir: staticDir,
+      files: assets,
+      objectTags: payload.objectTags,
+      refresh: payload.refresh,
+      deleteStale: false,
+    });
+    changedKeys = published.changedKeys;
+    staleKeys = published.staleKeys;
+    log(
+      `published ${assets.length} static asset(s) (${changedKeys.size} changed) to ` +
+        `s3://${payload.bucket}/${prefix}`,
+    );
+  } else {
+    log('no ssr.staticDir configured - leaving site/ untouched');
+  }
+
+  // The result file, before the changed-paths manifest that signals completion.
+  const result: WebFunctionBuildResult = {
+    artifactKey: job.artifactKey,
+    artifactVersionId: versionId ?? 'null',
+    artifactSha256: digest,
+    artifactSize: zip.byteLength,
+    staleStaticKeys: staleKeys,
+  };
+  await s3.putObject(
+    payload.bucket,
+    job.resultKey,
+    JSON.stringify(result, null, 2),
+    'application/json',
+  );
+  log(`wrote ${job.resultKey} (${staleKeys.length} stale site key(s) left for the CLI)`);
+  return { changedKeys, count: 0 };
+}
+
 function escapeXml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -372,7 +659,10 @@ export async function generateSitemap(distDir: string, base: string): Promise<st
 
 /**
  * The build pipeline that runs inside the MicroVM: download the source zip, install
- * dependencies, build the Astro site, and sync dist/ to the bucket's site/ prefix.
+ * dependencies, build the site, and publish it. In SSR mode the built package is
+ * zipped and uploaded as a revision artifact, `site/` receives only `staticDir`, and
+ * robots.txt/sitemap.xml generation is skipped because the application owns those
+ * routes.
  */
 export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn): Promise<void> {
   const workDir = join(tmpdir(), `build-${payload.hash}`);
@@ -405,80 +695,27 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
 
   const distDir = resolveWithin(workDir, payload.distDir ?? 'dist', 'distDir');
 
-  // Write SEO artifacts into dist/ before the walk so they publish (and invalidate) like
-  // any other page. robots.txt/sitemap.xml policy is decided by the CLI per environment.
-  if (payload.robots !== undefined) {
-    await writeFile(join(distDir, 'robots.txt'), payload.robots);
-    log('wrote robots.txt');
-  }
-  if (payload.sitemapBaseUrl) {
-    const xml = await generateSitemap(distDir, payload.sitemapBaseUrl);
-    await writeFile(join(distDir, 'sitemap.xml'), xml);
-    log('wrote sitemap.xml');
-  }
-
-  const built = await walkFiles(distDir);
-  log(`uploading ${built.length} files to site/`);
-
-  const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
-  // Compare each new file's MD5 to the existing object's ETag so only genuinely changed
-  // content is re-uploaded, and only changed URL paths get invalidated. Publish first,
-  // then delete stale keys, so the live site never has an empty/partial window.
-  const existing = new Map(
-    (await s3.listObjects(payload.bucket, prefix)).map((o) => [o.key, o.etag]),
-  );
-  const uploadSiteFile = createSiteUploader(s3, log);
-  const uploaded = new Set<string>();
-  const changedKeys = new Set<string>();
-  const unmapped = new Set<string>();
-  if (payload.refresh) {
-    log('refresh: re-uploading every file (metadata - content type, tags - may have changed)');
-  }
-  for (const file of built) {
-    const key = prefix + relative(distDir, file).split('\\').join('/');
-    uploaded.add(key);
-    const content = await readFile(file);
-    const md5 = createHash('md5').update(content).digest('hex');
-    const type = contentType(key);
-    // Only real extensions are worth warning about: for an extensionless file
-    // (LICENSE, _headers) octet-stream is the correct answer, not a gap.
-    const ext = extensionOf(key);
-    if (type === DEFAULT_CONTENT_TYPE && ext !== undefined) unmapped.add(ext);
-    if (!shouldUpload(existing.get(key), md5, payload.refresh)) continue;
-    await uploadSiteFile(payload.bucket, key, content, type, payload.objectTags);
-    changedKeys.add(key);
-  }
-  if (unmapped.size > 0) {
-    // A silently wrong header is how the .webmanifest gap survived; say it out loud.
-    log(
-      `warning: no content type mapped for extension(s) ${[...unmapped].sort().join(', ')} - ` +
-        `serving them as ${DEFAULT_CONTENT_TYPE}`,
-    );
-  }
-  for (const key of existing.keys()) {
-    if (!uploaded.has(key)) {
-      await s3.deleteObject(payload.bucket, key);
-      changedKeys.add(key);
+  // Write SEO artifacts into the build output before the walk so they publish (and
+  // invalidate) like any other page. robots.txt/sitemap.xml are the application's
+  // routes in SSR mode, so the CLI sends nothing and the agent writes nothing.
+  if (!payload.webFunction) {
+    if (payload.robots !== undefined) {
+      await writeFile(join(distDir, 'robots.txt'), payload.robots);
+      log('wrote robots.txt');
+    }
+    if (payload.sitemapBaseUrl) {
+      const xml = await generateSitemap(distDir, payload.sitemapBaseUrl);
+      await writeFile(join(distDir, 'sitemap.xml'), xml);
+      log('wrote sitemap.xml');
     }
   }
 
-  const changedPaths = [...new Set([...changedKeys].flatMap((k) => invalidationPaths(k, prefix)))];
-  // The changed-paths manifest is only an invalidation optimization: if writing it fails
-  // (e.g. the runtime role lacks build/changed/* PutObject), the site is already published,
-  // so log and continue - the CLI falls back to a wildcard invalidation.
-  try {
-    await s3.putObject(
-      payload.bucket,
-      `build/changed/${payload.hash}.json`,
-      JSON.stringify({ paths: changedPaths }),
-      'application/json',
-    );
-  } catch (err) {
-    log(`warning: could not write changed-paths manifest (${(err as Error).message})`);
-  }
-  log(
-    `published ${built.length} files (${changedKeys.size} changed) to s3://${payload.bucket}/${prefix}`,
-  );
+  const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
+  const published = await publishBuild(s3, payload, workDir, distDir, log);
+  // The changed-paths manifest is the completion signal the CLI polls and reads.
+  // It goes LAST: in SSR mode the result file the CLI's publish step reads must
+  // already be in place when the manifest appears.
+  await writeChangedPaths(s3, log, payload.bucket, payload.hash, published.changedKeys, prefix);
   await rm(workDir, { recursive: true, force: true });
 }
 

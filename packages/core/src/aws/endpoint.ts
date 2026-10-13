@@ -27,6 +27,9 @@ export const SIGNING_NAMES = {
   // Lambda MicroVMs is served off the standard Lambda endpoint (host + signing name
   // "lambda"); operations are distinguished by the /2025-09-09/ path prefix.
   microvms: 'lambda',
+  // Lambda Web Functions share that endpoint and signing name; its own operations
+  // live under /2025-03-07/.
+  lambdaweb: 'lambda',
   secretsmanager: 'secretsmanager',
 } as const;
 
@@ -108,6 +111,8 @@ function canonicalHost(service: string, region: string): string {
     case 's3':
       return `s3.${region}.amazonaws.com`;
     case 'microvms':
+      return `lambda.${region}.amazonaws.com`;
+    case 'lambdaweb':
       return `lambda.${region}.amazonaws.com`;
     default:
       return `${service}.${region}.amazonaws.com`;

@@ -280,7 +280,7 @@ function contextFor(
   const config = mergeConfig({
     siteName: SITE,
     region: REGION,
-    retention: { microvmDays: 365, cloudfrontDays: RETENTION_DAYS },
+    retention: { microvmDays: 365, cloudfrontDays: RETENTION_DAYS, webFunctionDays: 90 },
   });
   const clients = createClients({
     region: config.region,

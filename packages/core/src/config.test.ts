@@ -242,3 +242,180 @@ describe('deriveNames', () => {
     expect(() => deriveNames('production', '123456789012', cfg)).toThrow(/63-char/);
   });
 });
+
+describe('ssr config', () => {
+  it('is absent by default, and every field defaults when the block is empty', () => {
+    expect(parseConfig(withSite('{}')).ssr).toBeUndefined();
+    const ssr = parseConfig(withSite('{ "ssr": {}, "paths": { "dist": "web/build" } }')).ssr;
+    expect(ssr).toEqual({
+      packageDir: 'web/build', // paths.dist
+      entryPoint: 'index.js',
+      staticPaths: [],
+      cacheKeyHeaders: [],
+      env: {},
+      timeoutSeconds: 30,
+      maxConcurrencyPerEnvironment: 64,
+    });
+  });
+
+  it('rejects a non-object block and unknown keys inside it', () => {
+    for (const block of ['null', '"ssr"', '[]', '42', 'true']) {
+      expect(() => parseConfig(withSite(`{ "ssr": ${block} }`))).toThrow(/config\.ssr/);
+    }
+    expect(() => parseConfig(withSite('{ "ssr": { "entrPoint": "x.js" } }'))).toThrow(
+      /unknown key "entrPoint"/,
+    );
+  });
+
+  it('validates the entry point: non-empty, "/"-separated, relative, inside the package', () => {
+    expect(
+      parseConfig(withSite('{ "ssr": { "entryPoint": "server/lambda.mjs" } }')).ssr?.entryPoint,
+    ).toBe('server/lambda.mjs');
+    for (const bad of ['""', '"/abs.js"', '"../up.js"', '"a/../b.js"', '"a\\\\b.js"']) {
+      expect(() => parseConfig(withSite(`{ "ssr": { "entryPoint": ${bad} } }`))).toThrow(
+        /entryPoint/,
+      );
+    }
+  });
+
+  it('rejects escaping packageDir/staticDir and requires staticDir/staticPaths together', () => {
+    expect(() => parseConfig(withSite('{ "ssr": { "packageDir": "../out" } }'))).toThrow(
+      /ssr\.packageDir/,
+    );
+    expect(() => parseConfig(withSite('{ "ssr": { "staticDir": "/abs" } }'))).toThrow(
+      /ssr\.staticDir/,
+    );
+    expect(() => parseConfig(withSite('{ "ssr": { "staticDir": "dist/client" } }'))).toThrow(
+      /staticPaths is required/,
+    );
+    expect(() => parseConfig(withSite('{ "ssr": { "staticPaths": ["/_astro/*"] } }'))).toThrow(
+      /staticDir is required/,
+    );
+    expect(() =>
+      parseConfig(withSite('{ "ssr": { "staticPaths": ["_astro/*"], "staticDir": "d" } }')),
+    ).toThrow(/must be a CloudFront path pattern beginning "\/"/);
+    expect(
+      parseConfig(
+        withSite(
+          '{ "ssr": { "staticDir": "dist/client", "staticPaths": ["/_astro/*", "/favicon.svg"] } }',
+        ),
+      ).ssr?.staticPaths,
+    ).toEqual(['/_astro/*', '/favicon.svg']);
+  });
+
+  it('accepts cacheKeyHeaders tokens and rejects malformed, duplicate, denied and too many', () => {
+    expect(
+      parseConfig(withSite('{ "ssr": { "cacheKeyHeaders": ["Authorization", "X-Tenant"] } }')).ssr
+        ?.cacheKeyHeaders,
+    ).toEqual(['Authorization', 'X-Tenant']);
+    expect(() => parseConfig(withSite('{ "ssr": { "cacheKeyHeaders": ["has space"] } }'))).toThrow(
+      /RFC 7230 token/,
+    );
+    expect(() =>
+      parseConfig(withSite('{ "ssr": { "cacheKeyHeaders": ["Authorization", "authorization"] } }')),
+    ).toThrow(/more than once/);
+    expect(() => parseConfig(withSite('{ "ssr": { "cacheKeyHeaders": ["Host"] } }'))).toThrow(
+      /cannot list "Host"/,
+    );
+    expect(() =>
+      parseConfig(withSite('{ "ssr": { "cacheKeyHeaders": ["Lambda-Web-Trace"] } }')),
+    ).toThrow(/cannot list "Lambda-Web-Trace"/);
+    const eleven = Array.from({ length: 11 }, (_, i) => `"X-H${i}"`).join(', ');
+    expect(() => parseConfig(withSite(`{ "ssr": { "cacheKeyHeaders": [${eleven}] } }`))).toThrow(
+      /at most 10/,
+    );
+    // Per-name boundary (confirmed against the live API): 128 characters pass,
+    // 129 are refused.
+    const atNameLimit = `"${'a'.repeat(128)}"`;
+    expect(
+      parseConfig(withSite(`{ "ssr": { "cacheKeyHeaders": [${atNameLimit}] } }`)).ssr
+        ?.cacheKeyHeaders,
+    ).toHaveLength(1);
+    expect(() =>
+      parseConfig(withSite(`{ "ssr": { "cacheKeyHeaders": ["${'a'.repeat(129)}"] } }`)),
+    ).toThrow(/128-character header-name limit/);
+
+    // Combined-length boundary (also confirmed live): a 1,023-character joined
+    // list passes and 1,024 - the quota itself - is refused. Nine distinct
+    // 101-character names plus one of 105 give 1,014 characters, joined by nine
+    // commas to exactly 1,023.
+    const nineNames = Array.from({ length: 9 }, (_, i) => `"${'a'.repeat(100)}${i}"`).join(', ');
+    const total = (extra: number): string =>
+      `{ "ssr": { "cacheKeyHeaders": [${nineNames}, "${'b'.repeat(extra)}"] } }`;
+    expect(parseConfig(withSite(total(105))).ssr?.cacheKeyHeaders).toHaveLength(10);
+    expect(() => parseConfig(withSite(total(106)))).toThrow(/1,?024-character cache-policy quota/);
+  });
+
+  it('accepts ssr.env keys and values, rejecting reserved keys and malformed ones', () => {
+    expect(
+      parseConfig(withSite('{ "ssr": { "env": { "ORIGIN": "https://example.com", "A1": "x" } } }'))
+        .ssr?.env,
+    ).toEqual({ ORIGIN: 'https://example.com', A1: 'x' });
+    expect(() => parseConfig(withSite('{ "ssr": { "env": { "HAS-DASH": "x" } } }'))).toThrow(
+      /must match/,
+    );
+    expect(() => parseConfig(withSite('{ "ssr": { "env": { "EMPTY": "" } } }'))).toThrow(
+      /non-empty string/,
+    );
+    expect(() => parseConfig(withSite('{ "ssr": { "env": { "AWS_REGION": "x" } } }'))).toThrow(
+      /reserved by Lambda/,
+    );
+    expect(() =>
+      parseConfig(withSite('{ "ssr": { "env": { "AWS_LAMBDA_NODEJS_ENTRYPOINT": "a.js" } } }')),
+    ).toThrow(/entryPoint instead/);
+  });
+
+  it('bounds timeoutSeconds and maxConcurrencyPerEnvironment one below/at/above', () => {
+    const parse = (timeout: number, concurrency: number): unknown =>
+      parseConfig(
+        withSite(
+          `{ "ssr": { "timeoutSeconds": ${timeout}, "maxConcurrencyPerEnvironment": ${concurrency} } }`,
+        ),
+      ).ssr?.timeoutSeconds;
+    expect(parse(3, 1)).toBe(3);
+    expect(parse(900, 128)).toBe(900);
+    for (const [timeout, concurrency] of [
+      [2, 1],
+      [901, 1],
+      [30, 0],
+      [30, 129],
+      [3.5, 1],
+      [30, 1.5],
+    ] as const) {
+      expect(() => parse(timeout, concurrency)).toThrow(/must be an integer in/);
+    }
+  });
+
+  it('rejects ssr together with spa, and an unsupported region', () => {
+    expect(() => parseConfig(withSite('{ "spa": true, "ssr": {} }'))).toThrow(/mutually exclusive/);
+    expect(() => parseConfig(withSite('{ "region": "eu-central-1", "ssr": {} }'))).toThrow(
+      /us-east-1, us-east-2, us-west-2, ap-northeast-1, eu-west-1/,
+    );
+    for (const region of ['us-east-1', 'us-east-2', 'us-west-2', 'ap-northeast-1', 'eu-west-1']) {
+      expect(parseConfig(withSite(`{ "region": "${region}", "ssr": {} }`)).ssr).toBeDefined();
+    }
+    // A static site keeps accepting any region.
+    expect(parseConfig(withSite('{ "region": "eu-central-1" }')).region).toBe('eu-central-1');
+  });
+
+  it('defaults retention.webFunctionDays to 90 and requires it positive', () => {
+    expect(parseConfig(withSite('{}')).retention.webFunctionDays).toBe(90);
+    expect(
+      parseConfig(withSite('{ "retention": { "webFunctionDays": 7 } }')).retention.webFunctionDays,
+    ).toBe(7);
+    expect(() => parseConfig(withSite('{ "retention": { "webFunctionDays": 0 } }'))).toThrow(
+      /positive/,
+    );
+  });
+
+  it('derives the Web Function names from the environment prefix', () => {
+    const cfg = parseConfig(withSite('{ "ssr": {} }'));
+    const names = deriveNames('staging', '123456789012', cfg);
+    expect(names.webFunction).toBe('staging-example-web');
+    expect(names.webRole).toBe('staging-example-web-role');
+    expect(names.webLogGroup).toBe('/example/staging/web');
+    expect(names.webLocalLogGroup).toBe('/example/staging/web.local');
+    expect(names.webOac).toBe('staging-example-web-oac');
+    expect(names.ssrCachePolicy).toBe('staging-example-ssr');
+  });
+});

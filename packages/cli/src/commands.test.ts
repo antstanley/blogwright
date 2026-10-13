@@ -28,12 +28,17 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertModeSwitchAllowed,
   assertNoScopedState,
   bootstrap,
+  deleteSite,
   deploy,
   destroy,
+  previewBootstrap,
+  previewDeploy,
   previewTeardown,
   readNodeStatus,
+  rollback,
   status,
 } from './commands.js';
 import { cliPackageDir, type OpsContext } from './context.js';
@@ -392,8 +397,12 @@ function fullDestroyContext(
     preview?: boolean;
     /** Raised by `listObjects` instead of answering, e.g. a bucket already deleted. */
     listFailure?: Error;
-    /** Raised by the bucket node's own `deletePrefix`, as a missing bucket really would. */
-    deletePrefixFailure?: Error;
+    /**
+     * Raised by the bucket node's own version-aware deletion
+     * (`deleteAllVersions` -> `listObjectVersions`), as a missing bucket
+     * really would.
+     */
+    deleteVersionsFailure?: Error;
     /** Environment name; the state key the store deletes is derived from it. */
     env?: string;
   } = {},
@@ -416,9 +425,16 @@ function fullDestroyContext(
           if (opts.listFailure) throw opts.listFailure;
           return scopedObjects;
         },
+        // The bucket node's teardown path: version-aware removal lists every
+        // version/delete marker, then batch-deletes them. Answering with an
+        // empty page is a bucket with nothing left to remove.
+        listObjectVersions: async (bucket, prefix) => {
+          calls.push(`s3.listObjectVersions ${bucket} ${prefix}`);
+          if (opts.deleteVersionsFailure) throw opts.deleteVersionsFailure;
+          return [];
+        },
         deletePrefix: async (bucket, prefix) => {
           calls.push(`s3.deletePrefix ${bucket} ${prefix}`);
-          if (opts.deletePrefixFailure) throw opts.deletePrefixFailure;
           return 0;
         },
         deleteBucket: async (bucket) => {
@@ -522,7 +538,10 @@ describe('destroy', () => {
     expect(calls[0]).toBe('s3.listObjects my-bucket state/');
     expect(calls.at(-1)).toBe('s3.deleteObject state/production.json');
     // The graph's own deletes genuinely ran - the guard did not swallow them.
-    expect(calls).toContain('s3.deletePrefix my-bucket '); // bucketNode.delete's deletePrefix(bucket, '')
+    // The bucket node now empties the bucket version-aware: it lists every
+    // version and delete marker before deleting the bucket, because a plain
+    // `deletePrefix` cannot empty a versioned bucket.
+    expect(calls).toContain('s3.listObjectVersions my-bucket ');
     expect(calls).toContain('s3.deleteBucket my-bucket');
     expect(calls).toContain(`iam.deleteRole ${ctx.names.buildRole}`);
     expect(calls).toContain(`iam.deleteRole ${ctx.names.execRole}`);
@@ -570,11 +589,11 @@ describe('destroy', () => {
 
   it('treats an already-deleted bucket as no scoped state, and still tears down every non-bucket resource', async () => {
     // Faithful to the real thing: with the bucket gone, its own node's
-    // `deletePrefix` fails too - and always did, guard or no guard. What
-    // must not change is everything that happens BEFORE it.
+    // version-aware deletion fails too - and always did, guard or no guard.
+    // What must not change is everything that happens BEFORE it.
     const { ctx, calls } = fullDestroyContext([], {
       listFailure: bucketGone(),
-      deletePrefixFailure: bucketGone(),
+      deleteVersionsFailure: bucketGone(),
     });
 
     await expect(destroy(ctx, { yes: true })).rejects.toThrow('NoSuchBucket');
@@ -597,7 +616,7 @@ describe('destroy', () => {
     // The guard ran first and got out of the way, rather than aborting ahead
     // of `clearRunningMicrovms`.
     expect(calls[0]).toBe('s3.listObjects my-bucket state/');
-    expect(calls.at(-1)).toBe('s3.deletePrefix my-bucket ');
+    expect(calls.at(-1)).toBe('s3.listObjectVersions my-bucket ');
   });
 
   it('still propagates a listing failure that is NOT a missing bucket, deleting nothing', async () => {
@@ -972,5 +991,313 @@ describe('bootstrap scoped state warnings', () => {
       `could not check plugin state for "staging" at s3://my-bucket/state/ (bootstrap succeeded): ${String(error)}`,
     ]);
     expect(run.output).toContain('bootstrap complete for "staging"');
+  });
+});
+
+/*
+ * SSR serving: the refusals, the mandatory preflight, and rollback's decision
+ * between a recorded artifact and a rebuild. The deploy/rollback sequences
+ * themselves are covered by `web-functions.test.ts`; these cases pin the
+ * command-level contract around them.
+ */
+describe('SSR mode command contract', () => {
+  const HASH = 'ssr123';
+  const RECORDED = {
+    revisionId: 'r-old',
+    revisionArn: 'arn:rev-old',
+    fingerprint: 'fp-old',
+    artifactKey: 'web/artifacts/ssr123.zip',
+    artifactVersionId: 'v-old',
+    artifactSha256: 'c'.repeat(64),
+    settings: {
+      entryPoint: 'index.js',
+      env: { NODE_ENV: 'production' },
+      timeoutSeconds: 45,
+      maxConcurrencyPerEnvironment: 12,
+    },
+    endpointName: 'site',
+    endpointDomainName: 'abc.lambda-url.us-east-1.on.aws',
+  };
+
+  const DIST_STATE = {
+    'cloudfront-distribution': { id: 'D1', arn: 'arn:dist', mode: 'ssr' },
+    'web-function': {
+      name: 'production-example-web',
+      endpointName: 'site',
+      endpointDomainName: 'abc.lambda-url.us-east-1.on.aws',
+      endpointArn: 'arn:ep',
+    },
+    'iam-web-role': { arn: 'arn:web-role' },
+  };
+
+  /** A context whose every client rejects unless overridden, plus call recording. */
+  function ssrCtx(opts: {
+    ssr?: Record<string, unknown> | undefined;
+    state?: Record<string, Record<string, string | number | boolean | string[]>> | undefined;
+    clients?: Record<string, Record<string, unknown>> | undefined;
+    preview?: boolean | undefined;
+    mode?: 'static' | 'ssr' | undefined;
+    logged?: string[] | undefined;
+  }): { ctx: OpsContext; calls: string[] } {
+    const calls: string[] = [];
+    const logged = opts.logged ?? [];
+    const ctx = createTestContext({
+      env: opts.preview ? 'preview' : 'production',
+      preview: opts.preview ?? false,
+      config: { ssr: opts.ssr ?? {} },
+      ports: {
+        terminal: createScriptedTerminal({ interactive: false }),
+        // `deploy` resolves the repo root and the revision hash before its
+        // preflight; both are stubbed so the preflight is what is measured.
+        fs: createMemoryFileSystem({ [`${process.cwd()}/.jj`]: '' }),
+        vcs: { revisionHash: async () => HASH, listFiles: async () => [] },
+      },
+      state: {
+        resources: {
+          ...DIST_STATE,
+          ...(opts.mode === 'static'
+            ? { 'cloudfront-distribution': { id: 'D1', arn: 'arn:dist', mode: 'static' } }
+            : {}),
+          ...opts.state,
+        },
+      },
+      clients: {
+        s3: {
+          putObject: async (_bucket, key) => {
+            calls.push(`s3.putObject ${key}`);
+            return undefined;
+          },
+          deleteObject: async (_bucket, key) => {
+            calls.push(`s3.deleteObject ${key}`);
+          },
+          deletePrefix: async (_bucket, prefix) => {
+            calls.push(`s3.deletePrefix ${prefix}`);
+            return 0;
+          },
+          objectExists: async (_bucket, key) => {
+            calls.push(`s3.objectExists ${key}`);
+            return false;
+          },
+          objectVersionExists: async (_bucket, key, versionId) => {
+            calls.push(`s3.objectVersionExists ${key} ${versionId}`);
+            return false;
+          },
+          getObjectText: async (_bucket, key) => {
+            calls.push(`s3.getObjectText ${key}`);
+            return undefined;
+          },
+          listObjects: async () => [],
+        },
+        lambdaWeb: {
+          listWebFunctionRevisions: async () =>
+            [
+              {
+                functionName: 'production-example-web',
+                revisionId: 'r-live',
+                revisionArn: 'arn:rev-live',
+                state: 'Active',
+                description: 'blogwright:other',
+                errors: [],
+              },
+            ] as never,
+          getWebFunctionRevision: async () =>
+            ({
+              functionName: 'production-example-web',
+              revisionId: 'r-new',
+              revisionArn: 'arn:rev-new',
+              state: 'Active',
+              errors: [],
+            }) as never,
+          createWebFunctionRevision: async (input) => {
+            calls.push(
+              `lambdaWeb.createRevision ${(input as { description?: string }).description}`,
+            );
+            return {
+              revisionId: 'r-new',
+              revisionArn: 'arn:rev-new',
+              state: 'Creating',
+              errors: [],
+            } as never;
+          },
+        },
+        signing: {
+          sendToUrl: async () => {
+            calls.push('probe');
+            return {
+              statusCode: 503,
+              headers: {},
+              body: new Uint8Array(),
+              text: () => '',
+            };
+          },
+        },
+        cloudfront: {
+          createInvalidation: async (_id, paths) => {
+            calls.push(`invalidate ${paths.join(',')}`);
+            return 'inv';
+          },
+        },
+        microvms: {
+          runMicrovm: async () => {
+            calls.push('microvms.runMicrovm');
+            throw new Error('unexpected microvm launch');
+          },
+        },
+        ...opts.clients,
+      },
+      save: async () => {
+        calls.push('save');
+      },
+      logger: {
+        info: (m: string) => logged.push(m),
+        step: (m: string) => logged.push(m),
+        ok: (m: string) => logged.push(m),
+        warn: (m: string) => logged.push(m),
+      },
+    });
+    return { ctx, calls };
+  }
+
+  it('deploy preflights the endpoint and stops before the build when it may not invoke it', async () => {
+    const { ctx, calls } = ssrCtx({
+      clients: {
+        signing: {
+          sendToUrl: async () => ({
+            statusCode: 403,
+            headers: {},
+            body: new Uint8Array(),
+            text: () => '',
+          }),
+        },
+      },
+    });
+    await expect(deploy(ctx)).rejects.toThrow(/lambda:InvokeWebFunctionEndpoint/);
+    // Nothing was zipped, uploaded or launched.
+    expect(calls).toEqual([]);
+  });
+
+  it('deleteSite refuses in SSR mode without issuing a prefix delete', async () => {
+    const { ctx, calls } = ssrCtx({});
+    await expect(deleteSite(ctx)).rejects.toThrow(/cannot unpublish it/);
+    expect(calls).toEqual([]);
+  });
+
+  it('preview bootstrap and deploy refuse an SSR config', async () => {
+    const previewStack = ssrCtx({ preview: true });
+    await expect(previewBootstrap(previewStack.ctx)).rejects.toThrow(/does not support SSR/);
+    const deployStack = ssrCtx({ preview: true });
+    await expect(previewDeploy(deployStack.ctx, 'pr-42')).rejects.toThrow(/does not support SSR/);
+  });
+
+  it('bootstrap refuses a mode switch and applies nothing without --switch-mode', async () => {
+    const { ctx, calls } = ssrCtx({ mode: 'static' });
+    await expect(bootstrap(ctx)).rejects.toThrow(/503 from the placeholder/);
+    expect(calls).toEqual([]);
+  });
+
+  it('bootstrap reads a distribution recorded without a mode as static', async () => {
+    // What every stack bootstrapped before SSR existed has in state.
+    const { ctx, calls } = ssrCtx({
+      state: { 'cloudfront-distribution': { id: 'D1', arn: 'arn:dist' } },
+    });
+    await expect(bootstrap(ctx)).rejects.toThrow(/from static to ssr serving.*--switch-mode/);
+    expect(calls).toEqual([]);
+  });
+
+  it('deploy and rollback refuse a mode the distribution is not serving', async () => {
+    // SSR configured, distribution still static: nothing is probed or built.
+    const ahead = ssrCtx({ mode: 'static' });
+    await expect(deploy(ahead.ctx)).rejects.toThrow(
+      /configured for ssr serving but its distribution serves static/,
+    );
+    await expect(rollback(ahead.ctx, HASH)).rejects.toThrow(/bootstrap production --switch-mode/);
+    expect(ahead.calls).toEqual([]);
+
+    // `ssr` dropped, distribution still SSR: a static publish would delete the
+    // site/ assets the live revision references.
+    const behind = ssrCtx({ mode: 'ssr' });
+    behind.ctx.config = { ...behind.ctx.config, ssr: undefined };
+    await expect(deploy(behind.ctx)).rejects.toThrow(
+      /configured for static serving but its distribution serves ssr/,
+    );
+    expect(behind.calls).toEqual([]);
+  });
+
+  it('bootstrap names the static window when SSR is dropped, and warns when it proceeds', async () => {
+    const logged: string[] = [];
+    const { ctx } = ssrCtx({ mode: 'ssr', logged });
+    // Drop the block entirely: the config no longer asks for SSR.
+    ctx.config = { ...ctx.config, ssr: undefined };
+    await expect(bootstrap(ctx)).rejects.toThrow(/serves whatever site\/ holds/);
+    // With the flag the cutover proceeds, with the window repeated as a warning.
+    expect(() => assertModeSwitchAllowed(ctx, true)).not.toThrow();
+    expect(
+      logged.some((line) => line.includes('switching "production" from ssr to static serving')),
+    ).toBe(true);
+  });
+
+  it('rollback rebuilds when the manifest has no webFunction block', async () => {
+    const { ctx, calls } = ssrCtx({});
+    // The manifest carries a predecessor's static-era shape.
+    ctx.clients.s3.getObjectText = async () => JSON.stringify({ hash: HASH, status: 'succeeded' });
+    await expect(rollback(ctx, HASH)).rejects.toThrow(/no build artifact at build\/ssr123\.zip/);
+    expect(calls).toContain(`s3.objectExists build/${HASH}.zip`);
+    expect(calls.some((call) => call.startsWith('lambdaWeb.createRevision'))).toBe(false);
+  });
+
+  it('rollback rebuilds when the recorded artifact version is gone', async () => {
+    const { ctx, calls } = ssrCtx({});
+    ctx.clients.s3.getObjectText = async (_bucket, key) =>
+      key === `build/manifests/${HASH}.json`
+        ? JSON.stringify({ hash: HASH, status: 'succeeded', webFunction: RECORDED })
+        : undefined;
+    await expect(rollback(ctx, HASH)).rejects.toThrow(/no build artifact/);
+    expect(calls).toContain(
+      `s3.objectVersionExists ${RECORDED.artifactKey} ${RECORDED.artifactVersionId}`,
+    );
+  });
+
+  it('rollback rebuilds when staticDir is configured, because the artifact carries only the server', async () => {
+    const { ctx, calls } = ssrCtx({
+      ssr: { staticDir: 'dist/client', staticPaths: ['/_astro/*'] },
+    });
+    ctx.clients.s3.getObjectText = async (_bucket, key) =>
+      key === `build/manifests/${HASH}.json`
+        ? JSON.stringify({ hash: HASH, status: 'succeeded', webFunction: RECORDED })
+        : undefined;
+    await expect(rollback(ctx, HASH)).rejects.toThrow(/no build artifact/);
+    expect(calls.some((call) => call.startsWith('s3.objectVersionExists'))).toBe(false);
+  });
+
+  it('rollback reproduces the recorded revision without rebuilding', async () => {
+    const { ctx, calls } = ssrCtx({
+      clients: {
+        s3: {
+          getObjectText: async (_bucket: string, key: string) =>
+            key === `build/manifests/${HASH}.json`
+              ? JSON.stringify({ hash: HASH, status: 'succeeded', webFunction: RECORDED })
+              : undefined,
+          objectVersionExists: async () => true,
+          objectExists: async () => false,
+          putObject: async (_bucket: string, key: string) => {
+            calls.push(`s3.putObject ${key}`);
+            return undefined;
+          },
+        },
+        signing: {
+          sendToUrl: async () => {
+            calls.push('probe');
+            return { statusCode: 200, headers: {}, body: new Uint8Array(), text: () => '' };
+          },
+        },
+      },
+    });
+    await rollback(ctx, HASH);
+    expect(calls.some((call) => call.startsWith('s3.objectExists build/'))).toBe(false);
+    // No build: the artifact path creates the revision from the manifest.
+    expect(calls).not.toContain('microvms.runMicrovm');
+    expect(calls).toContain('lambdaWeb.createRevision blogwright:fp-old');
+    expect(calls).toContain('probe');
+    expect(calls).toContain('invalidate /*');
   });
 });

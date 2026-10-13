@@ -144,6 +144,25 @@ any scoped key for that environment exists, including empty-state objects and
 uninstalled plugins. The [architecture page](02-plugin-architecture.md) defines
 the boundary and warning/refusal paths.
 
+An environment's config document may carry an `ssr` block. Core validates it
+as site-owned config (like `microvm`, `seo` and `paths`), and the site graph
+gains `web-log-group`, `web-local-log-group`, `iam-web-role`, `web-oac`,
+`web-cache-policy`, `web-code-bucket-policy`, `web-function` and
+`web-function-policy` nodes; the `bucket` node enables S3 versioning, and
+`cloudfront-distribution` grows a second origin and per-behavior policies and
+records the serving `mode` (`static` or `ssr`; absent means `static`). Web
+Function outputs are recorded in `OpsState` under those node ids; deployment
+manifests gain a `webFunction` object (`revisionId`, `revisionArn`,
+`fingerprint`, `artifactKey`, `artifactVersionId`, `artifactSha256`,
+`settings`, `endpointName`, `endpointDomainName`) so history and rollback can
+name the revision a hash is pinned to and reproduce it. `settings` holds the
+revision-scoped values the revision was created with (`entryPoint`, `env`,
+`timeoutSeconds`, `maxConcurrencyPerEnvironment`). The object is written only
+for a revision that is serving and verified, and an SSR manifest's `status`
+is the outcome of the whole deploy, not of the build alone. The Web Function
+placeholder revision created at bootstrap is registered in state like any
+other node output; no plugin state is involved.
+
 ## Assumptions and open questions
 
 **Assumptions**

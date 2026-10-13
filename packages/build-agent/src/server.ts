@@ -90,6 +90,7 @@ async function poll(): Promise<void> {
       sitemapBaseUrl: next.sitemapBaseUrl,
       objectTags: next.objectTags,
       refresh: next.refresh,
+      ...(next.webFunction ? { webFunction: next.webFunction } : {}),
     });
   } finally {
     polling = false;

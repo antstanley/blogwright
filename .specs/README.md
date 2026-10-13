@@ -12,6 +12,7 @@ Internal documentation does not offer a supported third-party plugin API.
 ## Canonical product specifications
 
 - [Documentation design](blogwright/specs/06-docs-design.md)
+- [Web Functions (SSR)](blogwright/specs/07-web-functions.md)
 - [Accessibility acceptance evidence](reviews/2026-09-06-accessibility-acceptance.md)
 - [Analytics dashboard design](blogwright/specs/05-design.md)
 
@@ -52,10 +53,14 @@ Internal documentation does not offer a supported third-party plugin API.
   — accepted, implementation in progress: both web interfaces and browser gates; manual acceptance remains open.
 
 - [Node.js web servers and SSR on Lambda Web Functions](changes/2026-10-13-node_ssr_lambda_web_functions.md)
-  — proposed: an `ssr` config mode that packages the MicroVM build output as an
+  — proposed, implementation landed in the working tree with transport-level
+  evidence: an `ssr` config mode that packages the MicroVM build output as an
   immutable Lambda Web Function revision and serves it through CloudFront behind
   origin access control with a cache policy honouring the application's cache
-  headers; preview stacks and multi-region endpoints are out of scope.
+  headers; preview stacks and multi-region endpoints are out of scope. The
+  [Web Functions page](blogwright/specs/07-web-functions.md) records the shipped
+  contract; spec review and merge remain open. No canonical JSON Schema type
+  changed - `ssr` is site-owned config of the same kind as `microvm` and `paths`.
 
 - [Analytics dashboard design](changes/merged/2026-09-05-analytics_dashboard_design.md)
   — merged 2026-09-05: responsive reporting layout, accessible chart data, and design guidelines.

@@ -25,6 +25,8 @@ Usage:
 Commands:
   init                        First-run wizard: writes config/production.jsonc
   bootstrap   [env]           Create/reconcile the infrastructure graph
+                              (--switch-mode: move a bootstrapped stack
+                              between static and SSR serving)
   deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
   rollback    <hash> [env]    Re-deploy an existing build by hash
   delete      [env]           Empty the live site/ prefix
@@ -58,6 +60,10 @@ Options:
   --refresh         Re-upload every file on deploy, even unchanged ones, so
                     metadata fixes (content types, object tags) reach live
                     objects the ETag comparison would otherwise skip.
+  --switch-mode     Allow bootstrap to change a bootstrapped stack between
+                    static and SSR serving. Without it that cutover is
+                    refused, because the distribution moves before a deploy
+                    in the new mode exists.
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -323,6 +329,10 @@ export async function main(
       identifier: { type: 'string' },
       plain: { type: 'boolean', default: false },
       refresh: { type: 'boolean', default: false },
+      // Node's `parseArgs` matches option names literally - `--switch-mode`
+      // is declared kebab-case and read back the same way, because the camel
+      // form would reject the flag the usage text and docs advertise.
+      'switch-mode': { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -454,7 +464,7 @@ export async function main(
 
   switch (command) {
     case 'bootstrap':
-      await commands.bootstrap(ctx);
+      await commands.bootstrap(ctx, undefined, { switchMode: values['switch-mode'] });
       break;
     case 'deploy':
       await commands.deploy(ctx, { refresh: values.refresh });
