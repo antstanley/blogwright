@@ -196,7 +196,11 @@ export class CloudFrontClient {
     }
   }
 
-  /** Update a cache policy in place (headers/quota drift after a config change). */
+  /**
+   * Update a cache policy in place (headers/quota drift after a config change).
+   * `UpdateCachePolicy` is a PUT on the policy itself; `/config` is only the
+   * read path of `GetCachePolicyConfig`, and a PUT there is an `InvalidAction`.
+   */
   async updateCachePolicy(
     id: string,
     config: CachePolicyConfigInput,
@@ -205,7 +209,7 @@ export class CloudFrontClient {
     await this.client.send({
       service: 'cloudfront',
       method: 'PUT',
-      path: `${API}/cache-policy/${id}/config`,
+      path: `${API}/cache-policy/${id}`,
       headers: {
         'content-type': 'application/xml',
         ...(etag ? { 'if-match': etag } : {}),

@@ -18,7 +18,7 @@ The application must be a standard port-listening Node HTTP server: it reads the
     "entryPoint": "server/lambda.mjs",
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
-    // Add "cacheKeyHeaders": ["Authorization"] if viewers authenticate.
+    // Add "cacheKeyHeaders": ["Authorization"] if cacheable responses vary by token.
     "env": { "ORIGIN": "https://example.com" },
   },
 }
@@ -138,10 +138,10 @@ The SSR behavior uses a Blogwright-managed cache policy: minimum TTL 0, default 
 - `no-store` and `private` are never cached; `max-age=31536000, immutable` is cached at the edge for a year.
 - Query strings always produce distinct cache entries.
 - Each header in `cacheKeyHeaders` produces distinct entries and is forwarded to the application.
-- **`Authorization` on GET and HEAD is stripped by CloudFront unless it is in the cache key.** An application that authenticates viewers with bearer tokens must list `cacheKeyHeaders: ["Authorization"]`; doing so also splits the cache per token, which is the correct trade for authenticated traffic.
+- **`Authorization` always reaches the application, but only varies the cache when listed.** CloudFront does not strip it: the origin-request policy forwards it on every method. With `cacheKeyHeaders` empty, a request carrying a token shares the anonymous cache entry, so an application whose cacheable responses depend on the token must either list `cacheKeyHeaders: ["Authorization"]`, which gives each token its own entry, or mark those responses `private` or `no-store`.
 - A response whose first byte takes longer than 60 seconds is a CloudFront `504` whatever `timeoutSeconds` says. Values above 60 help only a response that keeps streaming.
 
-The managed `CachingOptimized` policy is not applied to the SSR behavior: it ignores query strings, cannot forward the viewer `Authorization` header, and would apply an 86,400-second default TTL to responses the application did not mark cacheable. Static paths kept on S3 use `CachingOptimized` as usual.
+The managed `CachingOptimized` policy is not applied to the SSR behavior: it ignores query strings, cannot key on the viewer `Authorization` header, and would apply an 86,400-second default TTL to responses the application did not mark cacheable. Static paths kept on S3 use `CachingOptimized` as usual.
 
 Fingerprint your static asset names (Astro's `/_astro/`, SvelteKit's `/_app/`, Nuxt's `/_nuxt/`, Next's `/_next/` all do by default). A file that keeps its name across builds is overwritten at upload time, before the new revision serves, so only fingerprinted names switch together with the server.
 

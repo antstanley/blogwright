@@ -55,7 +55,7 @@ example:
     "entryPoint": "server/lambda.mjs",
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
-    // Add "cacheKeyHeaders": ["Authorization"] if viewers authenticate.
+    // Add "cacheKeyHeaders": ["Authorization"] if cacheable responses vary by token.
     "env": { "ORIGIN": "https://example.com" },
   },
 }
@@ -278,15 +278,19 @@ immutable assets with `max-age=31536000, immutable` are cached at the edge for
 a year. Headers in the cache key are automatically forwarded; every other
 viewer header still reaches the application because
 `AllViewerExceptHostHeader` forwards it, and the `Host` header is the endpoint
-domain as the service requires. The one exception is `Authorization` on GET
-and HEAD: CloudFront strips it unless it is in the cache key, so an
-application that authenticates viewers with bearer tokens must list
-`cacheKeyHeaders: ["Authorization"]`; doing so also splits the cache per token,
-which is the correct trade for authenticated traffic. This is what "caching
-optimized" means here: the AWS managed `CachingOptimized` policy is not applied
-to the SSR behavior because it ignores query strings, cannot forward the viewer
-`Authorization` header, and applies an 86,400-second default TTL to responses
-that the application did not mark cacheable.
+domain as the service requires. That includes `Authorization`, on every
+method: CloudFront does not strip it under `AllViewerExceptHostHeader`, so it
+reaches the application whether or not it is listed (observed live: a GET
+carrying a bearer token arrived with the header intact while `cacheKeyHeaders`
+was empty). Listing a header changes the cache key, not delivery. With the
+default empty set an `Authorization`-bearing request shares the anonymous cache
+entry, so an application whose cacheable responses depend on the viewer's token
+must either list `cacheKeyHeaders: ["Authorization"]`, which gives each token
+its own entry, or mark those responses `private` or `no-store`. This is what
+"caching optimized" means here: the AWS managed `CachingOptimized` policy is
+not applied to the SSR behavior because it ignores query strings, cannot key on
+the viewer `Authorization` header, and applies an 86,400-second default TTL to
+responses that the application did not mark cacheable.
 
 ## Deploy contract
 

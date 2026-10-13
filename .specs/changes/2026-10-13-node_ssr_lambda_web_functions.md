@@ -239,7 +239,7 @@ index. Its body contains these local contracts:
 >     "entryPoint": "server/lambda.mjs",
 >     "staticDir": "dist/client",
 >     "staticPaths": ["/_astro/*", "/favicon.svg"],
->     // Add "cacheKeyHeaders": ["Authorization"] if viewers authenticate.
+>     // Add "cacheKeyHeaders": ["Authorization"] if cacheable responses vary by token.
 >     "env": { "ORIGIN": "https://example.com" },
 >   },
 > }
@@ -406,15 +406,20 @@ index. Its body contains these local contracts:
 > cached at the edge for a year. Headers in the cache key are automatically
 > forwarded; every other viewer header still reaches the application because
 > `AllViewerExceptHostHeader` forwards it, and the `Host` header is the endpoint
-> domain as the service requires. The one exception is `Authorization` on GET
-> and HEAD: CloudFront strips it unless it is in the cache key, so an
-> application that authenticates viewers with bearer tokens must list
-> `cacheKeyHeaders: ["Authorization"]`; doing so also splits the cache per
-> token, which is the correct trade for authenticated traffic. This is what
-> "caching optimized" means here: the AWS managed `CachingOptimized` policy is
-> not applied to the SSR behavior because it ignores query strings, cannot
-> forward the viewer `Authorization` header, and applies an 86,400-second
-> default TTL to responses that the application did not mark cacheable.
+> domain as the service requires. That includes `Authorization`, on every
+> method: CloudFront does not strip it under `AllViewerExceptHostHeader`, so it
+> reaches the application whether or not it is listed (observed live: a GET
+> carrying a bearer token arrived with the header intact while
+> `cacheKeyHeaders` was empty). Listing a header changes the cache key, not
+> delivery. With the default empty set an `Authorization`-bearing request
+> shares the anonymous cache entry, so an application whose cacheable responses
+> depend on the viewer's token must either list
+> `cacheKeyHeaders: ["Authorization"]`, which gives each token its own entry,
+> or mark those responses `private` or `no-store`. This is what "caching
+> optimized" means here: the AWS managed `CachingOptimized` policy is not
+> applied to the SSR behavior because it ignores query strings, cannot key on
+> the viewer `Authorization` header, and applies an 86,400-second default TTL
+> to responses that the application did not mark cacheable.
 >
 > **Deploy contract.** `blogwright deploy` in SSR mode creates one revision per
 > revision fingerprint: a sha256 over the artifact digest, the runtime, the
@@ -687,8 +692,8 @@ index. Its body contains these local contracts:
    cache-control expectations, the static-path split and why its assets should
    be fingerprinted),
    [troubleshooting](../../docs/src/content/docs/guides/troubleshooting.md)
-   (cold starts, 403 from OAC, 404 from a wrong Host header, a viewer
-   `Authorization` stripped on GET/HEAD unless `cacheKeyHeaders` lists it,
+   (cold starts, 403 from OAC, 404 from a wrong Host header, a cacheable
+   response shared across tokens unless `cacheKeyHeaders` lists `Authorization`,
    S3's 403 for a static path with no object, a 504 past the 60-second origin
    timeout, a refused preflight, a server that never listens,
    missing entry point, a symlinked package, package size, `Failed` revisions) and the README
@@ -705,7 +710,7 @@ index. Its body contains these local contracts:
 | Builder permissions | The build and exec roles can write `web/artifacts/*` and `web/results/*` in SSR mode and nothing new otherwise; `preview destroy` still succeeds with the CI deploy role's existing S3 actions |
 | Deploy | A deploy preflights the endpoint and stops before building when it may not invoke it; builds in the MicroVM, uploads a digest-stable artifact, creates one `Active` revision, creates another when only a revision-scoped setting changed, skips a redeploy whose fingerprint is unchanged, fails with the revision's errors on `Failed`, probes before invalidating `/*`, and records the `webFunction` manifest block only for a verified revision |
 | Failed readiness | When the probe does not pass, the deploy creates a revision from the previous revision's captured config, leaves the cache and `staleStaticKeys` untouched, records a `failed` manifest and exits non-zero naming both revisions; when the restore also fails it says the endpoint is not serving |
-| Caching | Uncached HTML is not cached; `private`/`no-store` responses are not cached; a hashed asset with an immutable max-age is served from cache on the second request; query strings and each configured `cacheKeyHeaders` entry produce distinct cache entries; with the default empty set an `Authorization`-bearing GET shares the anonymous entry and the app does not receive the header; cookies reach the application |
+| Caching | Uncached HTML is not cached; `private`/`no-store` responses are not cached; a hashed asset with an immutable max-age is served from cache on the second request; query strings and each configured `cacheKeyHeaders` entry produce distinct cache entries; with the default empty set an `Authorization`-bearing GET shares the anonymous entry while the app still receives the header; cookies reach the application |
 | Private origin | The endpoint rejects unsigned requests; only the distribution's ARN is allowed to invoke it; no wildcard-principal resource policy is ever written |
 | Edge shape | The default behavior targets the Web Function with the `<prefix>-ssr` cache policy and `AllViewerExceptHostHeader`; `staticPaths` behaviors target S3 with `CachingOptimized`; `DefaultRootObject` is empty; no custom error responses are attached and the router function is not associated with any behavior in SSR mode |
 | Mode switch | `bootstrap` refuses a static stack that gained `ssr`, and an SSR stack that lost it, unless `--switch-mode` is passed, and the refusal names the serving window; with the flag the stack converges in place, enables versioning on the way in and never suspends it on the way out, and serves the placeholder (or the current `site/`) until the next deploy; neither path tears down the stack |
@@ -843,8 +848,8 @@ The builder architecture comes from the MicroVM API's
   default TTL to uncacheable HTML.
 - *Cache key.* **Query strings plus an operator-declared header set, empty by
   default.** Only headers the operator names can vary the cached response;
-  `Authorization` is opt-in because needing it means viewer credentials reach
-  the application and every token gets its own cache entry.
+  `Authorization` is opt-in because listing it gives every token its own cache
+  entry; the header reaches the application either way.
 - *No-op deploys.* **Skip revision creation when the revision fingerprint
   matches what the endpoint currently serves**, so a redeploy of unchanged
   output and unchanged settings - a workflow re-run, a `--refresh` metadata

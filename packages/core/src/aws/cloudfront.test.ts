@@ -243,6 +243,29 @@ describe('CloudFrontClient cache policies', () => {
     brotli: true,
   };
 
+  it('updates a policy with a PUT on the policy itself, guarded by its ETag', async () => {
+    const requests: { method: string; path: string; ifMatch: string | undefined; body: string }[] =
+      [];
+    const transport: Transport = async (req) => {
+      requests.push({
+        method: req.method,
+        path: new URL(req.url).pathname,
+        ifMatch: req.headers['if-match'],
+        body: String(req.body ?? ''),
+      });
+      return response(200, '');
+    };
+    await cloudfrontWith(transport).updateCachePolicy('CP-1', SSR_POLICY, 'E1');
+    expect(requests).toHaveLength(1);
+    // Not `/config`: CloudFront answers a PUT there with InvalidAction (HTTP 404).
+    expect(requests[0]).toMatchObject({
+      method: 'PUT',
+      path: '/2020-05-31/cache-policy/CP-1',
+      ifMatch: 'E1',
+    });
+    expect(requests[0]?.body).toContain('<Name>Authorization</Name>');
+  });
+
   it('creates a policy keyed on every query string and exactly the named headers', async () => {
     let body = '';
     const transport: Transport = async (req) => {

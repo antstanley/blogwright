@@ -206,15 +206,15 @@ The packaged server output exceeds the deployment-package limit. Keep build outp
 
 `GET` on the endpoint returns `502`/`504`, or the readiness probe times out, when the server does not begin listening within 10 seconds of process start on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`. Check the entry shim: frameworks that read `HOST`/`PORT`, `NITRO_HOST`/`NITRO_PORT` or `HOSTNAME` need the mapping before the built entry is imported. The Web Function's logs are in `/<siteName>/<env>/web` (with the in-Region companion `/<siteName>/<env>/web.local`), retention from `retention.webFunctionDays`.
 
-### A viewer's `Authorization` header never reaches the application
+### One viewer's cached response is served to another
 
-CloudFront strips `Authorization` from `GET` and `HEAD` requests unless it is in the cache key. Add it to config if your application authenticates viewers with bearer tokens:
+The viewer's `Authorization` header always reaches the application - CloudFront does not strip it, because the origin-request policy forwards it - but it is not part of the cache key unless you list it. A response the application marks cacheable for an authenticated request is then served to the next viewer of the same URL, whatever their token. Either mark authenticated responses `private` or `no-store`, or key the cache on the header:
 
 ```jsonc
 { "ssr": { "cacheKeyHeaders": ["Authorization"] } }
 ```
 
-That also splits the cache per token - the correct trade for authenticated traffic. Cookies reach the application without being listed (they are forwarded but excluded from the key).
+That gives each token its own cache entry. Cookies reach the application without being listed too, and never vary the cache (they are forwarded but excluded from the key), so cookie-authenticated responses must be `private` or `no-store`.
 
 ### `504` on a slow route
 
