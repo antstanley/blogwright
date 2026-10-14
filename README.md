@@ -4,25 +4,30 @@
 </h1>
 
 <p align="center">
-  Full operations for a blog site on AWS - S3 + CloudFront hosting, with the site
-  built inside a <strong>Lambda MicroVM</strong>. One CLI, no CloudFormation, no
-  Terraform, no CDK.
+  Deploy static sites, single-page apps and server-rendered apps to AWS - built
+  inside a <strong>Lambda MicroVM</strong>, served through CloudFront. One CLI, no
+  CloudFormation, no Terraform, no CDK.
   <br /><br />
   <a href="https://blogwright.iamstan.dev"><strong>Documentation → blogwright.iamstan.dev</strong></a>
 </p>
 
 ---
 
-Works with any static site that builds via `pnpm build` - an Astro blog at the
-repo root, or a SvelteKit/Vite SPA in a monorepo subdirectory - and, with an
-`ssr` config block, with a Node framework that needs a server: the same MicroVM
-build output is packaged as an immutable **Lambda Web Function** revision behind
-the site's existing CloudFront distribution, with a private, origin-access-
-controlled endpoint and a cache policy that caches exactly what the application
-marks cacheable (Astro SSR, SvelteKit `adapter-node`, Nuxt, TanStack Start and Next
-standalone -
-see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/)).
-Buildable starting points for each, static and SSR, are in [`examples/`](examples/).
+Any app that builds with `pnpm build` deploys one of three ways:
+
+| App type | Config | Served by |
+| --- | --- | --- |
+| Static site | nothing | private S3 bucket through CloudFront |
+| Single-page app | `"spa": true` | the same, with `index.html` for unknown paths |
+| Server-rendered app | an `ssr` block | an immutable **Lambda Web Function** revision behind the same distribution |
+
+Server rendering covers Astro SSR, SvelteKit `adapter-node`, Nuxt, TanStack Start and
+Next standalone - see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
+Buildable starting points for each framework and mode are in [`examples/`](examples/),
+documented at [blogwright.iamstan.dev/examples](https://blogwright.iamstan.dev/examples/overview/).
+Optional [plugins](https://blogwright.iamstan.dev/plugins/overview/) add traffic
+analytics and standard.site publishing.
+
 The CLI talks to AWS by SigV4-signing raw HTTP requests and models the
 infrastructure as a reconcilable dependency graph. Deploys are incremental: only
 changed files are re-uploaded and only the changed CloudFront paths are
@@ -96,7 +101,7 @@ OIDC publishing, run `blogwright pds bootstrap <env>` once per eligible stack to
 install PDS's own secret-access policy. `plugin remove --yes` uninstalls while
 **keeping** resources; run `<plugin> destroy <env> --yes` first when teardown is wanted.
 
-The optional [analytics plugin](packages/analytics/README.md) provides a fourteen-node
+The optional [analytics plugin](https://blogwright.iamstan.dev/plugins/analytics/) provides a fourteen-node
 us-east-1 pipeline and a local dashboard. Its `page_views` table excludes raw viewer
 IP, while failed Firehose objects can retain original payloads and the site's
 CloudWatch copy remains separate.
@@ -114,10 +119,15 @@ Everything lives at **[blogwright.iamstan.dev](https://blogwright.iamstan.dev)**
   keyless deploys from GitHub Actions.
 - [PR previews](https://blogwright.iamstan.dev/guides/pr-previews/) - every PR at
   `https://<id>.<preview-domain>` from one shared stack.
-- [Publishing to standard.site](https://blogwright.iamstan.dev/guides/publishing-standard-site/) -
-  mirroring posts to an AT Protocol PDS, with OAuth handled by the CLI.
-- [Beyond Astro](https://blogwright.iamstan.dev/guides/non-astro-sites/) - monorepo
-  SPAs (`paths.app`/`paths.dist`, `spa`, `sourceInclude`).
+- [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/) -
+  the `ssr` block and a recipe per framework.
+- [Plugins](https://blogwright.iamstan.dev/plugins/overview/) - adding, running and
+  removing plugins; [Analytics](https://blogwright.iamstan.dev/plugins/analytics/)
+  and [standard.site](https://blogwright.iamstan.dev/plugins/standard-site/).
+- [Single-page apps](https://blogwright.iamstan.dev/guides/single-page-apps/) -
+  `spa` mode for client-routed apps.
+- [Monorepos](https://blogwright.iamstan.dev/guides/monorepos/) - apps in a
+  subdirectory (`paths.app`/`paths.dist`, `sourceInclude`).
 - [Architecture](https://blogwright.iamstan.dev/reference/architecture/) - the
   resource graph, bucket layout, builder MicroVM, and SigV4 transport.
 

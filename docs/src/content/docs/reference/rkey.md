@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-`blogwright/rkey` is the CLI package's only library entry point. It exports the record-key (rkey) scheme that [standard.site publishing](/guides/publishing-standard-site/) uses to key each `site.standard.document` record: a TID derived deterministically from the post's URL path - no lookup table, no PDS round-trip. Your site imports the same functions to render its `<link rel="site.standard.document">` tags, so the tag on every page and the record the sync writes can never disagree.
+`blogwright/rkey` is the CLI package's only library entry point. It exports the record-key (rkey) scheme that [standard.site publishing](/plugins/standard-site/) uses to key each `site.standard.document` record: a TID derived deterministically from the post's URL path - no lookup table, no PDS round-trip. Your site imports the same functions to render its `<link rel="site.standard.document">` tags, so the tag on every page and the record the sync writes can never disagree.
 
 ## What it is
 
@@ -86,7 +86,7 @@ The `slug` must be the same id the sync derives when it enumerates posts: the fr
 
 ## The invariant: the rkey is the URL
 
-Because the rkey is a pure function of the URL path, **post slugs must never change after publication**. Renaming a slug derives a new rkey, so the next sync creates a fresh record at the new key and the old record becomes an orphan - the sync warns about orphans but never deletes them (see [Publishing to standard.site](/guides/publishing-standard-site/)).
+Because the rkey is a pure function of the URL path, **post slugs must never change after publication**. Renaming a slug derives a new rkey, so the next sync creates a fresh record at the new key and the old record becomes an orphan - the sync warns about orphans but never deletes them (see [Publishing to standard.site](/plugins/standard-site/)).
 
 :::caution
 Treat the pinned outputs as on-the-wire identity. Anything that changes a published post's path - renaming the slug, moving posts out of `/posts/`, adding or dropping the trailing slash - orphans the PDS record and breaks every link tag already derived from it.

@@ -244,13 +244,13 @@ command declarations. The SPI remains internal and unversioned.
 The optional analytics plugin adds `analytics init`, `bootstrap`, `status`,
 `dashboard`, `backfill`, and `destroy`. Its dashboard listens on loopback port
 4317 by default; backfill imports whole days strictly before first delivery and
-omits the boundary day. See the
-[analytics package guide](https://github.com/antstanley/blogwright/blob/main/packages/analytics/README.md)
-for pipeline, retention and privacy details.
+omits the boundary day. See [Analytics](/plugins/analytics/) for setup, the
+dashboard, retention and privacy, and [Plugins overview](/plugins/overview/) for
+the plugin model.
 
 ## pds commands
 
-The `pds` group manages [standard.site publishing](/guides/publishing-standard-site/) over AT Protocol. All of it requires a `pds` section in the config; `keygen`, `login`, `init`, and `sync` also require a configured domain. Run the setup commands in order - keygen, commit and release, login, init, sync.
+The `pds` group manages [standard.site publishing](/plugins/standard-site/) over AT Protocol. All of it requires a `pds` section in the config; `keygen`, `login`, `init`, and `sync` also require a configured domain. Run the setup commands in order - keygen, commit and release, login, init, sync.
 
 ### pds bootstrap, status and destroy
 

@@ -50,7 +50,7 @@ The file listing honors `.gitignore`: tracked files plus untracked files that ar
 
 Tracked files that are deleted on disk are skipped rather than failing the zip. The zip itself is deterministic (fixed timestamps), and one extra file is injected in memory: `.commit-hash`, carrying the revision hash. The build runs from this zip with no `.git` present, so your site's build config can read the deployed revision from that file instead.
 
-See [Configuration](/reference/configuration/) for the full key reference and [Non-Astro sites](/guides/non-astro-sites/) for `sourceInclude` in practice.
+See [Configuration](/reference/configuration/) for the full key reference and [Monorepos](/guides/monorepos/#ship-pre-built-artifacts) for `sourceInclude` in practice.
 
 ## The builder image check
 
@@ -87,6 +87,32 @@ The CLI reads the changed-paths manifest and invalidates accordingly:
 
 Tune the threshold with the `invalidationMaxPaths` config key; see [Configuration](/reference/configuration/).
 
+## How URLs map to files
+
+A CloudFront function resolves every URL without a file extension to a directory index: `/about` and `/about/` both fetch `about/index.html`. It never tries `about.html`.
+
+- **Astro** already writes `about/index.html` by default.
+- **SvelteKit's `adapter-static`** writes `about.html` unless pages set `trailingSlash`. Without this, every prerendered page other than `/` answers `404`:
+
+  ```js
+  // src/routes/+layout.js
+  export const prerender = true;
+  export const trailingSlash = 'always'; // writes /about as about/index.html
+  ```
+
+A path with no file behind it gets your `/404.html` with status `404` - so make sure your build writes one. With SvelteKit, give `adapter-static` `fallback: '404.html'`. Single-page apps answer these paths with `index.html` instead; see [Single-page apps](/guides/single-page-apps/). Complete projects: [SvelteKit SSG](/examples/sveltekit-ssg/), [Astro static](/examples/astro-static/).
+
+## robots.txt and sitemap.xml
+
+The builder writes `robots.txt` and `sitemap.xml` into your output before uploading, so they publish and invalidate like any other page. The `seo` config decides what goes in them, with defaults that depend on the environment:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `seo.robots` | `"auto"` | `auto` makes production indexable and blocks crawlers everywhere else. `index` or `noindex` force either. `off` keeps whatever `robots.txt` your build wrote. `seo.robotsContent` replaces the body verbatim. |
+| `seo.sitemap` | `"auto"` | `auto` writes `sitemap.xml` in production only. `on` or `off` force it. It needs a site origin: your custom domain, or the CloudFront domain. |
+
+The sitemap lists the HTML pages in your build output: directory index documents map to their clean URL, and `404.html` pages are left out. A prerendered site gets one entry per page; a single-page app that writes one `index.html` gets one entry.
+
 ## Metadata fixes: `--refresh`
 
 S3 writes object metadata - the content type and object tags - only on the PUT. Because the sync skips unchanged content, a metadata fix (an upgrade that corrects a content type, or newly added tags) never reaches an object whose bytes did not change. Pass `--refresh` once after such an upgrade to re-upload every file:
@@ -119,7 +145,7 @@ The command uses the deployment manifest to window the log query to that build's
 
 When the config has a `pds` section and publishing has been initialised, every successful **production** deploy also re-reconciles the site's standard.site records on your PDS. The sync is non-fatal by design: if it fails (an expired session, a network blip), the deploy still succeeds with a warning, and the next deploy heals the records. Non-production environments never sync.
 
-Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/guides/publishing-standard-site/).
+Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/plugins/standard-site/).
 
 ## SSR environments
 

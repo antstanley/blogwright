@@ -35,7 +35,7 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
-  "description": "Full operations for a blog site on AWS: S3 + CloudFront hosting with builds in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site (AT Protocol) publishing",
+  "description": "Deploy static sites, single-page apps and server-rendered apps to AWS: S3 + CloudFront hosting, builds in a Lambda MicroVM, Lambda Web Functions for SSR, PR previews, GitHub-OIDC CI deploys, and plugins for analytics and standard.site publishing",
   "keywords": [
     "astro",
     "aws",

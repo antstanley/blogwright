@@ -2,7 +2,7 @@
 title: Troubleshooting
 description: Symptom, cause, and fix for the errors and warnings blogwright actually raises.
 sidebar:
-  order: 10
+  order: 11
 ---
 
 blogwright errors try to name their own fix. This page collects the ones you are most likely to meet - what triggers each, why, and what to do - grouped by area. Command and flag details live in the [CLI reference](/reference/cli/); every config key is documented in the [configuration reference](/reference/configuration/).
@@ -23,7 +23,7 @@ Create the missing file - `siteName` is the only key without a default (`region`
 }
 ```
 
-The environment defaults to `production`, so a bare `blogwright deploy` looks for `config/production.jsonc`. If you meant a different environment, pass it positionally or with `--env`. See [Environments](/guides/environments/).
+The environment defaults to `production`, so a bare `blogwright deploy` looks for `config/production.jsonc`. If you meant a different environment, pass it positionally or with `--env`. See [Configuration files](/guides/configuration-files/#which-file-is-loaded).
 
 ### `could not find the repo root (no .git or .jj above <dir>)`
 
@@ -116,7 +116,7 @@ A running builder MicroVM pins the builder image, and deleting a pinned image fa
 
 ### `sourceInclude path "<entry>" is missing or empty - run the pre-deploy build that produces it before deploying`
 
-`sourceInclude` entries are gitignored paths zipped into the deploy source anyway - artifacts a pre-deploy step builds outside the MicroVM (a wasm bundle, generated assets). Each entry must exist and be non-empty at deploy time; a forgotten pre-build fails fast here instead of shipping a broken site. Run the step that produces the artifact, then deploy again. See [Non-Astro sites](/guides/non-astro-sites/).
+`sourceInclude` entries are gitignored paths zipped into the deploy source anyway - artifacts a pre-deploy step builds outside the MicroVM (a wasm bundle, generated assets). Each entry must exist and be non-empty at deploy time; a forgotten pre-build fails fast here instead of shipping a broken site. Run the step that produces the artifact, then deploy again. See [Monorepos](/guides/monorepos/#ship-pre-built-artifacts).
 
 ### `build failed for <hash>: <message>`
 
@@ -272,7 +272,7 @@ The preview stack creates its wildcard-certificate validation records and the `*
 
 ## standard.site publishing (pds)
 
-The `pds` commands have a strict setup order - keygen, release, login, init, sync - and each error points at the step that was skipped. The full walkthrough is in [Publishing to standard.site](/guides/publishing-standard-site/).
+The `pds` commands have a strict setup order - keygen, release, login, init, sync - and each error points at the step that was skipped. The full walkthrough is in [Publishing to standard.site](/plugins/standard-site/).
 
 ### `config has no "pds" section - add it to config/production.jsonc`
 

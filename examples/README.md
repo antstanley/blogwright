@@ -26,7 +26,7 @@ pnpm add -D blogwright
 
 Then set `siteName` and `region` in `config/production.jsonc`, commit everything including `pnpm-lock.yaml`, and run `pnpm exec blogwright bootstrap` and `pnpm exec blogwright deploy`. Each example's README names the files that matter and why.
 
-The configs assume the example directory is the repository root, because Blogwright resolves `paths` and `ssr` paths from the repository root. To deploy one from inside a larger repository instead, set `paths.app` to its directory and prefix `paths.dist`, `ssr.packageDir` and `ssr.staticDir` with it - see [Beyond Astro](https://blogwright.iamstan.dev/guides/non-astro-sites/).
+The configs assume the example directory is the repository root, because Blogwright resolves `paths` and `ssr` paths from the repository root. To deploy one from inside a larger repository instead, set `paths.app` to its directory and prefix `paths.dist`, `ssr.packageDir` and `ssr.staticDir` with it - see [Monorepos](https://blogwright.iamstan.dev/guides/monorepos/).
 
 ## Conventions
 

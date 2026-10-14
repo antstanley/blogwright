@@ -2,7 +2,7 @@
 title: Custom domains
 description: Serve the site from your own domain with a DNS-validated ACM certificate and a CloudFront alias - your DNS can stay wherever it is hosted.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 Without a domain, the site is served from the distribution's `*.cloudfront.net` hostname. Configure a domain and `bootstrap` requests a TLS certificate, waits for you to validate it via DNS, and attaches the domain to the CloudFront distribution as its alias. Creating the DNS record that points your domain at the distribution is the one step left to you - blogwright never touches the main site's DNS, so the domain can be hosted at any registrar or DNS provider.

@@ -8,6 +8,8 @@ import { getCollection } from 'astro:content';
 const GROUPS: Array<{ prefix: string; label: string }> = [
   { prefix: 'getting-started/', label: 'Getting started' },
   { prefix: 'guides/', label: 'Guides' },
+  { prefix: 'examples/', label: 'Examples' },
+  { prefix: 'plugins/', label: 'Plugins' },
   { prefix: 'reference/', label: 'Reference' },
 ];
 
@@ -19,9 +21,10 @@ export const GET: APIRoute = async ({ site }) => {
   lines.push('# blogwright');
   lines.push('');
   lines.push(
-    '> Full operations for a blog site on AWS: S3 + CloudFront hosting with builds ' +
-      'in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site ' +
-      '(AT Protocol) publishing. One CLI, no CloudFormation, no Terraform, no CDK.',
+    '> Deploy static sites, single-page apps and server-rendered apps to AWS with one ' +
+      'CLI: S3 + CloudFront hosting, builds in a Lambda MicroVM, Lambda Web Functions ' +
+      'for SSR, PR previews, GitHub-OIDC CI deploys, and plugins for traffic analytics ' +
+      'and standard.site (AT Protocol) publishing. No CloudFormation, Terraform or CDK.',
   );
   lines.push('');
   lines.push(

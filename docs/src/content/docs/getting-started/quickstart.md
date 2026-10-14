@@ -7,7 +7,7 @@ sidebar:
 
 Three commands take you from an empty AWS account to a live site: `init` writes the config, `bootstrap` creates the infrastructure, `deploy` builds and publishes. This page walks the whole flow, then shows how to check on the result with `status` and `history`.
 
-Before you start you need blogwright [installed](/getting-started/installation/) in a git (or jj) repository that builds a static site with `pnpm build`, Node ≥ 22, and AWS credentials in the ambient provider chain. The CLI finds the repo root by walking up to the nearest `.git` or `.jj`, so every command works from any subdirectory. The binary is `blogwright`; `bw` is an alias.
+Before you start you need blogwright [installed](/getting-started/installation/) in a git (or jj) repository whose app - static site, SPA or server-rendered - builds with `pnpm build`, Node ≥ 22, and AWS credentials in the ambient provider chain. The CLI finds the repo root by walking up to the nearest `.git` or `.jj`, so every command works from any subdirectory. The binary is `blogwright`; `bw` is an alias.
 
 ## 1. `blogwright init` - write the config
 
@@ -36,6 +36,16 @@ The result looks like this:
 ```
 
 If `config/production.jsonc` already exists, `init` refuses and tells you to edit it directly. Everything beyond these keys has defaults - see the [configuration reference](/reference/configuration/) for the full set.
+
+Then add the one key your app type needs, before you bootstrap:
+
+| App type | Add to the config | Guide |
+| --- | --- | --- |
+| Static site | nothing | - |
+| Single-page app | `"spa": true` | [Single-page apps](/guides/single-page-apps/) |
+| Server-rendered app | an `ssr` block | [Server-rendered sites](/guides/server-rendered-sites/) |
+
+An app outside the repo root also needs `paths.app` - see [Monorepos](/guides/monorepos/).
 
 :::note[No TTY?]
 `init` is interactive and exits with an error in CI or plain mode. Write the minimal config by hand instead - only `region` and `siteName` are required:
@@ -118,4 +128,6 @@ pnpm exec blogwright history    # deployment history
 - [Deploying](/guides/deploying/) - the deploy lifecycle in depth: builds, invalidation, rollback, logs.
 - [Custom domains](/guides/custom-domains/) - certificates, DNS, and adding a domain after the fact.
 - [Environments](/guides/environments/) - staging and other environments beyond `production`.
+- [Configuration files](/guides/configuration-files/) - where config lives and which file each environment loads.
 - [Configuration reference](/reference/configuration/) - every config key and its default.
+- [Plugins](/plugins/overview/) - add traffic analytics or standard.site publishing.

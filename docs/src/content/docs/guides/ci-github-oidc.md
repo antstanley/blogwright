@@ -2,7 +2,7 @@
 title: CI deploys with GitHub OIDC
 description: Let GitHub Actions deploy your site with a short-lived OIDC role - no AWS keys stored anywhere.
 sidebar:
-  order: 4
+  order: 5
 ---
 
 blogwright deploys from CI without any stored AWS credentials. Set `githubRepo` in your config and `bootstrap` provisions an IAM role that GitHub Actions assumes via OIDC federation: the workflow exchanges its short-lived GitHub token for temporary AWS credentials, runs `blogwright deploy`, and nothing long-lived ever exists to leak or rotate.
@@ -59,7 +59,7 @@ The role is scoped to one environment's resources, not the account:
 - Read the MicroVM build logs, and pass the environment's build and exec roles.
 - Create CloudFront invalidations on the environment's distribution (previews are never cached, so the preview role omits this).
 - In an [SSR environment](/guides/server-rendered-sites/), publish revisions of the environment's own Web Function: create revisions and read or list that function's revisions and endpoints (never account-wide), invoke its endpoint for the deploy preflight and readiness probe, pass its execution role, and read artifact object versions (`s3:GetObjectVersion`) so `rollback` can reproduce a pinned revision. It cannot create or delete the function, change its endpoint, or touch the distribution's configuration - `bootstrap`, including a `--switch-mode` bootstrap, stays an operator action. The grants are added by the same bootstrap that provisions the function, since the endpoint grant names the endpoint ARN it records.
-- When [standard.site publishing](/guides/publishing-standard-site/) is configured **and `blogwright pds bootstrap <env>` has been run once for the environment**, read and write the OAuth secret in Secrets Manager - the post-deploy sync rotates the session on every run. That grant is no longer part of the role's `<env>-deploy` policy: it is a separate inline policy named `blogwright-pds`, owned and reconciled by the pds plugin. The preview role never gets it - its subject claim accepts any ref, while the secret is shared across environments - so preview deploys of a standard.site do not rotate the session.
+- When [standard.site publishing](/plugins/standard-site/) is configured **and `blogwright pds bootstrap <env>` has been run once for the environment**, read and write the OAuth secret in Secrets Manager - the post-deploy sync rotates the session on every run. That grant is no longer part of the role's `<env>-deploy` policy: it is a separate inline policy named `blogwright-pds`, owned and reconciled by the pds plugin. The preview role never gets it - its subject claim accepts any ref, while the secret is shared across environments - so preview deploys of a standard.site do not rotate the session.
 
 When upgrading from the additive PDS migration release, run `blogwright pds bootstrap <env>` before the next `blogwright bootstrap <env>` in every configured non-preview environment (for example, `production` or `staging`). Site bootstrap rewrites the entire `<env>-deploy` policy, removing the old secret statement. If this step was missed, run `blogwright pds bootstrap <env>` to restore secret access; the next deploy can sync to the PDS again. The site deploy itself still succeeds while sync is unavailable.
 
