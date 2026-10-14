@@ -15,24 +15,23 @@ hero:
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
+import AppCard from '../../components/AppCard.astro';
+import AppCardGrid from '../../components/AppCardGrid.astro';
 
-## Pick your app type
-
-<CardGrid>
-  <Card title="Static site" icon="document">
+<AppCardGrid>
+  <AppCard title="Static site" icon="document" href="/guides/deploying/">
     Astro, SvelteKit prerendered, or any `pnpm build` that writes HTML. Served
     from a private S3 bucket through CloudFront. Nothing extra to configure.
-  </Card>
-  <Card title="Single-page app" icon="window">
+  </AppCard>
+  <AppCard title="Single-page app" icon="window" href="/guides/single-page-apps/">
     Add `"spa": true`. Unknown paths serve your `index.html`, so client-side
-    routing works on refresh. See [Single-page apps](/guides/single-page-apps/).
-  </Card>
-  <Card title="Server-rendered app" icon="server">
+    routing works on refresh.
+  </AppCard>
+  <AppCard title="Server-rendered app" icon="server" href="/guides/server-rendered-sites/">
     Add an `ssr` block. The build ships as a Lambda Web Function behind the same
-    CloudFront distribution - Astro, SvelteKit, Nuxt, TanStack Start or Next. See
-    [Server-rendered sites](/guides/server-rendered-sites/).
-  </Card>
-</CardGrid>
+    CloudFront distribution - Astro, SvelteKit, Nuxt, TanStack Start or Next.
+  </AppCard>
+</AppCardGrid>
 
 ## Built in
 
