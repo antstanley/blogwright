@@ -42,6 +42,13 @@ export interface SsrConfig {
   /** Entry file inside the package that starts the HTTP server. */
   entryPoint: string;
   /**
+   * When set, Blogwright generates the entry shim: the package gains
+   * `SSR_SHIM_FILE` beside `entryPoint`, which maps `AWS_LAMBDA_HTTP_ENDPOINT`
+   * onto these variables before importing `entryPoint`, and the revision starts
+   * the shim. Absent, `entryPoint` must listen on the endpoint itself.
+   */
+  shim?: SsrShimConfig | undefined;
+  /**
    * Repo-relative directory of static browser assets to keep publishing to
    * `site/`. Supplied together with `staticPaths`; when absent the build leaves
    * `site/` untouched.
@@ -64,6 +71,21 @@ export interface SsrConfig {
   /** Concurrent requests each execution environment handles (1-128). */
   maxConcurrencyPerEnvironment: number;
 }
+
+/** The variable names a generated entry shim sets from `AWS_LAMBDA_HTTP_ENDPOINT`. */
+export interface SsrShimConfig {
+  /** Variable the server reads its listen host from; omitted for servers that read only a port. */
+  host?: string | undefined;
+  /** Variable the server reads its listen port from. */
+  port: string;
+}
+
+/**
+ * File name of the generated entry shim, written beside `ssr.entryPoint` so
+ * the entry's relative imports and directory lookups resolve as they would
+ * when started directly.
+ */
+export const SSR_SHIM_FILE = 'blogwright-entry.mjs';
 
 /** Lambda Web Function runtime id: Node.js 24 on Arm64, the only runtime offered. */
 export const WEB_FUNCTION_RUNTIME = 'nodejs24.x';
@@ -463,6 +485,7 @@ const ENV_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 const SSR_KEYS = new Set<string>([
   'packageDir',
   'entryPoint',
+  'shim',
   'staticDir',
   'staticPaths',
   'cacheKeyHeaders',
@@ -482,6 +505,51 @@ function repoRelativePath(value: unknown, label: string): string {
   }
   if (value.startsWith('/') || value.split('/').includes('..')) {
     throw new Error(`config.${label} must be repo-relative without "..", got "${value}"`);
+  }
+  return value;
+}
+
+/** Keys `ssr.shim` declares. */
+const SSR_SHIM_KEYS = new Set<string>(['host', 'port']);
+
+/**
+ * The listen variable names of `ssr.shim`. Each must be a variable name the
+ * runtime does not reserve, the two must differ, and neither may also be set in
+ * `ssr.env`: the shim overwrites it at start, so the literal value would never
+ * be seen.
+ */
+function normalizeShimConfig(raw: unknown, env: Record<string, string>): SsrShimConfig {
+  if (!isRecord(raw)) {
+    throw new Error('config.ssr.shim must be an object naming the "host" and "port" variables');
+  }
+  for (const key of Object.keys(raw)) {
+    if (!SSR_SHIM_KEYS.has(key)) throw new Error(`config.ssr.shim has unknown key "${key}"`);
+  }
+  if (raw.port === undefined) throw new Error('config.ssr.shim.port is required');
+  const port = shimVariable(raw.port, 'port', env);
+  if (raw.host === undefined) return { port };
+  const host = shimVariable(raw.host, 'host', env);
+  if (host === port) {
+    throw new Error(`config.ssr.shim.host and ssr.shim.port must differ, both are "${host}"`);
+  }
+  return { host, port };
+}
+
+function shimVariable(value: unknown, field: string, env: Record<string, string>): string {
+  if (typeof value !== 'string' || !ENV_KEY_PATTERN.test(value)) {
+    throw new Error(
+      `config.ssr.shim.${field} must be an environment variable name matching ` +
+        `[A-Za-z][A-Za-z0-9_]*, got ${JSON.stringify(value)}`,
+    );
+  }
+  if (WEB_FUNCTION_RESERVED_ENV.includes(value)) {
+    throw new Error(`config.ssr.shim.${field} cannot be "${value}": it is reserved by Lambda`);
+  }
+  if (Object.hasOwn(env, value)) {
+    throw new Error(
+      `config.ssr.shim.${field} names "${value}", which ssr.env also sets: the shim ` +
+        'overwrites it at start, so remove it from ssr.env',
+    );
   }
   return value;
 }
@@ -623,6 +691,14 @@ function normalizeSsrConfig(raw: unknown, distDir: string): SsrConfig | undefine
     }
   }
 
+  const shim = raw.shim === undefined ? undefined : normalizeShimConfig(raw.shim, env);
+  if (shim !== undefined && entryPoint.split('/').at(-1) === SSR_SHIM_FILE) {
+    throw new Error(
+      `config.ssr.entryPoint cannot be named "${SSR_SHIM_FILE}" when ssr.shim is set: that is ` +
+        "the generated shim's own file name - point entryPoint at the framework's server entry",
+    );
+  }
+
   const timeoutSeconds =
     raw.timeoutSeconds === undefined
       ? SSR_DEFAULT_TIMEOUT_SECONDS
@@ -640,6 +716,7 @@ function normalizeSsrConfig(raw: unknown, distDir: string): SsrConfig | undefine
   return {
     packageDir,
     entryPoint,
+    ...(shim !== undefined ? { shim } : {}),
     ...(staticDir !== undefined ? { staticDir } : {}),
     staticPaths,
     cacheKeyHeaders,

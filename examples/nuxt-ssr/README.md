@@ -6,6 +6,7 @@ Nuxt 4 with Nitro's `node-server` preset, running on Lambda Web Functions.
 
 - `nuxt.config.ts` - the `node-server` preset (Nuxt's default), which writes a standalone server to `.output/server` with the dependencies it needs copied in as real files.
 - `lambda.mjs` - the entry shim: maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `NITRO_HOST` and `NITRO_PORT` and imports `index.mjs`. The build copies it into `.output/server/`.
+  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "index.mjs"` with `"shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" }` in the `ssr` block. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
 - `pnpm-workspace.yaml` - `allowBuilds` approves esbuild's install script. pnpm 11 fails an install that runs into an unapproved one, in the builder as much as locally.
 - `config/production.jsonc` - packages `.output/server`; `staticDir`/`staticPaths` publish `/_nuxt/` from `.output/public` to S3.
 

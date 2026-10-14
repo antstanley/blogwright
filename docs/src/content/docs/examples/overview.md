@@ -64,7 +64,7 @@ See [Monorepos](/guides/monorepos/).
 | Its own `pnpm-workspace.yaml` and `pnpm-lock.yaml` | pnpm treats the directory as a project root, even inside the Blogwright repository. The builder runs `pnpm install --frozen-lockfile --prod=false`, so the lockfile must be committed. |
 | pnpm pinned with `packageManager` | The builder enables pnpm through corepack, which installs the version `packageManager` names. |
 | Install scripts approved in `allowBuilds` | pnpm 11 fails an install that meets a dependency build script nobody approved. |
-| An entry shim (`lambda.mjs`) in each SSR example | Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`. The shim maps it onto the variables the framework's server reads, and `pnpm build` copies it into the package. |
+| An entry shim (`lambda.mjs`) in each SSR example | Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`. The shim maps it onto the variables the framework's server reads, and `pnpm build` copies it into the package. The examples write their own so the mapping is visible; set [`ssr.shim`](/guides/server-rendered-sites/#the-entry-shim) and Blogwright generates it instead, with no file or copy step. Each example page lists the values. |
 | Self-contained SSR packages | Lambda loads nothing outside the package, and the build agent rejects symbolic links. Each SSR example either bundles its dependencies or has its framework copy them in as real files. |
 
 ## Check an SSR package before deploying

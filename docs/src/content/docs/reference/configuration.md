@@ -185,7 +185,9 @@ Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown p
   "siteName": "example",
   "ssr": {
     "packageDir": "dist",
-    "entryPoint": "server/lambda.mjs",
+    "entryPoint": "server/entry.mjs",
+    // Blogwright generates the entry shim: Astro's server reads HOST and PORT.
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
     // Only if cacheable responses vary by token:
@@ -202,6 +204,7 @@ Presence of the key enables the mode. `ssr` and `spa: true` are mutually exclusi
 | --- | --- | --- |
 | `packageDir` | Repo-relative, non-empty, no `..` segments | `paths.dist` |
 | `entryPoint` | Non-empty relative path inside the package, `/` separators, no `..`, no leading `/` | `index.js` |
+| `shim` | Object with `port` (required) and `host` (optional): the environment variable names the server reads its listen address from. Each matches `[A-Za-z][A-Za-z0-9_]*`, is not Lambda-reserved, is not also set in `env`, and the two differ. With `shim` set, `entryPoint` cannot be named `blogwright-entry.mjs` | none |
 | `staticDir` | Repo-relative, no `..`; must be supplied together with `staticPaths`. Files publish at their path relative to it, so it must mirror the URL layout | none |
 | `staticPaths` | Array of CloudFront path patterns, each beginning `/`; must be non-empty when `staticDir` is set, and empty without it | `[]` |
 | `cacheKeyHeaders` | HTTP header names (RFC 7230 tokens), no case-insensitive duplicates, at most 10, at most 128 characters each, joined list under 1,024 characters, none CloudFront owns or strips | `[]` |
@@ -211,7 +214,9 @@ Presence of the key enables the mode. `ssr` and `spa: true` are mutually exclusi
 
 `env` keys Lambda reserves are rejected at config load, naming the key: the `AWS_*` credential, region, session and Lambda-runtime names, plus `AWS_LAMBDA_NODEJS_ENTRYPOINT` (which points at `entryPoint` instead, so the two can never disagree). `cacheKeyHeaders` rejects `Host`, `Accept-Encoding`, the connection-scoped headers CloudFront removes, and any name beginning `lambda-web-`. CloudFront's limits are enforced at load: 10 headers, 128 characters per header name, and a comma-joined name list strictly under 1,024 characters.
 
-Revision-scoped settings (`entryPoint`, `env`, `timeoutSeconds`, `maxConcurrencyPerEnvironment`) take effect at the next deploy, which creates a revision whenever any of them changed even if the built output did not. `bootstrap` never cuts one.
+With `shim` set, Blogwright generates the entry shim: the package gains `blogwright-entry.mjs` beside `entryPoint`, which copies the host and port from `AWS_LAMBDA_HTTP_ENDPOINT` into the named variables and then imports `entryPoint`, and the revision starts the shim. `entryPoint` is then the framework's own server entry, not a hand-written shim. See [The entry shim](/guides/server-rendered-sites/#the-entry-shim).
+
+Revision-scoped settings (`entryPoint`, `shim`, `env`, `timeoutSeconds`, `maxConcurrencyPerEnvironment`) take effect at the next deploy, which creates a revision whenever any of them changed even if the built output did not. `bootstrap` never cuts one.
 
 ### How SSR changes the other settings
 
@@ -370,6 +375,7 @@ unrelated built-in commands. Post-deploy PDS sync failures remain warnings:
 | `ssr` + `spa` | mutually exclusive |
 | `ssr` + `region` | `region` must be a Web Function launch region |
 | `ssr.env` keys | reserved Lambda names rejected |
+| `ssr.shim` | `port` required, `host` optional; variable names, not reserved, not in `ssr.env`, distinct |
 | `seo.robots` | `auto`, `index`, `noindex`, or `off` |
 | `seo.sitemap` | `auto`, `on`, or `off` |
 | `sourceInclude[]` | repo-relative, no leading `/`, no `..` |

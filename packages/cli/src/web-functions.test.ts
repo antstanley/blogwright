@@ -211,6 +211,15 @@ describe('revision settings and fingerprint', () => {
     expect(revisionSettings(ctx).env).toEqual({ NODE_ENV: 'staging' });
   });
 
+  it('starts the generated shim beside the entry when ssr.shim is set', () => {
+    const { ctx } = ssrContext({
+      ssr: { entryPoint: 'server/entry.mjs', shim: { host: 'HOST', port: 'PORT' } },
+    });
+    const settings = revisionSettings(ctx);
+    expect(settings.entryPoint).toBe('server/blogwright-entry.mjs');
+    expect(settings.env['AWS_LAMBDA_NODEJS_ENTRYPOINT']).toBe('server/blogwright-entry.mjs');
+  });
+
   it('changes when only a revision-scoped setting changed, and is otherwise stable', () => {
     const base = revisionFingerprint(ssrContext({}).ctx, RESULT.artifactSha256);
     expect(revisionFingerprint(ssrContext({}).ctx, RESULT.artifactSha256)).toBe(base);

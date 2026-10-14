@@ -208,7 +208,7 @@ The packaged server output exceeds the deployment-package limit. Keep build outp
 
 ### `Could not find the server directory "server"` (Astro)
 
-`@astrojs/node` finds its own files by walking up from `entry.mjs` to a directory named `server`. With `ssr.packageDir` set to `dist/server` the entry sits at the archive root and the walk finds nothing, so the server exits before it listens. Package all of `dist` with `"entryPoint": "server/lambda.mjs"` - see the [Astro recipe](/guides/server-rendered-sites/#astro-node-standalone).
+`@astrojs/node` finds its own files by walking up from `entry.mjs` to a directory named `server`. With `ssr.packageDir` set to `dist/server` the entry sits at the archive root and the walk finds nothing, so the server exits before it listens. Package all of `dist`, with `"entryPoint": "server/entry.mjs"` and `ssr.shim` (or `"server/lambda.mjs"` for a shim your build writes) - see the [Astro recipe](/guides/server-rendered-sites/#astro-node-standalone).
 
 ### The SSR server never starts listening
 

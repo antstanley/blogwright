@@ -33,7 +33,7 @@ The configs assume the example directory is the repository root, because Blogwri
 - **Its own pnpm workspace.** Each example has a `pnpm-workspace.yaml`, so pnpm treats the directory as a project root even inside this repository, and its own `pnpm-lock.yaml`. The builder runs `pnpm install --frozen-lockfile --prod=false` and then `pnpm run build`, so the lockfile must be committed.
 - **pnpm pinned through `packageManager`.** The builder enables pnpm through corepack, which installs the version `packageManager` names.
 - **Install scripts approved explicitly.** pnpm 11 fails an install that meets a dependency build script nobody approved; `allowBuilds` in `pnpm-workspace.yaml` lists the ones an example needs.
-- **An entry shim per SSR example.** Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`; `lambda.mjs` maps it onto the variables the framework's server reads, and `pnpm build` copies it into the package.
+- **An entry shim per SSR example.** Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`; `lambda.mjs` maps it onto the variables the framework's server reads, and `pnpm build` copies it into the package. The examples write their own so the mapping is visible; set `ssr.shim` and Blogwright generates it instead, with no file or copy step. Each example's README lists the values.
 - **Self-contained SSR packages.** Lambda loads nothing outside the package, and the build agent rejects symbolic links, so each SSR example either bundles its dependencies or has its framework copy them in as real files.
 
 ## Checking an SSR package

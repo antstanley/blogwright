@@ -8,6 +8,7 @@ Next.js with `output: 'standalone'`, running on Lambda Web Functions.
 - `pnpm-workspace.yaml` - `nodeLinker: hoisted`. Next copies traced `node_modules` entries into `.next/standalone` as it finds them, so pnpm's default symlink tree comes through as symbolic links, which the build agent rejects.
 - `package.json` - the build copies `public/` and `.next/static/` into the standalone package (Next leaves them out) and Next serves them itself, `/_next/static/` as `immutable`, so CloudFront caches them like any other cacheable response. It also copies the shim in.
 - `lambda.mjs` - the entry shim: maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOSTNAME` and `PORT` and imports `server.js`.
+  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "server.js"` with `"shim": { "host": "HOSTNAME", "port": "PORT" }` in the `ssr` block. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
 - `config/production.jsonc` - packages `.next/standalone`; no `staticDir`, since Next serves its own assets. If the app uses Server Actions, add your domain to `serverActions.allowedOrigins`: the app receives the endpoint's domain as `Host`.
 
 ## Deploy it
