@@ -1,6 +1,8 @@
 /*
  * `blogwright init` - the first-run wizard. Asks the four core questions a
- * new site needs, then each already-discovered plugin's own `init(io)`
+ * new site needs, whether it is server-rendered (and with which framework,
+ * which picks its `ssr` block and entry shim), then each already-discovered
+ * plugin's own `init(io)`
  * questions (in deterministic, name-sorted order), and writes ONE commented
  * config/production.jsonc carrying every answered block. Runs before any
  * context exists (there is no config to load yet), so it takes its ports
@@ -19,9 +21,10 @@ import {
   type Plugin,
   type PluginInitIo,
   type Terminal,
+  WEB_FUNCTION_REGIONS,
 } from 'blogwright-core';
 
-import { renderConfigBlock } from './config-block.js';
+import { renderConfigBlock, type ConfigBlockEntry as BlockEntry } from './config-block.js';
 import type { Logger } from './logger.js';
 
 const SITE_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -161,6 +164,129 @@ async function collectPluginBlocks(
   return blocks;
 }
 
+/** A server-rendering framework `init` can configure, and the `ssr` block it writes for it. */
+interface SsrFramework {
+  /** Name shown in the next steps. */
+  label: string;
+  /** Anchor in the Server-rendered sites guide covering the build settings it needs. */
+  anchor: string;
+  entries: BlockEntry[];
+}
+
+const SSR_GUIDE_URL = 'https://blogwright.iamstan.dev/guides/server-rendered-sites/';
+
+/**
+ * The `ssr` block per framework, matching the guide's recipes: where the build
+ * puts the server, the variables that server reads its listen address from
+ * (so Blogwright generates the entry shim), and the browser assets kept on S3.
+ * `other` writes the defaults for the operator to fill in.
+ */
+const SSR_FRAMEWORKS: Readonly<Record<string, SsrFramework>> = {
+  astro: {
+    label: 'Astro (@astrojs/node standalone)',
+    anchor: 'astro-node-standalone',
+    entries: [
+      { prop: '"packageDir": "dist"', comment: 'all of dist/: the adapter looks for server/' },
+      { prop: '"entryPoint": "server/entry.mjs"' },
+      {
+        prop: '"shim": { "host": "HOST", "port": "PORT" }',
+        comment: 'generated entry shim: the server reads HOST and PORT',
+      },
+      { prop: '"staticDir": "dist/client"' },
+      { prop: '"staticPaths": ["/_astro/*", "/favicon.svg", "/robots.txt"]' },
+    ],
+  },
+  sveltekit: {
+    label: 'SvelteKit (adapter-node)',
+    anchor: 'sveltekit-adapter-node',
+    entries: [
+      { prop: '"packageDir": "build"' },
+      { prop: '"entryPoint": "index.js"' },
+      {
+        prop: '"shim": { "host": "HOST", "port": "PORT" }',
+        comment: 'generated entry shim: the server reads HOST and PORT',
+      },
+      { prop: '"staticDir": "build/client"' },
+      { prop: '"staticPaths": ["/_app/*", "/favicon.png"]' },
+    ],
+  },
+  nuxt: {
+    label: 'Nuxt (Nitro node-server)',
+    anchor: 'nuxt-nitro-node-server-preset',
+    entries: [
+      { prop: '"packageDir": ".output/server"' },
+      { prop: '"entryPoint": "index.mjs"' },
+      {
+        prop: '"shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" }',
+        comment: 'generated entry shim: Nitro reads NITRO_HOST and NITRO_PORT',
+      },
+      { prop: '"staticDir": ".output/public"' },
+      { prop: '"staticPaths": ["/_nuxt/*", "/favicon.ico"]' },
+    ],
+  },
+  'tanstack-start': {
+    label: 'TanStack Start (Nitro node-server)',
+    anchor: 'tanstack-start-nitro',
+    entries: [
+      { prop: '"packageDir": ".output/server"' },
+      { prop: '"entryPoint": "index.mjs"' },
+      {
+        prop: '"shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" }',
+        comment: 'generated entry shim: Nitro reads NITRO_HOST and NITRO_PORT',
+      },
+      { prop: '"staticDir": ".output/public"' },
+      { prop: '"staticPaths": ["/assets/*", "/favicon.svg"]' },
+    ],
+  },
+  nextjs: {
+    label: 'Next.js (standalone output)',
+    anchor: 'nextjs-standalone-output',
+    entries: [
+      { prop: '"packageDir": ".next/standalone"', comment: 'Next serves its own static assets' },
+      { prop: '"entryPoint": "server.js"' },
+      {
+        prop: '"shim": { "host": "HOSTNAME", "port": "PORT" }',
+        comment: 'generated entry shim: the server reads HOSTNAME and PORT',
+      },
+    ],
+  },
+  other: {
+    label: 'your framework',
+    anchor: 'the-entry-shim',
+    entries: [
+      { prop: '"packageDir": "dist"', comment: 'the built server output, repo-relative' },
+      {
+        prop: '"entryPoint": "index.js"',
+        comment: 'starts the server; add "shim" unless it listens on AWS_LAMBDA_HTTP_ENDPOINT',
+      },
+    ],
+  },
+};
+
+/**
+ * Ask whether the site is server-rendered and, if so, which framework, and
+ * return that framework's recipe; `undefined` for a static site.
+ */
+async function askSsrFramework(
+  terminal: Terminal,
+  logger: Logger,
+): Promise<SsrFramework | undefined> {
+  const wanted = await ask(terminal, logger, {
+    prompt: 'server-rendered (SSR) app on a Lambda Web Function? (y/n)',
+    defaultValue: 'n',
+    validate: (v) => (/^(y|yes|n|no)$/i.test(v) ? undefined : 'answer y or n'),
+  });
+  if (!/^y/i.test(wanted ?? '')) return undefined;
+  const names = Object.keys(SSR_FRAMEWORKS);
+  const choice = await ask(terminal, logger, {
+    prompt: `framework (${names.join(', ')})`,
+    required: true,
+    validate: (v) =>
+      Object.hasOwn(SSR_FRAMEWORKS, v.toLowerCase()) ? undefined : `expected ${names.join(', ')}`,
+  });
+  return SSR_FRAMEWORKS[choice!.toLowerCase()];
+}
+
 /** One core `"key": value` entry, or a plugin's pre-rendered `"key": { ... }` block, at the top level. */
 type TopLevelItem = { prop: string; comment?: string } | { block: string };
 
@@ -172,19 +298,21 @@ function renderTopLevelItem(item: TopLevelItem, last: boolean): string {
 }
 
 /**
- * Render the whole `config/production.jsonc` body: the four core entries in
- * their fixed, commented style, followed by every plugin block already
+ * Render the whole `config/production.jsonc` body: the core entries in
+ * their fixed, commented style, then the `ssr` block when the site is
+ * server-rendered, followed by every plugin block already
  * rendered by `collectPluginBlocks` - each its own top-level property, comma
  * discipline shared with the core entries via `renderTopLevelItem` so no
- * block ever leaves (or follows) a stray comma. `pluginBlocks` empty
- * reproduces exactly the entries-only output this wizard has always
- * written - byte for byte, pinned by `init.test.ts`.
+ * block ever leaves (or follows) a stray comma. With no `ssr` and
+ * `pluginBlocks` empty this reproduces exactly the entries-only output this
+ * wizard has always written - byte for byte, pinned by `init.test.ts`.
  */
 function renderConfig(opts: {
   region: string;
   siteName: string;
   domain?: string | undefined;
   githubRepo?: string | undefined;
+  ssr?: SsrFramework | undefined;
   pluginBlocks: readonly string[];
 }): string {
   const items: TopLevelItem[] = [
@@ -201,6 +329,7 @@ function renderConfig(opts: {
       comment: 'enables the GitHub OIDC deploy role',
     });
   }
+  if (opts.ssr) items.push({ block: renderConfigBlock('ssr', opts.ssr.entries) });
   for (const block of opts.pluginBlocks) items.push({ block });
 
   const body = items.map((item, i) => renderTopLevelItem(item, i === items.length - 1));
@@ -240,14 +369,14 @@ export async function initSite(
     return 1;
   }
 
-  logger.info(colors.bold('Welcome to blogwright - four questions and you are live.'));
+  logger.info(colors.bold('Welcome to blogwright - a few questions and you are live.'));
   const siteName = await ask(terminal, logger, {
     prompt: 'site name (lowercase slug, names every AWS resource)',
     required: true,
     validate: (v) =>
       SITE_NAME_PATTERN.test(v) ? undefined : 'must be lowercase letters, digits, or dashes',
   });
-  const region = await ask(terminal, logger, {
+  let region = await ask(terminal, logger, {
     prompt: 'AWS region',
     defaultValue: 'us-east-1',
     required: true,
@@ -259,6 +388,17 @@ export async function initSite(
     prompt: 'GitHub repo for CI deploys, owner/repo (blank to skip)',
     validate: (v) => (GITHUB_REPO_PATTERN.test(v) ? undefined : 'expected owner/repo'),
   });
+  const ssr = await askSsrFramework(terminal, logger);
+  if (ssr && !WEB_FUNCTION_REGIONS.includes(region!)) {
+    const regions = WEB_FUNCTION_REGIONS.join(', ');
+    logger.warn(`server-rendered sites run on Lambda Web Functions, available in ${regions}`);
+    region = await ask(terminal, logger, {
+      prompt: 'AWS region',
+      defaultValue: 'us-east-1',
+      required: true,
+      validate: (v) => (WEB_FUNCTION_REGIONS.includes(v) ? undefined : `expected ${regions}`),
+    });
+  }
   const pluginBlocks = await collectPluginBlocks(plugins, terminal, logger);
 
   const rendered = renderConfig({
@@ -266,6 +406,7 @@ export async function initSite(
     siteName: siteName!,
     domain,
     githubRepo,
+    ssr,
     pluginBlocks,
   });
   // Re-parsed before it is trusted onto disk, mirroring `plugin-commands.ts`'s
@@ -278,6 +419,7 @@ export async function initSite(
   logger.ok(`wrote ${configPath}`);
   logger.info('');
   logger.info(colors.bold('Next steps:'));
+  if (ssr) logger.step(`set up the build for ${ssr.label}: ${SSR_GUIDE_URL}#${ssr.anchor}`);
   logger.step(`blogwright bootstrap${domain ? '' : '   # add --domain later if you get one'}`);
   logger.step('blogwright deploy');
   logger.info(colors.dim('   (bootstrap prints ACM validation CNAMEs when a domain is set)'));

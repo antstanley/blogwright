@@ -64,6 +64,28 @@ const EXPECTED_TRAILING_BLOCK_CONFIG =
   '}\n';
 
 /**
+ * Byte-for-byte pin of the `ssr` block for Astro, followed by a plugin block:
+ * the block renders between the core entries and the plugin blocks, with the
+ * comma discipline the other pins hold.
+ */
+const EXPECTED_ASTRO_SSR_CONFIG =
+  '// config/production.jsonc - created by `blogwright init`\n' +
+  '{\n' +
+  '  "region": "us-east-1",\n' +
+  '  "siteName": "myblog", // stable slug in every AWS resource name - never change it\n' +
+  '  "ssr": {\n' +
+  '    "packageDir": "dist", // all of dist/: the adapter looks for server/\n' +
+  '    "entryPoint": "server/entry.mjs",\n' +
+  '    "shim": { "host": "HOST", "port": "PORT" }, // generated entry shim: the server reads HOST and PORT\n' +
+  '    "staticDir": "dist/client",\n' +
+  '    "staticPaths": ["/_astro/*", "/favicon.svg", "/robots.txt"]\n' +
+  '  },\n' +
+  '  "alpha": {\n' +
+  '    "one": 1\n' +
+  '  }\n' +
+  '}\n';
+
+/**
  * A minimal, otherwise-inert plugin declaring only an `init(io)` contributor.
  * `configKey` is required (never defaulted) so a test can build a plugin
  * with a contributor but no key to file its answers under by passing
@@ -83,7 +105,7 @@ describe('initSite', () => {
   it('writes a commented production config from the answers', async () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', 'blog.example.com', 'ant/myblog'],
+      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', ''],
     });
     const logger = capturingLogger();
 
@@ -106,7 +128,7 @@ describe('initSite', () => {
   it('with no plugins installed, writes exactly the file it writes today (pinned byte-for-byte)', async () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', 'blog.example.com', 'ant/myblog'],
+      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', ''],
     });
 
     const code = await initSite(fs, terminal, capturingLogger(), [], '/repo');
@@ -117,7 +139,7 @@ describe('initSite', () => {
 
   it('omits optional keys left blank', async () => {
     const fs = createMemoryFileSystem();
-    const terminal = createScriptedTerminal({ answers: ['myblog', 'eu-west-1', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', 'eu-west-1', '', '', ''] });
 
     await initSite(fs, terminal, capturingLogger(), [], '/repo');
 
@@ -130,7 +152,7 @@ describe('initSite', () => {
   it('re-asks until the site name is a valid slug', async () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({
-      answers: ['My Blog!', 'myblog', '', '', ''],
+      answers: ['My Blog!', 'myblog', '', '', '', ''],
     });
     const logger = capturingLogger();
 
@@ -188,7 +210,7 @@ describe('initSite', () => {
     // Passed in discovery order (z, a) - the wizard must still ask "apple"
     // before "zebra", proving it sorts rather than trusting caller order.
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', '', '', 'app-key-123', 'UA-ZEBRA'],
+      answers: ['myblog', '', '', '', '', 'app-key-123', 'UA-ZEBRA'],
     });
 
     const code = await initSite(fs, terminal, capturingLogger(), [zebra, apple], '/repo');
@@ -196,8 +218,8 @@ describe('initSite', () => {
     expect(code).toBe(0);
     expect(askedOrder).toEqual(['apple', 'zebra']);
     // Pins the FULL prompt sequence, not just plugin-vs-plugin order: the
-    // four core questions are asked first, in their fixed order, and only
-    // then "apple" (sorted before "zebra"). A reorder that asked plugin
+    // four core questions and the SSR question are asked first, in their
+    // fixed order, and only then "apple" (sorted before "zebra"). A reorder that asked plugin
     // questions before - or interleaved with - the core four would fail
     // this even if it also happened to keep the scripted answers lined up.
     expect(terminal.prompts).toEqual([
@@ -205,6 +227,7 @@ describe('initSite', () => {
       'AWS region [us-east-1]: ',
       'custom domain (blank to use the CloudFront domain): ',
       'GitHub repo for CI deploys, owner/repo (blank to skip): ',
+      'server-rendered (SSR) app on a Lambda Web Function? (y/n) [n]: ',
       'apple api key?: ',
       'enable zebra tracking?: ',
     ]);
@@ -234,7 +257,7 @@ describe('initSite', () => {
       async () => [{ property: '"two": 2', comment: 'note' }],
       'omega',
     );
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
 
     const code = await initSite(fs, terminal, capturingLogger(), [alpha, omega], '/repo');
 
@@ -251,7 +274,7 @@ describe('initSite', () => {
     // a contributor-less plugin leave the file BYTE-identical to the one this
     // wizard writes with no plugins installed at all.
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', 'blog.example.com', 'ant/myblog'],
+      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', ''],
     });
 
     const code = await initSite(
@@ -295,7 +318,7 @@ describe('initSite', () => {
       },
       'boom',
     );
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
 
     await expect(initSite(fs, terminal, capturingLogger(), [boom], '/repo')).rejects.toThrow(
       'kaboom',
@@ -307,7 +330,7 @@ describe('initSite', () => {
   it('raises naming the plugin when its init(io) contributor has no configKey to file answers under', async () => {
     const fs = createMemoryFileSystem();
     const noKey = fakeInitPlugin('nokey', async () => [{ property: '"x": true' }], undefined);
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
 
     await expect(initSite(fs, terminal, capturingLogger(), [noKey], '/repo')).rejects.toThrow(
       /plugin "nokey" declares an init\(io\) contributor but no configKey/,
@@ -327,10 +350,130 @@ describe('initSite', () => {
       async () => [{ property: '"unterminated": {' }],
       'broken',
     );
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
 
     await expect(initSite(fs, terminal, capturingLogger(), [broken], '/repo')).rejects.toThrow();
 
     expect(await fs.exists('/repo/config/production.jsonc')).toBe(false);
+  });
+});
+
+describe('initSite server-rendered sites', () => {
+  async function initSsr(answers: string[]) {
+    const fs = createMemoryFileSystem();
+    const terminal = createScriptedTerminal({ answers });
+    const logger = capturingLogger();
+    const code = await initSite(fs, terminal, logger, [], '/repo');
+    const written = await fs.readText('/repo/config/production.jsonc');
+    return { code, written, terminal, logger };
+  }
+
+  it.each([
+    ['astro', 'dist', 'server/entry.mjs', { host: 'HOST', port: 'PORT' }, 'dist/client'],
+    ['sveltekit', 'build', 'index.js', { host: 'HOST', port: 'PORT' }, 'build/client'],
+    [
+      'nuxt',
+      '.output/server',
+      'index.mjs',
+      { host: 'NITRO_HOST', port: 'NITRO_PORT' },
+      '.output/public',
+    ],
+    [
+      'tanstack-start',
+      '.output/server',
+      'index.mjs',
+      { host: 'NITRO_HOST', port: 'NITRO_PORT' },
+      '.output/public',
+    ],
+    ['nextjs', '.next/standalone', 'server.js', { host: 'HOSTNAME', port: 'PORT' }, undefined],
+  ])(
+    'writes the %s ssr block with its generated entry shim',
+    async (name, packageDir, entryPoint, shim, staticDir) => {
+      const { code, written } = await initSsr(['myblog', '', '', '', 'y', name]);
+
+      expect(code).toBe(0);
+      const ssr = parseConfig(written).ssr;
+      expect(ssr?.packageDir).toBe(packageDir);
+      expect(ssr?.entryPoint).toBe(entryPoint);
+      expect(ssr?.shim).toEqual(shim);
+      expect(ssr?.staticDir).toBe(staticDir);
+    },
+  );
+
+  it('renders the ssr block between the core entries and plugin blocks (pinned byte-for-byte)', async () => {
+    const fs = createMemoryFileSystem();
+    const alpha = fakeInitPlugin('alpha', async () => [{ property: '"one": 1' }], 'alpha');
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', 'yes', 'Astro'] });
+
+    const code = await initSite(fs, terminal, capturingLogger(), [alpha], '/repo');
+
+    expect(code).toBe(0);
+    expect(await fs.readText('/repo/config/production.jsonc')).toBe(EXPECTED_ASTRO_SSR_CONFIG);
+  });
+
+  it('writes the defaults with no shim for another framework', async () => {
+    const { written, logger } = await initSsr(['myblog', '', '', '', 'y', 'other']);
+
+    const ssr = parseConfig(written).ssr;
+    expect(ssr?.packageDir).toBe('dist');
+    expect(ssr?.entryPoint).toBe('index.js');
+    expect(ssr?.shim).toBeUndefined();
+    expect(written).toContain('add "shim" unless it listens on AWS_LAMBDA_HTTP_ENDPOINT');
+    expect(logger.lines).toContain(
+      'set up the build for your framework: ' +
+        'https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim',
+    );
+  });
+
+  it("points the next steps at the framework's recipe", async () => {
+    const { logger } = await initSsr(['myblog', '', '', '', 'y', 'nextjs']);
+
+    expect(logger.lines).toContain(
+      'set up the build for Next.js (standalone output): ' +
+        'https://blogwright.iamstan.dev/guides/server-rendered-sites/#nextjs-standalone-output',
+    );
+  });
+
+  it('writes no ssr block for a static site', async () => {
+    const { written, terminal } = await initSsr(['myblog', '', '', '', 'n']);
+
+    expect(written).not.toContain('ssr');
+    expect(terminal.prompts.some((p) => p.startsWith('framework'))).toBe(false);
+  });
+
+  it('re-asks an answer that is not yes or no, and a framework it does not know', async () => {
+    const { code, written, logger } = await initSsr([
+      'myblog',
+      '',
+      '',
+      '',
+      'maybe',
+      'y',
+      'remix',
+      'nuxt',
+    ]);
+
+    expect(code).toBe(0);
+    expect(logger.lines).toContain('answer y or n');
+    expect(logger.lines.some((l) => l.startsWith('expected astro, sveltekit'))).toBe(true);
+    expect(parseConfig(written).ssr?.shim).toEqual({ host: 'NITRO_HOST', port: 'NITRO_PORT' });
+  });
+
+  it('re-asks the region when it has no Lambda Web Functions', async () => {
+    const { code, written, terminal, logger } = await initSsr([
+      'myblog',
+      'eu-central-1',
+      '',
+      '',
+      'y',
+      'astro',
+      'eu-central-1',
+      'eu-west-1',
+    ]);
+
+    expect(code).toBe(0);
+    expect(logger.lines.some((l) => l.includes('available in us-east-1, us-east-2'))).toBe(true);
+    expect(terminal.prompts.filter((p) => p === 'AWS region [us-east-1]: ')).toHaveLength(3);
+    expect(parseConfig(written).region).toBe('eu-west-1');
   });
 });

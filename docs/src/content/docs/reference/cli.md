@@ -41,7 +41,7 @@ Unrecognized flags are an error. `--help` prints usage and exits 0; running with
 blogwright init
 ```
 
-First-run wizard. Asks four questions - site name (a lowercase slug that names every AWS resource), AWS region (default `us-east-1`), optional custom domain, optional GitHub repo for CI deploys - and writes a commented `config/production.jsonc` at the repo root, then prints the next steps.
+First-run wizard. Asks for the site name (a lowercase slug that names every AWS resource), AWS region (default `us-east-1`), optional custom domain and optional GitHub repo for CI deploys, then whether the app is server-rendered. For a server-rendered app it asks the framework (`astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs` or `other`) and writes its `ssr` block, with the entry shim settings for a known framework. It also asks each installed plugin's questions, then writes a commented `config/production.jsonc` at the repo root and prints the next steps.
 
 `init` runs before any config or AWS context exists, so it takes no environment or options. It refuses to run (exit 1) when:
 

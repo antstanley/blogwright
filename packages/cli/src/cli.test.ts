@@ -619,7 +619,7 @@ Plugins that failed to load:
 
 describe('main - init dispatch', () => {
   it('discovers installed plugins and asks their questions in deterministic (name-sorted) order, writing every block into the one file', async () => {
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
     const asked: string[] = [];
     const zzz: Plugin = {
       name: 'zzz',
@@ -675,7 +675,7 @@ describe('main - init dispatch', () => {
     expect(written.indexOf('"aaa"')).toBeLessThan(written.indexOf('"zzz"'));
   });
 
-  it('runs the plain four-question wizard AND warns, rather than crashing on plugin discovery, when there is no repo root or root package.json at all', async () => {
+  it('runs the plain wizard AND warns, rather than crashing on plugin discovery, when there is no repo root or root package.json at all', async () => {
     // blogwright init is exactly the wizard that bootstraps a repo, so this
     // is not a hypothetical: a genuinely first run may have neither. A
     // sibling task's own gate caught an unguarded discovery call breaking
@@ -684,7 +684,7 @@ describe('main - init dispatch', () => {
     // `helpText`'s own `isMissingPackageJsonError` - so this also pins that
     // the warning names the SPECIFIC "missing package.json" precondition,
     // not a blanket "something went wrong" catch-all.
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
     const fs = createMemoryFileSystem();
     const loader = createFakeModuleLoader([]);
 
@@ -750,7 +750,7 @@ describe('main - init dispatch', () => {
     // Otherwise an operator with a typo'd package.json and a plugin
     // installed gets a config silently missing that plugin's block and a
     // success exit, discovering the problem only later.
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
     const repoRoot = await findRepoRoot(createNodeFileSystem());
     const fs = createMemoryFileSystem({
       [`${repoRoot}/.jj`]: '',

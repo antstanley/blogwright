@@ -11,7 +11,7 @@ Before you start you need blogwright [installed](/getting-started/installation/)
 
 ## 1. `blogwright init` - write the config
 
-The first-run wizard asks four questions and writes a commented `config/production.jsonc` at the repo root:
+The first-run wizard asks a few questions and writes a commented `config/production.jsonc` at the repo root:
 
 ```sh
 pnpm exec blogwright init
@@ -23,6 +23,7 @@ The questions, in order:
 2. **AWS region** (required, default `us-east-1`).
 3. **Custom domain** (optional) - leave blank to serve from the CloudFront domain instead.
 4. **GitHub repo** for CI deploys, as `owner/repo` (optional) - leave blank to skip; setting it makes `bootstrap` provision a GitHub OIDC deploy role.
+5. **Server-rendered app?** (default no) - answer `y` and the wizard asks for the framework: `astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs`, or `other`. For a known framework it writes the [recipe's](/guides/server-rendered-sites/#recipes) `ssr` block, including the [entry shim](/guides/server-rendered-sites/#the-entry-shim) settings, and links the recipe for the build settings it needs. For `other` it writes the defaults to fill in. If the region has no Lambda Web Functions, it asks for one that does.
 
 The result looks like this:
 
@@ -43,7 +44,7 @@ Then add the one key your app type needs, before you bootstrap:
 | --- | --- | --- |
 | Static site | nothing | - |
 | Single-page app | `"spa": true` | [Single-page apps](/guides/single-page-apps/) |
-| Server-rendered app | an `ssr` block | [Server-rendered sites](/guides/server-rendered-sites/) |
+| Server-rendered app | an `ssr` block (`init` writes it when you answer `y`) | [Server-rendered sites](/guides/server-rendered-sites/) |
 
 An app outside the repo root also needs `paths.app` - see [Monorepos](/guides/monorepos/).
 
