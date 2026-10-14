@@ -1,9 +1,9 @@
 ---
 title: blogwright
-description: Publish and operate static sites and single-page apps on AWS. Full operations for a blog site on AWS - S3 + CloudFront hosting with builds in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site publishing.
+description: Publish and operate static sites, single-page apps and server-rendered Node sites on AWS. Full operations for a blog site on AWS - S3 + CloudFront hosting with builds in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site publishing.
 template: splash
 hero:
-  tagline: Publish and operate static sites and single-page apps on AWS.
+  tagline: Publish and operate static sites, single-page apps and server-rendered Node sites on AWS.
   actions:
     - text: Get started
       link: /getting-started/introduction/
@@ -29,6 +29,11 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     Every deploy zips your repo, builds it in an isolated MicroVM with
     `pnpm install && pnpm build`, and syncs the output to S3 - only changed
     files are re-uploaded and only changed paths are invalidated.
+  </Card>
+  <Card title="Server-rendered sites" icon="laptop">
+    Add an `ssr` block and the same build ships a Node server - Astro,
+    SvelteKit, Nuxt or Next - as a Lambda Web Function behind your
+    distribution. See [Server-rendered sites](/guides/server-rendered-sites/).
   </Card>
   <Card title="PR previews & CI deploys" icon="github">
     A shared preview stack serves every pull request at its own subdomain, and

@@ -1,14 +1,18 @@
 # blogwright
 
-Deploy a static site to AWS from one CLI: S3 + CloudFront hosting, builds in an
-isolated **Lambda MicroVM**, PR previews, keyless GitHub-OIDC CI deploys, and
-optional [standard.site](https://standard.site) (AT Protocol) publishing. No
+Deploy a static site - or a server-rendered Node app - to AWS from one CLI: S3 +
+CloudFront hosting, builds in an isolated **Lambda MicroVM**, PR previews,
+keyless GitHub-OIDC CI deploys, and optional
+[standard.site](https://standard.site) (AT Protocol) publishing. No
 CloudFormation, no Terraform, no CDK - the infrastructure is a reconcilable
 dependency graph the CLI applies directly through signed AWS API calls.
 
 Works with any static site that installs and builds with pnpm: an Astro blog at
 the repo root, a SvelteKit/Vite SPA in a monorepo subdirectory, anything that
-ends in a directory of files to serve.
+ends in a directory of files to serve. With an `ssr` config block it also runs a
+Node server (Astro, SvelteKit `adapter-node`, Nuxt, Next standalone) as a
+**Lambda Web Function** behind the same CloudFront distribution - see
+[Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
 
 ## Requirements
 

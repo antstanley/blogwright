@@ -479,7 +479,7 @@ async function rollbackAdvice(ctx: OpsContext): Promise<string> {
   const target = await newestWebFunctionHash(ctx);
   return (
     `Run \`blogwright rollback ${target ?? '<hash>'} ${ctx.env}\` with the newest hash ` +
-    `whose manifest carries a webFunction block (see \`blogwright history\`). ` +
+    `that shows a revision in \`blogwright history ${ctx.env}\`. ` +
     `Logs: ${ctx.names.webLogGroup}`
   );
 }

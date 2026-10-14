@@ -42,6 +42,8 @@ import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import {
   formatDuration,
   logStatusEntries,
+  historyHasRevisions,
+  NO_REVISION,
   renderHistoryTable,
   renderSummary,
   type StatusEntry,
@@ -670,16 +672,24 @@ export async function history(ctx: OpsContext): Promise<void> {
     for (const line of renderHistoryTable(manifests, Date.now())) ctx.logger.info(line);
     return;
   }
-  // The plain form is the stable contract for CI logs and agents.
-  ctx.logger.info(colors.bold('hash          status      finished                 duration'));
+  // The plain form is the stable contract for CI logs and agents. The revision
+  // column is appended only once a hash recorded one, so static output is unchanged.
+  const revisions = historyHasRevisions(manifests);
+  ctx.logger.info(
+    colors.bold(
+      `hash          status      finished                 duration${revisions ? '  revision' : ''}`,
+    ),
+  );
   for (const m of manifests) {
     const cell =
       m.status === 'succeeded'
         ? colors.green(m.status.padEnd(10))
         : colors.red(m.status.padEnd(10));
-    ctx.logger.info(
-      `${m.hash.padEnd(13)} ${cell}  ${m.finishedAt}  ${(m.durationMs / 1000).toFixed(0)}s`,
-    );
+    const duration = `${(m.durationMs / 1000).toFixed(0)}s`;
+    const revision = revisions
+      ? `  ${duration.padEnd(8)}  ${m.webFunction?.revisionId ?? NO_REVISION}`
+      : `  ${duration}`;
+    ctx.logger.info(`${m.hash.padEnd(13)} ${cell}  ${m.finishedAt}${revision}`);
   }
 }
 

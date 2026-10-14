@@ -2,7 +2,7 @@
 title: Troubleshooting
 description: Symptom, cause, and fix for the errors and warnings blogwright actually raises.
 sidebar:
-  order: 9
+  order: 10
 ---
 
 blogwright errors try to name their own fix. This page collects the ones you are most likely to meet - what triggers each, why, and what to do - grouped by area. Command and flag details live in the [CLI reference](/reference/cli/); every config key is documented in the [configuration reference](/reference/configuration/).
@@ -172,23 +172,27 @@ The mandatory preflight runs before anything is built or published. Lambda omits
 
 ### `Web Function revision <id> failed (<errors>)`
 
-The revision settled `Failed`, so Lambda never routed traffic to it - the previous revision keeps serving. The errors come from `GetWebFunctionRevision` and usually name the cause directly: a missing or unreadable entry point, a package Lambda could not load, a role it could not assume. Rebuild after fixing:
+The revision settled `Failed`, so Lambda never routed traffic to it - the previous revision keeps serving. The errors come from `GetWebFunctionRevision` and usually name the cause directly: a missing or unreadable entry point, a package Lambda could not load, a role it could not assume. The application's own output, if it got as far as starting, is in the Web Function log group; `blogwright logs <hash>` shows the MicroVM build that produced the package, which is where a missing entry file or an incomplete package shows up. Rebuild after fixing:
 
 ```sh
-blogwright logs <hash>
+aws logs tail /<siteName>/<env>/web --since 1h   # the server's stdout and stderr
+blogwright logs <hash>                            # the build that packaged it
 blogwright deploy
 ```
 
 ### `the endpoint is NOT serving`
 
-The new revision became `Active` but never answered below `500`, and the automatic restore of the previous revision did not serve either. This is the one case where the site is genuinely down: the endpoint has already cut over and nothing answered.
+A revision became `Active` but never answered below `500`, and nothing that would serve was put back in front of it. The endpoint has already cut over, so this is the one case where the site is genuinely down. It happens two ways:
+
+- **A new revision did not serve, and neither did the restore** of the previous one.
+- **A deploy finished an interrupted publish.** An earlier deploy created the revision now serving and stopped before verifying it (the CLI was killed, the network dropped). The next deploy of the same build finds that revision serving with its publish never finished, probes it rather than calling it unchanged - and it does not answer. The revision it replaced was never captured, so there is nothing to restore.
 
 ```sh
-blogwright history
-blogwright rollback <hash>
+blogwright history <env>
+blogwright rollback <hash> <env>
 ```
 
-Use the newest hash whose manifest carries a `webFunction` block - `rollback` recreates that revision from its retained artifact and settings without a rebuild. The failure message names that hash when one exists.
+Use the newest hash with a revision id in `history`'s `revision` column - `rollback` recreates that revision from its retained artifact and settings without a rebuild. The failure message names that hash when one exists. Read `/<siteName>/<env>/web` for why the failing revision did not answer.
 
 ### `SSR package contains a symbolic link at <path>`
 
@@ -202,9 +206,13 @@ The build did not emit `ssr.entryPoint` inside `ssr.packageDir`. Check both: the
 
 The packaged server output exceeds the deployment-package limit. Keep build output and caches out of `packageDir`, or split static assets into `staticDir` so only the server is packaged.
 
-### The SSR build never starts listening
+### The SSR server never starts listening
 
-`GET` on the endpoint returns `502`/`504`, or the readiness probe times out, when the server does not begin listening within 10 seconds of process start on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`. Check the entry shim: frameworks that read `HOST`/`PORT`, `NITRO_HOST`/`NITRO_PORT` or `HOSTNAME` need the mapping before the built entry is imported. The Web Function's logs are in `/<siteName>/<env>/web` (with the in-Region companion `/<siteName>/<env>/web.local`), retention from `retention.webFunctionDays`.
+`GET` on the endpoint returns `502`/`504`, or the readiness probe times out, when the server does not begin listening within 10 seconds of process start on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`. Check the entry shim: frameworks that read `HOST`/`PORT`, `NITRO_HOST`/`NITRO_PORT` or `HOSTNAME`/`PORT` need the mapping before the built entry is imported. Run the package locally the way Lambda does to see it fail fast (see [Running the package locally](/guides/server-rendered-sites/#running-the-package-locally)). The Web Function's logs are in `/<siteName>/<env>/web` (with the in-Region companion `/<siteName>/<env>/web.local`), retention from `retention.webFunctionDays`:
+
+```sh
+aws logs tail /<siteName>/<env>/web --follow
+```
 
 ### One viewer's cached response is served to another
 
@@ -215,6 +223,10 @@ The viewer's `Authorization` header always reaches the application - CloudFront 
 ```
 
 That gives each token its own cache entry. Cookies reach the application without being listed too, and never vary the cache (they are forwarded but excluded from the key), so cookie-authenticated responses must be `private` or `no-store`.
+
+### Form posts fail with `403`, or links point at `*.on.aws`
+
+The application receives the Web Function endpoint's domain (`<id>.lambda-web.<region>.on.aws`) as `Host`, not your site's domain: CloudFront forwards every viewer header except `Host`, which it sets to the origin's domain as the endpoint requires. A framework that derives its URL from `Host` then builds absolute links and redirects on the endpoint domain, and its cross-site request check rejects the browser's form posts, whose `Origin` is your site. Tell the application its public origin - see [The public origin](/guides/server-rendered-sites/#the-public-origin).
 
 ### `504` on a slow route
 
@@ -230,7 +242,7 @@ Requests matching `ssr.staticPaths` are served from S3, not the application, and
 
 ### `refusing to switch "<env>" from <mode> to <mode> serving`
 
-`bootstrap` refuses a mode change on a bootstrapped stack because the distribution's default behavior moves before a deploy in the new mode exists: static → SSR answers `503` from the placeholder until the first SSR deploy completes, and SSR → static serves whatever `site/` holds until the next static deploy. Re-run with `--switch-mode` when that window is acceptable; nothing was applied. Removing `ssr` from the config and re-bootstrapping cannot de-provision the Web Function's resources, because the graph is derived from config - tear the stack down while the block is still present if that matters.
+`bootstrap` refuses a mode change on a bootstrapped stack because the distribution's default behavior moves before a deploy in the new mode exists: static → SSR answers `503` from the placeholder until the first SSR deploy completes, and SSR → static serves whatever `site/` holds until the next static deploy. Re-run with `--switch-mode` when that window is acceptable; nothing was applied. Removing `ssr` from the config and re-bootstrapping leaves the Web Function's resources in place, because the graph is derived from config - see [Switching modes](/guides/deploying/#switching-modes).
 
 ### `"<env>" is configured for <mode> serving but its distribution serves <mode>`
 

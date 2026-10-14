@@ -95,6 +95,22 @@ describe('renderHistoryTable', () => {
     expect(lines[2]).toContain('2h ago');
     expect(lines[2]).toContain('2m14s');
   });
+
+  it('adds a revision column only once a hash recorded a revision', () => {
+    expect(renderHistoryTable(entries, now).map(stripColors)[0]).not.toContain('revision');
+
+    const ssr = [
+      { ...entries[0]!, webFunction: { revisionId: '7' } },
+      { ...entries[1]!, webFunction: { revisionId: '6' } },
+      entries[2]!,
+    ];
+    const lines = renderHistoryTable(ssr, now).map(stripColors);
+
+    expect(lines[0]).toMatch(/duration revision$/);
+    expect(lines[1]).toMatch(/30s +7$/);
+    expect(lines[2]).toMatch(/2m14s +6 ← live$/);
+    expect(lines[3]).toMatch(/1m30s +-$/);
+  });
 });
 
 describe('renderSummary', () => {

@@ -34,6 +34,7 @@ import {
   deleteSite,
   deploy,
   destroy,
+  history,
   previewBootstrap,
   previewDeploy,
   previewTeardown,
@@ -1299,5 +1300,62 @@ describe('SSR mode command contract', () => {
     expect(calls).toContain('lambdaWeb.createRevision blogwright:fp-old');
     expect(calls).toContain('probe');
     expect(calls).toContain('invalidate /*');
+  });
+});
+
+describe('history', () => {
+  const manifest = (hash: string, finishedAt: string, revisionId?: string) => ({
+    hash,
+    sourceKey: `build/sources/${hash}.zip`,
+    status: 'succeeded',
+    startedAt: finishedAt,
+    finishedAt,
+    durationMs: 42_000,
+    microvmId: 'vm',
+    ...(revisionId ? { webFunction: { revisionId } } : {}),
+  });
+
+  async function plainHistory(manifests: ReturnType<typeof manifest>[]): Promise<string[]> {
+    const lines: string[] = [];
+    const ctx = createTestContext({
+      logger: { info: (msg) => lines.push(stripColors(msg)) },
+      clients: {
+        s3: {
+          listObjects: async () =>
+            manifests.map((m) => ({
+              key: `build/manifests/${m.hash}.json`,
+              size: 1,
+              lastModified: undefined,
+              etag: undefined,
+            })),
+          getObjectText: async (_bucket, key) =>
+            JSON.stringify(manifests.find((m) => key.endsWith(`${m.hash}.json`))),
+        },
+      },
+    });
+    await history(ctx);
+    return lines;
+  }
+
+  it('keeps the static plain form unchanged', async () => {
+    const lines = await plainHistory([manifest('aaaaaaaaaaaa', '2026-10-13T10:00:00Z')]);
+
+    expect(lines).toEqual([
+      'hash          status      finished                 duration',
+      'aaaaaaaaaaaa  succeeded   2026-10-13T10:00:00Z  42s',
+    ]);
+  });
+
+  it('appends the recorded revision once any hash carries one', async () => {
+    const lines = await plainHistory([
+      manifest('aaaaaaaaaaaa', '2026-10-13T10:00:00Z', '3'),
+      manifest('bbbbbbbbbbbb', '2026-10-13T11:00:00Z'),
+    ]);
+
+    expect(lines).toEqual([
+      'hash          status      finished                 duration  revision',
+      'bbbbbbbbbbbb  succeeded   2026-10-13T11:00:00Z  42s       -',
+      'aaaaaaaaaaaa  succeeded   2026-10-13T10:00:00Z  42s       3',
+    ]);
   });
 });

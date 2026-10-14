@@ -122,13 +122,28 @@ export interface HistoryEntry {
   status: 'succeeded' | 'failed';
   finishedAt: string;
   durationMs: number;
+  /** The Web Function revision recorded for the hash (SSR mode only). */
+  webFunction?: { revisionId: string } | undefined;
+}
+
+/**
+ * Printed in the revision column for a hash with no recorded revision - never
+ * a blank cell, so plain output stays whitespace-separated column-per-field.
+ */
+export const NO_REVISION = '-';
+
+/** Whether `history` shows the revision column: once any hash recorded one. */
+export function historyHasRevisions(entries: readonly HistoryEntry[]): boolean {
+  return entries.some((e) => e.webFunction);
 }
 
 /**
  * The pretty deployment table for `history`: relative times, a live marker on
- * the newest success. Entries arrive newest-first (the caller sorts).
+ * the newest success, and - in SSR mode - the revision each hash recorded.
+ * Entries arrive newest-first (the caller sorts).
  */
 export function renderHistoryTable(entries: HistoryEntry[], now: number): string[] {
+  const revisions = historyHasRevisions(entries);
   const liveIndex = entries.findIndex((e) => e.status === 'succeeded');
   const rows = entries.map((e, i) => {
     const mark = e.status === 'succeeded' ? colors.green('✓') : colors.red('✗');
@@ -136,11 +151,13 @@ export function renderHistoryTable(entries: HistoryEntry[], now: number): string
       e.hash.padEnd(13),
       mark,
       formatAgo(now - Date.parse(e.finishedAt)).padEnd(9),
-      formatDuration(e.durationMs).padEnd(7),
+      formatDuration(e.durationMs).padEnd(revisions ? 8 : 7),
+      ...(revisions ? [e.webFunction?.revisionId ?? NO_REVISION] : []),
     ].join(' ');
     return i === liveIndex ? `${cells} ${colors.cyan('← live')}` : cells;
   });
-  return [colors.bold(`${'hash'.padEnd(13)} ${' '} ${'finished'.padEnd(9)} duration`), ...rows];
+  const header = `${'hash'.padEnd(13)} ${' '} ${'finished'.padEnd(9)} duration${revisions ? ' revision' : ''}`;
+  return [colors.bold(header), ...rows];
 }
 
 /** One installed plugin's row in `blogwright plugin list`. */

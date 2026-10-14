@@ -184,11 +184,14 @@ Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown p
   "region": "us-east-1",
   "siteName": "example",
   "ssr": {
-    "entryPoint": "server/lambda.mjs",
+    "packageDir": "dist/server",
+    "entryPoint": "lambda.mjs",
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
-    "cacheKeyHeaders": ["Authorization"],
-    "env": { "ORIGIN": "https://example.com" },
+    // Only if cacheable responses vary by token:
+    // "cacheKeyHeaders": ["Authorization"],
+    // Literal, non-secret values the server reads at runtime:
+    "env": { "SITE_URL": "https://example.com" },
   },
 }
 ```
@@ -199,8 +202,8 @@ Presence of the key enables the mode. `ssr` and `spa: true` are mutually exclusi
 | --- | --- | --- |
 | `packageDir` | Repo-relative, non-empty, no `..` segments | `paths.dist` |
 | `entryPoint` | Non-empty relative path inside the package, `/` separators, no `..`, no leading `/` | `index.js` |
-| `staticDir` | Repo-relative, no `..`; must be supplied together with `staticPaths` | none |
-| `staticPaths` | Non-empty array of CloudFront path patterns, each beginning `/`; required with `staticDir` | `[]` |
+| `staticDir` | Repo-relative, no `..`; must be supplied together with `staticPaths`. Files publish at their path relative to it, so it must mirror the URL layout | none |
+| `staticPaths` | Array of CloudFront path patterns, each beginning `/`; must be non-empty when `staticDir` is set, and empty without it | `[]` |
 | `cacheKeyHeaders` | HTTP header names (RFC 7230 tokens), no case-insensitive duplicates, at most 10, at most 128 characters each, joined list under 1,024 characters, none CloudFront owns or strips | `[]` |
 | `env` | Map of `[A-Za-z][A-Za-z0-9_]*` keys to non-empty strings; literal values only, never secrets; Lambda-reserved names rejected | `{}` |
 | `timeoutSeconds` | Integer 3-900 | `30` |
@@ -214,7 +217,7 @@ Revision-scoped settings (`entryPoint`, `env`, `timeoutSeconds`, `maxConcurrency
 
 - `defaultRootObject` is inert - the distribution's root object is empty, because the application answers `/`.
 - `invalidationMaxPaths` applies only to a deploy that publishes `staticDir` changes without a new revision; a new revision invalidates `/*`.
-- `seo` is inert - `robots.txt` and `sitemap.xml` are the application's routes. A `seo` key written in the config document with a non-`off` value warns once per deploy.
+- `seo` is inert - Blogwright writes no `robots.txt` or `sitemap.xml`; the application serves them, or the build puts them in `staticDir` and lists them in `staticPaths`. A `seo` key written in the config document with a non-`off` value warns once per deploy.
 - `region` is restricted to the launch regions above.
 
 ## SEO

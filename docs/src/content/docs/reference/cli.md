@@ -81,6 +81,10 @@ After every successful **production** deploy, standard.site records are re-synce
 
 `--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change.
 
+With an `ssr` block in the config, the build's output is packaged and published as a Lambda Web Function revision instead of synced to `site/`: the deploy preflights the endpoint, creates a revision only when the artifact or a revision-scoped setting changed, probes it until it serves, restores the previous revision if it never does, and invalidates `/*`. See [Deploying](/guides/deploying/#ssr-environments).
+
+`deploy` refuses, before anything is built, when the configured serving mode (static or SSR) is not the one the stack's distribution serves - the state between adding or removing the `ssr` block and running [`bootstrap --switch-mode`](#bootstrap). `rollback` refuses in the same state.
+
 ### rollback
 
 ```sh
@@ -123,7 +127,7 @@ failures abort, while a confirmed missing bucket permits interrupted cleanup.
 blogwright history [env]
 ```
 
-Lists deployment history from the stored build manifests, newest first. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. A corrupt manifest is skipped with a warning rather than failing the listing.
+Lists deployment history from the stored build manifests, newest first. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. Once any manifest records a Web Function revision (SSR mode), both forms append a `revision` column: the revision id a hash was verified with, or `-` for a hash with none. A hash with a revision is one `rollback` can reproduce without a rebuild. A corrupt manifest is skipped with a warning rather than failing the listing.
 
 ### logs
 
@@ -333,6 +337,7 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
+| `--switch-mode` | `bootstrap` | Allow a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses a mode change. |
 | `--refresh` | `deploy`, `rollback`, `preview deploy` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. |
 | `--yes` | site/plugin destroy, preview teardown, pds secret delete, plugin remove | Required for explicit destruction. For plugin remove it skips the teardown question and keeps resources. |
 | `--help` | all | Print usage and exit 0. |

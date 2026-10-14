@@ -85,10 +85,17 @@ One bucket per environment holds everything:
 │   └── changed/<hash>.json      # changed-paths manifest, consumed for invalidation
 ├── site/                        # the live site - CloudFront origin, private via OAC
 ├── previews/<id>/site/          # per-PR preview sites (preview stack only)
+├── web/                         # SSR mode only
+│   ├── artifacts/<hash>.zip     # packaged server, one object version per build of the hash
+│   ├── artifacts/placeholder.zip  # the placeholder revision bootstrap creates
+│   ├── results/<hash>.json      # build result: artifact digest and version, stale site keys
+│   └── publishing/<fingerprint>.json  # in-flight publish note (present only mid-publish)
 └── state/<env>.json             # topology state - source of truth
 ```
 
 `site/` is never public: public access is blocked on the bucket, and CloudFront reads it through the Origin Access Control under the bucket policy. Deployment manifests record each build's hash, source key, status, timing, and MicroVM id - they are what `blogwright history` lists. `blogwright rollback <hash>` re-runs the build from the retained source zip at `build/<hash>.zip`. `blogwright delete` empties `site/` only; `destroy` empties every prefix and removes the bucket.
+
+In SSR mode the bucket is versioned. A revision pins the exact object version of its `web/artifacts/<hash>.zip`, which the manifest's `webFunction` block records along with the revision's settings - that pair is what `rollback` reproduces a revision from. A publish note under `web/publishing/` exists from just before a revision is created until it is verified (or restored away from); a deploy that finds one for the revision already serving finishes that publish instead of treating it as unchanged. Because the bucket is versioned, `destroy` deletes every object version and delete marker, not just current objects.
 
 ## The builder MicroVM
 

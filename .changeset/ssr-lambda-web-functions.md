@@ -24,6 +24,17 @@ serving-mode switch without the new `--switch-mode`, and `deploy` and
 `rollback` refuse until that bootstrap has run; `delete` and the preview verbs
 refuse in SSR mode.
 
+`blogwright history` gains a trailing `revision` column - the Web Function
+revision each hash was verified with, or `-` - once any manifest records one;
+static environments keep the existing columns unchanged.
+
+Changes that reach static environments too: `destroy` now empties the bucket
+version by version, so the credentials running it need `s3:ListBucketVersions`
+and `s3:DeleteObjectVersion`; the bucket policy is merged statement by `Sid`
+rather than replaced, so statements added outside Blogwright survive
+`bootstrap`; and a new `retention.webFunctionDays` setting (default 90) sets
+the Web Function log groups' retention, inert without `ssr`.
+
 The builder MicroVM image now states `cpuConfigurations: [{ architecture:
 "ARM_64" }]` on every create and update - the only architecture the MicroVM API
 accepts, and the one Lambda Web Functions run on - so native dependencies
