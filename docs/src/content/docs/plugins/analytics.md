@@ -11,7 +11,7 @@ The analytics plugin reads CloudFront's access logs, so it counts every request 
 
 What you get:
 
-- A local dashboard with seven reports: views over time, daily unique visitors, top paths, referrers, countries, status codes and cache hit ratio.
+- A local dashboard with [seven reports](#the-reports): views over time, daily unique visitors, top paths, referrers, countries, status codes and cache hit ratio.
 - Your data in an [Apache Iceberg](https://iceberg.apache.org) table in your own AWS account, queryable with any Iceberg-aware tool.
 - No raw IP addresses in the table. Visitors are counted with a daily salted hash.
 - Bot traffic flagged, not dropped, so you can include or exclude it per query.
@@ -56,6 +56,8 @@ Run `pnpm exec blogwright analytics backfill` once. It imports the days your sit
 
 `blogwright analytics dashboard` serves the dashboard on `127.0.0.1` only. It queries the table with your local AWS credentials, so whoever runs it needs read access to the account.
 
+![The dashboard's controls: the reporting window presets and custom range, the traffic selector, and the path filter.](../../../assets/analytics/controls.png)
+
 The controls:
 
 | Control | What it does |
@@ -70,6 +72,54 @@ The server answers only the dashboard's own named queries. It never runs SQL sen
 :::note[Unique visitors]
 A visitor's key changes every day, by design. A monthly "unique visitors" figure is the sum of daily uniques, not a count of distinct people.
 :::
+
+## The reports
+
+Seven reports, each answering one question. With **Traffic** set to **All**, every chart stacks human (non-bot) and bot traffic. Open **View chart data** under any chart to see its numbers as a table.
+
+The screenshots below use the dashboard's synthetic test data.
+
+### Views over time
+
+How many requests the site served, over the selected window. Pick a granularity from 15 minutes to 24 hours, and drag across the chart to zoom into a spike.
+
+![Views over time: a stacked area chart of non-bot and bot requests per day.](../../../assets/analytics/views-over-time.png)
+
+### Daily unique visitors
+
+Distinct visitors per UTC day, plus the total for the window. The total adds up each day's count - see the note on unique visitors above.
+
+![Daily unique visitors: a stacked bar per day, with the summed total underneath.](../../../assets/analytics/unique-visitors.png)
+
+### Referrers
+
+Which sites sent visitors to you, and how many requests each one sent.
+
+![Referrers: horizontal bars for each referring URL.](../../../assets/analytics/referrers.png)
+
+### Top paths
+
+Which pages get the most requests. The top 12 paths appear individually with their share; the rest are grouped as **Other paths**.
+
+![Top paths: a pie chart with a ranked list of paths, request counts and percentages.](../../../assets/analytics/top-paths.png)
+
+### Countries
+
+Where requests come from, as a map or as bars. Darker countries sent more requests; search for a country to find it.
+
+![Countries: a world map shaded by request count, with a country search box.](../../../assets/analytics/countries.png)
+
+### Status codes
+
+How many responses carried each HTTP status code - a quick way to spot a wave of `404`s or `5xx` errors.
+
+![Status codes: stacked bars for 200, 304 and 404 responses.](../../../assets/analytics/status-codes.png)
+
+### Cache hit ratio
+
+The share of requests CloudFront answered from its edge cache each day. Higher means faster pages and fewer origin requests.
+
+![Cache hit ratio: a stacked bar per day showing the percentage of requests served from cache.](../../../assets/analytics/cache-hit-ratio.png)
 
 ## Check it is working
 

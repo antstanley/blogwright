@@ -1,9 +1,12 @@
 import starlight from '@astrojs/starlight';
-import { defineConfig } from 'astro/config';
+import { defineConfig, passthroughImageService } from 'astro/config';
 
 // https://astro.build/config
 export default defineConfig({
   site: 'https://blogwright.iamstan.dev',
+  // Images ship as committed (no Sharp in the docs workspace); Astro still adds
+  // their dimensions and lazy loading.
+  image: { service: passthroughImageService() },
   redirects: {
     // The standard.site guide moved into the Plugins section.
     '/guides/publishing-standard-site': '/plugins/standard-site/',
