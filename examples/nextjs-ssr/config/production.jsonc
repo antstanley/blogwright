@@ -7,6 +7,9 @@
     // Next serves public/ and /_next/static/ itself (the build copies them into
     // the package), so there is no staticDir.
     "packageDir": ".next/standalone",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "server.js",
+    // Blogwright generates the entry shim: Next's standalone server reads
+    // HOSTNAME and PORT.
+    "shim": { "host": "HOSTNAME", "port": "PORT" },
   },
 }

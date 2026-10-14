@@ -7,7 +7,10 @@
     // The whole of dist/: @astrojs/node finds its files by walking up to a
     // directory named "server", so the package must keep dist/'s layout.
     "packageDir": "dist",
-    "entryPoint": "server/lambda.mjs",
+    "entryPoint": "server/entry.mjs",
+    // Blogwright generates the entry shim: Astro's standalone server reads
+    // HOST and PORT.
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
   },

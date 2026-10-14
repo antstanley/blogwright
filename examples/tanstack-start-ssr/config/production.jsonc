@@ -5,7 +5,10 @@
   "siteName": "tanstack-start-ssr",
   "ssr": {
     "packageDir": ".output/server",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.mjs",
+    // Blogwright generates the entry shim: Nitro's node-server reads
+    // NITRO_HOST and NITRO_PORT.
+    "shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" },
     "staticDir": ".output/public",
     "staticPaths": ["/assets/*", "/favicon.svg"],
   },

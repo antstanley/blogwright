@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && cp lambda.mjs dist/server/",
+    "build": "astro build",
     "preview": "astro preview"
   },
   "devDependencies": {

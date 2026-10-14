@@ -41,8 +41,7 @@ SvelteKit with `adapter-node`, running on a Lambda Web Function. Fingerprinted `
 
 - `vite.config.js` - `adapter-node`, and `paths.origin` set to the public origin. The app receives the endpoint's domain as `Host`, so without it SvelteKit's CSRF check rejects form actions (`Cross-site POST form submissions are forbidden`). Replace `https://example.com` with your domain.
 - `package.json` - every package is a `devDependency`, so `adapter-node` bundles it into `build/` and the package needs no `node_modules`. A package under `dependencies` stays an import and would have to be installed into `build/node_modules` as real files.
-- `lambda.mjs` - the entry shim. It maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOST` and `PORT`, then imports `index.js`. The build copies it into `build/`.
-  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "index.js"` with `"shim": { "host": "HOST", "port": "PORT" }` in the `ssr` block. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
+- `ssr.shim` in `config/production.jsonc` - Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`, and adapter-node's server reads `HOST` and `PORT`. With `shim` naming them, Blogwright adds an entry shim beside `index.js` that copies the address across, so the build needs no shim file or copy step. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
 - `config/production.jsonc` - packages `build/`. `staticDir` and `staticPaths` publish the fingerprinted `/_app/` assets to S3.
 
 ## The files
@@ -55,7 +54,10 @@ SvelteKit with `adapter-node`, running on a Lambda Web Function. Fingerprinted `
   "siteName": "sveltekit-ssr",
   "ssr": {
     "packageDir": "build",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.js",
+    // Blogwright generates the entry shim: adapter-node's server reads
+    // HOST and PORT.
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "build/client",
     "staticPaths": ["/_app/*", "/favicon.svg"],
   },
@@ -81,16 +83,6 @@ export default defineConfig({
 });
 ```
 
-```js title="lambda.mjs"
-// Entry shim for Lambda Web Functions. Lambda passes the listen address in
-// AWS_LAMBDA_HTTP_ENDPOINT; adapter-node's server reads HOST and PORT.
-const endpoint = process.env.AWS_LAMBDA_HTTP_ENDPOINT;
-const colon = endpoint.lastIndexOf(':');
-process.env.HOST = endpoint.slice(0, colon);
-process.env.PORT = endpoint.slice(colon + 1);
-await import('./index.js');
-```
-
 ```json title="package.json"
 {
   "name": "blogwright-example-sveltekit-ssr",
@@ -99,7 +91,7 @@ await import('./index.js');
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && cp lambda.mjs build/",
+    "build": "vite build",
     "preview": "vite preview"
   },
   "devDependencies": {
@@ -113,12 +105,12 @@ await import('./index.js');
 
 ## Check the package locally
 
-Run it the way Lambda does - from a copy outside the project, so nothing resolves from its own `node_modules`:
+Run it the way Lambda does - from a copy outside the project, so nothing resolves from its own `node_modules`. The generated shim is not in the build output, so set the variables it would:
 
 ```sh
 pnpm build
 cp -R build /tmp/pkg && cd /tmp/pkg
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+HOST=127.0.0.1 PORT=8080 node index.js
 curl -i http://127.0.0.1:8080/
 ```
 

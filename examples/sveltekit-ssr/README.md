@@ -6,8 +6,7 @@ SvelteKit with `adapter-node`, running on Lambda Web Functions.
 
 - `vite.config.js` - `adapter-node`, and `paths.origin`, the public origin. The app receives the endpoint's domain as `Host`, so without it SvelteKit's CSRF check rejects form actions (`Cross-site POST form submissions are forbidden`). Replace `https://example.com` with your domain.
 - `package.json` - every package is a `devDependency`, so `adapter-node` bundles it into `build/` and the package needs no `node_modules`. A package listed under `dependencies` stays an import and would have to be installed into `build/node_modules` as real files.
-- `lambda.mjs` - the entry shim: maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOST` and `PORT` and imports `index.js`. The build copies it into `build/`.
-  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "index.js"` with `"shim": { "host": "HOST", "port": "PORT" }` in the `ssr` block. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
+- `ssr.shim` in `config/production.jsonc` - Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`, and adapter-node's server reads `HOST` and `PORT`. With `shim` naming them, Blogwright adds an entry shim beside `index.js` that copies the address across, so the build needs no shim file or copy step. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
 - `config/production.jsonc` - packages `build/`; `staticDir`/`staticPaths` publish the fingerprinted `/_app/` assets to S3.
 
 ## Deploy it
@@ -20,16 +19,16 @@ pnpm exec blogwright bootstrap
 pnpm exec blogwright deploy
 ```
 
-Edit `siteName` and `region` in `config/production.jsonc` first (`region` must be a Web Function launch region). Commit `pnpm-lock.yaml`: the builder installs with `--frozen-lockfile`. SSR needs a Blogwright release with the `ssr` config block; see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
+Edit `siteName` and `region` in `config/production.jsonc` first (`region` must be a Web Function launch region). Commit `pnpm-lock.yaml`: the builder installs with `--frozen-lockfile`. SSR needs a Blogwright release with the `ssr` config block and `ssr.shim`; see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
 
 ## Check the package locally
 
-Run it the way Lambda does - from a copy outside the repository, so nothing resolves from the project's own `node_modules`:
+Run it the way Lambda does - from a copy outside the repository, so nothing resolves from the project's own `node_modules`. The generated shim is not in the build output, so set the variables it would:
 
 ```sh
 pnpm build
 cp -R build /tmp/pkg && cd /tmp/pkg
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+HOST=127.0.0.1 PORT=8080 node index.js
 curl -i http://127.0.0.1:8080/
 ```
 

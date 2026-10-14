@@ -14,7 +14,7 @@ blogwright takes an empty AWS account to a live HTTPS site in three commands. Af
 ```sh
 pnpm add -D blogwright
 
-pnpm exec blogwright init        # answer four questions
+pnpm exec blogwright init        # answer a few questions
 pnpm exec blogwright bootstrap   # create the bucket, CDN and build environment
 pnpm exec blogwright deploy      # build in the cloud and publish
 ```

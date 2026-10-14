@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build && cp lambda.mjs .output/server/"
+    "build": "vite build"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.170.44",

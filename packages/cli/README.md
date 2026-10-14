@@ -32,8 +32,10 @@ pnpm exec blogwright bootstrap # creates the bucket, CDN, roles, builder image
 pnpm exec blogwright deploy    # zip → build in a MicroVM → live site
 ```
 
-`init` asks four questions (site name, region, optional domain, optional GitHub
-repo). `bootstrap` prints the CloudFront domain - and, if you set a domain, the
+`init` asks for the site name, region, optional domain and optional GitHub repo,
+then whether the app is server-rendered and with which framework (`astro`,
+`sveltekit`, `nuxt`, `tanstack-start`, `nextjs` or `other`), writing its `ssr`
+block and entry shim settings. `bootstrap` prints the CloudFront domain - and, if you set a domain, the
 ACM validation CNAMEs to add to DNS. `deploy` streams the build log with live
 progress and ends with a summary card and your URL. The `bw` alias works
 everywhere `blogwright` does.

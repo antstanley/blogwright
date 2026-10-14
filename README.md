@@ -61,7 +61,7 @@ Requires Node ≥ 22 and AWS credentials in the ambient provider chain.
 ```sh
 pnpm add -D blogwright
 
-pnpm exec blogwright init          # answer four questions - writes config/production.jsonc
+pnpm exec blogwright init          # answer a few questions - writes config/production.jsonc
 pnpm exec blogwright bootstrap     # create the bucket, CDN and build environment
 pnpm exec blogwright deploy        # build in a MicroVM and publish (`bw` works too)
 ```

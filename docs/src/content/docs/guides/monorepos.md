@@ -57,7 +57,8 @@ Prefix the `ssr` paths with the app's directory, just like `paths.dist`. For a S
   "paths": { "app": "web" },
   "ssr": {
     "packageDir": "web/build",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.js",
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "web/build/client",
     "staticPaths": ["/_app/*", "/favicon.svg"],
   },

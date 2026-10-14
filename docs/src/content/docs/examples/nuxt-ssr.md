@@ -40,8 +40,7 @@ Nuxt 4 with Nitro's `node-server` preset, running on a Lambda Web Function. `/_n
 ## What matters
 
 - `nuxt.config.ts` - the `node-server` preset (Nuxt's default), which writes a standalone server to `.output/server` with the dependencies it needs copied in as real files.
-- `lambda.mjs` - the entry shim. It maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `NITRO_HOST` and `NITRO_PORT`, then imports `index.mjs`. The build copies it into `.output/server/`.
-  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "index.mjs"` with `"shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" }` in the `ssr` block. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
+- `ssr.shim` in `config/production.jsonc` - Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`, and Nitro's node-server reads `NITRO_HOST` and `NITRO_PORT`. With `shim` naming them, Blogwright adds an entry shim beside `index.mjs` that copies the address across, so the build needs no shim file or copy step. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
 - `pnpm-workspace.yaml` - `allowBuilds` approves esbuild's install script. pnpm 11 fails an install that meets an unapproved one, in the builder as much as locally.
 - `config/production.jsonc` - packages `.output/server`. `staticDir` and `staticPaths` publish `/_nuxt/` from `.output/public` to S3.
 
@@ -55,7 +54,10 @@ Nuxt 4 with Nitro's `node-server` preset, running on a Lambda Web Function. `/_n
   "siteName": "nuxt-ssr",
   "ssr": {
     "packageDir": ".output/server",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.mjs",
+    // Blogwright generates the entry shim: Nitro's node-server reads
+    // NITRO_HOST and NITRO_PORT.
+    "shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" },
     "staticDir": ".output/public",
     "staticPaths": ["/_nuxt/*", "/favicon.svg"],
   },
@@ -71,16 +73,6 @@ export default defineNuxtConfig({
     head: { link: [{ rel: 'icon', href: '/favicon.svg' }] },
   },
 });
-```
-
-```js title="lambda.mjs"
-// Entry shim for Lambda Web Functions. Lambda passes the listen address in
-// AWS_LAMBDA_HTTP_ENDPOINT; Nitro's node-server reads NITRO_HOST and NITRO_PORT.
-const endpoint = process.env.AWS_LAMBDA_HTTP_ENDPOINT;
-const colon = endpoint.lastIndexOf(':');
-process.env.NITRO_HOST = endpoint.slice(0, colon);
-process.env.NITRO_PORT = endpoint.slice(colon + 1);
-await import('./index.mjs');
 ```
 
 ```yaml title="pnpm-workspace.yaml"
@@ -102,7 +94,7 @@ allowBuilds:
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "nuxt dev",
-    "build": "nuxt build && cp lambda.mjs .output/server/",
+    "build": "nuxt build",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
@@ -115,12 +107,12 @@ allowBuilds:
 
 ## Check the package locally
 
-Run it the way Lambda does - from a copy outside the project, so nothing resolves from its own `node_modules`:
+Run it the way Lambda does - from a copy outside the project, so nothing resolves from its own `node_modules`. The generated shim is not in the build output, so set the variables it would:
 
 ```sh
 pnpm build
 cp -R .output/server /tmp/pkg && cd /tmp/pkg
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+NITRO_HOST=127.0.0.1 NITRO_PORT=8080 node index.mjs
 curl -i http://127.0.0.1:8080/
 ```
 

@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "next dev",
-    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/ && cp lambda.mjs .next/standalone/"
+    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/"
   },
   "dependencies": {
     "next": "^16.4.0",

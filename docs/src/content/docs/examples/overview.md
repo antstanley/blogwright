@@ -64,17 +64,17 @@ See [Monorepos](/guides/monorepos/).
 | Its own `pnpm-workspace.yaml` and `pnpm-lock.yaml` | pnpm treats the directory as a project root, even inside the Blogwright repository. The builder runs `pnpm install --frozen-lockfile --prod=false`, so the lockfile must be committed. |
 | pnpm pinned with `packageManager` | The builder enables pnpm through corepack, which installs the version `packageManager` names. |
 | Install scripts approved in `allowBuilds` | pnpm 11 fails an install that meets a dependency build script nobody approved. |
-| An entry shim (`lambda.mjs`) in each SSR example | Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`. The shim maps it onto the variables the framework's server reads, and `pnpm build` copies it into the package. The examples write their own so the mapping is visible; set [`ssr.shim`](/guides/server-rendered-sites/#the-entry-shim) and Blogwright generates it instead, with no file or copy step. Each example page lists the values. |
+| A generated entry shim (`ssr.shim`) in each SSR example | Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`. [`ssr.shim`](/guides/server-rendered-sites/#the-entry-shim) names the variables the framework's server reads, and Blogwright adds a shim to the package that copies the address into them, so no example carries a shim file or a copy step. Each example page lists the values. |
 | Self-contained SSR packages | Lambda loads nothing outside the package, and the build agent rejects symbolic links. Each SSR example either bundles its dependencies or has its framework copy them in as real files. |
 
 ## Check an SSR package before deploying
 
-Run it the way Lambda does - build, copy the package outside the project, and start the entry with `AWS_LAMBDA_HTTP_ENDPOINT` set:
+Run it the way Lambda does - build, copy the package outside the project, and start the entry with the variables the generated shim would set:
 
 ```sh
 pnpm build
 cp -R .output/server /tmp/pkg && cd /tmp/pkg      # the example's ssr.packageDir
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+NITRO_HOST=127.0.0.1 NITRO_PORT=8080 node index.mjs   # the example's ssr.shim and ssr.entryPoint
 curl -i http://127.0.0.1:8080/
 ```
 

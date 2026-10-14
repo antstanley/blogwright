@@ -200,7 +200,7 @@ Lambda loads nothing that is not in the archive, and pnpm's default `node_module
 
 ### `SSR package entry point "<entry>" does not exist under <dir>`
 
-The build did not emit `ssr.entryPoint` inside `ssr.packageDir`. Check both: the framework's output directory (`dist` for Astro, `build`, `.output/server`, `.next/standalone`) and the shim your build writes inside it. If the shim is emitted by a postbuild step, make sure that step runs before the agent packages the output.
+The build did not emit `ssr.entryPoint` inside `ssr.packageDir`. Check both: the framework's output directory (`dist` for Astro, `build`, `.output/server`, `.next/standalone`) and, without `ssr.shim`, the shim your build writes inside it. If the shim is emitted by a postbuild step, make sure that step runs before the agent packages the output.
 
 ### `SSR package is <n> MB unzipped, over Lambda's 512 MB limit`
 
