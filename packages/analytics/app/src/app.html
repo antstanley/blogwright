@@ -3,9 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- A dashboard bound to loopback has no icon to serve; an empty data URL
-         answers the browser's request without a round trip that would 404. -->
-    <link rel="icon" href="data:," />
+    <!-- The blogwright mark (docs/public/favicon.svg), inlined: a dashboard bound
+         to loopback has no icon to serve, and a data URL needs no round trip. -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cstyle%3E.s{fill:%23eab308}%40media (prefers-color-scheme:dark){.s{fill:%23facc15}}%3C/style%3E%3Cpolygon class='s' points='22.24,9.00 62.24,9.00 59.00,22.00 19.00,22.00'/%3E%3Cpolygon fill='%235b5ef0' points='19.24,6.00 59.24,6.00 56.00,19.00 16.00,19.00'/%3E%3Cpolygon class='s' points='15.24,27.00 55.24,27.00 52.00,40.00 12.00,40.00'/%3E%3Cpolygon fill='%234f46e5' points='12.24,24.00 52.24,24.00 49.00,37.00 9.00,37.00'/%3E%3Cpolygon class='s' points='8.24,45.00 48.24,45.00 45.00,58.00 5.00,58.00'/%3E%3Cpolygon fill='%234338ca' points='5.24,42.00 45.24,42.00 42.00,55.00 2.00,55.00'/%3E%3C/svg%3E"
+    />
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="tap">
