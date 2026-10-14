@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { staticCredentials } from './credentials.js';
 import { CLOUDFRONT_ALIAS_ZONE_ID, Route53Client } from './route53.js';
@@ -74,8 +74,19 @@ describe('Route53Client.deleteRecord', () => {
     await expect(
       clientWith(async () => notFound).deleteRecord('Z1', record),
     ).resolves.toBeUndefined();
-    await expect(clientWith(async () => throttled).deleteRecord('Z1', record)).rejects.toThrow(
-      /Throttling/,
-    );
+    // Throttling is retried first, then surfaces - never read as "already gone".
+    vi.useFakeTimers();
+    try {
+      const outcome = clientWith(async () => throttled)
+        .deleteRecord('Z1', record)
+        .then(
+          () => undefined,
+          (err: unknown) => err,
+        );
+      await vi.runAllTimersAsync();
+      expect(await outcome).toMatchObject({ code: 'Throttling' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
