@@ -79,6 +79,61 @@
   outline-offset: 3px;
 }
 
+/* Wordmark: the site title (docs top bar) and the home hero title read as a
+   prompt - "~ blogwright" in monospace with a slanted yellow cursor. The "~"
+   and cursor are decoration, hidden from assistive tech. */
+:root {
+  --bw-cursor: #facc15;
+}
+[data-theme='light'] {
+  --bw-cursor: #eab308;
+}
+.site-title span,
+.hero h1 {
+  font-family: var(--__sl-font-mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--sl-color-white);
+}
+.site-title span {
+  /* Room for the slanted cursor, which Starlight's overflow would clip. */
+  padding-inline-end: 0.25em;
+}
+.site-title span::before {
+  content: '~ ' / '';
+  color: var(--sl-color-text-accent);
+}
+:is(.site-title span, .hero h1)::after {
+  content: '' / '';
+  display: inline-block;
+  width: 0.5em;
+  height: 0.85em;
+  margin-inline-start: 0.15em;
+  vertical-align: -0.08em;
+  transform: skewX(-14deg);
+  background: var(--bw-cursor);
+}
+/* The home page has no top bar, so the hero title carries the mark; its "~"
+   is a span in the hero title (index.mdx), as ::before holds the mark. */
+.hero h1 {
+  display: flex;
+  align-items: center;
+}
+.hero h1::before {
+  content: '' / '';
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  margin-inline-end: 0.3em;
+  background: url('../assets/logo-dark.svg') center / contain no-repeat;
+}
+[data-theme='light'] .hero h1::before {
+  background-image: url('../assets/logo-light.svg');
+}
+.hero h1 > .bw-prompt {
+  color: var(--sl-color-text-accent);
+}
+
 /* The home page (the only page with a hero) has no top bar: search, the
    theme picker and GitHub live in the docs. Drop the bar and the space
    Starlight reserves for it. */

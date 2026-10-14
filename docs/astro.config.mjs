@@ -20,7 +20,11 @@ export default defineConfig({
         MarkdownContent: './src/components/MarkdownContent.astro',
         MobileMenuToggle: './src/components/MobileMenuToggle.astro',
       },
-      logo: { src: './src/assets/logo.svg', alt: '' },
+      logo: {
+        light: './src/assets/logo-light.svg',
+        dark: './src/assets/logo-dark.svg',
+        alt: '',
+      },
       customCss: ['./src/styles/custom.css'],
       description:
         'Deploy static sites, single-page apps and server-rendered apps to AWS with one CLI: S3 + CloudFront hosting, builds in a Lambda MicroVM, Lambda Web Functions for SSR, PR previews, GitHub-OIDC CI deploys, and plugins for analytics and standard.site publishing.',
