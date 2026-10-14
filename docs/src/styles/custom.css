@@ -179,7 +179,8 @@ starlight-toc a[href]::before {
   box-shadow: 3px 3px 0 var(--bw-nav-shadow);
 }
 :is(.sidebar-content, starlight-toc) a:is([aria-current='page'], [aria-current='true']),
-:is(.sidebar-content, starlight-toc) a:is([aria-current='page'], [aria-current='true']):is(:hover, :focus) {
+:is(.sidebar-content, starlight-toc)
+  a:is([aria-current='page'], [aria-current='true']):is(:hover, :focus) {
   color: #fff;
   background: none;
 }
@@ -187,7 +188,8 @@ starlight-toc a[href]::before {
   transform: skewX(-14deg);
   background: var(--bw-indigo-gradient);
 }
-:is(.sidebar-content, starlight-toc) a:is([aria-current='page'], [aria-current='true']):hover::before {
+:is(.sidebar-content, starlight-toc)
+  a:is([aria-current='page'], [aria-current='true']):hover::before {
   box-shadow: 3px 3px 0 var(--bw-nav-shadow);
 }
 :is(.sidebar-content, starlight-toc) a:focus-visible {
