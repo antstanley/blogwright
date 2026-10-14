@@ -79,6 +79,16 @@
   outline-offset: 3px;
 }
 
+/* The home page (the only page with a hero) has no top bar: search, the
+   theme picker and GitHub live in the docs. Drop the bar and the space
+   Starlight reserves for it. */
+html[data-has-hero] .header {
+  display: none;
+}
+html[data-has-hero] .main-frame {
+  padding-top: 0;
+}
+
 /* Home hero: Starlight pads up to 10rem below the actions; keep the first
    section close to the buttons instead. */
 @media (min-width: 50rem) {

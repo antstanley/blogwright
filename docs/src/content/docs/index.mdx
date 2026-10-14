@@ -15,6 +15,7 @@ hero:
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
+import AgentBanner from '../../components/AgentBanner.astro';
 import AppCard from '../../components/AppCard.astro';
 import AppCardGrid from '../../components/AppCardGrid.astro';
 
@@ -32,6 +33,8 @@ import AppCardGrid from '../../components/AppCardGrid.astro';
     CloudFront distribution - Astro, SvelteKit, Nuxt, TanStack Start or Next.
   </AppCard>
 </AppCardGrid>
+
+<AgentBanner href="/llms.txt">Are you an agent? Start here!</AgentBanner>
 
 ## Built in
 
