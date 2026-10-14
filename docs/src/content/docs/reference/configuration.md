@@ -123,6 +123,12 @@ Retention for the builder MicroVM log group (`/aws/lambda/microvms/<env>-<siteNa
 
 Retention for the CloudFront access-log group (`/<siteName>/<env>/cloudfront`). This log group always lives in `us-east-1`, because CloudFront's vended log delivery only exists there.
 
+### `retention.webFunctionDays`
+
+`number` · optional · default: `90`
+
+Retention for the two log groups an SSR environment's Web Function writes to (`/<siteName>/<env>/web` and its in-Region companion `/<siteName>/<env>/web.local`). Inert when `ssr` is absent.
+
 ## Deploy source and invalidation
 
 Each deploy zips the repo (honoring `.gitignore`), builds it in the MicroVM, syncs the output to S3, and invalidates only the CloudFront paths that actually changed.
@@ -166,6 +172,53 @@ The CloudFront distribution's default root object - the object served for reques
 `boolean` · optional · default: `false`
 
 Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown paths (client-side routing) instead of the 404 page. Applies to the main distribution at creation. Previews are unaffected - the shared preview distribution's error responses cannot be host-routed. See [Non-Astro sites](/guides/non-astro-sites/).
+
+## Server rendering (`ssr`)
+
+`object` · optional · no default
+
+`ssr` turns the environment from a static site into a Lambda Web Function deployment: the MicroVM build's output directory is packaged as a `.zip`, stored as a versioned object in the site bucket, and published as an immutable Web Function revision that the site's CloudFront distribution serves as a private origin. The whole contract - packaging, revisions, caching, limits - is in [Server-rendered sites](/guides/server-rendered-sites/).
+
+```jsonc
+{
+  "region": "us-east-1",
+  "siteName": "example",
+  "ssr": {
+    "packageDir": "dist/server",
+    "entryPoint": "lambda.mjs",
+    "staticDir": "dist/client",
+    "staticPaths": ["/_astro/*", "/favicon.svg"],
+    // Only if cacheable responses vary by token:
+    // "cacheKeyHeaders": ["Authorization"],
+    // Literal, non-secret values the server reads at runtime:
+    "env": { "SITE_URL": "https://example.com" },
+  },
+}
+```
+
+Presence of the key enables the mode. `ssr` and `spa: true` are mutually exclusive, and with `ssr` set, `region` must be one of the Web Function launch regions: `us-east-1`, `us-east-2`, `us-west-2`, `ap-northeast-1`, `eu-west-1`. Preview stacks do not support SSR - `preview bootstrap` and `preview deploy` refuse.
+
+| Field | Validation | Default |
+| --- | --- | --- |
+| `packageDir` | Repo-relative, non-empty, no `..` segments | `paths.dist` |
+| `entryPoint` | Non-empty relative path inside the package, `/` separators, no `..`, no leading `/` | `index.js` |
+| `staticDir` | Repo-relative, no `..`; must be supplied together with `staticPaths`. Files publish at their path relative to it, so it must mirror the URL layout | none |
+| `staticPaths` | Array of CloudFront path patterns, each beginning `/`; must be non-empty when `staticDir` is set, and empty without it | `[]` |
+| `cacheKeyHeaders` | HTTP header names (RFC 7230 tokens), no case-insensitive duplicates, at most 10, at most 128 characters each, joined list under 1,024 characters, none CloudFront owns or strips | `[]` |
+| `env` | Map of `[A-Za-z][A-Za-z0-9_]*` keys to non-empty strings; literal values only, never secrets; Lambda-reserved names rejected | `{}` |
+| `timeoutSeconds` | Integer 3-900 | `30` |
+| `maxConcurrencyPerEnvironment` | Integer 1-128 | `64` |
+
+`env` keys Lambda reserves are rejected at config load, naming the key: the `AWS_*` credential, region, session and Lambda-runtime names, plus `AWS_LAMBDA_NODEJS_ENTRYPOINT` (which points at `entryPoint` instead, so the two can never disagree). `cacheKeyHeaders` rejects `Host`, `Accept-Encoding`, the connection-scoped headers CloudFront removes, and any name beginning `lambda-web-`. CloudFront's limits are enforced at load: 10 headers, 128 characters per header name, and a comma-joined name list strictly under 1,024 characters.
+
+Revision-scoped settings (`entryPoint`, `env`, `timeoutSeconds`, `maxConcurrencyPerEnvironment`) take effect at the next deploy, which creates a revision whenever any of them changed even if the built output did not. `bootstrap` never cuts one.
+
+### How SSR changes the other settings
+
+- `defaultRootObject` is inert - the distribution's root object is empty, because the application answers `/`.
+- `invalidationMaxPaths` applies only to a deploy that publishes `staticDir` changes without a new revision; a new revision invalidates `/*`.
+- `seo` is inert - Blogwright writes no `robots.txt` or `sitemap.xml`; the application serves them, or the build puts them in `staticDir` and lists them in `staticPaths`. A `seo` key written in the config document with a non-`off` value warns once per deploy.
+- `region` is restricted to the launch regions above.
 
 ## SEO
 
@@ -312,6 +365,10 @@ unrelated built-in commands. Post-deploy PDS sync failures remain warnings:
 | `microvm.memory` | one of `0.5`, `1`, `2`, `4`, `8` |
 | `microvm.maxDurationSeconds` | `1`–`28800` |
 | `retention.*Days` | positive |
+| `ssr` block | object; unknown keys rejected; field rules in the table above |
+| `ssr` + `spa` | mutually exclusive |
+| `ssr` + `region` | `region` must be a Web Function launch region |
+| `ssr.env` keys | reserved Lambda names rejected |
 | `seo.robots` | `auto`, `index`, `noindex`, or `off` |
 | `seo.sitemap` | `auto`, `on`, or `off` |
 | `sourceInclude[]` | repo-relative, no leading `/`, no `..` |

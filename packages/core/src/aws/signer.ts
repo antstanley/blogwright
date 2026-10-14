@@ -172,6 +172,63 @@ export class SigningClient {
       { retryable },
     );
   }
+
+  /**
+   * Sign and send a request to an explicit URL - an application endpoint, not
+   * an AWS service endpoint - with `x-amz-content-sha256` always present (a
+   * Lambda Web Function endpoint rejects a signed request without it).
+   *
+   * Unlike {@link send}, an HTTP error status is RETURNED rather than thrown:
+   * the Web Function probe needs the status and headers of a 403 or 5xx to
+   * tell an application answer from an authorization refusal, and neither is
+   * a transport failure. Network errors still throw.
+   */
+  async sendToUrl(opts: {
+    url: string;
+    method: string;
+    /** SigV4 signing name, e.g. `lambda` for a Web Function endpoint. */
+    service: string;
+    headers?: Record<string, string> | undefined;
+    body?: string | Uint8Array | undefined;
+  }): Promise<RawResponse> {
+    const url = new URL(opts.url);
+    const contentHash = await sha256Hex(opts.body);
+    const headers: Record<string, string> = {
+      host: url.host,
+      'x-amz-content-sha256': contentHash,
+      ...opts.headers,
+    };
+    const request = new HttpRequest({
+      protocol: url.protocol === 'http:' ? 'http:' : 'https:',
+      hostname: url.hostname,
+      ...(url.port ? { port: Number(url.port) } : {}),
+      method: opts.method,
+      path: url.pathname,
+      query: Object.fromEntries(url.searchParams.entries()),
+      headers,
+      ...(opts.body !== undefined ? { body: opts.body } : {}),
+    });
+    const signer = new SignatureV4({
+      service: opts.service,
+      region: this.region,
+      credentials: async () => {
+        const c = await this.credentials();
+        return {
+          accessKeyId: c.accessKeyId,
+          secretAccessKey: c.secretAccessKey,
+          ...(c.sessionToken ? { sessionToken: c.sessionToken } : {}),
+        };
+      },
+      sha256: Sha256,
+    });
+    const signed = await signer.sign(request);
+    return this.transport({
+      url: url.toString(),
+      method: opts.method,
+      headers: signed.headers as Record<string, string>,
+      body: opts.body,
+    });
+  }
 }
 
 function parseError(service: string, response: RawResponse): AwsError {

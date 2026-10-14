@@ -2,7 +2,7 @@
 title: Troubleshooting
 description: Symptom, cause, and fix for the errors and warnings blogwright actually raises.
 sidebar:
-  order: 9
+  order: 10
 ---
 
 blogwright errors try to name their own fix. This page collects the ones you are most likely to meet - what triggers each, why, and what to do - grouped by area. Command and flag details live in the [CLI reference](/reference/cli/); every config key is documented in the [configuration reference](/reference/configuration/).
@@ -163,6 +163,94 @@ Two log lines explain a full invalidation instead of the usual per-path one:
 - `no changed-paths manifest - invalidating everything (/*)` - a warning: the build's changed-paths manifest could not be read, so the deploy invalidates everything to stay correct. Harmless for the site; if it recurs, check the build logs.
 
 An identical redeploy logs `no content changed - skipping CloudFront invalidation` and invalidates nothing.
+
+## Server-rendered sites (SSR)
+
+### `this caller may not invoke the Web Function endpoint: it answered HTTP 403 without an application error …`
+
+The mandatory preflight runs before anything is built or published. Lambda omits the `lambda-web-error-type` header when the caller is not authorized to invoke the endpoint at all, so a `403` without it means `lambda:InvokeWebFunctionEndpoint` is missing on your principal - not that the application answered `403`. The GitHub OIDC deploy role carries the action; a local operator's credentials need it too. Nothing was built or published.
+
+### `Web Function revision <id> failed (<errors>)`
+
+The revision settled `Failed`, so Lambda never routed traffic to it - the previous revision keeps serving. The errors come from `GetWebFunctionRevision` and usually name the cause directly: a missing or unreadable entry point, a package Lambda could not load, a role it could not assume. The application's own output, if it got as far as starting, is in the Web Function log group; `blogwright logs <hash>` shows the MicroVM build that produced the package, which is where a missing entry file or an incomplete package shows up. Rebuild after fixing:
+
+```sh
+aws logs tail /<siteName>/<env>/web --since 1h   # the server's stdout and stderr
+blogwright logs <hash>                            # the build that packaged it
+blogwright deploy
+```
+
+### `the endpoint is NOT serving`
+
+A revision became `Active` but never answered below `500`, and nothing that would serve was put back in front of it. The endpoint has already cut over, so this is the one case where the site is genuinely down. It happens two ways:
+
+- **A new revision did not serve, and neither did the restore** of the previous one.
+- **A deploy finished an interrupted publish.** An earlier deploy created the revision now serving and stopped before verifying it (the CLI was killed, the network dropped). The next deploy of the same build finds that revision serving with its publish never finished, probes it rather than calling it unchanged - and it does not answer. The revision it replaced was never captured, so there is nothing to restore.
+
+```sh
+blogwright history <env>
+blogwright rollback <hash> <env>
+```
+
+Use the newest hash with a revision id in `history`'s `revision` column - `rollback` recreates that revision from its retained artifact and settings without a rebuild. The failure message names that hash when one exists. Read `/<siteName>/<env>/web` for why the failing revision did not answer.
+
+### `SSR package contains a symbolic link at <path>`
+
+Lambda loads nothing that is not in the archive, and pnpm's default `node_modules` is a symlink tree - so the package is not self-contained. Make your build copy production dependencies into the package as real files (or bundle the server), rather than shipping a package that merely sits beside the build's `node_modules`. See [Server-rendered sites](/guides/server-rendered-sites/).
+
+### `SSR package entry point "<entry>" does not exist under <dir>`
+
+The build did not emit `ssr.entryPoint` inside `ssr.packageDir`. Check both: the framework's output directory (`dist/server`, `build`, `.output/server`, `.next/standalone`) and the shim your build writes inside it. If the shim is emitted by a postbuild step, make sure that step runs before the agent packages the output.
+
+### `SSR package is <n> MB unzipped, over Lambda's 512 MB limit`
+
+The packaged server output exceeds the deployment-package limit. Keep build output and caches out of `packageDir`, or split static assets into `staticDir` so only the server is packaged.
+
+### The SSR server never starts listening
+
+`GET` on the endpoint returns `502`/`504`, or the readiness probe times out, when the server does not begin listening within 10 seconds of process start on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`. Check the entry shim: frameworks that read `HOST`/`PORT`, `NITRO_HOST`/`NITRO_PORT` or `HOSTNAME`/`PORT` need the mapping before the built entry is imported. Run the package locally the way Lambda does to see it fail fast (see [Running the package locally](/guides/server-rendered-sites/#running-the-package-locally)). The Web Function's logs are in `/<siteName>/<env>/web` (with the in-Region companion `/<siteName>/<env>/web.local`), retention from `retention.webFunctionDays`:
+
+```sh
+aws logs tail /<siteName>/<env>/web --follow
+```
+
+### One viewer's cached response is served to another
+
+The viewer's `Authorization` header always reaches the application - CloudFront does not strip it, because the origin-request policy forwards it - but it is not part of the cache key unless you list it. A response the application marks cacheable for an authenticated request is then served to the next viewer of the same URL, whatever their token. Either mark authenticated responses `private` or `no-store`, or key the cache on the header:
+
+```jsonc
+{ "ssr": { "cacheKeyHeaders": ["Authorization"] } }
+```
+
+That gives each token its own cache entry. Cookies reach the application without being listed too, and never vary the cache (they are forwarded but excluded from the key), so cookie-authenticated responses must be `private` or `no-store`.
+
+### Form posts fail with `403`, or links point at `*.on.aws`
+
+The application receives the Web Function endpoint's domain (`<id>.lambda-web.<region>.on.aws`) as `Host`, not your site's domain: CloudFront forwards every viewer header except `Host`, which it sets to the origin's domain as the endpoint requires. A framework that derives its URL from `Host` then builds absolute links and redirects on the endpoint domain, and its cross-site request check rejects the browser's form posts, whose `Origin` is your site. Tell the application its public origin - see [The public origin](/guides/server-rendered-sites/#the-public-origin).
+
+### `504` on a slow route
+
+CloudFront gives the Web Function origin 60 seconds to first byte. A response whose first byte takes longer than that is a `504` whatever `ssr.timeoutSeconds` says; values above 60 help only a response that keeps streaming.
+
+### A static path returns `403` instead of the application's `404`
+
+Requests matching `ssr.staticPaths` are served from S3, not the application, and error responses are distribution-wide - so the SSR behavior has no custom error responses and a static pattern with no object in `site/` returns S3's `403`. Keep `staticPaths` to prefixes your build always publishes, or let the application serve the path.
+
+### `refusing to delete site/ for "<env>"`
+
+`blogwright delete` refuses in SSR mode: the application renders every page the revision serves, and emptying `site/` cannot unpublish a revision. Deploy a new revision, roll back, or switch the stack back to static serving with `blogwright bootstrap <env> --switch-mode` and deploy before deleting.
+
+### `refusing to switch "<env>" from <mode> to <mode> serving`
+
+`bootstrap` refuses a mode change on a bootstrapped stack because the distribution's default behavior moves before a deploy in the new mode exists: static → SSR answers `503` from the placeholder until the first SSR deploy completes, and SSR → static serves whatever `site/` holds until the next static deploy. Re-run with `--switch-mode` when that window is acceptable; nothing was applied. Removing `ssr` from the config and re-bootstrapping leaves the Web Function's resources in place, because the graph is derived from config - see [Switching modes](/guides/deploying/#switching-modes).
+
+### `"<env>" is configured for <mode> serving but its distribution serves <mode>`
+
+`deploy` and `rollback` refuse while the config and the stack disagree about the serving mode - the state between adding or removing the `ssr` block and re-bootstrapping. An SSR deploy in that gap publishes a revision the distribution does not route to, and a static deploy deletes the `site/` assets the live revision still references. Run `blogwright bootstrap <env> --switch-mode` first; nothing was built or published.
+
+### `the preview stack does not support SSR`
+
+The shared preview stack is a host-routed distribution over per-PR S3 prefixes; an SSR preview needs its own endpoint, which is a separate design. `preview bootstrap` and `preview deploy` refuse when the config sets `ssr`. Preview a static branch, or drop the block from the preview config.
 
 ## Previews
 

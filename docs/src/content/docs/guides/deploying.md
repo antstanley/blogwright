@@ -121,6 +121,38 @@ When the config has a `pds` section and publishing has been initialised, every s
 
 Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/guides/publishing-standard-site/).
 
+## SSR environments
+
+When the config carries an `ssr` block, the same pipeline publishes a Lambda Web Function revision instead of a static site. The differences:
+
+1. **Preflight.** Before anything is zipped, the deploy sends a SigV4-signed `GET` to the endpoint root. Any answer passes, including the placeholder's `503`. A caller that is not authorized to invoke the endpoint (`lambda:InvokeWebFunctionEndpoint`) stops the deploy there, before anything is built or published.
+2. **Build.** Still a MicroVM build. The agent packages `ssr.packageDir` (default `paths.dist`) into a deterministic `.zip` after checking the entry file exists, rejecting any symbolic link in the package, and enforcing Lambda's 512 MB unzipped bound. It uploads the artifact to `web/artifacts/<hash>.zip`, publishes only `ssr.staticDir` to `site/` when configured (upload-only - stale keys are listed, not deleted), and writes `web/results/<hash>.json`.
+3. **Revision.** The CLI fingerprints the artifact digest, runtime, execution role, log group and revision-scoped settings. When that fingerprint already serves, no revision is created: only the static changes are invalidated. The exception is a revision whose own publish never finished (an earlier deploy stopped after the cutover): the deploy finishes it instead, probing the endpoint and invalidating `/*`. Otherwise it creates one revision from the artifact's object version and every setting (a revision copies nothing from the last one), polls `GetWebFunctionRevision` until `Active`, and fails with the revision's own errors if it settles `Failed` - the previous revision keeps serving.
+4. **Readiness probe.** `Active` only means Lambda prepared the code, so the deploy then probes the endpoint root until it answers below `500`. Only a ready revision is followed by deleting stale `site/` keys and invalidating `/*`, because a new revision may change any cached page.
+5. **Restore.** A `LatestRevision` endpoint has already cut over by the time the probe runs. If the probe never passes, the deploy re-creates the previous revision from its captured configuration, waits for it to become `Active`, probes it, and fails naming both revisions. It does not invalidate and does not delete stale keys, so pages still cached keep serving. If the restore does not serve either, the failure says the endpoint is not serving and gives the `blogwright rollback <hash>` command for the newest hash with a recorded revision.
+
+The summary reports the revision id, whether it was created or found unchanged, and the invalidation that ran. `blogwright history` adds a `revision` column in SSR mode: a hash shows a revision id only once a revision built from it was verified to serve (its manifest's `webFunction` block), and a later failed deploy or rollback of the same hash keeps it, so the hash stays reproducible by `rollback`. A hash showing `-` has nothing to reproduce from.
+
+### Rollback in SSR mode
+
+`blogwright rollback <hash>` reproduces the revision that hash was deployed with, from the artifact version and `settings` recorded in its manifest - not from the current config, whose `entryPoint` or `env` may not fit the older artifact. It skips creation when that fingerprint is already serving, and runs the same preflight, probe, restore and invalidation steps as a deploy.
+
+It falls back to re-running the MicroVM build when the manifest has no `webFunction` block (a static-era or failed deploy), the recorded artifact version no longer exists, or `ssr.staticDir` is configured - the last because an artifact carries only the server, and the fingerprinted assets its pages reference were removed from `site/` by the deploys that followed.
+
+### Switching modes
+
+To turn an existing static environment into an SSR one:
+
+1. Add the `ssr` block to the environment's config, and the entry shim and packaging steps to your build ([Server-rendered sites](/guides/server-rendered-sites/)).
+2. `blogwright bootstrap <env> --switch-mode` - creates the Web Function, its role, log groups, origin access control and cache policy, and moves the distribution's default behavior to the endpoint, which answers `503` from a placeholder revision until step 3 finishes.
+3. `blogwright deploy <env>` - publishes the first real revision.
+
+A new environment needs no flag: `bootstrap` then `deploy`. Moving back to static is the same sequence with the block removed.
+
+`blogwright bootstrap` refuses to change the mode of a bootstrapped stack without `--switch-mode`, because the distribution's default behavior moves before a deploy in the new mode exists: static → SSR answers `503` from the placeholder until the first SSR deploy completes, and SSR → static serves whatever `site/` holds until the next static deploy. With the flag, bootstrap converges the distribution in place and repeats the window as a warning. Until that bootstrap has run, `deploy` and `rollback` refuse, because the configured mode is not the one the distribution serves. Enabling versioning is part of the way in; it is never suspended, including when `ssr` is removed from the config. Every object overwritten or deleted from then on - each redeployed `site/` file, each state save - keeps its previous version, and Blogwright adds no lifecycle rule to expire them. If storage matters, add a noncurrent-version expiration rule yourself, scoped away from `web/artifacts/`: rollback reproduces revisions from the artifact versions their manifests record.
+
+Removing `ssr` and re-bootstrapping does not delete the Web Function, its role, log groups, origin access control or cache policy: the graph is derived from the config, so once the block is gone those nodes are no longer part of it. An idle function costs nothing to run, but its log groups keep their retained logs, and `destroy` will not remove any of them either. To remove them, run `blogwright destroy <env> --yes` while the block is still present, or delete them by hand under the names in [Architecture](/reference/architecture/#tagging-and-naming). See [Server-rendered sites](/guides/server-rendered-sites/) for the full contract.
+
 ## Related pages
 
 - [Operations](/guides/operations/) - `history`, `rollback`, `status`, and day-two tasks

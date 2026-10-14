@@ -56,10 +56,12 @@ no first-run config questions.
 ### bootstrap
 
 ```sh
-blogwright bootstrap [env]
+blogwright bootstrap [env] [--switch-mode]
 ```
 
-Creates or reconciles the full infrastructure graph for the environment - safe to re-run, including after a failure partway: state is persisted even when a step fails, and resources a crashed run created but never recorded (such as a CloudFront distribution hitting a duplicate-alias conflict) are adopted rather than duplicated. When a domain is configured (via `--domain` or the config), bootstrap requests the ACM certificate and prints the DNS validation CNAMEs, and the distribution gets the domain as an alias. On completion it prints the CloudFront domain the site is served from. See [deploying](/guides/deploying/) and [custom domains](/guides/custom-domains/).
+Creates or reconciles the full infrastructure graph for the environment - safe to re-run, including after a failure partway: state is persisted even when a step fails, and resources a crashed run created but never recorded (such as a CloudFront distribution hitting a duplicate-alias conflict) are adopted rather than duplicated.
+
+`--switch-mode` allows a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses when the configured mode (presence of an `ssr` block) differs from the mode the live distribution was left in (a stack bootstrapped before SSR existed counts as static), because the distribution's default behavior moves before a deploy in the new mode exists: a static → SSR switch answers `503` from the placeholder until the first SSR deploy completes, and an SSR → static switch serves whatever `site/` holds until the next static deploy. The refusal names that window and applies nothing; with the flag the same window is repeated as a warning and the distribution converges in place. An environment with an `ssr` block also enables S3 versioning on its bucket here (and never suspends it again). When a domain is configured (via `--domain` or the config), bootstrap requests the ACM certificate and prints the DNS validation CNAMEs, and the distribution gets the domain as an alias. On completion it prints the CloudFront domain the site is served from. See [deploying](/guides/deploying/) and [custom domains](/guides/custom-domains/).
 
 After successful site reconciliation, bootstrap reads scoped state keys in the
 site bucket and warns once per plugin to run `blogwright <plugin> bootstrap <env>`.
@@ -79,6 +81,10 @@ After every successful **production** deploy, standard.site records are re-synce
 
 `--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change.
 
+With an `ssr` block in the config, the build's output is packaged and published as a Lambda Web Function revision instead of synced to `site/`: the deploy preflights the endpoint, creates a revision only when the artifact or a revision-scoped setting changed, probes it until it serves, restores the previous revision if it never does, and invalidates `/*`. See [Deploying](/guides/deploying/#ssr-environments).
+
+`deploy` refuses, before anything is built, when the configured serving mode (static or SSR) is not the one the stack's distribution serves - the state between adding or removing the `ssr` block and running [`bootstrap --switch-mode`](#bootstrap). `rollback` refuses in the same state.
+
 ### rollback
 
 ```sh
@@ -86,6 +92,8 @@ blogwright rollback <hash> [env] [--refresh]
 ```
 
 Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history).
+
+In SSR mode, rollback instead reproduces the revision that hash was deployed with, from the artifact version and the `webFunction` settings recorded in its manifest - without a rebuild - and skips creation when that revision's fingerprint is already what serves. It falls back to re-running the build when the manifest has no `webFunction` block, the recorded artifact version is gone, or `ssr.staticDir` is configured (the artifact carries only the server, and the fingerprinted assets its pages reference were removed from `site/` by later deploys). Both paths run the same endpoint preflight, readiness probe and `/*` invalidation a deploy does.
 
 :::caution
 Rollback does not sync the PDS - standard.site records mirror the current repo content, which a rollback does not restore. When production has a `pds` config, the command warns: check out the rolled-back revision and run `blogwright pds sync` if needed.
@@ -97,7 +105,7 @@ Rollback does not sync the PDS - standard.site records mirror the current repo c
 blogwright delete [env]
 ```
 
-Empties the live `site/` prefix and invalidates CloudFront. Infrastructure, build artifacts, and deployment history stay intact - a later `deploy` or `rollback` restores the site. Note it takes effect immediately, without a confirmation prompt.
+Empties the live `site/` prefix and invalidates CloudFront. Infrastructure, build artifacts, and deployment history stay intact - a later `deploy` or `rollback` restores the site. Note it takes effect immediately, without a confirmation prompt. Refuses in SSR mode: emptying `site/` cannot unpublish a Web Function revision, whose routes would keep answering from a server whose static assets are gone. Switch the stack back to static serving and deploy, or `destroy` it.
 
 ### destroy
 
@@ -119,7 +127,7 @@ failures abort, while a confirmed missing bucket permits interrupted cleanup.
 blogwright history [env]
 ```
 
-Lists deployment history from the stored build manifests, newest first. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. A corrupt manifest is skipped with a warning rather than failing the listing.
+Lists deployment history from the stored build manifests, newest first. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. Once any manifest records a Web Function revision (SSR mode), both forms append a `revision` column: the revision id a hash was verified with, or `-` for a hash with none. A hash with a revision is one `rollback` can reproduce without a rebuild. A corrupt manifest is skipped with a warning rather than failing the listing.
 
 ### logs
 
@@ -329,6 +337,7 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
+| `--switch-mode` | `bootstrap` | Allow a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses a mode change. |
 | `--refresh` | `deploy`, `rollback`, `preview deploy` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. |
 | `--yes` | site/plugin destroy, preview teardown, pds secret delete, plugin remove | Required for explicit destruction. For plugin remove it skips the teardown question and keeps resources. |
 | `--help` | all | Print usage and exit 0. |

@@ -1,9 +1,72 @@
-import { AwsError, type DistributionConfigInput, type PdsConfig } from 'blogwright-core';
+import {
+  AwsError,
+  CloudFrontClient,
+  createMemoryFileSystem,
+  SigningClient,
+  staticCredentials,
+  type CachePolicyConfigInput,
+  type DistributionConfigInput,
+  type PdsConfig,
+  type RawResponse,
+} from 'blogwright-core';
+import { unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 
+import { applyGraph } from './graph.js';
 import type { OpsContext } from './context.js';
-import { buildNodes, builderImageAction, oidcRolePolicyStatements, oidcSubClaim } from './nodes.js';
-import { createTestContext } from './test-support.js';
+import {
+  buildNodes,
+  builderImageAction,
+  reconcileBuilderImage,
+  oidcRolePolicyStatements,
+  oidcSubClaim,
+  PLACEHOLDER_ARTIFACT_KEY,
+  placeholderPackageZip,
+} from './nodes.js';
+import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
+
+/** One response through the real transport seam, for the XML fixtures below. */
+function rawResponse(body: string): RawResponse {
+  const bytes = new TextEncoder().encode(body);
+  return { statusCode: 200, headers: {}, body: bytes, text: () => body };
+}
+
+/** The XML the real cache-policy builder emits for a desired config. */
+async function cachePolicyXml(config: CachePolicyConfigInput): Promise<string> {
+  let body = '';
+  const client = new CloudFrontClient(
+    new SigningClient({
+      region: 'us-east-1',
+      credentials: staticCredentials({ accessKeyId: 'A', secretAccessKey: 'B' }),
+      transport: async (req) => {
+        body = String(req.body ?? '');
+        return rawResponse('<CachePolicy><Id>CP-1</Id></CachePolicy>');
+      },
+    }),
+  );
+  await client.createCachePolicy(config);
+  return body;
+}
+
+/** The XML the real distribution builder emits for a desired shape. */
+async function distributionXml(shape: DistributionConfigInput): Promise<string> {
+  let body = '';
+  const client = new CloudFrontClient(
+    new SigningClient({
+      region: 'us-east-1',
+      credentials: staticCredentials({ accessKeyId: 'A', secretAccessKey: 'B' }),
+      transport: async (req) => {
+        body = String(req.body ?? '');
+        return rawResponse(
+          '<Distribution><Id>D1</Id><ARN>arn:aws:cloudfront::1:distribution/D1</ARN>' +
+            '<DomainName>d1.cloudfront.net</DomainName><Status>Deployed</Status></Distribution>',
+        );
+      },
+    }),
+  );
+  await client.createDistribution(shape);
+  return body;
+}
 
 /**
  * The block `pds: true` stands for: a fully populated `pds` block, `secretName`
@@ -71,7 +134,7 @@ describe('cloudfront log delivery self-heal', () => {
     };
     const ctx = createTestContext({
       env: 'staging',
-      config: { retention: { microvmDays: 1, cloudfrontDays: 1 } },
+      config: { retention: { microvmDays: 1, cloudfrontDays: 1, webFunctionDays: 1 } },
       state: {
         resources: {
           'cloudfront-distribution': { arn: 'arn:dist/NEW' },
@@ -263,6 +326,84 @@ describe('builderImageAction', () => {
       'update',
     );
   });
+
+  it('does not treat a legacy state record without the architecture as a rebuild reason', () => {
+    // `ARM_64` is the API's only architecture, so every image created before
+    // the field existed already runs it: a record lacking `cpuArchitecture`
+    // still skips.
+    expect(builderImageAction(HEALTHY, recorded, 'abc123', '/lg')).toBe('skip');
+  });
+});
+
+describe('reconcileBuilderImage architecture', () => {
+  const AGENT_HASH = '0123456789ab';
+
+  function imageCtx(existing: { state: string; imageVersion?: string } | undefined) {
+    const calls: string[] = [];
+    // What GetMicrovmImage answers as the run progresses: an update request
+    // flips the image to UPDATING with a new version, which is what the
+    // settle poll waits for.
+    let current = existing;
+    const opsCtx = createTestContext({
+      ports: {
+        fs: createMemoryFileSystem({
+          [`${TEST_AGENT_DIR}/Dockerfile`]: 'FROM scratch',
+          [`${TEST_AGENT_DIR}/server.js`]: 'export {};',
+          [`${TEST_AGENT_DIR}/agent-manifest.json`]: JSON.stringify({ hash: AGENT_HASH }),
+        }),
+      },
+      state: { resources: { 'microvm-image': { arn: 'arn:img', agentHash: AGENT_HASH } } },
+      clients: {
+        s3: {
+          putObject: async () => 'v1',
+        },
+        microvms: {
+          getImage: async () =>
+            current
+              ? {
+                  imageArn: 'arn:img',
+                  imageName: 'builder',
+                  state: current.state,
+                  imageVersion: current.imageVersion,
+                }
+              : undefined,
+          updateImage: async (_id, input) => {
+            calls.push(`updateImage ${JSON.stringify(input.cpuConfigurations ?? null)}`);
+            current = { state: 'UPDATED', imageVersion: '2' };
+            return {
+              imageArn: 'arn:img',
+              imageName: 'builder',
+              state: 'UPDATING',
+              imageVersion: '2',
+            };
+          },
+        },
+      },
+    });
+    return { ctx: opsCtx, calls };
+  }
+
+  it('states the Arm64 architecture on an update too, and records it', async () => {
+    // The log group differs from the record, so the reconcile updates.
+    const { ctx, calls } = imageCtx({ state: 'CREATED', imageVersion: '1' });
+    await reconcileBuilderImage(ctx);
+    expect(calls).toEqual(['updateImage [{"architecture":"ARM_64"}]']);
+    expect(ctx.state.resources['microvm-image']?.cpuArchitecture).toBe('ARM_64');
+  });
+
+  it('leaves a matching image alone', async () => {
+    const { ctx, calls } = imageCtx({ state: 'CREATED', imageVersion: '1' });
+    ctx.state.resources['microvm-image'] = {
+      arn: 'arn:img',
+      agentHash: AGENT_HASH,
+      logGroup: ctx.names.microvmLogGroup,
+    };
+    await reconcileBuilderImage(ctx);
+    expect(calls).toEqual([]);
+    // A skip is not a request, so nothing is written: a legacy record without
+    // the architecture stays as it is, and is not a rebuild reason either.
+    expect(ctx.state.resources['microvm-image']?.cpuArchitecture).toBeUndefined();
+  });
 });
 
 describe('oidcSubClaim', () => {
@@ -296,6 +437,52 @@ describe('oidcRolePolicyStatements', () => {
       Resource: string[];
     };
     expect(passRole.Resource).toContain('arn:aws:iam::123456789012:role/build');
+  });
+
+  it('adds the Web Function revision and probe grants only in SSR mode', () => {
+    const staticActions = actionsOf(oidcRolePolicyStatements(ctx({ preview: false })));
+    expect(staticActions).not.toContain('lambda:InvokeWebFunctionEndpoint');
+    expect(staticActions).not.toContain('s3:GetObjectVersion');
+
+    const ssrCtx = createTestContext({
+      config: {
+        githubRepo: 'antstanley/example',
+        ssr: { entryPoint: 'index.js' },
+      },
+      state: {
+        resources: {
+          'iam-exec-role': { arn: 'arn:aws:iam::123456789012:role/exec' },
+          'iam-build-role': { arn: 'arn:aws:iam::123456789012:role/build' },
+          'iam-web-role': { arn: 'arn:aws:iam::123456789012:role/production-example-web-role' },
+          'cloudfront-distribution': { arn: 'arn:aws:cloudfront::123456789012:distribution/DIST' },
+          'web-function': {
+            arn: 'arn:aws:lambda:us-east-1:123456789012:web-function/production-example-web',
+            endpointArn:
+              'arn:aws:lambda:us-east-1:123456789012:web-function/production-example-web/endpoint/site',
+          },
+        },
+      },
+    });
+    const ssrStatements = oidcRolePolicyStatements(ssrCtx);
+    const ssrActions = actionsOf(ssrStatements);
+    expect(ssrActions).toContain('lambda:CreateWebFunctionRevision');
+    expect(ssrActions).toContain('lambda:GetWebFunction*');
+    expect(ssrActions).toContain('lambda:ListWebFunction*');
+    expect(ssrActions).toContain('lambda:InvokeWebFunctionEndpoint');
+    expect(ssrActions).toContain('s3:GetObjectVersion');
+    const passRole = ssrStatements.filter((s) => actionsOf([s]).includes('iam:PassRole'));
+    expect(passRole.flatMap((s) => (s as { Resource: string[] }).Resource)).toContain(
+      'arn:aws:iam::123456789012:role/production-example-web-role',
+    );
+    // Scoped to this site's function, never every Web Function in the account.
+    const resourcesFor = (action: string) =>
+      ssrStatements
+        .filter((s) => actionsOf([s]).includes(action))
+        .flatMap((s) => (s as { Resource: string | string[] }).Resource);
+    const fn = 'arn:aws:lambda:us-east-1:123456789012:web-function/production-example-web';
+    expect(resourcesFor('lambda:CreateWebFunctionRevision')).toEqual([fn, `${fn}/*`]);
+    expect(resourcesFor('lambda:ListWebFunction*')).toEqual([fn, `${fn}/*`]);
+    expect(resourcesFor('lambda:InvokeWebFunctionEndpoint')).toEqual([`${fn}/endpoint/site`]);
   });
 
   it('grants production invalidation on the distribution ARN', () => {
@@ -371,6 +558,46 @@ describe('distributionNode.update', () => {
     const found = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
     await found!.update!(ctx);
     expect(calls[0]?.aliases).toEqual(['*.preview.example.com']);
+  });
+
+  it('leaves a static stack that stays static to the alias-only update', async () => {
+    // A recorded static mode plus a static config is not a mode switch and not
+    // an SSR bootstrap, so the full reconcile must not run - `spa` and
+    // `defaultRootObject` stay creation-time settings there.
+    const { ctx } = distCtx({ domain: 'example.com' });
+    const reconciled: string[] = [];
+    ctx.state.resources['cloudfront-distribution'] = {
+      id: 'D1',
+      domainName: 'd1.cloudfront.net',
+      mode: 'static',
+    };
+    ctx.clients.cloudfront.reconcileDistribution = async (id: string) => {
+      reconciled.push(id);
+      return false;
+    };
+    await distNode(ctx).update!(ctx);
+    expect(reconciled).toEqual([]);
+  });
+
+  it('reconciles the full shape on a mode switch, recording the mode it left', async () => {
+    const ctx = createTestContext({
+      config: { ssr: { entryPoint: 'index.js' } },
+      state: {
+        resources: {
+          'cloudfront-distribution': { id: 'D1', domainName: 'd1.cloudfront.net', mode: 'static' },
+          oac: { id: 'OAC-S' },
+          'cloudfront-function': { arn: 'arn:function:router' },
+        },
+      },
+      clients: {
+        cloudfront: {
+          reconcileDistribution: async () => true,
+        },
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'cloudfront-distribution');
+    await node?.update?.(ctx);
+    expect(ctx.state.resources['cloudfront-distribution']?.mode).toBe('ssr');
   });
 
   it('never touches aliases when no domain is configured', async () => {
@@ -512,6 +739,7 @@ describe('distributionNode adoption', () => {
       id: 'D-ORPHAN',
       arn: 'arn:orphan',
       domainName: 'orphan.cloudfront.net',
+      mode: 'static',
     });
     expect(tagged).toEqual([{ arn: 'arn:orphan', tags: ctx.tags }]);
   });
@@ -742,6 +970,106 @@ describe('site-write roles can tag objects (#7)', () => {
   );
 });
 
+describe('bucket versioning', () => {
+  function bucketCtx(opts: { ssr: boolean; versioned?: boolean }) {
+    const calls: string[] = [];
+    const opsCtx = createTestContext({
+      config: opts.ssr ? { ssr: { entryPoint: 'index.js' } } : {},
+      state: {
+        resources: {
+          bucket: { name: 'b', ...(opts.versioned ? { versioned: true } : {}) },
+        },
+      },
+      clients: {
+        s3: {
+          putBucketTagging: async () => {
+            calls.push('tagging');
+          },
+          putPublicAccessBlock: async () => {
+            calls.push('pab');
+          },
+          getBucketVersioning: async () => {
+            calls.push('getVersioning');
+            return 'Suspended';
+          },
+          putBucketVersioning: async (_bucket, status) => {
+            calls.push(`putVersioning ${status}`);
+          },
+        },
+      },
+    });
+    const node = buildNodes(opsCtx).find((n) => n.id === 'bucket');
+    return { ctx: opsCtx, calls, node };
+  }
+
+  it('enables versioning on an SSR update, and records it', async () => {
+    const { ctx, calls, node } = bucketCtx({ ssr: true });
+    await node?.update?.(ctx);
+    expect(calls).toEqual(['tagging', 'pab', 'getVersioning', 'putVersioning Enabled']);
+    expect(ctx.state.resources['bucket']?.versioned).toBe(true);
+  });
+
+  it('never suspends versioning, including after ssr is removed from the config', async () => {
+    const enabled = bucketCtx({ ssr: true, versioned: true });
+    await enabled.node?.update?.(enabled.ctx);
+    expect(enabled.calls).toEqual(['tagging', 'pab']);
+
+    const removed = bucketCtx({ ssr: false, versioned: true });
+    await removed.node?.update?.(removed.ctx);
+    expect(removed.calls).toEqual(['tagging', 'pab']);
+  });
+});
+
+describe('SSR build and exec role grants', () => {
+  async function policyForSsr(roleId: 'iam-build-role' | 'iam-exec-role', ssr: boolean) {
+    let policy: { Statement: { Action: string[]; Resource: string | string[] }[] } | undefined;
+    const opsCtx = createTestContext({
+      ...(ssr ? { config: { ssr: { entryPoint: 'index.js' } } } : {}),
+      clients: {
+        iam: {
+          ensureRole: async () => 'arn:aws:iam::1:role/r',
+          getRoleArn: async () => undefined,
+          putRolePolicy: async (_role: string, _name: string, doc: object) => {
+            policy = doc as typeof policy;
+          },
+        },
+      },
+    });
+    const node = buildNodes(opsCtx).find((n) => n.id === roleId);
+    await node?.create(opsCtx);
+    return policy?.Statement ?? [];
+  }
+
+  it.each(['iam-build-role', 'iam-exec-role'] as const)(
+    '%s can write web/artifacts and web/results in SSR mode',
+    async (roleId) => {
+      const statements = await policyForSsr(roleId, true);
+      const web = statements.find((s) =>
+        (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).some((r) =>
+          r.endsWith('/web/artifacts/*'),
+        ),
+      );
+      expect(web?.Action).toEqual(['s3:PutObject']);
+      expect(web?.Resource).toEqual([
+        expect.stringContaining('/web/artifacts/*'),
+        expect.stringContaining('/web/results/*'),
+      ]);
+    },
+  );
+
+  it.each(['iam-build-role', 'iam-exec-role'] as const)(
+    '%s gains nothing new in static mode',
+    async (roleId) => {
+      const statements = await policyForSsr(roleId, false);
+      expect(
+        statements.some((s) =>
+          (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).some((r) => r.includes('/web/')),
+        ),
+      ).toBe(false);
+    },
+  );
+});
+
 describe('certificateNode validation race', () => {
   // ACM fills DomainValidationOptions asynchronously after RequestCertificate:
   // the first describe can legitimately return no validation records for a
@@ -777,5 +1105,486 @@ describe('certificateNode validation race', () => {
     await node!.create(ctx);
     expect(upserts).toEqual([record]);
     expect(describes).toBeGreaterThanOrEqual(3);
+  });
+});
+
+/*
+ * The SSR graph: every Web Function node's create/reconcile, and the
+ * idempotence an immediate re-bootstrap must show. The whole graph is applied
+ * (not a filtered subset) because `topoSort` rejects a node whose dependency
+ * is missing, and the surrounding static nodes are what a real bootstrap pays.
+ */
+describe('SSR bootstrap graph', () => {
+  interface SsrRun {
+    ctx: OpsContext;
+    calls: string[];
+    /** The bodies the run sent to selected APIs, for shape assertions. */
+    bodies: Record<string, string>;
+  }
+
+  /** A fake that answers exactly like AWS would for a fresh stack. */
+  function ssrBootstrapCtx(existing?: Partial<Record<string, unknown>>): SsrRun {
+    const calls: string[] = [];
+    const bodies: Record<string, string> = {};
+    const exists = existing ?? {};
+    // The bucket policy as S3 stores it: the merged writer reads back what the
+    // previous node wrote, so the fake has to persist it between calls.
+    let storedBucketPolicy = exists['bucketPolicy'] as string | undefined;
+    const opsCtx = createTestContext({
+      env: 'production',
+      config: {
+        githubRepo: 'antstanley/example',
+        ssr: { entryPoint: 'server/lambda.mjs', cacheKeyHeaders: ['Authorization'] },
+      },
+      ports: {
+        // The builder-image node packages the agent from `ctx.agentDir`; the
+        // bytes do not matter to this graph, only that they exist.
+        fs: createMemoryFileSystem({
+          [`${TEST_AGENT_DIR}/Dockerfile`]: 'FROM scratch',
+          [`${TEST_AGENT_DIR}/server.js`]: 'export {};',
+          [`${TEST_AGENT_DIR}/agent-manifest.json`]: JSON.stringify({ hash: '0123456789ab' }),
+        }),
+      },
+      state: {
+        resources: {
+          'iam-exec-role': { arn: 'arn:exec' },
+          'iam-build-role': { arn: 'arn:build' },
+          ...(exists['state'] as Record<string, Record<string, never>> | undefined),
+        },
+      },
+      clients: {
+        s3: {
+          bucketExists: async () => Boolean(exists['bucket']),
+          createBucket: async () => {
+            calls.push('s3.createBucket');
+          },
+          putBucketTagging: async () => {
+            calls.push('s3.putBucketTagging');
+          },
+          putPublicAccessBlock: async () => {
+            calls.push('s3.putPublicAccessBlock');
+          },
+          getBucketVersioning: async () => (exists['bucketVersioned'] ? 'Enabled' : undefined),
+          putBucketVersioning: async (_bucket, status) => {
+            calls.push(`s3.putBucketVersioning ${status}`);
+          },
+          putObject: async (_bucket, key, body, _type) => {
+            calls.push(`s3.putObject ${key}`);
+            if (typeof body === 'string' && key.startsWith('web/artifacts/')) bodies[key] = body;
+            return `version-${key}`;
+          },
+          getBucketPolicy: async () => storedBucketPolicy,
+          putBucketPolicy: async (_bucket, policy) => {
+            calls.push('s3.putBucketPolicy');
+            storedBucketPolicy = policy;
+            bodies['bucketPolicy'] = policy;
+          },
+          deleteObject: async () => undefined,
+        },
+        logs: {
+          logGroupExists: async () => Boolean(exists['webLogGroup']),
+          ensureLogGroup: async (name) => {
+            calls.push(`logs.ensureLogGroup ${name}`);
+          },
+          putRetentionPolicy: async (name, days) => {
+            calls.push(`logs.putRetentionPolicy ${name} ${days}`);
+          },
+        },
+        logsUsEast1: {
+          logGroupExists: async () => true,
+          putRetentionPolicy: async () => undefined,
+          // The vended log-delivery trio the static graph wires on every bootstrap.
+          putDeliverySource: async () => {
+            calls.push('logsUsEast1.putDeliverySource');
+            return 'arn:source';
+          },
+          putDeliveryDestination: async () => {
+            calls.push('logsUsEast1.putDeliveryDestination');
+            return 'arn:destination';
+          },
+          createDelivery: async () => {
+            calls.push('logsUsEast1.createDelivery');
+          },
+          deliveriesForSource: async () => [],
+        },
+        iam: {
+          getRoleArn: async (name) =>
+            exists['webRole'] ? `arn:aws:iam::1:role/${name}` : undefined,
+          ensureRole: async (name) => {
+            calls.push(`iam.ensureRole ${name}`);
+            return `arn:aws:iam::1:role/${name}`;
+          },
+          putRolePolicy: async (name, policyName, policy) => {
+            calls.push(`iam.putRolePolicy ${name} ${policyName}`);
+            if (policyName === 'web') bodies['webRolePolicy'] = JSON.stringify(policy);
+          },
+          ensureOidcProvider: async () => {
+            calls.push('iam.ensureOidcProvider');
+          },
+        },
+        microvms: {
+          getImage: async (id) =>
+            id
+              ? {
+                  imageArn: String(id),
+                  imageName: 'production-example-builder',
+                  state: 'CREATED',
+                  imageVersion: '1',
+                }
+              : undefined,
+          createImage: async (input) => {
+            calls.push(`microvms.createImage ${JSON.stringify(input.cpuConfigurations ?? null)}`);
+            return {
+              imageArn: 'arn:aws:lambda:us-east-1:1:microvm-image/production-example-builder',
+              imageName: 'production-example-builder',
+              state: 'CREATING',
+              imageVersion: undefined,
+            };
+          },
+        },
+        cloudfront: {
+          createOriginAccessControl: async (input) => {
+            calls.push(
+              `cloudfront.createOriginAccessControl ${input.originType} ${input.signingBehavior ?? 'always'}`,
+            );
+            return `OAC-${input.originType}`;
+          },
+          createCachePolicy: async (config) => {
+            calls.push(`cloudfront.createCachePolicy ${config.headerNames.join(',')}`);
+            bodies['cachePolicy'] = JSON.stringify(config);
+            return { id: 'CP-1', etag: 'E1' };
+          },
+          getCachePolicy: async () =>
+            exists['cachePolicy']
+              ? { id: 'CP-1', config: String(exists['cachePolicy']), etag: 'E1' }
+              : undefined,
+          updateCachePolicy: async (id, config, etag) => {
+            calls.push(
+              `cloudfront.updateCachePolicy ${id} ${config.headerNames.join(',')} ${etag}`,
+            );
+          },
+          ensureFunction: async () => {
+            calls.push('cloudfront.ensureFunction');
+            return 'arn:function:router';
+          },
+          createDistribution: async (input) => {
+            calls.push('cloudfront.createDistribution');
+            bodies['distribution'] = JSON.stringify(input);
+            return {
+              id: 'D1',
+              arn: 'arn:aws:cloudfront::1:distribution/D1',
+              domainName: 'd1.cloudfront.net',
+              status: 'Deployed',
+              etag: 'E1',
+            };
+          },
+          getDistribution: async () =>
+            exists['distribution']
+              ? {
+                  id: 'D1',
+                  arn: 'arn:aws:cloudfront::1:distribution/D1',
+                  domainName: 'd1.cloudfront.net',
+                  status: 'Deployed',
+                  etag: 'E1',
+                }
+              : undefined,
+          getDistributionConfig: async () =>
+            exists['distributionConfig']
+              ? { config: String(exists['distributionConfig']), etag: 'E1' }
+              : undefined,
+          reconcileDistribution: async (_id, input) => {
+            calls.push('cloudfront.reconcileDistribution');
+            bodies['reconciled'] = JSON.stringify(input);
+            return false;
+          },
+          setDistributionAliases: async () => false,
+          tagResource: async () => {
+            calls.push('cloudfront.tagResource');
+          },
+          createInvalidation: async () => 'inv',
+        },
+        lambdaWeb: {
+          getWebFunction: async () =>
+            exists['webFunction']
+              ? {
+                  functionName: 'production-example-web',
+                  functionArn: 'arn:aws:lambda:us-east-1:1:web-function/production-example-web',
+                  state: 'Active',
+                  revisionId: 'r-placeholder',
+                }
+              : undefined,
+          createWebFunction: async (input) => {
+            calls.push('lambdaWeb.createWebFunction');
+            bodies['createWebFunction'] = JSON.stringify(input);
+            return {
+              functionName: input.functionName,
+              functionArn: 'arn:aws:lambda:us-east-1:1:web-function/production-example-web',
+              state: 'Active',
+              revision: {
+                revisionArn: 'arn:rev-placeholder',
+                revisionId: 'r-placeholder',
+                state: 'Pending',
+              },
+              endpoint: {
+                endpointName: 'site',
+                endpointArn: 'arn:endpoint',
+                domainName: 'abc.lambda-web.us-east-1.on.aws',
+                state: 'Pending',
+              },
+            };
+          },
+          getWebFunctionEndpoint: async () =>
+            exists['webEndpoint']
+              ? {
+                  endpointName: 'site',
+                  endpointArn: 'arn:endpoint',
+                  domainName: 'abc.lambda-web.us-east-1.on.aws',
+                  state: 'Active',
+                }
+              : undefined,
+          createWebFunctionEndpoint: async (input) => {
+            calls.push(
+              `lambdaWeb.createWebFunctionEndpoint ${input.endpointType} ${input.authType} ${input.autoDeploymentMode}`,
+            );
+            return {
+              endpointName: 'site',
+              endpointArn: 'arn:endpoint',
+              domainName: 'abc.lambda-web.us-east-1.on.aws',
+              state: 'Active',
+            };
+          },
+          getResourcePolicy: async () =>
+            exists['resourcePolicy'] && exists['distribution']
+              ? { policy: String(exists['resourcePolicy']), revisionId: 'rev-1' }
+              : exists['resourcePolicy']
+                ? { policy: String(exists['resourcePolicy']), revisionId: 'rev-1' }
+                : undefined,
+          putResourcePolicy: async (_name, policy) => {
+            calls.push('lambdaWeb.putResourcePolicy');
+            bodies['resourcePolicy'] = policy;
+            return { policy, revisionId: 'rev-1' };
+          },
+          listWebFunctionRevisions: async () => [],
+          createWebFunctionRevision: async () => {
+            calls.push('lambdaWeb.createWebFunctionRevision');
+            throw new Error('bootstrap must never create a revision');
+          },
+        },
+      },
+    });
+    return { ctx: opsCtx, calls, bodies };
+  }
+
+  it('creates versioning, both log groups, the role, the OAC, the cache policy and the code policy', async () => {
+    const run = ssrBootstrapCtx();
+    await applyGraph(buildNodes(run.ctx), run.ctx);
+
+    expect(run.calls).toContain('s3.putBucketVersioning Enabled');
+    expect(run.calls).toContain(`logs.ensureLogGroup ${run.ctx.names.webLocalLogGroup}`);
+    expect(run.calls).toContain(`logs.ensureLogGroup ${run.ctx.names.webLogGroup}`);
+    expect(run.calls).toContain(`logs.putRetentionPolicy ${run.ctx.names.webLogGroup} 90`);
+    expect(run.calls).toContain('cloudfront.createOriginAccessControl lambda always-amz-auth');
+    expect(run.calls).toContain('cloudfront.createCachePolicy Authorization');
+
+    const webRole = JSON.parse(run.bodies['webRolePolicy'] ?? '{}') as {
+      Statement: { Action: string[]; Resource: string[] }[];
+    };
+    expect(webRole.Statement[0]?.Action).toEqual(['logs:CreateLogStream', 'logs:PutLogEvents']);
+    // Both groups are nodes, so the role never needs logs:CreateLogGroup.
+    expect(webRole.Statement[0]?.Resource).toEqual([
+      `arn:aws:logs:us-east-1:123456789012:log-group:${run.ctx.names.webLogGroup}:*`,
+      `arn:aws:logs:us-east-1:123456789012:log-group:${run.ctx.names.webLocalLogGroup}:*`,
+    ]);
+
+    const policy = JSON.parse(run.bodies['bucketPolicy'] ?? '{}') as {
+      Statement: { Sid: string; Action: string[]; Resource: string; Condition: unknown }[];
+    };
+    const codeStatement = policy.Statement.find(
+      (s) => s.Sid === 'AllowLambdaWebFunctionCodeAccess',
+    );
+    expect(codeStatement?.Action).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+    expect(codeStatement?.Resource).toBe(`arn:aws:s3:::${run.ctx.names.bucket}/web/artifacts/*`);
+    expect(codeStatement?.Condition).toEqual({
+      ArnLike: {
+        'AWS:SourceArn': `arn:aws:lambda:us-east-1:123456789012:web-function/${run.ctx.names.webFunction}/revision/*`,
+      },
+    });
+    // The CloudFront-read statement is preserved, in its own Sid.
+    expect(policy.Statement.some((s) => s.Sid === 'AllowCloudFrontRead')).toBe(true);
+    // The placeholder is inside the prefix the statement covers, and is uploaded
+    // before the function that reads it is created.
+    expect(run.calls).toContain(`s3.putObject ${PLACEHOLDER_ARTIFACT_KEY}`);
+    expect(run.calls.indexOf('s3.putObject web/artifacts/placeholder.zip')).toBeLessThan(
+      run.calls.indexOf('lambdaWeb.createWebFunction'),
+    );
+  });
+
+  it('ships a placeholder package that listens on the endpoint and answers 503', () => {
+    const files = unzipSync(placeholderPackageZip());
+    expect(Object.keys(files)).toEqual(['index.js']);
+    const source = new TextDecoder().decode(files['index.js']);
+    expect(source).toContain('AWS_LAMBDA_HTTP_ENDPOINT');
+    expect(source).toContain('503');
+    // Reproducible: identical bytes on every call, so the placeholder never churns.
+    expect(Array.from(placeholderPackageZip())).toEqual(Array.from(placeholderPackageZip()));
+  });
+
+  it('creates the function with the placeholder revision, then the site endpoint and resource policy', async () => {
+    const run = ssrBootstrapCtx();
+    await applyGraph(buildNodes(run.ctx), run.ctx);
+
+    const fn = JSON.parse(run.bodies['createWebFunction'] ?? '{}') as {
+      revisionConfig: {
+        description: string;
+        buildConfig: {
+          codeConfig: { s3Object: { bucket: string; key: string; versionId: string } };
+          runtimeConfig: { runtime: string };
+        };
+        serviceConfig: {
+          executionRoleArn: string;
+          timeoutSeconds: number;
+          maxConcurrencyPerEnvironment: number;
+          environmentVariables: Record<string, string>;
+          telemetryConfig: { loggingConfig: { logGroup: string } };
+        };
+      };
+      endpointConfig: Record<string, string>;
+    };
+    expect(fn.revisionConfig.description).toBe('blogwright:placeholder');
+    expect(fn.revisionConfig.buildConfig.codeConfig.s3Object).toEqual({
+      bucket: run.ctx.names.bucket,
+      key: 'web/artifacts/placeholder.zip',
+      versionId: 'version-web/artifacts/placeholder.zip',
+    });
+    expect(fn.revisionConfig.buildConfig.runtimeConfig.runtime).toBe('nodejs24.x');
+    expect(fn.revisionConfig.serviceConfig.executionRoleArn).toBe(
+      `arn:aws:iam::1:role/${run.ctx.names.webRole}`,
+    );
+    expect(fn.revisionConfig.serviceConfig.timeoutSeconds).toBe(30);
+    expect(fn.revisionConfig.serviceConfig.maxConcurrencyPerEnvironment).toBe(64);
+    expect(fn.revisionConfig.serviceConfig.telemetryConfig.loggingConfig.logGroup).toBe(
+      run.ctx.names.webLogGroup,
+    );
+    expect(fn.endpointConfig).toEqual({
+      endpointName: 'site',
+      endpointType: 'HomeRegion',
+      authType: 'IamAuth',
+      autoDeploymentMode: 'LatestRevision',
+    });
+    // The create response carried the endpoint, so no second call is needed.
+    expect(run.calls).not.toContain(
+      'lambdaWeb.createWebFunctionEndpoint HomeRegion IamAuth LatestRevision',
+    );
+    expect(run.ctx.state.resources['web-function']?.endpointDomainName).toBe(
+      'abc.lambda-web.us-east-1.on.aws',
+    );
+    expect(run.ctx.state.resources['web-function']?.placeholderRevisionId).toBe('r-placeholder');
+
+    const resourcePolicy = JSON.parse(run.bodies['resourcePolicy'] ?? '{}') as {
+      Statement: { Sid: string; Action: string; Resource: string; Condition: unknown }[];
+    };
+    expect(resourcePolicy.Statement).toEqual([
+      {
+        Sid: 'AllowCloudFrontOACAccess',
+        Effect: 'Allow',
+        Principal: { Service: 'cloudfront.amazonaws.com' },
+        Action: 'lambda:InvokeWebFunctionEndpoint',
+        Resource: 'arn:endpoint',
+        Condition: {
+          ArnLike: { 'AWS:SourceArn': 'arn:aws:cloudfront::1:distribution/D1' },
+        },
+      },
+    ]);
+    // The builder image request states the Arm64 architecture on create.
+    expect(
+      run.calls.some((call) => call.includes('microvms.createImage [{"architecture":"ARM_64"}]')),
+    ).toBe(true);
+  });
+
+  it('an immediate re-run pushes nothing and creates no revision', async () => {
+    const first = ssrBootstrapCtx();
+    await applyGraph(buildNodes(first.ctx), first.ctx);
+
+    // What AWS would answer with after the first run: the very XML the real
+    // builders produce for the shape that run asked for.
+    const cachePolicy = await cachePolicyXml({
+      name: first.ctx.names.ssrCachePolicy,
+      comment: `${first.ctx.config.siteName} ${first.ctx.env} SSR responses`,
+      minTtl: 0,
+      defaultTtl: 0,
+      maxTtl: 31_536_000,
+      headerNames: ['Authorization'],
+      queryStrings: 'all',
+      cookies: 'none',
+      gzip: true,
+      brotli: true,
+    });
+    const distributionConfig = await distributionXml(
+      JSON.parse(first.bodies['distribution'] ?? '{}') as DistributionConfigInput,
+    );
+
+    const second = ssrBootstrapCtx({
+      bucket: true,
+      bucketVersioned: true,
+      webLogGroup: true,
+      webRole: true,
+      webFunction: true,
+      webEndpoint: true,
+      bucketPolicy: first.bodies['bucketPolicy'],
+      resourcePolicy: first.bodies['resourcePolicy'],
+      cachePolicy,
+      distribution: true,
+      distributionConfig,
+      state: first.ctx.state.resources,
+    });
+    await applyGraph(buildNodes(second.ctx), second.ctx);
+
+    expect(second.calls).not.toContain('s3.putBucketVersioning Enabled');
+    expect(second.calls).not.toContain('cloudfront.createCachePolicy Authorization');
+    expect(second.calls).not.toContain('lambdaWeb.createWebFunction');
+    expect(second.calls).not.toContain(
+      'lambdaWeb.createWebFunctionEndpoint HomeRegion IamAuth LatestRevision',
+    );
+    expect(second.calls).not.toContain('lambdaWeb.putResourcePolicy');
+    expect(second.calls).not.toContain('lambdaWeb.createWebFunctionRevision');
+    expect(second.calls.some((call) => call.startsWith('cloudfront.updateCachePolicy'))).toBe(
+      false,
+    );
+  });
+
+  it('updates the cache policy in place when cacheKeyHeaders changed after bootstrap', async () => {
+    const first = ssrBootstrapCtx();
+    await applyGraph(buildNodes(first.ctx), first.ctx);
+
+    // The live policy predates `cacheKeyHeaders: ["Authorization"]`.
+    const cachePolicy = await cachePolicyXml({
+      name: first.ctx.names.ssrCachePolicy,
+      minTtl: 0,
+      defaultTtl: 0,
+      maxTtl: 31_536_000,
+      headerNames: [],
+      queryStrings: 'all',
+      cookies: 'none',
+      gzip: true,
+      brotli: true,
+    });
+    const second = ssrBootstrapCtx({
+      bucket: true,
+      bucketVersioned: true,
+      webLogGroup: true,
+      webRole: true,
+      webFunction: true,
+      webEndpoint: true,
+      bucketPolicy: first.bodies['bucketPolicy'],
+      resourcePolicy: first.bodies['resourcePolicy'],
+      cachePolicy,
+      distribution: true,
+      state: first.ctx.state.resources,
+    });
+    await applyGraph(buildNodes(second.ctx), second.ctx);
+
+    // The name is taken, so a second create is what CloudFront would refuse.
+    expect(second.calls).not.toContain('cloudfront.createCachePolicy Authorization');
+    expect(second.calls).toContain('cloudfront.updateCachePolicy CP-1 Authorization E1');
   });
 });

@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AwsError, type S3Client } from 'blogwright-core';
+import { unzipSync } from 'fflate';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -10,6 +11,9 @@ import {
   DEFAULT_CONTENT_TYPE,
   extensionOf,
   generateSitemap,
+  MAX_PACKAGE_BYTES,
+  packageWebFunction,
+  publishBuild,
   createSiteUploader,
   invalidationPaths,
   resolveWithin,
@@ -243,5 +247,171 @@ describe('createSiteUploader (issue #7 fail-soft tagging)', () => {
     await upload('b', 'site/c.html', CONTENT, 'text/html', {});
 
     expect(puts.map((p) => p.key)).toEqual(['site/a.html', 'site/c.html']);
+  });
+});
+
+describe('packageWebFunction', () => {
+  let root = '';
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'ssr-package-'));
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('zips the package with its contents at the archive root and a fixed timestamp', async () => {
+    const dir = join(root, 'pkg-ok');
+    await mkdir(join(dir, 'server'), { recursive: true });
+    await writeFile(join(dir, 'index.js'), 'export {};');
+    await writeFile(join(dir, 'server', 'entry.mjs'), 'export {};');
+
+    const { zip } = await packageWebFunction(dir, 'index.js');
+    const entries = Object.keys(unzipSync(zip)).sort();
+    expect(entries).toEqual(['index.js', 'server/entry.mjs']);
+    // Deterministic bytes: the same directory packages identically.
+    const again = await packageWebFunction(dir, 'index.js');
+    expect(Array.from(again.zip)).toEqual(Array.from(zip));
+  });
+
+  it('fails naming the entry point when the package does not emit it', async () => {
+    const dir = join(root, 'pkg-no-entry');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'other.js'), '');
+    await expect(packageWebFunction(dir, 'server/lambda.mjs')).rejects.toThrow(
+      /entry point "server\/lambda\.mjs" does not exist/,
+    );
+  });
+
+  it('fails naming the path when the package contains a symbolic link', async () => {
+    const dir = join(root, 'pkg-link');
+    await mkdir(join(dir, 'node_modules'), { recursive: true });
+    await writeFile(join(dir, 'index.js'), '');
+    await symlink('../outside', join(dir, 'node_modules', 'dep'));
+    await expect(packageWebFunction(dir, 'index.js')).rejects.toThrow(
+      /symbolic link at node_modules\/dep/,
+    );
+  });
+
+  it('fails when the unzipped package exceeds the 512 MB bound', async () => {
+    const dir = join(root, 'pkg-big');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'index.js'), '');
+    // A sparse file of exactly the bound plus one byte: readdir/stat see the
+    // size without 512 MB ever being written.
+    await writeFile(join(dir, 'big.bin'), '');
+    await truncate(join(dir, 'big.bin'), MAX_PACKAGE_BYTES + 1);
+    await expect(packageWebFunction(dir, 'index.js')).rejects.toThrow(/over Lambda's 512 MB limit/);
+  });
+});
+
+/*
+ * The SSR publish branch: only `staticDir` reaches `site/`, stale keys are
+ * listed rather than deleted, the artifact is uploaded and the result sidecar
+ * is written. Exercised directly (not through `runBuild`, which spawns pnpm)
+ * over a fake S3 client.
+ */
+describe('publishBuild (SSR)', () => {
+  interface Recording {
+    calls: string[];
+    objects: Map<string, string>;
+  }
+
+  function fakeS3(recording: Recording, existing: string[]): S3Client {
+    return {
+      listObjects: async (_bucket: string, prefix: string) => {
+        recording.calls.push(`list ${prefix}`);
+        return existing.map((key) => ({ key, size: 1, lastModified: undefined, etag: 'other' }));
+      },
+      putObject: async (_bucket: string, key: string, body: unknown) => {
+        recording.calls.push(`put ${key}`);
+        recording.objects.set(key, typeof body === 'string' ? body : '<bytes>');
+        return `version-${key}`;
+      },
+      deleteObject: async (_bucket: string, key: string) => {
+        recording.calls.push(`delete ${key}`);
+      },
+    } as unknown as S3Client;
+  }
+
+  const log = () => undefined;
+
+  it('packages the server, publishes only staticDir, and leaves stale keys for the CLI', async () => {
+    const recording: Recording = { calls: [], objects: new Map() };
+    const root = join(await mkdtemp(join(tmpdir(), 'ssr-publish-')), 'work');
+    await mkdir(join(root, 'out'), { recursive: true });
+    await writeFile(join(root, 'out', 'index.js'), 'export {};');
+    await mkdir(join(root, 'client'), { recursive: true });
+    await writeFile(join(root, 'client', 'app.css'), 'body{}');
+
+    await publishBuild(
+      fakeS3(recording, ['site/app.css', 'site/old.html']),
+      {
+        hash: 'h1',
+        sourceKey: 'build/h1.zip',
+        bucket: 'b',
+        region: 'us-east-1',
+        sitePrefix: 'site/',
+        webFunction: {
+          packageDir: 'out',
+          entryPoint: 'index.js',
+          staticDir: 'client',
+          artifactKey: 'web/artifacts/h1.zip',
+          resultKey: 'web/results/h1.json',
+        },
+      },
+      root,
+      join(root, 'out'),
+      log,
+    );
+
+    expect(recording.calls).toContain('put web/artifacts/h1.zip');
+    expect(recording.calls).toContain('put site/app.css');
+    // The server output is never published as S3 objects...
+    expect(recording.calls.some((call) => call.includes('site/index.js'))).toBe(false);
+    // ...and a stale key is listed, not deleted: the revision still serving
+    // references it.
+    expect(recording.calls).not.toContain('delete site/old.html');
+    const result = JSON.parse(recording.objects.get('web/results/h1.json') ?? '{}') as {
+      artifactKey: string;
+      artifactVersionId: string;
+      artifactSha256: string;
+      staleStaticKeys: string[];
+    };
+    expect(result.artifactKey).toBe('web/artifacts/h1.zip');
+    expect(result.artifactVersionId).toBe('version-web/artifacts/h1.zip');
+    expect(result.artifactSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.staleStaticKeys).toEqual(['site/old.html']);
+  });
+
+  it('leaves site/ completely untouched when no staticDir is configured', async () => {
+    const recording: Recording = { calls: [], objects: new Map() };
+    const root = join(await mkdtemp(join(tmpdir(), 'ssr-publish-none-')), 'work');
+    await mkdir(join(root, 'out'), { recursive: true });
+    await writeFile(join(root, 'out', 'index.js'), 'export {};');
+
+    await publishBuild(
+      fakeS3(recording, ['site/index.html']),
+      {
+        hash: 'h2',
+        sourceKey: 'build/h2.zip',
+        bucket: 'b',
+        region: 'us-east-1',
+        sitePrefix: 'site/',
+        webFunction: {
+          packageDir: 'out',
+          entryPoint: 'index.js',
+          artifactKey: 'web/artifacts/h2.zip',
+          resultKey: 'web/results/h2.json',
+        },
+      },
+      root,
+      join(root, 'out'),
+      log,
+    );
+
+    expect(recording.calls.filter((call) => call.includes('site/'))).toEqual([]);
+    expect(recording.calls).toContain('put web/artifacts/h2.zip');
   });
 });

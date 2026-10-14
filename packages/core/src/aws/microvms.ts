@@ -12,6 +12,16 @@ import type { SigningClient } from './signer.js';
 
 const API = '/2025-09-09';
 
+/**
+ * The CPU architecture every builder MicroVM image is created and updated
+ * with. `ARM_64` is the only value the MicroVM API accepts today, and it is
+ * also the architecture a Lambda Web Function runs on, so native dependencies
+ * a build compiles match the runtime they serve from. Stated on every request
+ * (create and update) rather than inferred, and repo-wide - not an SSR-only
+ * setting.
+ */
+export const MICROVM_CPU_ARCHITECTURE = 'ARM_64';
+
 const PATHS = {
   images: `${API}/microvm-images`,
   image: (id: string) => `${API}/microvm-images/${encodeURIComponent(id)}`,
@@ -38,6 +48,8 @@ export interface CreateImageInput {
    * the /ready hook whenever any hook is enabled.
    */
   hooks?: { port: number } | undefined;
+  /** CPU configuration for the image; `ARM_64` is the API's only architecture. */
+  cpuConfigurations?: { architecture: string }[] | undefined;
 }
 
 export interface MicrovmImage {
@@ -158,6 +170,7 @@ export class MicrovmsClient {
             },
           }
         : {}),
+      ...(input.cpuConfigurations ? { cpuConfigurations: input.cpuConfigurations } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
       ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),
     };

@@ -2,7 +2,7 @@
 title: Day-2 operations
 description: Inspect drift, audit deploy history, read build logs, roll back, and tear the stack down.
 sidebar:
-  order: 8
+  order: 9
 ---
 
 Everything blogwright needs for day-2 work already lives in the environment's S3 bucket: the topology state, one manifest per build, and every source zip. The commands on this page read that record - check for drift, audit what deployed when, replay an earlier build, empty the site, or remove the stack entirely. Each command takes the environment positionally or via `--env`, defaulting to `production` (see [Environments](/guides/environments/)).
@@ -27,7 +27,7 @@ Every build the builder MicroVM runs - deploy or rollback, success or failure - 
 bw history
 ```
 
-On a TTY the table shows a status mark, a relative finish time (`3h ago`), the build duration, and a `← live` marker on the newest success. The plain form prints fixed columns - `hash status finished duration` - with ISO timestamps.
+On a TTY the table shows a status mark, a relative finish time (`3h ago`), the build duration, and a `← live` marker on the newest success. The plain form prints fixed columns - `hash status finished duration` - with ISO timestamps. In an [SSR environment](/guides/server-rendered-sites/) both forms add a `revision` column: the Web Function revision a hash was verified with, or `-` when it has none. Pick a hash with a revision to roll back without a rebuild.
 
 One corrupt manifest never takes down the whole listing: it's skipped with a `skipping unreadable manifest` warning and the rest still render. An environment with no builds yet prints `no deployments yet`.
 
@@ -69,6 +69,8 @@ Infrastructure, state, source zips, and build manifests all stay intact, so reco
 ## Tear everything down: `destroy --yes`
 
 `blogwright destroy [env] --yes` destroys the environment's entire resource graph and deletes the recorded state. The bucket is emptied and removed too, which takes the build artifacts and deployment history with it. The command refuses to run without `--yes`.
+
+The bucket is emptied version by version - every object version and delete marker, not just current objects - because an SSR environment's bucket is versioned and S3 refuses to delete a bucket that still holds any. The credentials running `destroy` therefore need `s3:ListBucketVersions` and `s3:DeleteObjectVersion` on the bucket, in static environments too. In an SSR environment, destroy also removes the Web Function, its role, log groups, origin access control and cache policy - but only while the `ssr` block is in the config; see [Switching modes](/guides/deploying/#switching-modes).
 
 ```sh
 bw destroy staging --yes

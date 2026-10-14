@@ -28,6 +28,123 @@ export interface SeoConfig {
 }
 
 /**
+ * Server-rendered site mode (`ssr`). Its presence turns the environment into a
+ * Lambda Web Function deployment: the MicroVM build's output directory is
+ * packaged, stored in the site bucket and published as an immutable Web
+ * Function revision that the site's CloudFront distribution serves as a
+ * private origin. Site-owned config, like `microvm`, `seo` and `paths` - its
+ * contract is the Web Functions spec page and `validateConfig` is its runtime
+ * enforcement.
+ */
+export interface SsrConfig {
+  /** Built output directory to package, repo-relative. Defaults to `paths.dist`. */
+  packageDir: string;
+  /** Entry file inside the package that starts the HTTP server. */
+  entryPoint: string;
+  /**
+   * Repo-relative directory of static browser assets to keep publishing to
+   * `site/`. Supplied together with `staticPaths`; when absent the build leaves
+   * `site/` untouched.
+   */
+  staticDir?: string | undefined;
+  /** CloudFront path patterns (each beginning `/`) served from S3, in order. */
+  staticPaths: string[];
+  /**
+   * Viewer header names included in the SSR cache key and forwarded to the
+   * application. Empty by default; `Authorization` is the usual entry.
+   */
+  cacheKeyHeaders: string[];
+  /**
+   * Literal environment variables baked into every revision. Never secrets;
+   * Lambda-reserved names are rejected at config load.
+   */
+  env: Record<string, string>;
+  /** Revision timeout in seconds (3-900). */
+  timeoutSeconds: number;
+  /** Concurrent requests each execution environment handles (1-128). */
+  maxConcurrencyPerEnvironment: number;
+}
+
+/** Lambda Web Function runtime id: Node.js 24 on Arm64, the only runtime offered. */
+export const WEB_FUNCTION_RUNTIME = 'nodejs24.x';
+
+/** Regions where Lambda Web Functions are available at launch. */
+export const WEB_FUNCTION_REGIONS: readonly string[] = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-2',
+  'ap-northeast-1',
+  'eu-west-1',
+];
+
+/**
+ * Environment variable names Lambda reserves on a Web Function revision. A
+ * config that tries to set one is rejected at load, naming the key, rather
+ * than by the API at deploy time.
+ */
+export const WEB_FUNCTION_RESERVED_ENV: readonly string[] = [
+  'AWS_ACCESS_KEY',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SECRET_KEY',
+  'AWS_SECURITY_TOKEN',
+  'AWS_SESSION_TOKEN',
+  'AWS_DEFAULT_REGION',
+  'AWS_REGION',
+  'AWS_LAMBDA_HTTP_ENDPOINT',
+  'AWS_LAMBDA_RUNTIME_API',
+  'AWS_LAMBDA_INITIALIZATION_TYPE',
+  'AWS_LAMBDA_FUNCTION_MEMORY_SIZE',
+  'AWS_LAMBDA_METADATA_API',
+  'AWS_LAMBDA_METADATA_TOKEN',
+  'AWS_LAMBDA_NODEJS_ENTRYPOINT',
+];
+
+/**
+ * Headers CloudFront owns or strips before the application sees a request, so
+ * listing one in `cacheKeyHeaders` cannot distinguish viewers (lowercased;
+ * matched case-insensitively). Names beginning `lambda-web-` are rejected too,
+ * by prefix.
+ */
+export const WEB_FUNCTION_CACHE_KEY_DENYLIST: readonly string[] = [
+  'host',
+  'accept-encoding',
+  'connection',
+  'keep-alive',
+  'upgrade',
+  'expect',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'proxy-connection',
+  'x-real-ip',
+  'x-http-method',
+  'x-http-method-override',
+  'x-method-override',
+];
+
+/** CloudFront's default quota for headers in one cache policy (confirmed live). */
+export const WEB_FUNCTION_CACHE_KEY_MAX_COUNT = 10;
+/** CloudFront's maximum length for one header name in a cache policy (confirmed live). */
+export const WEB_FUNCTION_CACHE_KEY_NAME_MAX_LENGTH = 128;
+/**
+ * CloudFront's cache-policy header-list quota, measured as the names joined by
+ * a comma. The API rejects a list whose joined length REACHES this number (a
+ * 1,023-character list is accepted, 1,024 is not), so validation rejects at
+ * the quota rather than above it - both confirmed against the live API.
+ */
+export const WEB_FUNCTION_CACHE_KEY_MAX_LENGTH = 1_024;
+
+/** `ssr.entryPoint` default: the runtime's own default entry file. */
+export const SSR_DEFAULT_ENTRY_POINT = 'index.js';
+/** `ssr.timeoutSeconds` default. */
+export const SSR_DEFAULT_TIMEOUT_SECONDS = 30;
+/** `ssr.maxConcurrencyPerEnvironment` default. */
+export const SSR_DEFAULT_MAX_CONCURRENCY = 64;
+
+/**
  * AT Protocol / standard.site publishing (see `blogwright pds`). Inert when
  * absent.
  *
@@ -104,6 +221,8 @@ export interface OpsConfig {
   retention: {
     microvmDays: number;
     cloudfrontDays: number;
+    /** Retention for the Web Function's own two log groups. */
+    webFunctionDays: number;
   };
   /** Extra path prefixes excluded from the source zip (on top of .gitignore). */
   sourceIgnore: string[];
@@ -131,6 +250,12 @@ export interface OpsConfig {
   seo: SeoConfig;
   /** standard.site publishing to the owner's AT Protocol PDS; disabled when absent. */
   pds?: PdsConfig | undefined;
+  /**
+   * Server-rendering mode. When present the environment is built and served as
+   * a Lambda Web Function instead of a purely static site; absent, every
+   * existing static contract applies unchanged.
+   */
+  ssr?: SsrConfig | undefined;
   /** Site-repo layout; the defaults match a stock Astro project. */
   paths: PathsConfig;
 }
@@ -150,6 +275,7 @@ export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
   retention: {
     microvmDays: 365,
     cloudfrontDays: 90,
+    webFunctionDays: 90,
   },
   sourceIgnore: ['.jj/', '.git/', 'node_modules/', 'dist/', '.astro/'],
   sourceInclude: [],
@@ -268,7 +394,7 @@ export function parseConfigDocument(text: string): {
   raw: Readonly<Record<string, unknown>>;
 } {
   const raw = JSON.parse(stripTrailingCommas(stripJsonComments(text))) as Record<string, unknown>;
-  const config = mergeConfig(raw as Partial<OpsConfig>);
+  const config = mergeConfig(raw as ConfigInput);
   return { config, raw };
 }
 
@@ -287,15 +413,28 @@ export function pluginBlock(raw: Readonly<Record<string, unknown>>, key: string)
   return raw[key];
 }
 
-export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
+/**
+ * What `mergeConfig` accepts: a partial `OpsConfig` whose `ssr` block may be
+ * spelled only as far as the operator wrote it - `normalizeSsrConfig` fills
+ * the defaults and enforces every field rule.
+ */
+export type ConfigInput = Omit<Partial<OpsConfig>, 'ssr'> & {
+  ssr?: Partial<SsrConfig> | undefined;
+};
+
+export function mergeConfig(raw: ConfigInput): OpsConfig {
   if (!raw.siteName) {
     throw new Error(
       'config.siteName is required - a stable lowercase slug used in every derived AWS resource name',
     );
   }
+  const paths: PathsConfig = { ...DEFAULT_CONFIG.paths, ...raw.paths };
+  // `ssr` is pulled out of the spread so its raw, partial block never reaches
+  // `OpsConfig` un-normalised.
+  const { ssr: rawSsr, ...rest } = raw;
   const cfg: OpsConfig = {
     ...DEFAULT_CONFIG,
-    ...raw,
+    ...rest,
     siteName: raw.siteName,
     microvm: {
       ...DEFAULT_CONFIG.microvm,
@@ -304,10 +443,210 @@ export function mergeConfig(raw: Partial<OpsConfig>): OpsConfig {
     },
     retention: { ...DEFAULT_CONFIG.retention, ...raw.retention },
     seo: { ...DEFAULT_CONFIG.seo, ...raw.seo },
-    paths: { ...DEFAULT_CONFIG.paths, ...raw.paths },
+    paths,
   };
+  // Normalised after `paths`, because `packageDir` defaults to `paths.dist`;
+  // assigned rather than spread so a malformed block cannot leak raw fields
+  // past validation.
+  const ssr = normalizeSsrConfig(rawSsr, paths.dist);
+  if (ssr) cfg.ssr = ssr;
   validateConfig(cfg);
   return cfg;
+}
+
+/** RFC 7230 token characters - what an HTTP header name may contain. */
+const HEADER_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** Environment variable name shape `ssr.env` accepts. */
+const ENV_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+
+/** Every key `ssr` declares; anything else in the block is a typo, not a setting. */
+const SSR_KEYS = new Set<string>([
+  'packageDir',
+  'entryPoint',
+  'staticDir',
+  'staticPaths',
+  'cacheKeyHeaders',
+  'env',
+  'timeoutSeconds',
+  'maxConcurrencyPerEnvironment',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Repo-relative path shape shared by `ssr.packageDir`/`ssr.staticDir`. */
+function repoRelativePath(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`config.${label} must be a non-empty repo-relative path`);
+  }
+  if (value.startsWith('/') || value.split('/').includes('..')) {
+    throw new Error(`config.${label} must be repo-relative without "..", got "${value}"`);
+  }
+  return value;
+}
+
+function integerInRange(value: unknown, label: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`config.${label} must be an integer in ${min}..${max}, got ${String(value)}`);
+  }
+  return value;
+}
+
+/**
+ * Validate a raw `ssr` block and fill its defaults, or return undefined when
+ * the key is absent. Runs before `OpsConfig` is assembled so a malformed block
+ * (`null`, an array, an unknown key) cannot survive the merge.
+ */
+function normalizeSsrConfig(raw: unknown, distDir: string): SsrConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) throw new Error('config.ssr must be an object');
+  for (const key of Object.keys(raw)) {
+    if (!SSR_KEYS.has(key)) throw new Error(`config.ssr has unknown key "${key}"`);
+  }
+
+  const packageDir =
+    raw.packageDir === undefined ? distDir : repoRelativePath(raw.packageDir, 'ssr.packageDir');
+
+  let entryPoint = SSR_DEFAULT_ENTRY_POINT;
+  if (raw.entryPoint !== undefined) {
+    const value = raw.entryPoint;
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new Error('config.ssr.entryPoint must be a non-empty relative path');
+    }
+    if (value.startsWith('/') || value.includes('\\') || value.split('/').includes('..')) {
+      throw new Error(
+        `config.ssr.entryPoint must be a "/"-separated relative path inside the package ` +
+          `without "..", got "${value}"`,
+      );
+    }
+    entryPoint = value;
+  }
+
+  let staticDir: string | undefined;
+  if (raw.staticDir !== undefined) {
+    staticDir = repoRelativePath(raw.staticDir, 'ssr.staticDir');
+  }
+
+  let staticPaths: string[] = [];
+  if (raw.staticPaths !== undefined) {
+    if (!Array.isArray(raw.staticPaths)) {
+      throw new Error('config.ssr.staticPaths must be an array of CloudFront path patterns');
+    }
+    staticPaths = raw.staticPaths.map((pattern: unknown, i: number) => {
+      if (typeof pattern !== 'string' || !pattern.startsWith('/')) {
+        throw new Error(
+          `config.ssr.staticPaths[${i}] must be a CloudFront path pattern beginning "/", ` +
+            `got ${JSON.stringify(pattern)}`,
+        );
+      }
+      return pattern;
+    });
+  }
+  if (staticDir !== undefined && staticPaths.length === 0) {
+    throw new Error('config.ssr.staticPaths is required when ssr.staticDir is set');
+  }
+  if (staticDir === undefined && staticPaths.length > 0) {
+    throw new Error('config.ssr.staticDir is required when ssr.staticPaths is set');
+  }
+
+  let cacheKeyHeaders: string[] = [];
+  if (raw.cacheKeyHeaders !== undefined) {
+    if (!Array.isArray(raw.cacheKeyHeaders)) {
+      throw new Error('config.ssr.cacheKeyHeaders must be an array of HTTP header names');
+    }
+    const seen = new Set<string>();
+    cacheKeyHeaders = raw.cacheKeyHeaders.map((name: unknown, i: number) => {
+      if (typeof name !== 'string' || !HEADER_TOKEN_PATTERN.test(name)) {
+        throw new Error(
+          `config.ssr.cacheKeyHeaders[${i}] must be an HTTP header name (RFC 7230 token), ` +
+            `got ${JSON.stringify(name)}`,
+        );
+      }
+      if (name.length > WEB_FUNCTION_CACHE_KEY_NAME_MAX_LENGTH) {
+        throw new Error(
+          `config.ssr.cacheKeyHeaders[${i}] is longer than CloudFront's ` +
+            `${WEB_FUNCTION_CACHE_KEY_NAME_MAX_LENGTH}-character header-name limit`,
+        );
+      }
+      const lower = name.toLowerCase();
+      if (seen.has(lower)) {
+        throw new Error(`config.ssr.cacheKeyHeaders lists "${name}" more than once`);
+      }
+      seen.add(lower);
+      const denied = lower.startsWith('lambda-web-')
+        ? lower
+        : WEB_FUNCTION_CACHE_KEY_DENYLIST.find((entry) => entry === lower);
+      if (denied !== undefined) {
+        throw new Error(
+          `config.ssr.cacheKeyHeaders cannot list "${name}": CloudFront owns or strips that ` +
+            'header before the application sees the request',
+        );
+      }
+      return name;
+    });
+    if (cacheKeyHeaders.length > WEB_FUNCTION_CACHE_KEY_MAX_COUNT) {
+      throw new Error(
+        `config.ssr.cacheKeyHeaders accepts at most ${WEB_FUNCTION_CACHE_KEY_MAX_COUNT} headers, ` +
+          `got ${cacheKeyHeaders.length}`,
+      );
+    }
+    if (cacheKeyHeaders.join(',').length >= WEB_FUNCTION_CACHE_KEY_MAX_LENGTH) {
+      throw new Error(
+        `config.ssr.cacheKeyHeaders exceeds CloudFront's ` +
+          `${WEB_FUNCTION_CACHE_KEY_MAX_LENGTH}-character cache-policy quota`,
+      );
+    }
+  }
+
+  let env: Record<string, string> = {};
+  if (raw.env !== undefined) {
+    if (!isRecord(raw.env)) throw new Error('config.ssr.env must be an object of string values');
+    env = {};
+    for (const [key, value] of Object.entries(raw.env)) {
+      if (!ENV_KEY_PATTERN.test(key)) {
+        throw new Error(
+          `config.ssr.env key "${key}" must match [A-Za-z][A-Za-z0-9_]* (no dashes or dots)`,
+        );
+      }
+      if (typeof value !== 'string' || value.length === 0) {
+        throw new Error(`config.ssr.env.${key} must be a non-empty string`);
+      }
+      if (WEB_FUNCTION_RESERVED_ENV.includes(key)) {
+        const hint =
+          key === 'AWS_LAMBDA_NODEJS_ENTRYPOINT'
+            ? ' - set config.ssr.entryPoint instead, so the two can never disagree'
+            : '';
+        throw new Error(`config.ssr.env.${key} is reserved by Lambda${hint}`);
+      }
+      env[key] = value;
+    }
+  }
+
+  const timeoutSeconds =
+    raw.timeoutSeconds === undefined
+      ? SSR_DEFAULT_TIMEOUT_SECONDS
+      : integerInRange(raw.timeoutSeconds, 'ssr.timeoutSeconds', 3, 900);
+  const maxConcurrencyPerEnvironment =
+    raw.maxConcurrencyPerEnvironment === undefined
+      ? SSR_DEFAULT_MAX_CONCURRENCY
+      : integerInRange(
+          raw.maxConcurrencyPerEnvironment,
+          'ssr.maxConcurrencyPerEnvironment',
+          1,
+          128,
+        );
+
+  return {
+    packageDir,
+    entryPoint,
+    ...(staticDir !== undefined ? { staticDir } : {}),
+    staticPaths,
+    cacheKeyHeaders,
+    env,
+    timeoutSeconds,
+    maxConcurrencyPerEnvironment,
+  };
 }
 
 function validateConfig(cfg: OpsConfig): void {
@@ -322,8 +661,26 @@ function validateConfig(cfg: OpsConfig): void {
   if (cfg.microvm.maxDurationSeconds < 1 || cfg.microvm.maxDurationSeconds > 28_800) {
     throw new Error('config.microvm.maxDurationSeconds must be in 1..28800');
   }
-  if (cfg.retention.microvmDays < 1 || cfg.retention.cloudfrontDays < 1) {
+  if (
+    cfg.retention.microvmDays < 1 ||
+    cfg.retention.cloudfrontDays < 1 ||
+    cfg.retention.webFunctionDays < 1
+  ) {
     throw new Error('config retention days must be positive');
+  }
+  if (cfg.ssr) {
+    if (cfg.spa) {
+      throw new Error(
+        'config.spa cannot be combined with config.ssr: a client-side-routed SPA has no ' +
+          'server to render it, so the two modes are mutually exclusive',
+      );
+    }
+    if (!WEB_FUNCTION_REGIONS.includes(cfg.region)) {
+      throw new Error(
+        `config.region must be one of ${WEB_FUNCTION_REGIONS.join(', ')} for a site with an ` +
+          `"ssr" block (Lambda Web Functions launch regions), got "${cfg.region}"`,
+      );
+    }
   }
   const robotsModes: RobotsMode[] = ['auto', 'index', 'noindex', 'off'];
   if (!robotsModes.includes(cfg.seo.robots)) {
@@ -376,6 +733,18 @@ export interface Names {
   oac: string;
   deliverySource: string;
   deliveryDestination: string;
+  /** Lambda Web Function serving the SSR app (SSR mode only). */
+  webFunction: string;
+  /** Execution role the Web Function assumes. */
+  webRole: string;
+  /** CloudWatch log group the Web Function's centralised logs land in. */
+  webLogGroup: string;
+  /** In-Region companion log group the runtime writes to first. */
+  webLocalLogGroup: string;
+  /** Origin access control signing CloudFront's requests to the endpoint. */
+  webOac: string;
+  /** CloudFront cache policy for the SSR default behavior. */
+  ssrCachePolicy: string;
 }
 
 /** Derive deterministic, environment-prefixed resource names. */
@@ -404,5 +773,11 @@ export function deriveNames(env: string, accountId: string, cfg: OpsConfig): Nam
     oac: `${prefix}-oac`,
     deliverySource: `${prefix}-cf-source`,
     deliveryDestination: `${prefix}-cf-dest`,
+    webFunction: `${prefix}-web`,
+    webRole: `${prefix}-web-role`,
+    webLogGroup: `/${cfg.siteName}/${env}/web`,
+    webLocalLogGroup: `/${cfg.siteName}/${env}/web.local`,
+    webOac: `${prefix}-web-oac`,
+    ssrCachePolicy: `${prefix}-ssr`,
   };
 }
