@@ -1,5 +1,65 @@
 # blogwright-core
 
+## 0.4.0-beta.5
+
+### Minor Changes
+
+- [#42](https://github.com/antstanley/blogwright/pull/42) [`fe9463d`](https://github.com/antstanley/blogwright/commit/fe9463d91f450225da11652c62a98ab72fcd8159) Thanks [@antstanley](https://github.com/antstanley)! - `ssr.shim` generates the SSR entry shim. Set `{ "host": "<VAR>", "port": "<VAR>" }` to the variables the framework's server reads its listen address from and point `ssr.entryPoint` at the framework's own server entry: the build adds `blogwright-entry.mjs` beside it, which copies the host and port from `AWS_LAMBDA_HTTP_ENDPOINT` into those variables before importing the entry, and the revision starts it. The build output is left untouched, and a hand-written shim keeps working without `shim`. The SSR examples now use it.
+
+- [#38](https://github.com/antstanley/blogwright/pull/38) [`b82fecc`](https://github.com/antstanley/blogwright/commit/b82fecc7ab78a53c4ca9099f56fc37fd2c5edb0d) Thanks [@antstanley](https://github.com/antstanley)! - Run a server-rendered Node framework on Lambda Web Functions. A new `ssr`
+  config block turns an environment from a static site into a Web Function
+  deployment: the MicroVM build's output directory is packaged as a deterministic
+  `.zip`, stored as a versioned object in the site bucket, and published as an
+  immutable revision that the site's existing CloudFront distribution serves as a
+  private origin - IAM-authorized and signed by a `lambda` origin access control,
+  with a Blogwright-managed cache policy that caches only responses the
+  application marks cacheable. `ssr.staticDir`/`staticPaths` keep publishing
+  browser assets to `site/` from S3 under `CachingOptimized`.
+
+  Deploys fingerprint the artifact digest and revision-scoped settings, so an
+  unchanged redeploy creates no revision; a deploy that cannot verify its
+  revision restores the previous one from its captured configuration and leaves
+  the cache and stale site keys alone. `blogwright rollback` reproduces a
+  recorded revision from its retained artifact and settings without a rebuild,
+  falling back to the build path when the artifact is gone, the manifest has no
+  `webFunction` block, or `ssr.staticDir` is configured. `bootstrap` refuses a
+  serving-mode switch without the new `--switch-mode`, and `deploy` and
+  `rollback` refuse until that bootstrap has run; `delete` and the preview verbs
+  refuse in SSR mode.
+
+  `blogwright history` gains a trailing `revision` column - the Web Function
+  revision each hash was verified with, or `-` - once any manifest records one;
+  static environments keep the existing columns unchanged.
+
+  Changes that reach static environments too: `destroy` now empties the bucket
+  version by version, so the credentials running it need `s3:ListBucketVersions`
+  and `s3:DeleteObjectVersion`; the bucket policy is merged statement by `Sid`
+  rather than replaced, so statements added outside Blogwright survive
+  `bootstrap`; and a new `retention.webFunctionDays` setting (default 90) sets
+  the Web Function log groups' retention, inert without `ssr`.
+
+  The builder MicroVM image now states `cpuConfigurations: [{ architecture:
+"ARM_64" }]` on every create and update - the only architecture the MicroVM API
+  accepts, and the one Lambda Web Functions run on - so native dependencies
+  compiled during a build match the runtime that serves them. Existing images are
+  already Arm64 and are not rebuilt for this.
+
+### Patch Changes
+
+- [#40](https://github.com/antstanley/blogwright/pull/40) [`1060d3b`](https://github.com/antstanley/blogwright/commit/1060d3b58a4ff3bc0798c2fad6eba0b958e4531c) Thanks [@antstanley](https://github.com/antstanley)! - Retry AWS requests that are throttled, for every resource and every method.
+  `SigningClient` previously retried a `POST` only on a network error, so a
+  create refused with `Throttling - Rate exceeded` - CloudFront's answer when
+  several bootstraps run against one account - failed the command at once, and
+  idempotent requests gave up after about three seconds. A throttle is refused
+  before AWS acts on it, so it is now retried for any method, including creates,
+  with its own budget: eight attempts with jittered exponential backoff from 1
+  second up to 20 seconds, about 36-71 seconds in all. Throttling is recognised
+  across services (`Throttling`, `ThrottlingException`, `TooManyRequestsException`,
+  S3's `SlowDown`, Route 53's `PriorRequestNotComplete`, any HTTP 429, and the
+  rest of the family); quota errors such as `LimitExceededException` are not
+  retried. A `POST` that fails with a 5xx is still never retried, and the backoff
+  for other transient failures is unchanged.
+
 ## 0.4.0-beta.4
 
 ### Patch Changes
