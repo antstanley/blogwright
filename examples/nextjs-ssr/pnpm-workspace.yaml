@@ -1,0 +1,9 @@
+# A workspace of its own, so pnpm treats this directory as the project root
+# even inside the blogwright repository.
+packages:
+  - .
+
+# Real files instead of pnpm's symlink tree: Next copies node_modules into
+# .next/standalone as it finds them, and Blogwright rejects a package that
+# contains a symbolic link.
+nodeLinker: hoisted

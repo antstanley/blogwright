@@ -10,7 +10,8 @@ dependency graph the CLI applies directly through signed AWS API calls.
 Works with any static site that installs and builds with pnpm: an Astro blog at
 the repo root, a SvelteKit/Vite SPA in a monorepo subdirectory, anything that
 ends in a directory of files to serve. With an `ssr` config block it also runs a
-Node server (Astro, SvelteKit `adapter-node`, Nuxt, Next standalone) as a
+Node server (Astro, SvelteKit `adapter-node`, Nuxt, TanStack Start, Next
+standalone) as a
 **Lambda Web Function** behind the same CloudFront distribution - see
 [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
 

@@ -184,8 +184,8 @@ Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown p
   "region": "us-east-1",
   "siteName": "example",
   "ssr": {
-    "packageDir": "dist/server",
-    "entryPoint": "lambda.mjs",
+    "packageDir": "dist",
+    "entryPoint": "server/lambda.mjs",
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
     // Only if cacheable responses vary by token:

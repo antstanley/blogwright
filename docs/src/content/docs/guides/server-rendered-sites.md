@@ -17,14 +17,16 @@ This is the [Astro recipe](#astro-node-standalone) below:
   "region": "us-east-1",
   "siteName": "example",
   "ssr": {
-    "packageDir": "dist/server",
-    "entryPoint": "lambda.mjs",
+    "packageDir": "dist",
+    "entryPoint": "server/lambda.mjs",
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
     // Add "cacheKeyHeaders": ["Authorization"] if cacheable responses vary by token.
   },
 }
 ```
+
+Every recipe on this page has a complete, buildable project in the repository's [`examples/`](https://github.com/antstanley/blogwright/tree/main/examples) directory, each checked by running its package the way Lambda does.
 
 ## Getting started
 
@@ -76,6 +78,8 @@ Point `ssr.entryPoint` at the shim. The deploy runs `pnpm build` in the MicroVM,
 { "scripts": { "build": "astro build && cp lambda.mjs dist/server/" } }
 ```
 
+The shim sits beside the framework's own entry so its relative import resolves inside the package; `entryPoint` is its path within `packageDir`.
+
 Each recipe below shows where its framework's built entry lands, which variables its shim sets, and how its build keeps server dependencies inside the package.
 
 ## Running the package locally
@@ -84,12 +88,12 @@ Lambda starts the entry file with `AWS_LAMBDA_HTTP_ENDPOINT` set and expects it 
 
 ```sh
 pnpm build
-cd dist/server            # ssr.packageDir
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+cp -R dist /tmp/pkg && cd /tmp/pkg                  # ssr.packageDir
+AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node server/lambda.mjs   # ssr.entryPoint
 curl -i http://127.0.0.1:8080/
 ```
 
-Run from inside the repository, Node still finds the workspace's `node_modules` in the parent directories, so a missing dependency does not show. To check that the package is self-contained, copy it somewhere outside the repository first (`cp -R dist/server /tmp/pkg`) and run it there.
+Copy the package out of the repository first: run in place, Node still finds the project's `node_modules` in the parent directories, so a missing dependency does not show. `find dist -type l` must print nothing - the build agent rejects a package that contains a symbolic link.
 
 ## The public origin
 
@@ -118,24 +122,26 @@ aws logs tail /<siteName>/<env>/web --follow
 
 ### Astro (node standalone)
 
-`output: 'server'` with `@astrojs/node` in `standalone` mode emits `dist/server/entry.mjs`, and `dist/client/` holds the browser assets. The shim and build script are the ones [above](#the-entry-shim).
+`output: 'server'` with `@astrojs/node` in `standalone` mode emits `dist/server/entry.mjs`, and `dist/client/` holds the browser assets. The shim and build script are the ones [above](#the-entry-shim). Example: [`examples/astro-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/astro-ssr).
 
 ```jsonc
 {
   "ssr": {
-    "packageDir": "dist/server",
-    "entryPoint": "lambda.mjs",
+    "packageDir": "dist",
+    "entryPoint": "server/lambda.mjs",
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg", "/robots.txt"],
   },
 }
 ```
 
-`dist/server/` imports Astro and your server dependencies from `node_modules` instead of bundling them, so a plain `astro build` is not self-contained. Either bundle them into the server output with `vite: { ssr: { noExternal: true } }` in `astro.config` (packages with native addons cannot be bundled and still need the second route), or install production dependencies into `dist/server/node_modules` as real files in the build script before the agent packages it - for example `npm install --omit=dev` against a copy of `package.json`, or pnpm with `node-linker=hoisted`.
+Package all of `dist/`, not `dist/server/`: the adapter finds its files by walking up from `entry.mjs` to a directory named `server`, and with `dist/server` as the package the entry sits at the archive root, so the server exits on start with `Could not find the server directory "server"`.
+
+`dist/server/` imports Astro and your server dependencies from `node_modules` instead of bundling them, so a plain `astro build` is not self-contained. Either bundle them into the server output with `vite: { ssr: { noExternal: true } }` in `astro.config` - the example does, and its package needs no `node_modules` - or, for packages that cannot be bundled such as native addons, install production dependencies into `dist/server/node_modules` as real files in the build script before the agent packages it.
 
 ### SvelteKit (`adapter-node`)
 
-`adapter-node` emits `build/`: `build/index.js` starts the server, `build/client/` holds the browser assets. The shim sets `HOST` and `PORT` as for Astro and imports `./index.js`.
+`adapter-node` emits `build/`: `build/index.js` starts the server, `build/client/` holds the browser assets. The shim sets `HOST` and `PORT` as for Astro and imports `./index.js`. Example: [`examples/sveltekit-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-ssr); the prerendered and single-page modes are [`sveltekit-ssg`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-ssg) and [`sveltekit-spa`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-spa).
 
 ```jsonc
 {
@@ -149,18 +155,14 @@ aws logs tail /<siteName>/<env>/web --follow
 ```
 
 ```json
-{
-  "scripts": {
-    "build": "vite build && cp lambda.mjs build/ && echo '{\"type\":\"module\"}' > build/package.json"
-  }
-}
+{ "scripts": { "build": "vite build && cp lambda.mjs build/" } }
 ```
 
-`build/` is self-contained only for what the adapter bundles: it bundles `devDependencies` and leaves `dependencies` as imports, and it writes no `package.json` (the one above tells Node the output is ES modules). Either list every runtime package under `devDependencies`, or install `dependencies` into `build/node_modules` as real files in the build script. Set the [public origin](#the-public-origin) too, or form actions fail.
+`build/` is self-contained only for what the adapter bundles: it bundles `devDependencies` and leaves `dependencies` as imports. Either list every runtime package under `devDependencies`, as the example does, or install `dependencies` into `build/node_modules` as real files in the build script. Set the [public origin](#the-public-origin) too, or form actions fail.
 
 ### Nuxt (Nitro node-server preset)
 
-`nitro.preset: 'node-server'` emits `.output/server/index.mjs` with `.output/public` for the client. Nitro reads `NITRO_HOST`/`NITRO_PORT` (and `HOST`/`PORT`); the port is only known at runtime, so map the endpoint onto those in the shim rather than `ssr.env`, and import `./index.mjs`.
+`nitro.preset: 'node-server'` emits `.output/server/index.mjs` with `.output/public` for the client. Nitro reads `NITRO_HOST`/`NITRO_PORT` (and `HOST`/`PORT`); the port is only known at runtime, so map the endpoint onto those in the shim rather than `ssr.env`, and import `./index.mjs`. Example: [`examples/nuxt-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/nuxt-ssr).
 
 ```jsonc
 {
@@ -175,9 +177,26 @@ aws logs tail /<siteName>/<env>/web --follow
 
 Nitro's output is bundled and self-contained; the client assets are fingerprinted under `/_nuxt/`.
 
+### TanStack Start (Nitro)
+
+TanStack Start builds through Nitro's Vite plugin. With `nitro({ preset: 'node-server' })` after `tanstackStart()` in `vite.config.ts`, `vite build` emits `.output/server/index.mjs` and `.output/public` - the same layout and the same `NITRO_HOST`/`NITRO_PORT` shim as Nuxt. Example: [`examples/tanstack-start-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/tanstack-start-ssr).
+
+```jsonc
+{
+  "ssr": {
+    "packageDir": ".output/server",
+    "entryPoint": "lambda.mjs",
+    "staticDir": ".output/public",
+    "staticPaths": ["/assets/*", "/favicon.svg"],
+  },
+}
+```
+
+The server output is bundled and self-contained; the client assets are fingerprinted under `/assets/`.
+
 ### Next.js (standalone output)
 
-`output: 'standalone'` emits `.next/standalone/server.js`, a server plus the `node_modules` files it traced. Next reads `PORT` and `HOSTNAME`, so the shim maps the endpoint onto those and imports `./server.js`:
+`output: 'standalone'` emits `.next/standalone/server.js`, a server plus the `node_modules` files it traced. Next reads `PORT` and `HOSTNAME`, so the shim maps the endpoint onto those and imports `./server.js`. Example: [`examples/nextjs-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/nextjs-ssr).
 
 ```js
 // lambda.mjs
@@ -209,7 +228,9 @@ The standalone output leaves out `public/` and `.next/static/`. The simplest rou
 
 To serve them from S3 instead, `staticDir` must mirror the URL layout: have the build copy `.next/static` to `.next/s3/_next/static` (and `public/` into `.next/s3/`), then set `"staticDir": ".next/s3"` and `"staticPaths": ["/_next/static/*"]`. Pointing `staticDir` at `.next/static` itself publishes `/chunks/…` instead of `/_next/static/chunks/…`.
 
-Under pnpm, the traced `node_modules` in `.next/standalone` can contain symbolic links, which the build agent rejects; set `node-linker=hoisted` in `.npmrc` so the build installs real files. In a monorepo, Next nests the app under its workspace path (`.next/standalone/apps/web/server.js`) - put the shim beside `server.js` and point `entryPoint` at it. Set the [public origin](#the-public-origin) if the app uses Server Actions.
+Under pnpm's default linker, Next copies the symlinks of pnpm's `node_modules` tree into `.next/standalone`, and the build agent rejects them. Set `nodeLinker: hoisted` in `pnpm-workspace.yaml` so the build installs, and Next copies, real files.
+
+Next traces from the root it infers from the nearest lockfile, so in a monorepo - or any project with a lockfile in a parent directory - it nests the app under its path (`.next/standalone/apps/web/server.js`). Set `outputFileTracingRoot: import.meta.dirname` in `next.config` to keep `server.js` at the package root, or put the shim beside the nested `server.js` and point `entryPoint` at it. Set the [public origin](#the-public-origin) if the app uses Server Actions.
 
 ## Caching
 

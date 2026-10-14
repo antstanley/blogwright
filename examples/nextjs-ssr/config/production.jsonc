@@ -1,0 +1,12 @@
+// Blogwright config for this example. Paths are relative to the repository
+// root, so they assume this directory IS the repository - see README.md.
+{
+  "region": "us-east-1",
+  "siteName": "nextjs-ssr",
+  "ssr": {
+    // Next serves public/ and /_next/static/ itself (the build copies them into
+    // the package), so there is no staticDir.
+    "packageDir": ".next/standalone",
+    "entryPoint": "lambda.mjs",
+  },
+}

@@ -1,0 +1,4 @@
+# A workspace of its own, so pnpm treats this directory as the project root
+# even inside the blogwright repository.
+packages:
+  - .

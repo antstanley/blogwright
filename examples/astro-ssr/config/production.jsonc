@@ -1,0 +1,14 @@
+// Blogwright config for this example. Paths are relative to the repository
+// root, so they assume this directory IS the repository - see README.md.
+{
+  "region": "us-east-1",
+  "siteName": "astro-ssr",
+  "ssr": {
+    // The whole of dist/: @astrojs/node finds its files by walking up to a
+    // directory named "server", so the package must keep dist/'s layout.
+    "packageDir": "dist",
+    "entryPoint": "server/lambda.mjs",
+    "staticDir": "dist/client",
+    "staticPaths": ["/_astro/*", "/favicon.svg"],
+  },
+}

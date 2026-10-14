@@ -1,0 +1,15 @@
+{
+  "name": "blogwright-example-astro-ssr",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build && cp lambda.mjs dist/server/",
+    "preview": "astro preview"
+  },
+  "devDependencies": {
+    "@astrojs/node": "^11.1.7",
+    "astro": "^7.3.8"
+  }
+}

@@ -1,0 +1,12 @@
+// Blogwright config for this example. Paths are relative to the repository
+// root, so they assume this directory IS the repository - see README.md.
+{
+  "region": "us-east-1",
+  "siteName": "tanstack-start-ssr",
+  "ssr": {
+    "packageDir": ".output/server",
+    "entryPoint": "lambda.mjs",
+    "staticDir": ".output/public",
+    "staticPaths": ["/assets/*", "/favicon.svg"],
+  },
+}
