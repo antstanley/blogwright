@@ -1,0 +1,12 @@
+// Blogwright config for this example. Paths are relative to the repository
+// root, so they assume this directory IS the repository - see README.md.
+{
+  "region": "us-east-1",
+  "siteName": "sveltekit-ssr",
+  "ssr": {
+    "packageDir": "build",
+    "entryPoint": "lambda.mjs",
+    "staticDir": "build/client",
+    "staticPaths": ["/_app/*", "/favicon.svg"],
+  },
+}

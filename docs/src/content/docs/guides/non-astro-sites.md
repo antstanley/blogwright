@@ -18,6 +18,8 @@ pnpm run build
 
 Both commands run in `paths.app`. The install uses `--frozen-lockfile`, so a committed `pnpm-lock.yaml` is required, and `--prod=false` forces a full install - the builder image bakes `NODE_ENV=production` (right for the build itself), but under it pnpm would skip `devDependencies`, which is where static sites keep their build tooling (astro, vite, tailwind).
 
+pnpm comes from corepack, so the version is the one your `package.json` names in `packageManager`. pnpm 11 fails an install that meets a dependency build script nobody approved (`ERR_PNPM_IGNORED_BUILDS`), in the builder as much as locally - list the ones your project needs under `allowBuilds` in `pnpm-workspace.yaml` (esbuild's is the common one).
+
 After the build, the agent syncs `paths.dist` to the bucket's `site/` prefix. See [Deploying](/guides/deploying/) for the full pipeline.
 
 ## Building in a subdirectory: `paths.app` and `paths.dist`
@@ -41,6 +43,18 @@ A SvelteKit SPA living in `web/` inside a monorepo:
 
 Both values must be repo-relative without `..`, and both are resolved strictly inside the build's work directory - the config is rejected otherwise. The source zip always contains the whole repo (the VCS file listing, minus `sourceIgnore` prefixes), so a workspace app can still install shared packages from the monorepo root.
 
+## Prerendered pages need directory URLs
+
+The viewer-request function resolves a URL without a file extension to a directory index: `/about` and `/about/` both fetch `/about/index.html`. It never tries `/about.html`. Astro's default static output already writes `about/index.html`; SvelteKit's `adapter-static` writes `about.html` unless the page sets `trailingSlash`:
+
+```js
+// src/routes/+layout.js
+export const prerender = true;
+export const trailingSlash = 'always'; // writes /about as about/index.html
+```
+
+Without it, every prerendered page other than `/` answers `404`. Give `adapter-static` `fallback: '404.html'` to emit the page the distribution answers misses with. Complete projects: [`examples/sveltekit-ssg`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-ssg), [`examples/astro-static`](https://github.com/antstanley/blogwright/tree/main/examples/astro-static).
+
 ## SPA mode: `spa: true`
 
 The site is served from the private S3 REST endpoint through CloudFront (via Origin Access Control), and a viewer-request function resolves directory URLs to their index document (`/projects/` → `/projects/index.html`). A client-side route like `/settings/profile` has no object in S3, so the origin answers 403/404.
@@ -48,7 +62,7 @@ The site is served from the private S3 REST endpoint through CloudFront (via Ori
 What CloudFront does with that miss is decided by `spa` (default `false`):
 
 - **`spa: false`** - origin 403/404 responses map to the site's `/404.html` with a 404 status.
-- **`spa: true`** - they map to `/index.html` with a **200**, so deep links into client-side routes load the app and let its router take over.
+- **`spa: true`** - they map to `/index.html` with a **200**, so deep links into client-side routes load the app and let its router take over. A SvelteKit SPA therefore uses `adapter-static` with `fallback: 'index.html'` and `export const ssr = false` in its root layout - see [`examples/sveltekit-spa`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-spa).
 
 :::caution
 The error-response mapping is applied to the main CloudFront distribution **when it is created**. Set `spa: true` before running `bootstrap`.

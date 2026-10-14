@@ -1,0 +1,9 @@
+// Blogwright config for this example. Paths are relative to the repository
+// root, so they assume this directory IS the repository - see README.md.
+{
+  "region": "us-east-1",
+  "siteName": "sveltekit-spa",
+  "paths": { "dist": "build" },
+  // Set before the first bootstrap: misses answer /index.html with a 200.
+  "spa": true,
+}

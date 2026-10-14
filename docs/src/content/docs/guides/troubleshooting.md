@@ -196,15 +196,19 @@ Use the newest hash with a revision id in `history`'s `revision` column - `rollb
 
 ### `SSR package contains a symbolic link at <path>`
 
-Lambda loads nothing that is not in the archive, and pnpm's default `node_modules` is a symlink tree - so the package is not self-contained. Make your build copy production dependencies into the package as real files (or bundle the server), rather than shipping a package that merely sits beside the build's `node_modules`. See [Server-rendered sites](/guides/server-rendered-sites/).
+Lambda loads nothing that is not in the archive, and pnpm's default `node_modules` is a symlink tree - so the package is not self-contained. Make your build copy production dependencies into the package as real files (or bundle the server), rather than shipping a package that merely sits beside the build's `node_modules`. For Next.js standalone output, set `nodeLinker: hoisted` in `pnpm-workspace.yaml`: Next copies pnpm's symlinks into the package as it finds them. See [Server-rendered sites](/guides/server-rendered-sites/).
 
 ### `SSR package entry point "<entry>" does not exist under <dir>`
 
-The build did not emit `ssr.entryPoint` inside `ssr.packageDir`. Check both: the framework's output directory (`dist/server`, `build`, `.output/server`, `.next/standalone`) and the shim your build writes inside it. If the shim is emitted by a postbuild step, make sure that step runs before the agent packages the output.
+The build did not emit `ssr.entryPoint` inside `ssr.packageDir`. Check both: the framework's output directory (`dist` for Astro, `build`, `.output/server`, `.next/standalone`) and the shim your build writes inside it. If the shim is emitted by a postbuild step, make sure that step runs before the agent packages the output.
 
 ### `SSR package is <n> MB unzipped, over Lambda's 512 MB limit`
 
 The packaged server output exceeds the deployment-package limit. Keep build output and caches out of `packageDir`, or split static assets into `staticDir` so only the server is packaged.
+
+### `Could not find the server directory "server"` (Astro)
+
+`@astrojs/node` finds its own files by walking up from `entry.mjs` to a directory named `server`. With `ssr.packageDir` set to `dist/server` the entry sits at the archive root and the walk finds nothing, so the server exits before it listens. Package all of `dist` with `"entryPoint": "server/lambda.mjs"` - see the [Astro recipe](/guides/server-rendered-sites/#astro-node-standalone).
 
 ### The SSR server never starts listening
 

@@ -19,8 +19,10 @@ repo root, or a SvelteKit/Vite SPA in a monorepo subdirectory - and, with an
 build output is packaged as an immutable **Lambda Web Function** revision behind
 the site's existing CloudFront distribution, with a private, origin-access-
 controlled endpoint and a cache policy that caches exactly what the application
-marks cacheable (Astro SSR, SvelteKit `adapter-node`, Nuxt and Next standalone -
+marks cacheable (Astro SSR, SvelteKit `adapter-node`, Nuxt, TanStack Start and Next
+standalone -
 see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/)).
+Buildable starting points for each, static and SSR, are in [`examples/`](examples/).
 The CLI talks to AWS by SigV4-signing raw HTTP requests and models the
 infrastructure as a reconcilable dependency graph. Deploys are incremental: only
 changed files are re-uploaded and only the changed CloudFront paths are

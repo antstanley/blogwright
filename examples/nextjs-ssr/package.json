@@ -1,0 +1,15 @@
+{
+  "name": "blogwright-example-nextjs-ssr",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/ && cp lambda.mjs .next/standalone/"
+  },
+  "dependencies": {
+    "next": "^16.4.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

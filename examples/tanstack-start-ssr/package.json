@@ -1,0 +1,23 @@
+{
+  "name": "blogwright-example-tanstack-start-ssr",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build && cp lambda.mjs .output/server/"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.170.44",
+    "@tanstack/react-start": "^1.169.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "nitro": "3.0.260903-beta",
+    "vite": "^8.3.4"
+  }
+}

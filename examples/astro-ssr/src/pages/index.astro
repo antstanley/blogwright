@@ -1,0 +1,16 @@
+---
+// Rendered on every request: the timestamp changes on each reload.
+Astro.response.headers.set('cache-control', 'no-store');
+const renderedAt = new Date().toISOString();
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="/favicon.svg" />
+    <title>Astro on Lambda Web Functions</title>
+  </head>
+  <body>
+    <h1>Astro on Lambda Web Functions</h1>
+    <p>Rendered on the server at <time>{renderedAt}</time>.</p>
+  </body>
+</html>
