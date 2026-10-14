@@ -11,6 +11,7 @@ import {
   SigningClient,
   type AwsCredentials,
   type CredentialProvider,
+  type EntryShim,
 } from 'blogwright-core';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 
@@ -24,6 +25,8 @@ interface WebFunctionJob {
   packageDir: string;
   /** Entry file inside the package; must exist. */
   entryPoint: string;
+  /** Generated entry shim to add to the package beside the entry, when `ssr.shim` is set. */
+  shim?: EntryShim | undefined;
   /** Repo-relative directory of static browser assets to publish, when configured. */
   staticDir?: string | undefined;
   /** S3 key the package is uploaded to (`web/artifacts/<hash>.zip`). */
@@ -409,11 +412,13 @@ async function walkPackageFiles(
 
 /**
  * Zip the built package with its contents at the archive root and a fixed
- * timestamp, so identical output produces identical bytes.
+ * timestamp, so identical output produces identical bytes. A generated entry
+ * shim is added to the archive only; the build output on disk is untouched.
  */
 export async function packageWebFunction(
   packageDir: string,
   entryPoint: string,
+  shim?: EntryShim,
 ): Promise<{ zip: Uint8Array; size: number }> {
   const entryPath = join(packageDir, ...entryPoint.split('/'));
   let entry: Awaited<ReturnType<typeof lstat>>;
@@ -422,7 +427,10 @@ export async function packageWebFunction(
   } catch {
     throw new Error(
       `SSR package entry point "${entryPoint}" does not exist under ${packageDir}; ` +
-        'the build must emit it (a consumer-owned entry shim is the usual way)',
+        (shim
+          ? "the build must emit it (with ssr.shim set, it is the framework's server entry the " +
+            'generated shim imports)'
+          : 'the build must emit it (a consumer-owned entry shim, or ssr.shim, is the usual way)'),
     );
   }
   if (!entry.isFile()) {
@@ -430,9 +438,18 @@ export async function packageWebFunction(
   }
 
   const files = await walkPackageFiles(packageDir);
+  const shimBytes = shim ? new TextEncoder().encode(shim.source) : undefined;
+  if (shim && files.some((file) => file.rel === shim.path)) {
+    throw new Error(
+      `SSR package already contains ${shim.path}, the path of the entry shim generated from ` +
+        'config.ssr.shim: remove the build step that emits it, or drop ssr.shim and point ' +
+        'ssr.entryPoint at your own shim',
+    );
+  }
   // Sized from the walk, before anything is read: an oversized package must
   // fail with this message, not by exhausting the builder's memory first.
-  const unzipped = files.reduce((total, file) => total + file.size, 0);
+  const unzipped =
+    files.reduce((total, file) => total + file.size, 0) + (shimBytes?.byteLength ?? 0);
   if (unzipped > MAX_PACKAGE_BYTES) {
     throw new Error(
       `SSR package is ${(unzipped / (1024 * 1024)).toFixed(1)} MB unzipped, over Lambda's ` +
@@ -443,6 +460,7 @@ export async function packageWebFunction(
   for (const file of files) {
     entries[file.rel] = new Uint8Array(await readFile(file.path));
   }
+  if (shim && shimBytes) entries[shim.path] = shimBytes;
   const zip = zipSync(entries, { level: 6, mtime: REPRODUCIBLE_ZIP_MTIME });
   return { zip, size: unzipped };
 }
@@ -573,7 +591,8 @@ export async function publishBuild(
   // set) - upload-only, because the revision still serving references keys this
   // build would otherwise remove.
   const packageDir = resolveWithin(workDir, job.packageDir, 'packageDir');
-  const { zip, size } = await packageWebFunction(packageDir, job.entryPoint);
+  const { zip, size } = await packageWebFunction(packageDir, job.entryPoint, job.shim);
+  if (job.shim) log(`added entry shim ${job.shim.path} (starts ${job.entryPoint})`);
   const digest = createHash('sha256').update(zip).digest('hex');
   const versionId = await s3.putObject(payload.bucket, job.artifactKey, zip, 'application/zip');
   log(

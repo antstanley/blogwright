@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 
 import {
   pollUntil,
+  runtimeEntryPoint,
   WEB_FUNCTION_RUNTIME,
   type RawResponse,
   type SsrConfig,
@@ -81,14 +82,16 @@ function endpointDomain(ctx: OpsContext): string {
  * The revision-scoped settings as sent: the resolved environment carries
  * `NODE_ENV=production` unless `ssr.env` overrides it, and
  * `AWS_LAMBDA_NODEJS_ENTRYPOINT` whenever the entry point is not the runtime's
- * `index.js` default.
+ * `index.js` default. With `ssr.shim` set, the entry point is the generated
+ * shim, which starts `ssr.entryPoint` itself.
  */
 export function revisionSettings(ctx: OpsContext): RevisionSettings {
   const config = requireSsr(ctx);
+  const entryPoint = runtimeEntryPoint(config);
   const env: Record<string, string> = { NODE_ENV: 'production', ...config.env };
-  if (config.entryPoint !== 'index.js') env['AWS_LAMBDA_NODEJS_ENTRYPOINT'] = config.entryPoint;
+  if (entryPoint !== 'index.js') env['AWS_LAMBDA_NODEJS_ENTRYPOINT'] = entryPoint;
   return {
-    entryPoint: config.entryPoint,
+    entryPoint,
     env,
     timeoutSeconds: config.timeoutSeconds,
     maxConcurrencyPerEnvironment: config.maxConcurrencyPerEnvironment,

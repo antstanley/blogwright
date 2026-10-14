@@ -1,8 +1,15 @@
-import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { AwsError, type S3Client } from 'blogwright-core';
+import {
+  AwsError,
+  entryShim,
+  mergeConfig,
+  type S3Client,
+  type SsrShimConfig,
+} from 'blogwright-core';
 import { unzipSync } from 'fflate';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -284,6 +291,30 @@ describe('packageWebFunction', () => {
     );
   });
 
+  it('adds a generated entry shim to the archive without writing it to the package', async () => {
+    const dir = join(root, 'pkg-shim');
+    await mkdir(join(dir, 'server'), { recursive: true });
+    await writeFile(join(dir, 'server', 'entry.mjs'), 'export {};');
+    const shim = { path: 'server/blogwright-entry.mjs', source: "await import('./entry.mjs');\n" };
+
+    const { zip, size } = await packageWebFunction(dir, 'server/entry.mjs', shim);
+    const files = unzipSync(zip);
+    expect(Object.keys(files).sort()).toEqual(['server/blogwright-entry.mjs', 'server/entry.mjs']);
+    expect(new TextDecoder().decode(files['server/blogwright-entry.mjs'])).toBe(shim.source);
+    expect(size).toBe('export {};'.length + shim.source.length);
+    await expect(readdir(join(dir, 'server'))).resolves.toEqual(['entry.mjs']);
+  });
+
+  it('fails when the build already emits a file at the shim path', async () => {
+    const dir = join(root, 'pkg-shim-clash');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'index.js'), '');
+    await writeFile(join(dir, 'blogwright-entry.mjs'), '');
+    await expect(
+      packageWebFunction(dir, 'index.js', { path: 'blogwright-entry.mjs', source: '' }),
+    ).rejects.toThrow(/already contains blogwright-entry\.mjs/);
+  });
+
   it('fails naming the path when the package contains a symbolic link', async () => {
     const dir = join(root, 'pkg-link');
     await mkdir(join(dir, 'node_modules'), { recursive: true });
@@ -303,6 +334,74 @@ describe('packageWebFunction', () => {
     await writeFile(join(dir, 'big.bin'), '');
     await truncate(join(dir, 'big.bin'), MAX_PACKAGE_BYTES + 1);
     await expect(packageWebFunction(dir, 'index.js')).rejects.toThrow(/over Lambda's 512 MB limit/);
+  });
+});
+
+/*
+ * The generated entry shim run the way Lambda runs it: the package is zipped,
+ * unpacked into a clean directory, and Node starts the shim with
+ * AWS_LAMBDA_HTTP_ENDPOINT set; the entry it imports reports what it was given.
+ */
+describe('generated entry shim at runtime', () => {
+  let root = '';
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'ssr-shim-'));
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function startPackage(
+    shimBlock: SsrShimConfig,
+    endpoint: string | undefined,
+  ): Promise<{ status: number | null; stdout: string; stderr: string }> {
+    const ssr = mergeConfig({
+      siteName: 'example',
+      region: 'us-east-1',
+      ssr: { entryPoint: 'server/index.mjs', shim: shimBlock },
+    }).ssr;
+    const shim = ssr && entryShim(ssr);
+    if (!ssr || !shim) throw new Error('fixture has no shim');
+    const built = await mkdtemp(join(root, 'built-'));
+    await mkdir(join(built, 'server'), { recursive: true });
+    await writeFile(
+      join(built, 'server', 'index.mjs'),
+      'console.log(JSON.stringify({ host: process.env.NITRO_HOST, port: process.env.NITRO_PORT }));\n',
+    );
+    const { zip } = await packageWebFunction(built, ssr.entryPoint, shim);
+
+    const unpacked = await mkdtemp(join(root, 'unpacked-'));
+    for (const [path, bytes] of Object.entries(unzipSync(zip))) {
+      await mkdir(dirname(join(unpacked, path)), { recursive: true });
+      await writeFile(join(unpacked, path), bytes);
+    }
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH };
+    if (endpoint !== undefined) env.AWS_LAMBDA_HTTP_ENDPOINT = endpoint;
+    return spawnSync(process.execPath, [shim.path], { cwd: unpacked, env, encoding: 'utf8' });
+  }
+
+  it('maps the endpoint host and port onto the configured variables, then starts the entry', async () => {
+    const result = await startPackage({ host: 'NITRO_HOST', port: 'NITRO_PORT' }, '127.0.0.1:8080');
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({ host: '127.0.0.1', port: '8080' });
+  });
+
+  it('splits an IPv6 endpoint at its last colon and unbrackets the host', async () => {
+    const result = await startPackage({ host: 'NITRO_HOST', port: 'NITRO_PORT' }, '[::1]:9000');
+    expect(JSON.parse(result.stdout)).toEqual({ host: '::1', port: '9000' });
+  });
+
+  it('leaves the host variable alone when only a port is configured', async () => {
+    const result = await startPackage({ port: 'NITRO_PORT' }, '127.0.0.1:8080');
+    expect(JSON.parse(result.stdout)).toEqual({ port: '8080' });
+  });
+
+  it('fails naming the variable when Lambda did not set it', async () => {
+    const result = await startPackage({ port: 'NITRO_PORT' }, undefined);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('AWS_LAMBDA_HTTP_ENDPOINT is not set');
   });
 });
 

@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 import {
   AwsError,
+  entryShim,
   networkConnectors,
   pollUntil,
   sleep,
+  type EntryShim,
   type LogEvent,
   type Microvm,
   type RunMicrovmInput,
@@ -85,6 +87,8 @@ export function artifactKeys(hash: string): { artifactKey: string; resultKey: st
 export interface WebFunctionJob {
   packageDir: string;
   entryPoint: string;
+  /** The generated entry shim the agent adds to the package, when `ssr.shim` is set. */
+  shim?: EntryShim | undefined;
   staticDir?: string | undefined;
   artifactKey: string;
   resultKey: string;
@@ -95,9 +99,11 @@ export function webFunctionJob(ctx: OpsContext, hash: string): WebFunctionJob {
   const ssr = ctx.config.ssr;
   if (!ssr) throw new Error(`environment "${ctx.env}" has no config.ssr block`);
   const { artifactKey, resultKey } = artifactKeys(hash);
+  const shim = entryShim(ssr);
   return {
     packageDir: ssr.packageDir,
     entryPoint: ssr.entryPoint,
+    ...(shim !== undefined ? { shim } : {}),
     ...(ssr.staticDir !== undefined ? { staticDir: ssr.staticDir } : {}),
     artifactKey,
     resultKey,

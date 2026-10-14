@@ -7,6 +7,7 @@ SvelteKit with `adapter-node`, running on Lambda Web Functions.
 - `vite.config.js` - `adapter-node`, and `paths.origin`, the public origin. The app receives the endpoint's domain as `Host`, so without it SvelteKit's CSRF check rejects form actions (`Cross-site POST form submissions are forbidden`). Replace `https://example.com` with your domain.
 - `package.json` - every package is a `devDependency`, so `adapter-node` bundles it into `build/` and the package needs no `node_modules`. A package listed under `dependencies` stays an import and would have to be installed into `build/node_modules` as real files.
 - `lambda.mjs` - the entry shim: maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOST` and `PORT` and imports `index.js`. The build copies it into `build/`.
+  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "index.js"` with `"shim": { "host": "HOST", "port": "PORT" }` in the `ssr` block. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
 - `config/production.jsonc` - packages `build/`; `staticDir`/`staticPaths` publish the fingerprinted `/_app/` assets to S3.
 
 ## Deploy it

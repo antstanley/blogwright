@@ -7,7 +7,7 @@ sidebar:
 
 An `ssr` block turns the environment from a static site into a server-rendered one. The MicroVM build is unchanged; its output directory is packaged as a `.zip`, stored as a versioned object in the site bucket, and published as an immutable **Lambda Web Function revision**. The site's existing CloudFront distribution serves the endpoint as a private origin - IAM-authorized and signed by an origin access control - with a cache policy that caches exactly what the application marks cacheable. Static browser assets may still be published to `site/` and served from the existing S3 origin.
 
-The application must be a standard port-listening Node HTTP server: it reads the host and port from `AWS_LAMBDA_HTTP_ENDPOINT` and starts listening. Blogwright does not rewrite, adapt or wrap it - frameworks that read their own listen variables need a small consumer-owned entry shim, documented below per framework.
+The application must be a standard port-listening Node HTTP server that listens on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`. Blogwright does not rewrite or adapt it. Most frameworks read their own listen variables instead, so they need a small [entry shim](#the-entry-shim) that copies the address across. Blogwright generates the shim when you name those variables in `ssr.shim`, or your build can emit its own.
 
 This is the [Astro recipe](#astro-node-standalone) below:
 
@@ -18,7 +18,8 @@ This is the [Astro recipe](#astro-node-standalone) below:
   "siteName": "example",
   "ssr": {
     "packageDir": "dist",
-    "entryPoint": "server/lambda.mjs",
+    "entryPoint": "server/entry.mjs",
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg"],
     // Add "cacheKeyHeaders": ["Authorization"] if cacheable responses vary by token.
@@ -30,7 +31,7 @@ Every recipe on this page has a complete, buildable project in [Examples](/examp
 
 ## Getting started
 
-1. Add the `ssr` block, and make your `pnpm build` emit the entry shim and a self-contained package (the [recipes](#recipes) show both per framework). [Run the package locally](#running-the-package-locally) once to check it starts.
+1. Add the `ssr` block, with `shim` naming the variables your framework's server reads, and make your `pnpm build` emit a self-contained package (the [recipes](#recipes) show both per framework). [Run the package locally](#running-the-package-locally) once to check it starts.
 2. Bootstrap. A new environment needs `blogwright bootstrap <env>`; an existing static one needs `blogwright bootstrap <env> --switch-mode`, after which the site answers `503` from a placeholder revision until step 3 finishes. Bootstrap creates the Web Function, its role and log groups, the origin access control and cache policy, and enables versioning on the bucket.
 3. `blogwright deploy <env>` publishes the first real revision.
 
@@ -41,7 +42,8 @@ Every recipe on this page has a complete, buildable project in [Examples](/examp
 | Field | Default | What it does |
 | --- | --- | --- |
 | `packageDir` | `paths.dist` | Built output directory to package, repo-relative. |
-| `entryPoint` | `index.js` | Entry file inside the package that starts the HTTP server. |
+| `entryPoint` | `index.js` | Entry file inside the package that starts the HTTP server. With `shim` set, this is the framework's own server entry. |
+| `shim` | none | `{ "host": "<VAR>", "port": "<VAR>" }`: the variables the server reads its listen address from. Blogwright then generates the [entry shim](#the-entry-shim). `port` is required; omit `host` for a server that reads only a port. |
 | `staticDir` | none | Repo-relative directory of static assets to keep publishing to `site/`. Each file is published at its path relative to `staticDir`, so the directory must mirror the URL layout: `staticDir/_astro/a.js` serves `/_astro/a.js`. Supplied with `staticPaths`; with neither, `site/` is left untouched. |
 | `staticPaths` | `[]` | CloudFront path patterns (each beginning `/`) served from S3, in the order configured. Required with `staticDir`. |
 | `cacheKeyHeaders` | `[]` | Viewer headers added to the SSR cache key. Every viewer header except `Host` reaches the application whether listed or not. `Authorization` is the usual entry. |
@@ -53,7 +55,7 @@ Every recipe on this page has a complete, buildable project in [Examples](/examp
 
 ## What must be true of the package
 
-- The entry file exists at `ssr.entryPoint` inside the package and starts an HTTP server on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`. The build agent checks the first; only the readiness probe can check the second.
+- The entry file exists at `ssr.entryPoint` inside the package and starts an HTTP server on the host and port in `AWS_LAMBDA_HTTP_ENDPOINT`, either directly or through the generated shim. The build agent checks the first; only the readiness probe can check the second.
 - The package is **self-contained**: Lambda loads nothing that is not in the archive. Framework-bundled output, or a directory your build has copied production dependencies into as real files. The build agent fails, naming the path, when the package contains a symbolic link - and pnpm's default `node_modules` is a symlink tree, so a package that merely sits beside the build's `node_modules` is not self-contained.
 - The unzipped package is at most 512 MB.
 
@@ -61,7 +63,46 @@ The archive holds the package directory's contents at its root, with a fixed tim
 
 ## The entry shim
 
-Lambda tells the process where to listen through one variable. Frameworks that read their own variable need a shim, which your build copies into the package:
+Lambda tells the process where to listen through one variable, `AWS_LAMBDA_HTTP_ENDPOINT` (`127.0.0.1:8080`, for example). Most framework servers read their own variables instead. A shim copies the address across and then starts the server.
+
+### Generated by Blogwright
+
+Name the variables in `ssr.shim` and point `entryPoint` at the framework's own server entry:
+
+```jsonc
+{
+  "ssr": {
+    "packageDir": "dist",
+    "entryPoint": "server/entry.mjs",
+    "shim": { "host": "HOST", "port": "PORT" },
+  },
+}
+```
+
+The build agent adds `blogwright-entry.mjs` to the package beside `entryPoint`, and the revision starts it in place of the entry. For the config above, the generated file is:
+
+```js
+// server/blogwright-entry.mjs
+const endpoint = process.env.AWS_LAMBDA_HTTP_ENDPOINT;
+if (!endpoint) throw new Error('AWS_LAMBDA_HTTP_ENDPOINT is not set');
+const colon = endpoint.lastIndexOf(':');
+const host = endpoint.slice(0, colon).replace(/^\[(.*)\]$/, '$1');
+process.env["HOST"] = host;
+process.env["PORT"] = endpoint.slice(colon + 1);
+await import("./entry.mjs");
+```
+
+Your build script needs no extra step: the shim is added to the archive only, not written into your build output. The build fails if the package already contains a file at that path. Omit `host` for a server that reads only a port and binds every interface by default.
+
+Config validation rejects these `shim` values:
+
+- a variable name that is reserved by Lambda;
+- the same name for both `host` and `port`;
+- a name `ssr.env` also sets, because the shim would overwrite that value at start.
+
+### Written by your build
+
+To control the shim yourself, leave `shim` out, write the file, and have the build copy it into the package. Point `ssr.entryPoint` at it:
 
 ```js
 // lambda.mjs - Astro's standalone server reads HOST and PORT
@@ -72,25 +113,31 @@ process.env.PORT = endpoint.slice(colon + 1);
 await import('./entry.mjs');
 ```
 
-Point `ssr.entryPoint` at the shim. The deploy runs `pnpm build` in the MicroVM, so the copy belongs in that script:
+The deploy runs `pnpm build` in the MicroVM, so the copy belongs in that script:
 
 ```json
 { "scripts": { "build": "astro build && cp lambda.mjs dist/server/" } }
 ```
 
-The shim sits beside the framework's own entry so its relative import resolves inside the package; `entryPoint` is its path within `packageDir`.
+The shim sits beside the framework's own entry so its relative import resolves inside the package; `entryPoint` is its path within `packageDir`. The [examples](/examples/overview/) use this form.
 
-Each recipe below shows where its framework's built entry lands, which variables its shim sets, and how its build keeps server dependencies inside the package.
+Each recipe below shows where its framework's built entry lands, which variables its server reads, and how its build keeps server dependencies inside the package.
 
 ## Running the package locally
 
-Lambda starts the entry file with `AWS_LAMBDA_HTTP_ENDPOINT` set and expects it to listen within 10 seconds. Doing the same locally catches a wrong shim before a deploy does:
+Lambda starts the entry file with `AWS_LAMBDA_HTTP_ENDPOINT` set and expects it to listen within 10 seconds. Doing the same locally catches a wrong shim before a deploy does. With a shim your build writes:
 
 ```sh
 pnpm build
 cp -R dist /tmp/pkg && cd /tmp/pkg                  # ssr.packageDir
 AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node server/lambda.mjs   # ssr.entryPoint
 curl -i http://127.0.0.1:8080/
+```
+
+The generated shim is not in your build output, so with `ssr.shim` set, start `entryPoint` with the variables the shim would set:
+
+```sh
+HOST=127.0.0.1 PORT=8080 node server/entry.mjs      # the names in ssr.shim
 ```
 
 Copy the package out of the repository first: run in place, Node still finds the project's `node_modules` in the parent directories, so a missing dependency does not show. `find dist -type l` must print nothing - the build agent rejects a package that contains a symbolic link.
@@ -144,13 +191,14 @@ It needs Node.js 22 or later, which Blogwright already requires. Press Ctrl+C to
 
 ### Astro (node standalone)
 
-`output: 'server'` with `@astrojs/node` in `standalone` mode emits `dist/server/entry.mjs`, and `dist/client/` holds the browser assets. The shim and build script are the ones [above](#the-entry-shim). Example: [`examples/astro-ssr`](/examples/astro-ssr/).
+`output: 'server'` with `@astrojs/node` in `standalone` mode emits `dist/server/entry.mjs`, and `dist/client/` holds the browser assets. The server reads `HOST` and `PORT`. Example: [`examples/astro-ssr`](/examples/astro-ssr/).
 
 ```jsonc
 {
   "ssr": {
     "packageDir": "dist",
-    "entryPoint": "server/lambda.mjs",
+    "entryPoint": "server/entry.mjs",
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "dist/client",
     "staticPaths": ["/_astro/*", "/favicon.svg", "/robots.txt"],
   },
@@ -163,34 +211,32 @@ Package all of `dist/`, not `dist/server/`: the adapter finds its files by walki
 
 ### SvelteKit (`adapter-node`)
 
-`adapter-node` emits `build/`: `build/index.js` starts the server, `build/client/` holds the browser assets. The shim sets `HOST` and `PORT` as for Astro and imports `./index.js`. Example: [`examples/sveltekit-ssr`](/examples/sveltekit-ssr/); the prerendered and single-page modes are [`sveltekit-ssg`](/examples/sveltekit-ssg/) and [`sveltekit-spa`](/examples/sveltekit-spa/).
+`adapter-node` emits `build/`: `build/index.js` starts the server, `build/client/` holds the browser assets. The server reads `HOST` and `PORT`. Example: [`examples/sveltekit-ssr`](/examples/sveltekit-ssr/); the prerendered and single-page modes are [`sveltekit-ssg`](/examples/sveltekit-ssg/) and [`sveltekit-spa`](/examples/sveltekit-spa/).
 
 ```jsonc
 {
   "ssr": {
     "packageDir": "build",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.js",
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "build/client",
     "staticPaths": ["/_app/*", "/favicon.png"],
   },
 }
 ```
 
-```json
-{ "scripts": { "build": "vite build && cp lambda.mjs build/" } }
-```
-
 `build/` is self-contained only for what the adapter bundles: it bundles `devDependencies` and leaves `dependencies` as imports. Either list every runtime package under `devDependencies`, as the example does, or install `dependencies` into `build/node_modules` as real files in the build script. Set the [public origin](#the-public-origin) too, or form actions fail.
 
 ### Nuxt (Nitro node-server preset)
 
-`nitro.preset: 'node-server'` emits `.output/server/index.mjs` with `.output/public` for the client. Nitro reads `NITRO_HOST`/`NITRO_PORT` (and `HOST`/`PORT`); the port is only known at runtime, so map the endpoint onto those in the shim rather than `ssr.env`, and import `./index.mjs`. Example: [`examples/nuxt-ssr`](/examples/nuxt-ssr/).
+`nitro.preset: 'node-server'` emits `.output/server/index.mjs` with `.output/public` for the client. Nitro reads `NITRO_HOST`/`NITRO_PORT` (and `HOST`/`PORT`); the port is only known at runtime, so map the endpoint onto those with `shim` rather than `ssr.env`. Example: [`examples/nuxt-ssr`](/examples/nuxt-ssr/).
 
 ```jsonc
 {
   "ssr": {
     "packageDir": ".output/server",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.mjs",
+    "shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" },
     "staticDir": ".output/public",
     "staticPaths": ["/_nuxt/*", "/favicon.ico"],
   },
@@ -201,13 +247,14 @@ Nitro's output is bundled and self-contained; the client assets are fingerprinte
 
 ### TanStack Start (Nitro)
 
-TanStack Start builds through Nitro's Vite plugin. With `nitro({ preset: 'node-server' })` after `tanstackStart()` in `vite.config.ts`, `vite build` emits `.output/server/index.mjs` and `.output/public` - the same layout and the same `NITRO_HOST`/`NITRO_PORT` shim as Nuxt. Example: [`examples/tanstack-start-ssr`](/examples/tanstack-start-ssr/).
+TanStack Start builds through Nitro's Vite plugin. With `nitro({ preset: 'node-server' })` after `tanstackStart()` in `vite.config.ts`, `vite build` emits `.output/server/index.mjs` and `.output/public` - the same layout and the same `NITRO_HOST`/`NITRO_PORT` mapping as Nuxt. Example: [`examples/tanstack-start-ssr`](/examples/tanstack-start-ssr/).
 
 ```jsonc
 {
   "ssr": {
     "packageDir": ".output/server",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.mjs",
+    "shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" },
     "staticDir": ".output/public",
     "staticPaths": ["/assets/*", "/favicon.svg"],
   },
@@ -218,23 +265,14 @@ The server output is bundled and self-contained; the client assets are fingerpri
 
 ### Next.js (standalone output)
 
-`output: 'standalone'` emits `.next/standalone/server.js`, a server plus the `node_modules` files it traced. Next reads `PORT` and `HOSTNAME`, so the shim maps the endpoint onto those and imports `./server.js`. Example: [`examples/nextjs-ssr`](/examples/nextjs-ssr/).
-
-```js
-// lambda.mjs
-const endpoint = process.env.AWS_LAMBDA_HTTP_ENDPOINT;
-const colon = endpoint.lastIndexOf(':');
-process.env.HOSTNAME = endpoint.slice(0, colon);
-process.env.PORT = endpoint.slice(colon + 1);
-await import('./server.js');
-```
+`output: 'standalone'` emits `.next/standalone/server.js`, a server plus the `node_modules` files it traced. Next reads `HOSTNAME` and `PORT`. Example: [`examples/nextjs-ssr`](/examples/nextjs-ssr/).
 
 The standalone output leaves out `public/` and `.next/static/`. The simplest route copies them into the package so Next serves them; Next marks `/_next/static/` responses immutable, so CloudFront caches them like any other cacheable response:
 
 ```json
 {
   "scripts": {
-    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/ && cp lambda.mjs .next/standalone/"
+    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/"
   }
 }
 ```
@@ -243,7 +281,8 @@ The standalone output leaves out `public/` and `.next/static/`. The simplest rou
 {
   "ssr": {
     "packageDir": ".next/standalone",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "server.js",
+    "shim": { "host": "HOSTNAME", "port": "PORT" },
   },
 }
 ```
@@ -252,7 +291,7 @@ To serve them from S3 instead, `staticDir` must mirror the URL layout: have the 
 
 Under pnpm's default linker, Next copies the symlinks of pnpm's `node_modules` tree into `.next/standalone`, and the build agent rejects them. Set `nodeLinker: hoisted` in `pnpm-workspace.yaml` so the build installs, and Next copies, real files.
 
-Next traces from the root it infers from the nearest lockfile, so in a monorepo - or any project with a lockfile in a parent directory - it nests the app under its path (`.next/standalone/apps/web/server.js`). Set `outputFileTracingRoot: import.meta.dirname` in `next.config` to keep `server.js` at the package root, or put the shim beside the nested `server.js` and point `entryPoint` at it. Set the [public origin](#the-public-origin) if the app uses Server Actions.
+Next traces from the root it infers from the nearest lockfile, so in a monorepo - or any project with a lockfile in a parent directory - it nests the app under its path (`.next/standalone/apps/web/server.js`). Set `outputFileTracingRoot: import.meta.dirname` in `next.config` to keep `server.js` at the package root, or point `entryPoint` at the nested `server.js`; the generated shim goes beside it. Set the [public origin](#the-public-origin) if the app uses Server Actions.
 
 ## Caching
 
@@ -277,7 +316,7 @@ Fingerprint your static asset names (Astro's `/_astro/`, SvelteKit's `/_app/`, N
 
 ## Revision-scoped settings
 
-`entryPoint`, `env`, `timeoutSeconds` and `maxConcurrencyPerEnvironment` take effect at the next deploy, which creates a revision whenever any of them changed even if the built output did not. Changing them does not restart the running revision, and `bootstrap` never cuts one.
+`entryPoint`, `shim`, `env`, `timeoutSeconds` and `maxConcurrencyPerEnvironment` take effect at the next deploy, which creates a revision whenever any of them changed even if the built output did not. Changing them does not restart the running revision, and `bootstrap` never cuts one.
 
 ## Limits
 

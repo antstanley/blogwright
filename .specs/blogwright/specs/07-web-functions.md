@@ -36,7 +36,8 @@ unknown keys inside the block, null, arrays and malformed values are rejected
 | Field | Validation | Default |
 | --- | --- | --- |
 | `packageDir` | Repo-relative, non-empty, no `..` segments | `paths.dist` |
-| `entryPoint` | Non-empty relative path inside the package, `/` separators, no `..`, no leading `/` | `index.js` |
+| `entryPoint` | Non-empty relative path inside the package, `/` separators, no `..`, no leading `/`; with `shim` set, its file name is not `blogwright-entry.mjs` | `index.js` |
+| `shim` | Object with required `port` and optional `host`, unknown keys rejected; each an `[A-Za-z][A-Za-z0-9_]*` name, not Lambda-reserved, not also a key of `env`, and the two distinct | none |
 | `staticDir` | Repo-relative, no `..`; must be supplied together with `staticPaths` | none |
 | `staticPaths` | Non-empty array of CloudFront path patterns, each beginning `/`; required with `staticDir` | `[]` |
 | `cacheKeyHeaders` | HTTP header names (RFC 7230 tokens), no case-insensitive duplicates, at most 10, at most 128 characters each, joined list strictly under 1,024 characters, none on the denylist | `[]` |
@@ -73,6 +74,18 @@ process.env.PORT = port;
 await import('./entry.mjs');
 ```
 
+With `ssr.shim` set, blogwright generates that shim instead, and `entryPoint`
+names the framework's own server entry. `"shim": { "host": "HOST", "port": "PORT" }`
+with `"entryPoint": "server/entry.mjs"` produces `server/blogwright-entry.mjs`
+(`SSR_SHIM_FILE`, always beside the entry, so the entry's relative imports and
+directory walks resolve as when it is started directly). The shim fails at start
+when `AWS_LAMBDA_HTTP_ENDPOINT` is unset, splits it at the last `:`, strips the
+brackets from an IPv6 host, sets the named variables (the host only when `host`
+is configured) and imports the entry. The CLI generates the source
+(`entryShim` in `packages/core/src/entry-shim.ts`) and passes it in the pending
+job, so the agent only adds bytes it was given. A `shim` variable that `env` also
+sets is rejected because the shim would overwrite the literal value at start.
+
 The example also assumes the site's build leaves its server dependencies inside
 `dist/`; the build and package contract below says what self-contained requires.
 
@@ -105,7 +118,7 @@ rather than by the API at deploy time: `AWS_ACCESS_KEY`, `AWS_ACCESS_KEY_ID`,
 (`WEB_FUNCTION_RESERVED_ENV`). `AWS_LAMBDA_NODEJS_ENTRYPOINT` is rejected too,
 with a message pointing at `entryPoint`, so the two can never disagree.
 
-Revision-scoped fields (`entryPoint`, `env`, `timeoutSeconds`,
+Revision-scoped fields (`entryPoint`, `shim`, `env`, `timeoutSeconds`,
 `maxConcurrencyPerEnvironment`) take effect at the next deploy, which creates
 a revision whenever any of them changed even if the built output did not.
 Changing them does not restart the running revision, and `bootstrap` never
@@ -144,6 +157,9 @@ dependencies as real files. The builder installs with pnpm, whose default
 build's `node_modules` is not self-contained. The agent fails the build, naming
 the path, when the package contains a symbolic link, rather than archiving a
 tree that cannot load. It also fails when the unzipped package exceeds 512 MB.
+When the job carries a generated shim, the agent adds it to the archive only,
+never to the build output on disk, counts it toward the 512 MB bound, and fails
+naming the path when the package already contains a file there.
 
 The artifact is uploaded to `web/artifacts/<hash>.zip`; its version id, sha256
 digest, size and stale site keys are written to `web/results/<hash>.json`
@@ -159,8 +175,10 @@ A file that keeps its name across builds is overwritten at upload time, before
 the new revision serves, so fingerprinted asset names are the only ones that
 switch together with the server. Every revision carries `NODE_ENV=production`
 unless `ssr.env` supplies its own value, and
-`AWS_LAMBDA_NODEJS_ENTRYPOINT` whenever `entryPoint` is not `index.js` (the
-runtime's default).
+`AWS_LAMBDA_NODEJS_ENTRYPOINT` whenever the file the runtime starts is not
+`index.js` (the runtime's default). That file is the generated shim when
+`ssr.shim` is set, and `entryPoint` otherwise; the recorded `settings.entryPoint`
+is the same file.
 
 ## Infrastructure
 
@@ -435,7 +453,7 @@ were read back from the service, and `destroy` left no resource behind.
 
 `floci` does not emulate `lambda-web`, so the client, the nodes and the deploy
 contract stay covered by transport-level mocks in the suite: config boundaries, the
-cache-header denylist and reserved `env` keys, each node's read/create/update/
+cache-header denylist and reserved `env` keys, the `shim` rules, each node's read/create/update/
 delete, the placeholder package, the bucket-policy statement's actions/resource/
 condition, the builder roles' `web/` grants, the distribution XML for both
 modes, reconcile convergence against a pushed document, the `--switch-mode`
@@ -446,7 +464,9 @@ restore, unreachable-probe, unfinished-publish and stale-key paths, the CI
 role's function-scoped grants, the verified block a failed
 outcome keeps, rollback from recorded settings and each of its
 rebuild conditions, `deleteAllVersions`, the builder image payload, and the
-agent's entry/symlink/size failures.
+agent's entry/symlink/size failures. The generated shim is also run under Node
+from an unpacked archive, checking the variables it sets for IPv4 and IPv6
+endpoints, a port-only shim, and its failure when the endpoint is unset.
 
 ## Open questions
 

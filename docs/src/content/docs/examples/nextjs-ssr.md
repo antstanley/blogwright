@@ -43,6 +43,7 @@ Next.js with `output: 'standalone'`, running on a Lambda Web Function. Next serv
 - `next.config.js` - `output: 'standalone'`, and `outputFileTracingRoot` pinned to this directory. Without it Next infers the root from the nearest lockfile above the project, and inside a larger repository nests the server at `.next/standalone/<path>/server.js`.
 - `package.json` - the build copies `public/` and `.next/static/` into the standalone package (Next leaves them out), plus the shim. Next serves `/_next/static/` as `immutable`, so CloudFront caches it like any other cacheable response.
 - `lambda.mjs` - the entry shim. It maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOSTNAME` and `PORT`, then imports `server.js`.
+  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "server.js"` with `"shim": { "host": "HOSTNAME", "port": "PORT" }` in the `ssr` block. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
 - `config/production.jsonc` - packages `.next/standalone`, with no `staticDir`. If the app uses Server Actions, add your domain to `serverActions.allowedOrigins`: the app receives the endpoint's domain as `Host`.
 
 ## The files

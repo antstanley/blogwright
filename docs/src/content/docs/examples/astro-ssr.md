@@ -43,6 +43,7 @@ Astro with `@astrojs/node` in standalone mode, running on a Lambda Web Function.
 - `astro.config.mjs` - `output: 'server'`, the Node adapter in `standalone` mode, and `vite.ssr.noExternal: true`, which bundles every dependency into `dist/server` so the package needs no `node_modules`.
 - `site` in `astro.config.mjs` is the public origin. The app receives the endpoint's domain as `Host`, so build absolute URLs from `Astro.site`.
 - `lambda.mjs` - the entry shim. It maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOST` and `PORT`, then imports `entry.mjs`. The build copies it into `dist/server/`.
+  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "server/entry.mjs"` with `"shim": { "host": "HOST", "port": "PORT" }` in the `ssr` block. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
 
 ## The files
 

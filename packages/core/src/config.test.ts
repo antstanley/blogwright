@@ -365,6 +365,40 @@ describe('ssr config', () => {
     ).toThrow(/entryPoint instead/);
   });
 
+  it('accepts ssr.shim listen variables, with host optional', () => {
+    expect(
+      parseConfig(withSite('{ "ssr": { "shim": { "host": "HOST", "port": "PORT" } } }')).ssr?.shim,
+    ).toEqual({ host: 'HOST', port: 'PORT' });
+    expect(parseConfig(withSite('{ "ssr": { "shim": { "port": "PORT" } } }')).ssr?.shim).toEqual({
+      port: 'PORT',
+    });
+    expect(parseConfig(withSite('{ "ssr": {} }')).ssr?.shim).toBeUndefined();
+  });
+
+  it('rejects a malformed ssr.shim', () => {
+    const shim =
+      (block: string, extra = ''): (() => unknown) =>
+      () =>
+        parseConfig(withSite(`{ "ssr": { "shim": ${block}${extra} } }`));
+    for (const block of ['null', '"PORT"', '[]']) {
+      expect(shim(block)).toThrow(/ssr\.shim must be an object/);
+    }
+    expect(shim('{ "host": "HOST" }')).toThrow(/ssr\.shim\.port is required/);
+    expect(shim('{ "port": "PORT", "hots": "HOST" }')).toThrow(/unknown key "hots"/);
+    expect(shim('{ "port": "HAS-DASH" }')).toThrow(/shim\.port must be an environment variable/);
+    expect(shim('{ "port": 8080 }')).toThrow(/shim\.port must be an environment variable/);
+    expect(shim('{ "port": "PORT", "host": "PORT" }')).toThrow(/must differ/);
+    expect(shim('{ "port": "AWS_LAMBDA_HTTP_ENDPOINT" }')).toThrow(/reserved by Lambda/);
+    expect(shim('{ "port": "PORT" }', ', "env": { "PORT": "3000" }')).toThrow(
+      /names "PORT", which ssr\.env also sets/,
+    );
+    // An inherited property name is not an ssr.env key.
+    expect(shim('{ "port": "toString" }')).not.toThrow();
+    expect(shim('{ "port": "PORT" }', ', "entryPoint": "server/blogwright-entry.mjs"')).toThrow(
+      /cannot be named "blogwright-entry\.mjs"/,
+    );
+  });
+
   it('bounds timeoutSeconds and maxConcurrencyPerEnvironment one below/at/above', () => {
     const parse = (timeout: number, concurrency: number): unknown =>
       parseConfig(
