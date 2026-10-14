@@ -169,7 +169,7 @@ It falls back to re-running the MicroVM build when the manifest has no `webFunct
 
 To turn an existing static environment into an SSR one:
 
-1. Add the `ssr` block to the environment's config, and the entry shim and packaging steps to your build ([Server-rendered sites](/guides/server-rendered-sites/)).
+1. Add the `ssr` block to the environment's config, with `ssr.shim` for the entry shim, and the packaging steps to your build ([Server-rendered sites](/guides/server-rendered-sites/)).
 2. `blogwright bootstrap <env> --switch-mode` - creates the Web Function, its role, log groups, origin access control and cache policy, and moves the distribution's default behavior to the endpoint, which answers `503` from a placeholder revision until step 3 finishes.
 3. `blogwright deploy <env>` - publishes the first real revision.
 

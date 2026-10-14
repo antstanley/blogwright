@@ -119,7 +119,7 @@ The deploy runs `pnpm build` in the MicroVM, so the copy belongs in that script:
 { "scripts": { "build": "astro build && cp lambda.mjs dist/server/" } }
 ```
 
-The shim sits beside the framework's own entry so its relative import resolves inside the package; `entryPoint` is its path within `packageDir`. The [examples](/examples/overview/) use this form.
+The shim sits beside the framework's own entry so its relative import resolves inside the package; `entryPoint` is its path within `packageDir`. The [examples](/examples/overview/) use the generated shim instead.
 
 Each recipe below shows where its framework's built entry lands, which variables its server reads, and how its build keeps server dependencies inside the package.
 

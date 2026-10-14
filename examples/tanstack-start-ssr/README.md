@@ -6,8 +6,7 @@ TanStack Start (React) built through Nitro's `node-server` preset, running on La
 
 - `vite.config.ts` - the `tanstackStart()` plugin, then `nitro({ preset: 'node-server' })`, which writes a standalone server to `.output/server` and the browser assets to `.output/public`, then React's plugin.
 - `src/routes/index.tsx` - a server function supplies the render timestamp, so the page proves it ran on the server.
-- `lambda.mjs` - the entry shim: maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `NITRO_HOST` and `NITRO_PORT` and imports `index.mjs`. The build copies it into `.output/server/`.
-  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "index.mjs"` with `"shim": { "host": "NITRO_HOST", "port": "NITRO_PORT" }` in the `ssr` block. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
+- `ssr.shim` in `config/production.jsonc` - Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`, and Nitro's node-server reads `NITRO_HOST` and `NITRO_PORT`. With `shim` naming them, Blogwright adds an entry shim beside `index.mjs` that copies the address across, so the build needs no shim file or copy step. See [the entry shim](https://blogwright.iamstan.dev/guides/server-rendered-sites/#the-entry-shim).
 - `pnpm-workspace.yaml` - `allowBuilds` approves esbuild's install script, which pnpm 11 otherwise fails the install on.
 - `config/production.jsonc` - packages `.output/server`; `staticDir`/`staticPaths` publish the fingerprinted `/assets/` to S3.
 
@@ -21,16 +20,16 @@ pnpm exec blogwright bootstrap
 pnpm exec blogwright deploy
 ```
 
-Edit `siteName` and `region` in `config/production.jsonc` first (`region` must be a Web Function launch region). Commit `pnpm-lock.yaml`: the builder installs with `--frozen-lockfile`. SSR needs a Blogwright release with the `ssr` config block; see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
+Edit `siteName` and `region` in `config/production.jsonc` first (`region` must be a Web Function launch region). Commit `pnpm-lock.yaml`: the builder installs with `--frozen-lockfile`. SSR needs a Blogwright release with the `ssr` config block and `ssr.shim`; see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
 
 ## Check the package locally
 
-Run it the way Lambda does - from a copy outside the repository, so nothing resolves from the project's own `node_modules`:
+Run it the way Lambda does - from a copy outside the repository, so nothing resolves from the project's own `node_modules`. The generated shim is not in the build output, so set the variables it would:
 
 ```sh
 pnpm build
 cp -R .output/server /tmp/pkg && cd /tmp/pkg
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+NITRO_HOST=127.0.0.1 NITRO_PORT=8080 node index.mjs
 curl -i http://127.0.0.1:8080/
 ```
 

@@ -41,9 +41,8 @@ Next.js with `output: 'standalone'`, running on a Lambda Web Function. Next serv
 
 - `pnpm-workspace.yaml` - `nodeLinker: hoisted`. Next copies traced `node_modules` entries into `.next/standalone` as it finds them, so pnpm's default symlink tree would come through as symbolic links, which the build agent rejects.
 - `next.config.js` - `output: 'standalone'`, and `outputFileTracingRoot` pinned to this directory. Without it Next infers the root from the nearest lockfile above the project, and inside a larger repository nests the server at `.next/standalone/<path>/server.js`.
-- `package.json` - the build copies `public/` and `.next/static/` into the standalone package (Next leaves them out), plus the shim. Next serves `/_next/static/` as `immutable`, so CloudFront caches it like any other cacheable response.
-- `lambda.mjs` - the entry shim. It maps `AWS_LAMBDA_HTTP_ENDPOINT` onto `HOSTNAME` and `PORT`, then imports `server.js`.
-  Blogwright can generate this shim instead: delete `lambda.mjs` and the build step that copies it, and set `"entryPoint": "server.js"` with `"shim": { "host": "HOSTNAME", "port": "PORT" }` in the `ssr` block. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
+- `package.json` - the build copies `public/` and `.next/static/` into the standalone package (Next leaves them out). Next serves `/_next/static/` as `immutable`, so CloudFront caches it like any other cacheable response.
+- `ssr.shim` in `config/production.jsonc` - Lambda passes the listen address in `AWS_LAMBDA_HTTP_ENDPOINT`, and Next's standalone server reads `HOSTNAME` and `PORT`. With `shim` naming them, Blogwright adds an entry shim beside `server.js` that copies the address across, so the build needs no shim file or copy step. See [the entry shim](/guides/server-rendered-sites/#the-entry-shim).
 - `config/production.jsonc` - packages `.next/standalone`, with no `staticDir`. If the app uses Server Actions, add your domain to `serverActions.allowedOrigins`: the app receives the endpoint's domain as `Host`.
 
 ## The files
@@ -58,7 +57,10 @@ Next.js with `output: 'standalone'`, running on a Lambda Web Function. Next serv
     // Next serves public/ and /_next/static/ itself (the build copies them into
     // the package), so there is no staticDir.
     "packageDir": ".next/standalone",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "server.js",
+    // Blogwright generates the entry shim: Next's standalone server reads
+    // HOSTNAME and PORT.
+    "shim": { "host": "HOSTNAME", "port": "PORT" },
   },
 }
 ```
@@ -73,16 +75,6 @@ export default {
   // even when the project sits inside a larger repository.
   outputFileTracingRoot: import.meta.dirname,
 };
-```
-
-```js title="lambda.mjs"
-// Entry shim for Lambda Web Functions. Lambda passes the listen address in
-// AWS_LAMBDA_HTTP_ENDPOINT; Next's standalone server reads HOSTNAME and PORT.
-const endpoint = process.env.AWS_LAMBDA_HTTP_ENDPOINT;
-const colon = endpoint.lastIndexOf(':');
-process.env.HOSTNAME = endpoint.slice(0, colon);
-process.env.PORT = endpoint.slice(colon + 1);
-await import('./server.js');
 ```
 
 ```yaml title="pnpm-workspace.yaml"
@@ -105,7 +97,7 @@ nodeLinker: hoisted
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "next dev",
-    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/ && cp lambda.mjs .next/standalone/"
+    "build": "next build && cp -R public .next/standalone/ && cp -R .next/static .next/standalone/.next/"
   },
   "dependencies": {
     "next": "^16.4.0",
@@ -117,12 +109,12 @@ nodeLinker: hoisted
 
 ## Check the package locally
 
-Run it the way Lambda does - from a copy outside the project, so nothing resolves from its own `node_modules`:
+Run it the way Lambda does - from a copy outside the project, so nothing resolves from its own `node_modules`. The generated shim is not in the build output, so set the variables it would:
 
 ```sh
 pnpm build
 cp -R .next/standalone /tmp/pkg && cd /tmp/pkg
-AWS_LAMBDA_HTTP_ENDPOINT=127.0.0.1:8080 node lambda.mjs
+HOSTNAME=127.0.0.1 PORT=8080 node server.js
 curl -i http://127.0.0.1:8080/
 ```
 

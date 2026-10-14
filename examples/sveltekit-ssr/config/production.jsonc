@@ -5,7 +5,10 @@
   "siteName": "sveltekit-ssr",
   "ssr": {
     "packageDir": "build",
-    "entryPoint": "lambda.mjs",
+    "entryPoint": "index.js",
+    // Blogwright generates the entry shim: adapter-node's server reads
+    // HOST and PORT.
+    "shim": { "host": "HOST", "port": "PORT" },
     "staticDir": "build/client",
     "staticPaths": ["/_app/*", "/favicon.svg"],
   },
