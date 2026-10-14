@@ -7,12 +7,29 @@
 
 /* Dark theme (Starlight's default :root) */
 :root {
+  /* The mark's indigo gradient for filled shapes with white text. It starts a
+     shade darker than the mark (#5b5ef0, not #6366f1) so white text clears
+     4.5:1 (4.9:1) across the whole fill. */
+  --bw-indigo-gradient: linear-gradient(135deg, #5b5ef0, #4338ca);
+
   --sl-color-accent-low: #312e81;
   /* indigo-900 - subtle tints, selection */
   --sl-color-accent: #6366f1;
   /* indigo-500 - primary actions, matches the mark */
   --sl-color-accent-high: #c7d2fe;
   /* indigo-200 - link text on dark (≈12:1 on the page bg) */
+
+  /* Blackboard: a faintly green-grey slate background with chalk-white text. The
+     gray steps keep Starlight's lightness ladder, re-tinted to match. */
+  --sl-color-white: hsl(45, 30%, 96%);
+  --sl-color-gray-1: hsl(180, 4%, 91%);
+  --sl-color-gray-2: hsl(180, 3%, 77%);
+  --sl-color-gray-3: hsl(180, 2%, 57%);
+  --sl-color-gray-4: hsl(180, 3%, 37%);
+  --sl-color-gray-5: hsl(180, 4%, 24%);
+  --sl-color-gray-6: hsl(180, 5%, 16%);
+  --sl-color-black: hsl(180, 5%, 11%);
+  --sl-color-backdrop-overlay: hsla(180, 5%, 8%, 0.66);
 }
 
 /* Light theme */
@@ -23,6 +40,19 @@
   /* indigo-600 - links + buttons on white (6.3:1) */
   --sl-color-accent-high: #312e81;
   /* indigo-900 - emphasized accent text */
+
+  /* Paper: a warm off-white background with ink-dark text, grays re-tinted
+     to match. */
+  --sl-color-white: hsl(30, 12%, 10%);
+  --sl-color-gray-1: hsl(30, 10%, 16%);
+  --sl-color-gray-2: hsl(30, 8%, 23%);
+  --sl-color-gray-3: hsl(32, 6%, 36%);
+  --sl-color-gray-4: hsl(36, 6%, 55%);
+  --sl-color-gray-5: hsl(38, 14%, 80%);
+  --sl-color-gray-6: hsl(40, 24%, 91%);
+  --sl-color-gray-7: hsl(40, 30%, 95%);
+  --sl-color-black: hsl(40, 38%, 97%);
+  --sl-color-backdrop-overlay: hsla(30, 8%, 36%, 0.66);
 }
 
 /* Fewer orphans in prose; balanced headings. */
@@ -36,10 +66,197 @@
   background: var(--sl-color-gray-6);
   color: var(--sl-color-text);
 }
-.sl-markdown-content :is(h1, h2, h3, h4, p, li, td, th) {
+.sl-markdown-content :is(h1, h2, h3, h4, p, li) {
   overflow-wrap: anywhere;
+}
+/* Cells keep whole words: `anywhere` lets auto table layout squeeze a column
+   below its longest word. Tables scroll in their own focusable box instead. */
+.sl-markdown-content :is(td, th) {
+  overflow-wrap: break-word;
 }
 .sl-markdown-content :is(table, pre):focus-visible {
   outline: 2px solid var(--sl-color-accent-high);
   outline-offset: 3px;
+}
+
+/* Wordmark: the site title (docs top bar) and the home hero title read as a
+   prompt - "~ blogwright" in monospace with a slanted yellow cursor. The "~"
+   and cursor are decoration, hidden from assistive tech. */
+:root {
+  --bw-cursor: #facc15;
+}
+[data-theme='light'] {
+  --bw-cursor: #eab308;
+}
+.site-title span,
+.hero h1 {
+  font-family: var(--__sl-font-mono);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--sl-color-white);
+}
+.site-title span {
+  /* Room for the slanted cursor, which Starlight's overflow would clip. */
+  padding-inline-end: 0.25em;
+}
+.site-title span::before {
+  content: '~ ' / '';
+  color: var(--sl-color-text-accent);
+}
+:is(.site-title span, .hero h1)::after {
+  content: '' / '';
+  display: inline-block;
+  width: 0.5em;
+  height: 0.85em;
+  margin-inline-start: 0.15em;
+  vertical-align: -0.08em;
+  transform: skewX(-14deg);
+  background: var(--bw-cursor);
+}
+/* The home page has no top bar, so the hero title carries the mark; its "~"
+   is a span in the hero title (index.mdx), as ::before holds the mark. */
+.hero h1 {
+  display: flex;
+  align-items: center;
+}
+.hero h1::before {
+  content: '' / '';
+  flex: none;
+  width: 1.1em;
+  height: 1.1em;
+  margin-inline-end: 0.3em;
+  background: url('../assets/logo-dark.svg') center / contain no-repeat;
+}
+[data-theme='light'] .hero h1::before {
+  background-image: url('../assets/logo-light.svg');
+}
+.hero h1 > .bw-prompt {
+  color: var(--sl-color-text-accent);
+}
+
+/* The home page (the only page with a hero) has no top bar: search, the
+   theme picker and GitHub live in the docs. Drop the bar and the space
+   Starlight reserves for it. */
+html[data-has-hero] .header {
+  display: none;
+}
+html[data-has-hero] .main-frame {
+  padding-top: 0;
+}
+
+/* Home hero: Starlight pads up to 10rem below the actions; keep the first
+   section close to the buttons instead. */
+@media (min-width: 50rem) {
+  .hero {
+    padding-bottom: 2rem;
+  }
+}
+
+/* Home hero "Get started": a parallelogram in the mark's indigo gradient with
+   a hard yellow shadow. The skew lives on ::before so the label stays upright. */
+.hero .sl-link-button.primary {
+  --bw-cta-shadow: #facc15;
+  position: relative;
+  isolation: isolate;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  color: #fff;
+  font-weight: 600;
+  margin-inline: 0.5rem 0.75rem;
+  transition: transform 120ms ease;
+}
+[data-theme='light'] .hero .sl-link-button.primary {
+  --bw-cta-shadow: #eab308;
+}
+.hero .sl-link-button.primary::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform: skewX(-14deg);
+  background: var(--bw-indigo-gradient);
+  box-shadow: 6px 6px 0 var(--bw-cta-shadow);
+  transition: box-shadow 120ms ease;
+}
+.hero .sl-link-button.primary:hover {
+  color: #fff;
+  transform: translate(-2px, -2px);
+}
+.hero .sl-link-button.primary:hover::before {
+  box-shadow: 9px 9px 0 var(--bw-cta-shadow);
+}
+.hero .sl-link-button.primary:focus-visible {
+  outline: none;
+}
+.hero .sl-link-button.primary:focus-visible::before {
+  outline: 2px solid var(--sl-color-text);
+  outline-offset: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero .sl-link-button.primary,
+  .hero .sl-link-button.primary::before {
+    transition: none;
+  }
+}
+
+/* Sidebar and "On this page" links share the home page's language: hover
+   slants the item into a parallelogram with the yellow shadow; the current
+   page or section is a parallelogram in the indigo gradient. The shape lives
+   on ::before so text stays upright. */
+:is(.sidebar-content, starlight-toc) a {
+  --bw-nav-shadow: #facc15;
+  position: relative;
+  isolation: isolate;
+  border-radius: 0;
+}
+[data-theme='light'] :is(.sidebar-content, starlight-toc) a {
+  --bw-nav-shadow: #eab308;
+}
+:is(.sidebar-content, starlight-toc) a::before {
+  content: '';
+  position: absolute;
+  /* Starts a little left of the text so the slant clears the first letter. */
+  inset: 0 0.25rem 0 -0.25rem;
+  z-index: -1;
+  transition:
+    transform 150ms ease,
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+/* "On this page" indents nested headings by 1rem per level; follow the text. */
+starlight-toc a[href]::before {
+  inset-inline-start: calc(1rem * var(--depth, 0));
+}
+:is(.sidebar-content, starlight-toc) a:hover::before {
+  transform: skewX(-14deg);
+  background: var(--sl-color-hairline-light);
+  box-shadow: 3px 3px 0 var(--bw-nav-shadow);
+}
+:is(.sidebar-content, starlight-toc) a:is([aria-current='page'], [aria-current='true']),
+:is(.sidebar-content, starlight-toc)
+  a:is([aria-current='page'], [aria-current='true']):is(:hover, :focus) {
+  color: #fff;
+  background: none;
+}
+:is(.sidebar-content, starlight-toc) a:is([aria-current='page'], [aria-current='true'])::before {
+  transform: skewX(-14deg);
+  background: var(--bw-indigo-gradient);
+}
+:is(.sidebar-content, starlight-toc)
+  a:is([aria-current='page'], [aria-current='true']):hover::before {
+  box-shadow: 3px 3px 0 var(--bw-nav-shadow);
+}
+:is(.sidebar-content, starlight-toc) a:focus-visible {
+  outline: none;
+}
+:is(.sidebar-content, starlight-toc) a:focus-visible::before {
+  transform: skewX(-14deg);
+  outline: 2px solid var(--sl-color-text);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.sidebar-content, starlight-toc) a::before {
+    transition: none;
+  }
 }

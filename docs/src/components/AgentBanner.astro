@@ -1,0 +1,88 @@
+---
+/**
+ * A full-width banner link that behaves like the AppCards above it: a grey
+ * rectangle at rest that slants into a parallelogram with the yellow shadow on
+ * hover or focus. The shape lives on ::before so the text stays upright.
+ */
+interface Props {
+  href: string;
+}
+
+const { href } = Astro.props;
+---
+
+<a class="agent-banner not-content" href={href}>
+  <span class="agent-banner-text"><slot /></span>
+  <code>{href}</code>
+  <span class="agent-banner-arrow" aria-hidden="true">→</span>
+</a>
+
+<style>
+  .agent-banner {
+    --agent-banner-shadow: #facc15;
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 1rem;
+    /* Same gutter as AppCardGrid, so it lines up under the cards. */
+    margin: 1.5rem 1rem 0;
+    padding: 0.75rem 1.5rem;
+    color: var(--sl-color-white);
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  :global([data-theme='light']) .agent-banner {
+    --agent-banner-shadow: #eab308;
+  }
+  .agent-banner::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: var(--sl-color-gray-6);
+    transition:
+      transform 200ms ease,
+      box-shadow 200ms ease;
+  }
+  /* The banner is short, so it slants at the hero button's 14deg, not the
+     cards' 4deg, to read as a parallelogram. */
+  .agent-banner:is(:hover, :focus-visible)::before {
+    transform: skewX(-14deg);
+    box-shadow: 8px 8px 0 var(--agent-banner-shadow);
+  }
+  .agent-banner:hover {
+    color: var(--sl-color-white);
+  }
+  .agent-banner-text {
+    flex: 1 1 auto;
+  }
+  code {
+    padding: 0.125rem 0.5rem;
+    background: var(--sl-color-black);
+    font-size: var(--sl-text-sm);
+    font-weight: 400;
+  }
+  .agent-banner-arrow {
+    transition: transform 150ms ease;
+  }
+  .agent-banner:hover .agent-banner-arrow {
+    transform: translateX(4px);
+  }
+  .agent-banner:focus-visible {
+    outline: none;
+  }
+  .agent-banner:focus-visible::before {
+    outline: 2px solid var(--sl-color-text);
+    outline-offset: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .agent-banner::before,
+    .agent-banner-arrow {
+      transition: none;
+    }
+  }
+</style>

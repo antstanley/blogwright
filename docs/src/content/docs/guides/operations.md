@@ -2,7 +2,7 @@
 title: Day-2 operations
 description: Inspect drift, audit deploy history, read build logs, roll back, and tear the stack down.
 sidebar:
-  order: 9
+  order: 10
 ---
 
 Everything blogwright needs for day-2 work already lives in the environment's S3 bucket: the topology state, one manifest per build, and every source zip. The commands on this page read that record - check for drift, audit what deployed when, replay an earlier build, empty the site, or remove the stack entirely. Each command takes the environment positionally or via `--env`, defaulting to `production` (see [Environments](/guides/environments/)).
@@ -53,7 +53,7 @@ bw rollback 4f3a2b1c9d0e
 As with a deploy, only the CloudFront paths whose content actually changed are invalidated, and `--refresh` is accepted to force every file to re-upload.
 
 :::caution
-A production rollback does **not** sync the PDS. The [standard.site records](/guides/publishing-standard-site/) mirror the current repo content, which a rollback does not restore - so the command only warns about the divergence. To realign the records, check out the rolled-back revision and run `blogwright pds sync`.
+A production rollback does **not** sync the PDS. The [standard.site records](/plugins/standard-site/) mirror the current repo content, which a rollback does not restore - so the command only warns about the divergence. To realign the records, check out the rolled-back revision and run `blogwright pds sync`.
 :::
 
 ## Empty the site: `delete`

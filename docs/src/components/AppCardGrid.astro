@@ -1,0 +1,22 @@
+---
+/** Lays out AppCards: one column on phones, three portrait cards side by side from 50rem. */
+---
+
+<div class="app-card-grid not-content"><slot /></div>
+
+<style>
+  .app-card-grid {
+    display: grid;
+    gap: 1.5rem;
+    /* Room for the cards' slanted edges, which lean past their boxes. */
+    padding-inline: 1rem;
+  }
+  @media (min-width: 50rem) {
+    .app-card-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .app-card-grid > :global(*) {
+      aspect-ratio: 5 / 6;
+    }
+  }
+</style>

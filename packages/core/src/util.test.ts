@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { REPRODUCIBLE_ZIP_MTIME } from './util.js';
+import { REPRODUCIBLE_ZIP_MTIME, withRetry } from './util.js';
 
 /**
  * Zones chosen for what they do to a UTC-fixed 1980-01-01: `America/New_York`
@@ -81,5 +81,44 @@ describe('REPRODUCIBLE_ZIP_MTIME', () => {
 
   it('is the value the exported constant carries, so the two cannot drift', () => {
     expect(localDay(REPRODUCIBLE_ZIP_MTIME)).toBe(localDay(new Date(1980, 0, 2)));
+  });
+});
+
+describe('withRetry', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Attempt times (ms since start) for a fn that fails twice, then succeeds. */
+  async function attemptTimes(jitter: boolean): Promise<number[]> {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const times: number[] = [];
+    const run = withRetry(
+      async () => {
+        times.push(Date.now() - start);
+        if (times.length < 3) throw new TypeError('fetch failed');
+        return 'ok';
+      },
+      { baseDelayMs: 1000, maxDelayMs: 10_000, jitter },
+    );
+    await vi.runAllTimersAsync();
+    await run;
+    return times;
+  }
+
+  it('doubles the delay between attempts', async () => {
+    expect(await attemptTimes(false)).toEqual([0, 1000, 3000]);
+  });
+
+  it('with jitter, waits between half and all of each delay', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    expect(await attemptTimes(true)).toEqual([0, 500, 1500]);
+
+    vi.spyOn(Math, 'random').mockReturnValue(0.999_999);
+    const [, first, second] = await attemptTimes(true);
+    expect(first).toBeGreaterThanOrEqual(999);
+    expect(second! - first!).toBeGreaterThanOrEqual(1999);
   });
 });

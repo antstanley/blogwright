@@ -2,7 +2,7 @@
 title: PR previews
 description: Serve every pull request at its own URL from one shared CloudFront distribution - deploy on open, destroy on close.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 blogwright serves every pull request at `https://<id>.<preview-domain>` from a single **shared preview stack**. Deploying a preview is just a MicroVM build plus an S3 sync under a per-PR prefix; removing one is a prefix delete. There are no per-PR CloudFront distributions, builder images, or IAM roles - the stack is provisioned once, and PRs come and go as S3 prefixes.

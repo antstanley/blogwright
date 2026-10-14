@@ -151,7 +151,7 @@ Paths zipped into the deploy source even when gitignored - for artifacts a pre-d
 }
 ```
 
-See [Non-Astro sites](/guides/non-astro-sites/) for the pattern this supports.
+See [Monorepos](/guides/monorepos/#ship-pre-built-artifacts) for the pattern this supports.
 
 ### `invalidationMaxPaths`
 
@@ -171,7 +171,7 @@ The CloudFront distribution's default root object - the object served for reques
 
 `boolean` · optional · default: `false`
 
-Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown paths (client-side routing) instead of the 404 page. Applies to the main distribution at creation. Previews are unaffected - the shared preview distribution's error responses cannot be host-routed. See [Non-Astro sites](/guides/non-astro-sites/).
+Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown paths (client-side routing) instead of the 404 page. Applies to the main distribution at creation. Previews are unaffected - the shared preview distribution's error responses cannot be host-routed. See [Single-page apps](/guides/single-page-apps/).
 
 ## Server rendering (`ssr`)
 
@@ -294,7 +294,7 @@ JSON file the site imports to render its document `<link>` tags, written by `pds
 
 `object` · optional · no default
 
-AT Protocol / standard.site publishing. When the section is absent, publishing is entirely inert. `{ "name": "My Blog" }` is enough to enable it - see [Publishing to standard.site](/guides/publishing-standard-site/).
+AT Protocol / standard.site publishing. When the section is absent, publishing is entirely inert. `{ "name": "My Blog" }` is enough to enable it - see [Publishing to standard.site](/plugins/standard-site/).
 
 ```jsonc
 {
@@ -333,8 +333,9 @@ Name of the Secrets Manager secret holding the OAuth client key and session. Lim
 
 ## Optional analytics plugin (`analytics`)
 
-The block is inert when the plugin is not installed. After
-`blogwright plugin add analytics`, an absent block or `{}` uses these defaults:
+Settings for the [analytics plugin](/plugins/analytics/). The block is inert when
+the plugin is not installed. After `blogwright plugin add analytics`, an absent
+block or `{}` uses these defaults:
 
 | Key | Default | Rule |
 | --- | --- | --- |

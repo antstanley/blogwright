@@ -1,9 +1,10 @@
 ---
 title: blogwright
-description: Publish and operate static sites, single-page apps and server-rendered Node sites on AWS. Full operations for a blog site on AWS - S3 + CloudFront hosting with builds in a Lambda MicroVM, PR previews, GitHub-OIDC CI deploys, and standard.site publishing.
+description: Deploy static sites, single-page apps and server-rendered apps to AWS with one CLI. No CloudFormation, Terraform or CDK.
 template: splash
 hero:
-  tagline: Publish and operate static sites, single-page apps and server-rendered Node sites on AWS.
+  title: '<span class="bw-prompt" aria-hidden="true">~ </span>blogwright'
+  tagline: Deploy static sites, single-page apps and server-rendered apps to AWS with one CLI. No CloudFormation, Terraform or CDK.
   actions:
     - text: Get started
       link: /getting-started/introduction/
@@ -15,29 +16,45 @@ hero:
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
+import AgentBanner from '../../components/AgentBanner.astro';
+import AppCard from '../../components/AppCard.astro';
+import AppCardGrid from '../../components/AppCardGrid.astro';
+
+<AppCardGrid>
+  <AppCard title="Static site" icon="document" href="/guides/deploying/">
+    Astro, SvelteKit prerendered, or any `pnpm build` that writes HTML. Served
+    from a private S3 bucket through CloudFront. Nothing extra to configure.
+  </AppCard>
+  <AppCard title="Single-page app" icon="window" href="/guides/single-page-apps/">
+    Add `"spa": true`. Unknown paths serve your `index.html`, so client-side
+    routing works on refresh.
+  </AppCard>
+  <AppCard title="Server-rendered app" icon="server" href="/guides/server-rendered-sites/">
+    Add an `ssr` block. The build ships as a Lambda Web Function behind the same
+    CloudFront distribution - Astro, SvelteKit, Nuxt, TanStack Start or Next.
+  </AppCard>
+</AppCardGrid>
+
+<AgentBanner href="/llms.txt">Are you an agent? Start here!</AgentBanner>
+
+## Built in
 
 <CardGrid>
-  <Card title="One CLI to do it all" icon="right-caret">
-      All operations managed through a single CLI. No other tools or dependencies
-      to install. Scriptable commands for people and automation.
-  </Card>
-  <Card title="S3 + CloudFront hosting" icon="cloud-download">
-    One private S3 bucket per environment behind CloudFront with Origin Access
-    Control. Custom domains get an ACM certificate and alias automatically.
-  </Card>
   <Card title="Builds in a Lambda MicroVM" icon="rocket">
-    Every deploy zips your repo, builds it in an isolated MicroVM with
-    `pnpm install && pnpm build`, and syncs the output to S3 - only changed
-    files are re-uploaded and only changed paths are invalidated.
+    `pnpm install && pnpm build` runs in an isolated MicroVM. Only changed files
+    upload, and only changed paths are invalidated.
   </Card>
-  <Card title="Server-rendered sites" icon="laptop">
-    Add an `ssr` block and the same build ships a Node server - Astro,
-    SvelteKit, Nuxt, TanStack Start or Next - as a Lambda Web Function behind your
-    distribution. See [Server-rendered sites](/guides/server-rendered-sites/).
+  <Card title="PR previews and CI deploys" icon="github">
+    Static sites and SPAs get a subdomain per pull request. GitHub OIDC deploy
+    roles mean CI never stores AWS keys.
   </Card>
-  <Card title="PR previews & CI deploys" icon="github">
-    A shared preview stack serves every pull request at its own subdomain, and
-    GitHub OIDC deploy roles mean CI never stores AWS keys.
+  <Card title="Rollback and history" icon="right-caret">
+    `blogwright rollback <hash>` re-deploys any earlier build. `history`, `logs`
+    and `status` cover the rest.
+  </Card>
+  <Card title="Plugins" icon="puzzle">
+    Add [traffic analytics](/plugins/analytics/) or
+    [standard.site publishing](/plugins/standard-site/) when you need them.
   </Card>
 </CardGrid>
 

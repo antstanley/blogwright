@@ -26,7 +26,7 @@ This is the [Astro recipe](#astro-node-standalone) below:
 }
 ```
 
-Every recipe on this page has a complete, buildable project in the repository's [`examples/`](https://github.com/antstanley/blogwright/tree/main/examples) directory, each checked by running its package the way Lambda does.
+Every recipe on this page has a complete, buildable project in [Examples](/examples/overview/), each checked by running its package the way Lambda does.
 
 ## Getting started
 
@@ -118,11 +118,33 @@ The server's standard output and standard error go to the log group `/<siteName>
 aws logs tail /<siteName>/<env>/web --follow
 ```
 
+### Stream them in a local viewer
+
+For more than a terminal tail, use [watch-tail](https://github.com/antstanley/watch-tail). It streams CloudWatch logs into a web app on your machine, using the same AWS credentials as Blogwright:
+
+```sh
+npx watch-tail --region <region>                    # the region in your config
+npx watch-tail --region <region> --profile <name>   # with a named AWS profile
+```
+
+1. It opens a browser window at `http://127.0.0.1:4517`.
+2. Select `/<siteName>/<env>/web` in the sidebar.
+3. Choose live tail, or a historic window when you are investigating something that already happened.
+
+What it adds over `aws logs tail`:
+
+- **Requests, not just lines.** Lines that share a request ID group into one expandable row.
+- **A duration chart.** Historic windows plot request duration over time, coloured by severity. Drag across a spike to zoom in.
+- **Readable JSON.** Structured log lines are syntax-coloured and expandable.
+- **A local archive.** Streamed events are kept in a DuckDB file, so you can reopen them later, even offline.
+
+It needs Node.js 22 or later, which Blogwright already requires. Press Ctrl+C to stop it.
+
 ## Recipes
 
 ### Astro (node standalone)
 
-`output: 'server'` with `@astrojs/node` in `standalone` mode emits `dist/server/entry.mjs`, and `dist/client/` holds the browser assets. The shim and build script are the ones [above](#the-entry-shim). Example: [`examples/astro-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/astro-ssr).
+`output: 'server'` with `@astrojs/node` in `standalone` mode emits `dist/server/entry.mjs`, and `dist/client/` holds the browser assets. The shim and build script are the ones [above](#the-entry-shim). Example: [`examples/astro-ssr`](/examples/astro-ssr/).
 
 ```jsonc
 {
@@ -141,7 +163,7 @@ Package all of `dist/`, not `dist/server/`: the adapter finds its files by walki
 
 ### SvelteKit (`adapter-node`)
 
-`adapter-node` emits `build/`: `build/index.js` starts the server, `build/client/` holds the browser assets. The shim sets `HOST` and `PORT` as for Astro and imports `./index.js`. Example: [`examples/sveltekit-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-ssr); the prerendered and single-page modes are [`sveltekit-ssg`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-ssg) and [`sveltekit-spa`](https://github.com/antstanley/blogwright/tree/main/examples/sveltekit-spa).
+`adapter-node` emits `build/`: `build/index.js` starts the server, `build/client/` holds the browser assets. The shim sets `HOST` and `PORT` as for Astro and imports `./index.js`. Example: [`examples/sveltekit-ssr`](/examples/sveltekit-ssr/); the prerendered and single-page modes are [`sveltekit-ssg`](/examples/sveltekit-ssg/) and [`sveltekit-spa`](/examples/sveltekit-spa/).
 
 ```jsonc
 {
@@ -162,7 +184,7 @@ Package all of `dist/`, not `dist/server/`: the adapter finds its files by walki
 
 ### Nuxt (Nitro node-server preset)
 
-`nitro.preset: 'node-server'` emits `.output/server/index.mjs` with `.output/public` for the client. Nitro reads `NITRO_HOST`/`NITRO_PORT` (and `HOST`/`PORT`); the port is only known at runtime, so map the endpoint onto those in the shim rather than `ssr.env`, and import `./index.mjs`. Example: [`examples/nuxt-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/nuxt-ssr).
+`nitro.preset: 'node-server'` emits `.output/server/index.mjs` with `.output/public` for the client. Nitro reads `NITRO_HOST`/`NITRO_PORT` (and `HOST`/`PORT`); the port is only known at runtime, so map the endpoint onto those in the shim rather than `ssr.env`, and import `./index.mjs`. Example: [`examples/nuxt-ssr`](/examples/nuxt-ssr/).
 
 ```jsonc
 {
@@ -179,7 +201,7 @@ Nitro's output is bundled and self-contained; the client assets are fingerprinte
 
 ### TanStack Start (Nitro)
 
-TanStack Start builds through Nitro's Vite plugin. With `nitro({ preset: 'node-server' })` after `tanstackStart()` in `vite.config.ts`, `vite build` emits `.output/server/index.mjs` and `.output/public` - the same layout and the same `NITRO_HOST`/`NITRO_PORT` shim as Nuxt. Example: [`examples/tanstack-start-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/tanstack-start-ssr).
+TanStack Start builds through Nitro's Vite plugin. With `nitro({ preset: 'node-server' })` after `tanstackStart()` in `vite.config.ts`, `vite build` emits `.output/server/index.mjs` and `.output/public` - the same layout and the same `NITRO_HOST`/`NITRO_PORT` shim as Nuxt. Example: [`examples/tanstack-start-ssr`](/examples/tanstack-start-ssr/).
 
 ```jsonc
 {
@@ -196,7 +218,7 @@ The server output is bundled and self-contained; the client assets are fingerpri
 
 ### Next.js (standalone output)
 
-`output: 'standalone'` emits `.next/standalone/server.js`, a server plus the `node_modules` files it traced. Next reads `PORT` and `HOSTNAME`, so the shim maps the endpoint onto those and imports `./server.js`. Example: [`examples/nextjs-ssr`](https://github.com/antstanley/blogwright/tree/main/examples/nextjs-ssr).
+`output: 'standalone'` emits `.next/standalone/server.js`, a server plus the `node_modules` files it traced. Next reads `PORT` and `HOSTNAME`, so the shim maps the endpoint onto those and imports `./server.js`. Example: [`examples/nextjs-ssr`](/examples/nextjs-ssr/).
 
 ```js
 // lambda.mjs

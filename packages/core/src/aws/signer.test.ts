@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { staticCredentials } from './credentials.js';
-import { SigningClient, type Transport } from './signer.js';
+import { THROTTLE_RETRY, SigningClient, type Transport } from './signer.js';
 
 function capture(): {
   transport: Transport;
@@ -200,5 +200,147 @@ describe('SigningClient with a plugin-supplied service descriptor', () => {
       statusCode: 400,
       message: 's3tables: ValidationException - bad table name (HTTP 400)',
     });
+  });
+});
+
+describe('SigningClient retries', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** A transport answering each call with the next scripted response, then 200. */
+  function scripted(responses: { status: number; body: string }[]): {
+    transport: Transport;
+    calls: () => number;
+  } {
+    let calls = 0;
+    const transport: Transport = async () => {
+      const next = responses[calls++];
+      const status = next?.status ?? 200;
+      const body = next?.body ?? '';
+      return { statusCode: status, headers: {}, body: new Uint8Array(), text: () => body };
+    };
+    return { transport, calls: () => calls };
+  }
+
+  /** Run a send to completion through every backoff delay. */
+  async function settle(promise: Promise<unknown>): Promise<unknown> {
+    const outcome = promise.then(
+      () => 'ok',
+      (err: unknown) => err,
+    );
+    await vi.runAllTimersAsync();
+    return outcome;
+  }
+
+  const cloudFrontThrottle = {
+    status: 400,
+    body: '<ErrorResponse><Error><Type>Sender</Type><Code>Throttling</Code><Message>Rate exceeded</Message></Error></ErrorResponse>',
+  };
+
+  it('retries a throttled POST - a CloudFront create refused for its rate', async () => {
+    const t = scripted([cloudFrontThrottle, cloudFrontThrottle]);
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    const outcome = await settle(
+      client.send({
+        service: 'cloudfront',
+        method: 'POST',
+        path: '/2020-05-31/origin-access-control',
+      }),
+    );
+
+    expect(outcome).toBe('ok');
+    expect(t.calls()).toBe(3);
+  });
+
+  it('retries a JSON service throttle (429 TooManyRequestsException) on a POST', async () => {
+    const t = scripted([
+      { status: 429, body: '{"__type":"TooManyRequestsException","message":"Rate exceeded"}' },
+    ]);
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    expect(await settle(client.send({ service: 'logs', method: 'POST', path: '/' }))).toBe('ok');
+    expect(t.calls()).toBe(2);
+  });
+
+  it("retries S3's SlowDown", async () => {
+    const t = scripted([
+      {
+        status: 503,
+        body: '<Error><Code>SlowDown</Code><Message>Reduce your request rate.</Message></Error>',
+      },
+    ]);
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    expect(await settle(client.send({ service: 's3', method: 'PUT', path: '/b/k' }))).toBe('ok');
+    expect(t.calls()).toBe(2);
+  });
+
+  it('gives up after THROTTLE_RETRY.attempts when the throttling never stops', async () => {
+    const t = scripted(
+      Array.from<typeof cloudFrontThrottle>({ length: 20 }).fill(cloudFrontThrottle),
+    );
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    const outcome = await settle(
+      client.send({ service: 'cloudfront', method: 'POST', path: '/2020-05-31/function' }),
+    );
+
+    expect(outcome).toMatchObject({ name: 'AwsError', code: 'Throttling', isThrottling: true });
+    expect(t.calls()).toBe(THROTTLE_RETRY.attempts);
+  });
+
+  it('never retries a POST that failed with a 5xx - the mutation may have been applied', async () => {
+    const t = scripted([{ status: 500, body: '{"__type":"ServiceException","message":"boom"}' }]);
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    const outcome = await settle(
+      client.send({ service: 'microvms', method: 'POST', path: '/2025-09-09/microvms' }),
+    );
+
+    expect(outcome).toMatchObject({ code: 'ServiceException' });
+    expect(t.calls()).toBe(1);
+  });
+
+  it('does not retry a quota error or a validation error', async () => {
+    for (const code of ['LimitExceededException', 'ValidationException']) {
+      const t = scripted([{ status: 400, body: `{"__type":"${code}","message":"no"}` }]);
+      const client = new SigningClient({
+        region: 'us-east-1',
+        credentials,
+        transport: t.transport,
+      });
+
+      const outcome = await settle(client.send({ service: 'logs', method: 'POST', path: '/' }));
+
+      expect(outcome).toMatchObject({ code });
+      expect(t.calls()).toBe(1);
+    }
+  });
+
+  it('recovers when a 5xx and a throttle arrive in the same request', async () => {
+    const t = scripted([
+      { status: 500, body: '<Error><Code>InternalError</Code></Error>' },
+      cloudFrontThrottle,
+    ]);
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    expect(
+      await settle(client.send({ service: 'cloudfront', method: 'GET', path: '/2020-05-31/x' })),
+    ).toBe('ok');
+    expect(t.calls()).toBe(3);
+  });
+
+  it('still retries a 5xx on an idempotent method', async () => {
+    const t = scripted([{ status: 503, body: '<Error><Code>ServiceUnavailable</Code></Error>' }]);
+    const client = new SigningClient({ region: 'us-east-1', credentials, transport: t.transport });
+
+    expect(await settle(client.send({ service: 's3', method: 'GET', path: '/b/k' }))).toBe('ok');
+    expect(t.calls()).toBe(2);
   });
 });

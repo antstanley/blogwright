@@ -1,32 +1,58 @@
-<h1 align="center">
-  <img src="docs/src/assets/logo.svg" alt="" width="40" height="40" align="top" />
-  blogwright
-</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.png" />
+    <img src=".github/assets/logo-light.png" alt="blogwright" width="490" />
+  </picture>
+</p>
 
 <p align="center">
-  Full operations for a blog site on AWS - S3 + CloudFront hosting, with the site
-  built inside a <strong>Lambda MicroVM</strong>. One CLI, no CloudFormation, no
-  Terraform, no CDK.
+  <strong>The deploy experience of a hosting platform, on an AWS account you own.</strong>
+  <br />
+  Deploy static sites, single-page apps and server-rendered apps to AWS with one
+  CLI. No CloudFormation, Terraform or CDK.
   <br /><br />
-  <a href="https://blogwright.iamstan.dev"><strong>Documentation → blogwright.iamstan.dev</strong></a>
+  <a href="https://blogwright.iamstan.dev/getting-started/introduction/"><strong>Get started →</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://blogwright.iamstan.dev">Documentation</a>
+  &nbsp;·&nbsp;
+  <a href="https://blogwright.iamstan.dev/examples/overview/">Examples</a>
 </p>
+
+> **Are you an agent? Start here:** [blogwright.iamstan.dev/llms.txt](https://blogwright.iamstan.dev/llms.txt)
+> lists every docs page as plain Markdown.
 
 ---
 
-Works with any static site that builds via `pnpm build` - an Astro blog at the
-repo root, or a SvelteKit/Vite SPA in a monorepo subdirectory - and, with an
-`ssr` config block, with a Node framework that needs a server: the same MicroVM
-build output is packaged as an immutable **Lambda Web Function** revision behind
-the site's existing CloudFront distribution, with a private, origin-access-
-controlled endpoint and a cache policy that caches exactly what the application
-marks cacheable (Astro SSR, SvelteKit `adapter-node`, Nuxt, TanStack Start and Next
-standalone -
-see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/)).
-Buildable starting points for each, static and SSR, are in [`examples/`](examples/).
-The CLI talks to AWS by SigV4-signing raw HTTP requests and models the
-infrastructure as a reconcilable dependency graph. Deploys are incremental: only
-changed files are re-uploaded and only the changed CloudFront paths are
-invalidated.
+Any app that builds with `pnpm build` deploys one of three ways:
+
+| App type | Config | Served by |
+| --- | --- | --- |
+| Static site | nothing | private S3 bucket through CloudFront |
+| Single-page app | `"spa": true` | the same, with `index.html` for unknown paths |
+| Server-rendered app | an `ssr` block | an immutable **Lambda Web Function** revision behind the same distribution |
+
+Server rendering covers Astro SSR, SvelteKit `adapter-node`, Nuxt, TanStack Start and
+Next standalone - see [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/).
+Buildable starting points for each framework and mode are in [`examples/`](examples/),
+documented at [blogwright.iamstan.dev/examples](https://blogwright.iamstan.dev/examples/overview/).
+Optional [plugins](https://blogwright.iamstan.dev/plugins/overview/) add traffic
+analytics and standard.site publishing.
+
+## Why blogwright
+
+- **You own all of it.** The site, its logs and its data live in your AWS
+  account. MIT-licensed, no fees on top of what AWS charges.
+- **No AWS expertise needed.** `bootstrap` creates the bucket, CDN, HTTPS
+  certificate, build environment and deploy roles; `status` shows drift.
+- **Deploys that only do what changed.** Only changed files upload and only
+  their CloudFront paths are invalidated. An identical redeploy touches nothing.
+- **Production habits by default.** A private origin behind CloudFront, PR
+  previews, keyless CI with GitHub OIDC, and one-command rollback.
+- **One tool for static, SPA and SSR.** The mode is one config key.
+
+Under the hood, the CLI talks to AWS by SigV4-signing raw HTTP requests, models
+the infrastructure as a reconcilable dependency graph, and retries throttled AWS
+requests with jittered exponential backoff.
 
 ## Getting started
 
@@ -35,8 +61,8 @@ Requires Node ≥ 22 and AWS credentials in the ambient provider chain.
 ```sh
 pnpm add -D blogwright
 
-pnpm exec blogwright init          # first-run wizard - writes config/production.jsonc
-pnpm exec blogwright bootstrap     # create the infrastructure; prints DNS records to add
+pnpm exec blogwright init          # answer four questions - writes config/production.jsonc
+pnpm exec blogwright bootstrap     # create the bucket, CDN and build environment
 pnpm exec blogwright deploy        # build in a MicroVM and publish (`bw` works too)
 ```
 
@@ -96,7 +122,7 @@ OIDC publishing, run `blogwright pds bootstrap <env>` once per eligible stack to
 install PDS's own secret-access policy. `plugin remove --yes` uninstalls while
 **keeping** resources; run `<plugin> destroy <env> --yes` first when teardown is wanted.
 
-The optional [analytics plugin](packages/analytics/README.md) provides a fourteen-node
+The optional [analytics plugin](https://blogwright.iamstan.dev/plugins/analytics/) provides a fourteen-node
 us-east-1 pipeline and a local dashboard. Its `page_views` table excludes raw viewer
 IP, while failed Firehose objects can retain original payloads and the site's
 CloudWatch copy remains separate.
@@ -105,21 +131,30 @@ CloudWatch copy remains separate.
 
 Everything lives at **[blogwright.iamstan.dev](https://blogwright.iamstan.dev)**:
 
-- [Deploying](https://blogwright.iamstan.dev/guides/deploying/) - the deploy
-  lifecycle: source zip, MicroVM build, ETag-diff sync, selective invalidation,
-  `--refresh`.
-- [Configuration reference](https://blogwright.iamstan.dev/reference/configuration/) -
-  every key in `config/<env>.jsonc`, with defaults.
-- [CI deploys with GitHub OIDC](https://blogwright.iamstan.dev/guides/ci-github-oidc/) -
-  keyless deploys from GitHub Actions.
-- [PR previews](https://blogwright.iamstan.dev/guides/pr-previews/) - every PR at
-  `https://<id>.<preview-domain>` from one shared stack.
-- [Publishing to standard.site](https://blogwright.iamstan.dev/guides/publishing-standard-site/) -
-  mirroring posts to an AT Protocol PDS, with OAuth handled by the CLI.
-- [Beyond Astro](https://blogwright.iamstan.dev/guides/non-astro-sites/) - monorepo
-  SPAs (`paths.app`/`paths.dist`, `spa`, `sourceInclude`).
-- [Architecture](https://blogwright.iamstan.dev/reference/architecture/) - the
-  resource graph, bucket layout, builder MicroVM, and SigV4 transport.
+- [Introduction](https://blogwright.iamstan.dev/getting-started/introduction/) and
+  [Quickstart](https://blogwright.iamstan.dev/getting-started/quickstart/) - three
+  commands from an empty AWS account to a live site.
+- Guides:
+  [Deploying](https://blogwright.iamstan.dev/guides/deploying/),
+  [Environments](https://blogwright.iamstan.dev/guides/environments/),
+  [Configuration files](https://blogwright.iamstan.dev/guides/configuration-files/),
+  [Custom domains](https://blogwright.iamstan.dev/guides/custom-domains/),
+  [CI deploys with GitHub OIDC](https://blogwright.iamstan.dev/guides/ci-github-oidc/),
+  [PR previews](https://blogwright.iamstan.dev/guides/pr-previews/),
+  [Single-page apps](https://blogwright.iamstan.dev/guides/single-page-apps/),
+  [Server-rendered sites](https://blogwright.iamstan.dev/guides/server-rendered-sites/),
+  [Monorepos](https://blogwright.iamstan.dev/guides/monorepos/),
+  [Day-2 operations](https://blogwright.iamstan.dev/guides/operations/) and
+  [Troubleshooting](https://blogwright.iamstan.dev/guides/troubleshooting/).
+- [Examples](https://blogwright.iamstan.dev/examples/overview/) - one complete
+  project per framework and mode, each deployed and checked on AWS.
+- [Plugins](https://blogwright.iamstan.dev/plugins/overview/) -
+  [Analytics](https://blogwright.iamstan.dev/plugins/analytics/) (page views from
+  CloudFront logs, no tracking script) and
+  [standard.site](https://blogwright.iamstan.dev/plugins/standard-site/).
+- Reference: [CLI](https://blogwright.iamstan.dev/reference/cli/),
+  [Configuration](https://blogwright.iamstan.dev/reference/configuration/) and
+  [Architecture](https://blogwright.iamstan.dev/reference/architecture/).
 
 Every page is also available as plain Markdown - append `.md` to any URL, or
 start from [blogwright.iamstan.dev/llms.txt](https://blogwright.iamstan.dev/llms.txt).

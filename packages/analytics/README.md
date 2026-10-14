@@ -6,6 +6,10 @@ table in an S3 Tables bucket, with a local SvelteKit dashboard that reads that t
 through DuckDB. The site's existing CloudWatch log delivery is untouched - one CloudFront
 delivery source carries several deliveries, so this one is added beside it.
 
+User documentation - setup, the dashboard, privacy and teardown - lives at
+[blogwright.iamstan.dev/plugins/analytics](https://blogwright.iamstan.dev/plugins/analytics/).
+This README covers the package internals and local dashboard development.
+
 This package owns the whole pipeline: its own four AWS service clients (S3 Tables,
 Firehose, Glue, Lambda), the fourteen resource nodes those clients reconcile, the
 record-transform Lambda, the named query set, and the dashboard application. It depends

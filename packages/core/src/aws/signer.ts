@@ -9,8 +9,8 @@ import {
   type ServiceDescriptor,
   type ServiceKey,
 } from './endpoint.js';
-import { AwsError, isRetryable } from './errors.js';
-import { withRetry } from '../util.js';
+import { AwsError, isRetryable, isThrottling } from './errors.js';
+import { withRetry, type RetryOptions } from '../util.js';
 import { textTag } from './xml.js';
 
 export interface RawResponse {
@@ -44,6 +44,20 @@ export interface SigningClientOptions {
   credentials: CredentialProvider;
   transport?: Transport | undefined;
 }
+
+/**
+ * Backoff for a request AWS refused for its rate. Eight attempts, doubling from
+ * 1 second to a 20-second ceiling with jitter, wait roughly 36-71 seconds in all -
+ * long enough to outlast a burst of throttling from parallel bootstraps against
+ * one account. Other transient failures (5xx, network errors) keep the default
+ * {@link withRetry} budget.
+ */
+export const THROTTLE_RETRY: Required<Omit<RetryOptions, 'retryable'>> = {
+  attempts: 8,
+  baseDelayMs: 1_000,
+  maxDelayMs: 20_000,
+  jitter: true,
+};
 
 /** Default transport backed by the global fetch. */
 export const fetchTransport: Transport = async (req) => {
@@ -149,28 +163,33 @@ export class SigningClient {
     const url = `${ep.protocol}//${ep.host}${opts.path}${qs ? `?${qs}` : ''}`;
 
     // Retry transient failures with backoff. For idempotent methods, retry on network
-    // errors and 5xx/429. For non-idempotent POSTs, retry ONLY on network errors (the
-    // request never reached the server) - never on a 5xx, which may mean the mutation
-    // was applied and a retry would double-execute (e.g. launch a second MicroVM).
+    // errors, throttling and 5xx. For non-idempotent POSTs, retry on network errors
+    // (the request never reached the server) and on throttling (AWS refused it before
+    // acting on it) - never on a 5xx, which may mean the mutation was applied and a
+    // retry would double-execute (e.g. launch a second MicroVM).
+    //
+    // Throttling has its own, longer budget (THROTTLE_RETRY) in the inner loop; the
+    // outer loop retries the other transient failures and never a throttle the
+    // inner loop already gave up on.
     const idempotent = ['GET', 'HEAD', 'PUT', 'DELETE'].includes(opts.method);
-    const retryable = idempotent ? isRetryable : (err: unknown) => err instanceof TypeError;
-    return withRetry(
-      async () => {
-        const response = await this.transport({
-          url,
-          method: opts.method,
-          headers: signed.headers as Record<string, string>,
-          body: opts.body,
-        });
-        // Anything outside 2xx is a failure. 3xx matters: S3's region-mismatch
-        // PermanentRedirect is a 301 with no Location header, which fetch
-        // returns as final - treating it as success would report writes as
-        // stored and listings as empty against the wrong endpoint.
-        if (response.statusCode >= 300) throw parseError(resolved.name, response);
-        return response;
-      },
-      { retryable },
-    );
+    const transient = idempotent ? isRetryable : (err: unknown) => err instanceof TypeError;
+    const attempt = async (): Promise<RawResponse> => {
+      const response = await this.transport({
+        url,
+        method: opts.method,
+        headers: signed.headers as Record<string, string>,
+        body: opts.body,
+      });
+      // Anything outside 2xx is a failure. 3xx matters: S3's region-mismatch
+      // PermanentRedirect is a 301 with no Location header, which fetch
+      // returns as final - treating it as success would report writes as
+      // stored and listings as empty against the wrong endpoint.
+      if (response.statusCode >= 300) throw parseError(resolved.name, response);
+      return response;
+    };
+    return withRetry(() => withRetry(attempt, { ...THROTTLE_RETRY, retryable: isThrottling }), {
+      retryable: (err) => !isThrottling(err) && transient(err),
+    });
   }
 
   /**

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- blogwright: three slanted bars (static, SPA, SSR) at the site's 14deg, with the hard yellow shadow. -->
+  <polygon fill="#eab308" points="22.24,9.00 62.24,9.00 59.00,22.00 19.00,22.00"/>
+  <polygon fill="#5b5ef0" points="19.24,6.00 59.24,6.00 56.00,19.00 16.00,19.00"/>
+  <polygon fill="#eab308" points="15.24,27.00 55.24,27.00 52.00,40.00 12.00,40.00"/>
+  <polygon fill="#4f46e5" points="12.24,24.00 52.24,24.00 49.00,37.00 9.00,37.00"/>
+  <polygon fill="#eab308" points="8.24,45.00 48.24,45.00 45.00,58.00 5.00,58.00"/>
+  <polygon fill="#4338ca" points="5.24,42.00 45.24,42.00 42.00,55.00 2.00,55.00"/>
+</svg>

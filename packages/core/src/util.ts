@@ -34,6 +34,11 @@ export interface RetryOptions {
   maxDelayMs?: number;
   /** Predicate for whether an error is retryable (defaults to isRetryable). */
   retryable?: (err: unknown) => boolean;
+  /**
+   * Randomise each delay within its upper half, so callers that failed together
+   * - parallel bootstraps throttled by the same API - do not retry together.
+   */
+  jitter?: boolean;
 }
 
 /** Retry a fn on transient AWS/network errors with exponential backoff. */
@@ -49,7 +54,8 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
     } catch (err) {
       lastErr = err;
       if (i === attempts - 1 || !retryable(err)) throw err;
-      const delay = Math.min(max, base * 2 ** i);
+      const ceiling = Math.min(max, base * 2 ** i);
+      const delay = opts.jitter ? ceiling / 2 + Math.random() * (ceiling / 2) : ceiling;
       await sleep(delay);
     }
   }

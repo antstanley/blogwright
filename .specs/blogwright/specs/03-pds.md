@@ -35,7 +35,7 @@ All dispatched PDS actions validate the pds block; keygen/login/init/sync also
 need the site's domain. Public OAuth files must be committed and deployed before
 login/init verification. A normal production deploy calls syncAfterDeploy
 non-fatally; rollback does not sync and warns if production PDS is configured.
-The [publishing guide](../../../docs/src/content/docs/guides/publishing-standard-site.md)
+The [publishing guide](../../../docs/src/content/docs/plugins/standard-site.md)
 and [commands](../../../packages/pds/src/commands.ts) detail the operator flow.
 
 ## Context and config ownership
