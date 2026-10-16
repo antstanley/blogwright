@@ -1,14 +1,21 @@
 import {
+  AwsCredentialsError,
+  createClients,
   createMemoryFileSystem,
   createScriptedTerminal,
   parseConfig,
   parseConfigDocument,
   type Plugin,
+  type Transport,
 } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { initSite } from './init.js';
 import type { Logger } from './logger.js';
+import { createRecordingAwsLogin, TEST_HOME, testAwsAccess } from './test-support.js';
+
+/** Writes under `/repo`; no shared AWS files, so the profile question is skipped. */
+const INIT_OPTIONS = { root: '/repo', aws: testAwsAccess()() };
 
 function capturingLogger(): Logger & { lines: string[] } {
   const lines: string[] = [];
@@ -105,11 +112,11 @@ describe('initSite', () => {
   it('writes a commented production config from the answers', async () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', ''],
+      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', '', 'n'],
     });
     const logger = capturingLogger();
 
-    const code = await initSite(fs, terminal, logger, [], '/repo');
+    const code = await initSite(fs, terminal, logger, [], INIT_OPTIONS);
 
     expect(code).toBe(0);
     const written = await fs.readText('/repo/config/production.jsonc');
@@ -128,10 +135,10 @@ describe('initSite', () => {
   it('with no plugins installed, writes exactly the file it writes today (pinned byte-for-byte)', async () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', ''],
+      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', '', 'n'],
     });
 
-    const code = await initSite(fs, terminal, capturingLogger(), [], '/repo');
+    const code = await initSite(fs, terminal, capturingLogger(), [], INIT_OPTIONS);
 
     expect(code).toBe(0);
     expect(await fs.readText('/repo/config/production.jsonc')).toBe(EXPECTED_NO_PLUGIN_CONFIG);
@@ -139,9 +146,9 @@ describe('initSite', () => {
 
   it('omits optional keys left blank', async () => {
     const fs = createMemoryFileSystem();
-    const terminal = createScriptedTerminal({ answers: ['myblog', 'eu-west-1', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', 'eu-west-1', '', '', '', 'n'] });
 
-    await initSite(fs, terminal, capturingLogger(), [], '/repo');
+    await initSite(fs, terminal, capturingLogger(), [], INIT_OPTIONS);
 
     const written = await fs.readText('/repo/config/production.jsonc');
     expect(written).toContain('"region": "eu-west-1"');
@@ -152,11 +159,11 @@ describe('initSite', () => {
   it('re-asks until the site name is a valid slug', async () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({
-      answers: ['My Blog!', 'myblog', '', '', '', ''],
+      answers: ['My Blog!', 'myblog', '', '', '', '', 'n'],
     });
     const logger = capturingLogger();
 
-    const code = await initSite(fs, terminal, logger, [], '/repo');
+    const code = await initSite(fs, terminal, logger, [], INIT_OPTIONS);
 
     expect(code).toBe(0);
     expect(logger.lines.some((l) => l.includes('lowercase'))).toBe(true);
@@ -167,7 +174,7 @@ describe('initSite', () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const logger = capturingLogger();
 
-    const code = await initSite(createMemoryFileSystem(), terminal, logger, [], '/repo');
+    const code = await initSite(createMemoryFileSystem(), terminal, logger, [], INIT_OPTIONS);
 
     expect(code).toBe(1);
     expect(terminal.prompts).toEqual([]);
@@ -179,7 +186,7 @@ describe('initSite', () => {
     await fs.writeText('/repo/config/production.jsonc', '{}');
     const logger = capturingLogger();
 
-    const code = await initSite(fs, createScriptedTerminal(), logger, [], '/repo');
+    const code = await initSite(fs, createScriptedTerminal(), logger, [], INIT_OPTIONS);
 
     expect(code).toBe(1);
     expect(await fs.readText('/repo/config/production.jsonc')).toBe('{}');
@@ -210,10 +217,10 @@ describe('initSite', () => {
     // Passed in discovery order (z, a) - the wizard must still ask "apple"
     // before "zebra", proving it sorts rather than trusting caller order.
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', '', '', '', 'app-key-123', 'UA-ZEBRA'],
+      answers: ['myblog', '', '', '', '', 'n', 'app-key-123', 'UA-ZEBRA'],
     });
 
-    const code = await initSite(fs, terminal, capturingLogger(), [zebra, apple], '/repo');
+    const code = await initSite(fs, terminal, capturingLogger(), [zebra, apple], INIT_OPTIONS);
 
     expect(code).toBe(0);
     expect(askedOrder).toEqual(['apple', 'zebra']);
@@ -228,6 +235,7 @@ describe('initSite', () => {
       'custom domain (blank to use the CloudFront domain): ',
       'GitHub repo for CI deploys, owner/repo (blank to skip): ',
       'server-rendered (SSR) app on a Lambda Web Function? (y/n) [n]: ',
+      'Detect the AWS account and pin it to this config? [Y/n] ',
       'apple api key?: ',
       'enable zebra tracking?: ',
     ]);
@@ -257,9 +265,9 @@ describe('initSite', () => {
       async () => [{ property: '"two": 2', comment: 'note' }],
       'omega',
     );
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
 
-    const code = await initSite(fs, terminal, capturingLogger(), [alpha, omega], '/repo');
+    const code = await initSite(fs, terminal, capturingLogger(), [alpha, omega], INIT_OPTIONS);
 
     expect(code).toBe(0);
     expect(await fs.readText('/repo/config/production.jsonc')).toBe(EXPECTED_TRAILING_BLOCK_CONFIG);
@@ -274,7 +282,7 @@ describe('initSite', () => {
     // a contributor-less plugin leave the file BYTE-identical to the one this
     // wizard writes with no plugins installed at all.
     const terminal = createScriptedTerminal({
-      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', ''],
+      answers: ['myblog', '', 'blog.example.com', 'ant/myblog', '', 'n'],
     });
 
     const code = await initSite(
@@ -282,7 +290,7 @@ describe('initSite', () => {
       terminal,
       capturingLogger(),
       [declines, noContributor],
-      '/repo',
+      INIT_OPTIONS,
     );
 
     expect(code).toBe(0);
@@ -318,9 +326,9 @@ describe('initSite', () => {
       },
       'boom',
     );
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
 
-    await expect(initSite(fs, terminal, capturingLogger(), [boom], '/repo')).rejects.toThrow(
+    await expect(initSite(fs, terminal, capturingLogger(), [boom], INIT_OPTIONS)).rejects.toThrow(
       'kaboom',
     );
 
@@ -330,9 +338,9 @@ describe('initSite', () => {
   it('raises naming the plugin when its init(io) contributor has no configKey to file answers under', async () => {
     const fs = createMemoryFileSystem();
     const noKey = fakeInitPlugin('nokey', async () => [{ property: '"x": true' }], undefined);
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
 
-    await expect(initSite(fs, terminal, capturingLogger(), [noKey], '/repo')).rejects.toThrow(
+    await expect(initSite(fs, terminal, capturingLogger(), [noKey], INIT_OPTIONS)).rejects.toThrow(
       /plugin "nokey" declares an init\(io\) contributor but no configKey/,
     );
 
@@ -350,9 +358,11 @@ describe('initSite', () => {
       async () => [{ property: '"unterminated": {' }],
       'broken',
     );
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
 
-    await expect(initSite(fs, terminal, capturingLogger(), [broken], '/repo')).rejects.toThrow();
+    await expect(
+      initSite(fs, terminal, capturingLogger(), [broken], INIT_OPTIONS),
+    ).rejects.toThrow();
 
     expect(await fs.exists('/repo/config/production.jsonc')).toBe(false);
   });
@@ -363,7 +373,7 @@ describe('initSite server-rendered sites', () => {
     const fs = createMemoryFileSystem();
     const terminal = createScriptedTerminal({ answers });
     const logger = capturingLogger();
-    const code = await initSite(fs, terminal, logger, [], '/repo');
+    const code = await initSite(fs, terminal, logger, [], INIT_OPTIONS);
     const written = await fs.readText('/repo/config/production.jsonc');
     return { code, written, terminal, logger };
   }
@@ -389,7 +399,7 @@ describe('initSite server-rendered sites', () => {
   ])(
     'writes the %s ssr block with its generated entry shim',
     async (name, packageDir, entryPoint, shim, staticDir) => {
-      const { code, written } = await initSsr(['myblog', '', '', '', 'y', name]);
+      const { code, written } = await initSsr(['myblog', '', '', '', 'y', name, 'n']);
 
       expect(code).toBe(0);
       const ssr = parseConfig(written).ssr;
@@ -403,16 +413,18 @@ describe('initSite server-rendered sites', () => {
   it('renders the ssr block between the core entries and plugin blocks (pinned byte-for-byte)', async () => {
     const fs = createMemoryFileSystem();
     const alpha = fakeInitPlugin('alpha', async () => [{ property: '"one": 1' }], 'alpha');
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', 'yes', 'Astro'] });
+    const terminal = createScriptedTerminal({
+      answers: ['myblog', '', '', '', 'yes', 'Astro', 'n'],
+    });
 
-    const code = await initSite(fs, terminal, capturingLogger(), [alpha], '/repo');
+    const code = await initSite(fs, terminal, capturingLogger(), [alpha], INIT_OPTIONS);
 
     expect(code).toBe(0);
     expect(await fs.readText('/repo/config/production.jsonc')).toBe(EXPECTED_ASTRO_SSR_CONFIG);
   });
 
   it('writes the defaults with no shim for another framework', async () => {
-    const { written, logger } = await initSsr(['myblog', '', '', '', 'y', 'other']);
+    const { written, logger } = await initSsr(['myblog', '', '', '', 'y', 'other', 'n']);
 
     const ssr = parseConfig(written).ssr;
     expect(ssr?.packageDir).toBe('dist');
@@ -426,7 +438,7 @@ describe('initSite server-rendered sites', () => {
   });
 
   it("points the next steps at the framework's recipe", async () => {
-    const { logger } = await initSsr(['myblog', '', '', '', 'y', 'nextjs']);
+    const { logger } = await initSsr(['myblog', '', '', '', 'y', 'nextjs', 'n']);
 
     expect(logger.lines).toContain(
       'set up the build for Next.js (standalone output): ' +
@@ -435,7 +447,7 @@ describe('initSite server-rendered sites', () => {
   });
 
   it('writes no ssr block for a static site', async () => {
-    const { written, terminal } = await initSsr(['myblog', '', '', '', 'n']);
+    const { written, terminal } = await initSsr(['myblog', '', '', '', 'n', 'n']);
 
     expect(written).not.toContain('ssr');
     expect(terminal.prompts.some((p) => p.startsWith('framework'))).toBe(false);
@@ -451,6 +463,7 @@ describe('initSite server-rendered sites', () => {
       'y',
       'remix',
       'nuxt',
+      'n',
     ]);
 
     expect(code).toBe(0);
@@ -469,11 +482,204 @@ describe('initSite server-rendered sites', () => {
       'astro',
       'eu-central-1',
       'eu-west-1',
+      'n',
     ]);
 
     expect(code).toBe(0);
     expect(logger.lines.some((l) => l.includes('available in us-east-1, us-east-2'))).toBe(true);
     expect(terminal.prompts.filter((p) => p === 'AWS region [us-east-1]: ')).toHaveLength(3);
     expect(parseConfig(written).region).toBe('eu-west-1');
+  });
+});
+
+describe('initSite AWS profile and account pin', () => {
+  const ACCOUNT = '012345678901';
+  const PROFILES = '[default]\nregion = us-east-1\n[profile mysite-prod]\nsso_session = s\n';
+
+  function identityXml(): string {
+    return (
+      '<GetCallerIdentityResponse><GetCallerIdentityResult>' +
+      `<Arn>arn:aws:sts::${ACCOUNT}:assumed-role/AdminRole/ant</Arn>` +
+      `<UserId>AROA:ant</UserId><Account>${ACCOUNT}</Account>` +
+      '</GetCallerIdentityResult></GetCallerIdentityResponse>'
+    );
+  }
+
+  /** Init over shared files and a scripted STS: `sts` answers each attempt, in order. */
+  async function initAws(setup: {
+    answers: string[];
+    sharedConfig?: string;
+    profile?: string;
+    processEnv?: NodeJS.ProcessEnv;
+    sts?: ('identity' | 'credentials-fail')[];
+  }) {
+    const fs = createMemoryFileSystem(
+      setup.sharedConfig === undefined ? {} : { [`${TEST_HOME}/.aws/config`]: setup.sharedConfig },
+    );
+    const terminal = createScriptedTerminal({ answers: setup.answers });
+    const logger = capturingLogger();
+    const sts = [...(setup.sts ?? ['identity'])];
+    const built: { profile: string | null | undefined; endpoint: string | undefined }[] = [];
+    const transport: Transport = async () => {
+      const text = identityXml();
+      return {
+        statusCode: 200,
+        headers: {},
+        body: new TextEncoder().encode(text),
+        text: () => text,
+      };
+    };
+    const awsLogin = createRecordingAwsLogin();
+    const access = testAwsAccess({
+      awsLogin,
+      host: {
+        processEnv: setup.processEnv ?? {},
+        createClients: (opts) => {
+          built.push({ profile: opts.profile, endpoint: opts.endpointOverride });
+          return createClients({
+            ...opts,
+            transport,
+            credentials: async () => {
+              if (sts.shift() === 'credentials-fail') {
+                throw new AwsCredentialsError(new Error('Token has expired and refresh failed'));
+              }
+              return { accessKeyId: 'AKIA', secretAccessKey: 'secret' };
+            },
+          });
+        },
+      },
+    })();
+    const code = await initSite(fs, terminal, logger, [], {
+      root: '/repo',
+      aws: { ...access, profile: setup.profile },
+    });
+    const written = await fs.readText('/repo/config/production.jsonc');
+    return { code, written, terminal, logger, built, awsLogin };
+  }
+
+  const PROFILE_PROMPT = 'AWS profile for this environment (blank for default credentials)';
+  const PIN_PROMPT = 'Detect the AWS account and pin it to this config? [Y/n] ';
+
+  it('skips the profile question when no profiles are defined, and writes no aws block when declined', async () => {
+    const { code, written, terminal } = await initAws({ answers: ['myblog', '', '', '', '', 'n'] });
+
+    expect(code).toBe(0);
+    expect(terminal.prompts.some((p) => p.startsWith(PROFILE_PROMPT))).toBe(false);
+    expect(terminal.prompts.at(-1)).toBe(PIN_PROMPT);
+    expect(written).not.toContain('"aws"');
+  });
+
+  it('asks for a profile after the SSR question, defaulting to --profile, and re-asks an unknown one', async () => {
+    const { written, terminal, logger } = await initAws({
+      sharedConfig: PROFILES,
+      profile: 'mysite-prod',
+      answers: ['myblog', '', '', '', '', 'nope', '', 'n'],
+    });
+
+    expect(terminal.prompts.slice(4)).toEqual([
+      'server-rendered (SSR) app on a Lambda Web Function? (y/n) [n]: ',
+      `${PROFILE_PROMPT} [mysite-prod]: `,
+      `${PROFILE_PROMPT} [mysite-prod]: `,
+      PIN_PROMPT,
+    ]);
+    expect(logger.lines).toContain('no profile "nope" - expected one of default, mysite-prod');
+    expect(parseConfig(written).aws).toEqual({ profile: 'mysite-prod' });
+    expect(written).toContain('  "aws": {\n    "profile": "mysite-prod"\n  }\n}');
+  });
+
+  it('defaults the profile to AWS_PROFILE when there is no --profile', async () => {
+    const { terminal } = await initAws({
+      sharedConfig: PROFILES,
+      processEnv: { AWS_PROFILE: 'default' },
+      answers: ['myblog', '', '', '', '', '', 'n'],
+    });
+
+    expect(terminal.prompts).toContain(`${PROFILE_PROMPT} [default]: `);
+  });
+
+  it('pins the detected account through the chosen profile, rendering a block that parses', async () => {
+    const { code, written, logger, built } = await initAws({
+      sharedConfig: PROFILES,
+      answers: ['myblog', '', '', '', '', 'mysite-prod', 'y'],
+    });
+
+    expect(code).toBe(0);
+    expect(built).toEqual([{ profile: 'mysite-prod', endpoint: undefined }]);
+    expect(logger.lines).toContain(`AWS account ${ACCOUNT} (AdminRole) - pinned as aws.accountId`);
+    expect(written).toContain(
+      '  "aws": {\n' +
+        '    "profile": "mysite-prod",\n' +
+        `    "accountId": "${ACCOUNT}" // deploys refuse credentials for any other account\n` +
+        '  }\n}',
+    );
+    expect(parseConfig(written).aws).toEqual({ profile: 'mysite-prod', accountId: ACCOUNT });
+  });
+
+  it('commas the aws block when a plugin block follows it', async () => {
+    const fs = createMemoryFileSystem();
+    const alpha = fakeInitPlugin('alpha', async () => [{ property: '"one": 1' }], 'alpha');
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'y'] });
+    const access = testAwsAccess({
+      host: {
+        createClients: (opts) =>
+          createClients({
+            ...opts,
+            credentials: async () => ({ accessKeyId: 'A', secretAccessKey: 'B' }),
+            transport: async () => {
+              const text = identityXml();
+              return {
+                statusCode: 200,
+                headers: {},
+                body: new TextEncoder().encode(text),
+                text: () => text,
+              };
+            },
+          }),
+      },
+    })();
+
+    await initSite(fs, terminal, capturingLogger(), [alpha], { root: '/repo', aws: access });
+
+    const written = await fs.readText('/repo/config/production.jsonc');
+    expect(written).toContain(
+      `"accountId": "${ACCOUNT}" // deploys refuse credentials for any other account\n  },\n  "alpha"`,
+    );
+    expect(parseConfigDocument(written).raw['alpha']).toEqual({ one: 1 });
+  });
+
+  it('ignores AWS_ENDPOINT_URL: the pin must be a real account', async () => {
+    const { built } = await initAws({
+      processEnv: { AWS_ENDPOINT_URL: 'http://localhost:4566' },
+      answers: ['myblog', '', '', '', '', 'y'],
+    });
+
+    expect(built).toEqual([{ profile: null, endpoint: undefined }]);
+  });
+
+  it('warns and carries on, unpinned, when the account cannot be detected', async () => {
+    const { code, written, logger } = await initAws({
+      sharedConfig: PROFILES,
+      sts: ['credentials-fail'],
+      answers: ['myblog', '', '', '', '', 'mysite-prod', 'y', '3'],
+    });
+
+    expect(code).toBe(0);
+    expect(logger.lines).toContain('account not pinned - add aws.accountId later');
+    expect(parseConfig(written).aws).toEqual({ profile: 'mysite-prod' });
+  });
+
+  it('offers a sign-in when detection hits expired credentials, then pins', async () => {
+    const { written, terminal, awsLogin } = await initAws({
+      sharedConfig: PROFILES,
+      sts: ['credentials-fail', 'identity'],
+      answers: ['myblog', '', '', '', '', 'mysite-prod', '', ''],
+    });
+
+    expect(terminal.prompts.at(-1)).toBe('choice [1]: ');
+    // testAwsAccess's host is Linux with no display, so the device-code flow.
+    expect(awsLogin.calls).toEqual([
+      ['sso', 'login', '--profile', 'mysite-prod', '--use-device-code'],
+    ]);
+    expect(parseConfig(written).aws?.accountId).toBe(ACCOUNT);
   });
 });

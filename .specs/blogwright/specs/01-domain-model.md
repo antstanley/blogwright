@@ -1,6 +1,6 @@
 # JSON entities, identities and state
 
-**Status:** Implemented · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [development guidelines](../../../DEVELOPMENT.md) and [spec index](../../README.md).
 
@@ -136,6 +136,15 @@ site bucket --> state/env.json (site outputs, readonly to plugin)
                      resources[nodeId] --> ResourceOutputs
 ```
 
+The account id in the state bucket name (`<env>-<siteName>-<accountId>`)
+comes from `sts:GetCallerIdentity` for the resolved credentials
+([AWS identity](08-aws-identity.md)); every other derived name uses the
+`<env>-<siteName>` prefix alone. An environment's config document may carry
+an `aws` block (`profile`, `accountId`), validated by core as site-owned
+config like `ssr`. When it pins `aws.accountId`, a mismatch fails before
+`StateStore.load`, so the state bucket is never derived from, read in, or
+created in an unintended account.
+
 The site owns resource naming prefix `<env>-<siteName>` and `githubRole`
 `<prefix>-gh`. Plugins read site outputs but record only their own map. Apply
 persists after each node and on failure; destroy visits reverse dependencies,
@@ -167,7 +176,7 @@ other node output; no plugin state is involved.
 
 **Assumptions**
 
-- Installed packages are trusted code; AWS services and the ambient credential provider remain external dependencies.
+- Installed packages are trusted code. AWS services, the shared AWS config files and the AWS CLI (for sign-in) remain external dependencies.
 
 **Decisions**
 

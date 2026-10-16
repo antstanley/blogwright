@@ -173,6 +173,8 @@ export interface PluginValues {
   hash?: string | undefined;
   id?: string | undefined;
   identifier?: string | undefined;
+  /** Session-level like `plain`: it shapes the context's credentials and is never forwarded. */
+  profile?: string | undefined;
   plain: boolean;
   refresh: boolean;
   yes: boolean;
@@ -183,8 +185,9 @@ export interface PluginValues {
  * Flags forwarded into a plugin action's `args`, in this fixed order so the
  * rendered array is deterministic regardless of property-iteration order.
  * `env` is excluded - it is consumed as the environment override, never
- * forwarded as a data flag; `plain` and `help` are session-level concerns of
- * `main` itself, never a plugin action's business.
+ * forwarded as a data flag; `plain`, `profile` and `help` are session-level
+ * concerns of `main` itself, never a plugin action's business - a plugin sees
+ * the profile's effect through `ctx.clients`.
  */
 const FORWARDED_FLAGS = [
   'domain',
@@ -707,6 +710,7 @@ export async function runPlugin(
     configPath: values.config,
     domain: values.domain,
     endpointOverride: values.endpoint,
+    profile: values.profile,
     ports: { terminal, fs: ports.fs, loader: ports.loader },
   });
 
@@ -1097,6 +1101,7 @@ async function destroyBeforeRemoval(
     configPath: deps.values.config,
     domain: deps.values.domain,
     endpointOverride: deps.values.endpoint,
+    profile: deps.values.profile,
     ports: { terminal, fs: ports.fs, loader: ports.loader },
   });
   const pluginConfig = resolvePluginConfig(plugin, ops.configDocument);

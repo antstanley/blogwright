@@ -24,6 +24,8 @@ The questions, in order:
 3. **Custom domain** (optional) - leave blank to serve from the CloudFront domain instead.
 4. **GitHub repo** for CI deploys, as `owner/repo` (optional) - leave blank to skip; setting it makes `bootstrap` provision a GitHub OIDC deploy role.
 5. **Server-rendered app?** (default no) - answer `y` and the wizard asks for the framework: `astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs`, or `other`. For a known framework it writes the [recipe's](/guides/server-rendered-sites/#recipes) `ssr` block, including the [entry shim](/guides/server-rendered-sites/#the-entry-shim) settings, and links the recipe for the build settings it needs. For `other` it writes the defaults to fill in. If the region has no Lambda Web Functions, it asks for one that does.
+6. **AWS profile** - asked only when your `~/.aws` files define profiles. Leave blank to use your default credentials.
+7. **Detect the AWS account and pin it?** (default yes) - looks up the account your credentials belong to and writes it as `aws.accountId`, so every later command refuses credentials for any other account. If your sign-in has expired it offers `aws sso login` or `aws login` first; if detection still fails, `init` warns and carries on without a pin.
 
 The result looks like this:
 
@@ -32,7 +34,11 @@ The result looks like this:
 {
   "region": "us-east-1",
   "siteName": "example", // stable slug in every AWS resource name - never change it
-  "domain": "example.com"
+  "domain": "example.com",
+  "aws": {
+    "profile": "example-prod",
+    "accountId": "123456789012" // deploys refuse credentials for any other account
+  }
 }
 ```
 

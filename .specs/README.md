@@ -13,6 +13,7 @@ Internal documentation does not offer a supported third-party plugin API.
 
 - [Documentation design](blogwright/specs/06-docs-design.md)
 - [Web Functions (SSR)](blogwright/specs/07-web-functions.md)
+- [AWS identity](blogwright/specs/08-aws-identity.md)
 - [Accessibility acceptance evidence](reviews/2026-09-06-accessibility-acceptance.md)
 - [Analytics dashboard design](blogwright/specs/05-design.md)
 
@@ -62,14 +63,13 @@ Internal documentation does not offer a supported third-party plugin API.
   contract; spec review and merge remain open. No canonical JSON Schema type
   changed - `ssr` is site-owned config of the same kind as `microvm` and `paths`.
 
-- [AWS profiles, account detection and account pinning](changes/2026-10-16-aws_profiles_and_account_pinning.md)
-  — proposed: a global `--profile` flag and `aws.profile` config key (exported
-  environment credentials beat the config's profile), `sts:GetCallerIdentity`
-  on every context-building command with an optional `aws.accountId` pin
-  checked before state loads, an interactive choice of `aws sso login` or
-  `aws login` on expired credentials, a `whoami` command, and `init` profile
-  and pin prompts. Adds canonical page `08-aws-identity.md` on merge; no JSON
-  Schema change.
+- [AWS profiles, account detection and account pinning](changes/merged/2026-10-16-aws_profiles_and_account_pinning.md)
+  — merged 2026-10-16: `--profile`/`AWS_PROFILE`/exported-credentials/`aws.profile`
+  precedence, `sts:GetCallerIdentity` on every context-building command with an
+  optional `aws.accountId` pin checked before state loads, an interactive
+  `aws sso login`/`aws login` offer, `whoami`, and `init` profile and pin
+  prompts. Folded into [AWS identity](blogwright/specs/08-aws-identity.md); no
+  JSON Schema change.
 
 - [Analytics dashboard design](changes/merged/2026-09-05-analytics_dashboard_design.md)
   — merged 2026-09-05: responsive reporting layout, accessible chart data, and design guidelines.

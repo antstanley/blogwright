@@ -107,6 +107,22 @@ export interface ModuleLoader {
   load(path: string): Promise<unknown>;
 }
 
+/** How an `aws` sign-in command ended. */
+export type AwsLoginResult =
+  | { ok: true }
+  | { ok: false; reason: 'not-installed' }
+  | { ok: false; reason: 'exit'; code: number };
+
+/**
+ * Runs an AWS CLI sign-in (`aws sso login`, `aws login`) with the operator's
+ * terminal attached, so its browser or device-code prompts reach them.
+ * Blogwright never stores credentials itself; the AWS CLI writes its own cache.
+ */
+export interface AwsLogin {
+  /** Run `aws` with `args` (without the leading `aws`) and report how it exited. */
+  run(args: readonly string[]): Promise<AwsLoginResult>;
+}
+
 /** The ports domain code reaches side effects through; adapters are wired in createContext. */
 export interface Ports {
   fs: FileSystem;
@@ -114,4 +130,5 @@ export interface Ports {
   terminal: Terminal;
   ping: PingBuilder;
   loader: ModuleLoader;
+  awsLogin: AwsLogin;
 }

@@ -1,6 +1,6 @@
 # Analytics pipeline and local dashboard
 
-**Status:** Implemented · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [overview](00-overview.md), [domain model](01-domain-model.md) and [development guidelines](../../../DEVELOPMENT.md).
 
@@ -218,8 +218,10 @@ only the adapter binds the fixed page_views relation to the configured table.
 `AnalyticsQuery.run(name, params)` returns readonly rows of string/number/boolean
 values. `AnalyticsIngest.insertDay(day, rows)` writes through a separate port.
 DuckDB vendor calls and errors stay in [adapters](../../../packages/analytics/src/adapters/duckdb-query.ts);
-fixture/recording implementations support domain tests. Credentials resolve
-through core's provider chain and are explicitly supplied to DuckDB's secret;
+fixture/recording implementations support domain tests. Credentials come
+from the host's resolved provider (`ctx.clients.credentials`, bound to the
+selected profile; see [AWS identity](08-aws-identity.md)) and are explicitly
+supplied to DuckDB's secret;
 the query attachment is read-only and the ingest attachment permits transactions.
 They do not use an unrelated DuckDB credential chain.
 

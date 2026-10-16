@@ -89,6 +89,7 @@ Existing ports are the model for new ones:
 | `Vcs`                       | `cli/src/ports.ts`            | `createProcessVcs` (`cli/src/adapters/process-vcs.ts`) | fake `Vcs` via `createTestContext` `ports.vcs` overrides |
 | `PingBuilder`               | `cli/src/ports.ts`            | `createFetchPing` (`cli/src/adapters/fetch-ping.ts`) | no-op / recording ping via `createTestContext` `ports.ping` overrides |
 | `ModuleLoader`              | `cli/src/ports.ts`            | `createNodeModuleLoader` (`cli/src/adapters/node-module-loader.ts`) | fail-fast fake via `createTestContext` `ports.loader` overrides |
+| `AwsLogin`                  | `cli/src/ports.ts`            | `createProcessAwsLogin` (`cli/src/adapters/process-aws-login.ts`) | `createRecordingAwsLogin` (`cli/src/test-support.ts`), via `ports.awsLogin` or `testAwsAccess` |
 | `PackageManager`            | `cli/src/ports.ts`            | `createProcessPackageManager` (`cli/src/adapters/process-package-manager.ts`) | `createRecordingPackageManager` (`cli/src/test-support.ts`), passed as `main`'s `PackageManagerFactory` |
 | `AnalyticsQuery`            | `analytics/src/ports.ts`      | `createDuckDbAnalyticsQuery` (`analytics/src/adapters/duckdb-query.ts`) | `createFixtureAnalyticsQuery` (`analytics/src/fixture-query.ts`), fixture-backed |
 | `TransformDiagnostics`      | `analytics/src/transform/diagnostics.ts` | JSON-line adapter wired to console.info in Lambda entry | recording callback |
@@ -284,7 +285,8 @@ name is derived, with an error that says how to fix it.
 - **Local, untracked operator data stays untracked.** `HANDOFF.md` is temporary
   session context and is excluded via `.git/info/exclude`. Never commit secrets: PDS
   keys and OAuth sessions live only in Secrets Manager, and AWS credentials come from
-  the ambient provider chain.
+  the shared AWS profiles or the ambient provider chain, resolved by the CLI (see
+  `.specs/blogwright/specs/08-aws-identity.md`).
 - **Build artifacts are gitignored, never committed** - `dist/` everywhere, and
   `packages/cli/agent/` (the copied build-agent bundle, produced by
   `scripts/copy-agent.mjs` and shipped only in the npm tarball).

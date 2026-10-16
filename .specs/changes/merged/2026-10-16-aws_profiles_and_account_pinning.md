@@ -1,6 +1,6 @@
 # Change: AWS profiles, account detection and account pinning
 
-**Status:** Proposed · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Target:** CLI composition root, core credentials and config, `init`, analytics credential wiring
+**Status:** Merged · **Date:** 2026-10-16 · **Merged:** 2026-10-16 · **Owner:** Ant Stanley · **Target:** CLI composition root, core credentials and config, `init`, analytics credential wiring
 
 Let an operator choose which AWS credentials Blogwright uses, and make
 Blogwright check which account those credentials belong to before it touches
@@ -21,7 +21,7 @@ init` asks for a profile and offers to detect and pin the account.
 ## Motivation
 
 The state bucket name is `<env>-<siteName>-<accountId>`
-([`deriveNames`](../../packages/core/src/config.ts)), and the account id comes
+([`deriveNames`](../../../packages/core/src/config.ts)), and the account id comes
 from whatever credentials happen to be ambient. Credentials for the wrong
 account therefore do not fail. They find no state, so `status` reports
 nothing deployed and `bootstrap` builds a second, complete stack in the wrong
@@ -73,14 +73,14 @@ a log viewer does not: a pinned account that a deploy refuses to leave.
 
 | Canonical page | Nature of change |
 |---|---|
-| Adds [`.specs/blogwright/specs/08-aws-identity.md`](../blogwright/specs/08-aws-identity.md) | New page: profile resolution, credential provider, identity check, account pin, login offer, `whoami`, `init` prompts |
-| [`.specs/blogwright/specs/00-overview.md`](../blogwright/specs/00-overview.md) | Problem and goals, Detail pages, Scope summary, Assumptions and open questions |
-| [`.specs/blogwright/specs/01-domain-model.md`](../blogwright/specs/01-domain-model.md) | Relationships and lifecycle (the state bucket's account id is verified first; the `aws` block), Assumptions and open questions |
-| [`.specs/blogwright/specs/02-plugin-architecture.md`](../blogwright/specs/02-plugin-architecture.md) | PluginContext (`clients.credentials`), Discovery (reserved `whoami`), Invocation, management and init (`--profile`, the `awsLogin` port), Plugin AWS service seam |
-| [`.specs/blogwright/specs/04-analytics.md`](../blogwright/specs/04-analytics.md) | DuckDB credentials come from the host's provider, not a provider of their own |
-| [`.specs/blogwright/README.md`](../blogwright/README.md) | Index the new `08` page |
-| [`.specs/README.md`](../README.md) | Index the new page; move this change spec to merged |
-| [`DEVELOPMENT.md`](../../DEVELOPMENT.md) | Repo hygiene: where local AWS credentials come from |
+| Adds [`.specs/blogwright/specs/08-aws-identity.md`](../../blogwright/specs/08-aws-identity.md) | New page: profile resolution, credential provider, identity check, account pin, login offer, `whoami`, `init` prompts |
+| [`.specs/blogwright/specs/00-overview.md`](../../blogwright/specs/00-overview.md) | Problem and goals, Detail pages, Scope summary, Assumptions and open questions |
+| [`.specs/blogwright/specs/01-domain-model.md`](../../blogwright/specs/01-domain-model.md) | Relationships and lifecycle (the state bucket's account id is verified first; the `aws` block), Assumptions and open questions |
+| [`.specs/blogwright/specs/02-plugin-architecture.md`](../../blogwright/specs/02-plugin-architecture.md) | PluginContext (`clients.credentials`), Discovery (reserved `whoami`), Invocation, management and init (`--profile`, the `awsLogin` port), Plugin AWS service seam |
+| [`.specs/blogwright/specs/04-analytics.md`](../../blogwright/specs/04-analytics.md) | DuckDB credentials come from the host's provider, not a provider of their own |
+| [`.specs/blogwright/README.md`](../../blogwright/README.md) | Index the new `08` page |
+| [`.specs/README.md`](../../README.md) | Index the new page; move this change spec to merged |
+| [`DEVELOPMENT.md`](../../../DEVELOPMENT.md) | Repo hygiene: where local AWS credentials come from |
 
 ---
 

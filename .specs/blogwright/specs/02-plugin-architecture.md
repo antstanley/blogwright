@@ -1,6 +1,6 @@
 # Plugin architecture and host contracts
 
-**Status:** Implemented · **Date:** 2026-09-05 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [overview](00-overview.md), [domain model](01-domain-model.md) and [development guidelines](../../../DEVELOPMENT.md).
 
@@ -43,7 +43,7 @@ sandbox for imported code or property getters. See [type/boundary tests](../../.
 | `pluginConfig` | Required `TConfig`, validator return for this dispatched plugin only |
 | `names` | Required derived `Names`, including deliverySource and githubRole |
 | `accountId` | Required AWS account id |
-| `clients` | Required shared `AwsClients`, including primary signing and signingUsEast1 |
+| `clients` | Required shared `AwsClients`, including primary `signing`, `signingUsEast1`, and `credentials` (the host's resolved provider, already bound to the selected profile) |
 | `ports` | Required `PluginPorts`: filesystem and terminal only |
 | `tags` | Sole optional member: `Record<string,string> | undefined` |
 | `logger` | Required info/step/ok/warn/error methods taking strings |
@@ -74,6 +74,10 @@ including its own IAM contributor sharing the consumer resolver. This exception
 adds no other typed plugin keys and never permits site graph plugin-config reads;
 it is detailed in [PDS](03-pds.md).
 
+Plugin code that needs raw credentials (analytics's DuckDB S3 Tables
+secret) reads `ctx.clients.credentials`. It never constructs its own
+provider, so `--profile` reaches every local AWS call.
+
 ## Discovery
 
 [discover](../../../packages/cli/src/plugins.ts) unions consumer and CLI
@@ -94,7 +98,7 @@ host location from import.meta.url; discovery callers pass it rather than
 attempting to resolve the CLI's unexported root entry.
 
 The reserved namespaces are init, bootstrap, deploy, rollback, delete, destroy,
-history, logs, status, preview and plugin. All members of a duplicate namespace
+history, logs, status, preview, plugin and whoami. All members of a duplicate namespace
 or config-key group are rejected; there is no first-wins collision. Declaring
 bootstrap/destroy is rejected; declaring both an init command and init
 contributor is rejected. A declared status or init command takes precedence.
@@ -117,6 +121,11 @@ guidance if unavailable. Longest declared multi-word action wins. After consumin
 its words, the first remaining positional is env; `--env` overrides it and
 production is the default. Remaining positionals and recognized forwarded flags
 reach run. The host has no generic arbitrary plugin flag registration mechanism.
+`--profile <name>` is global. It reaches `createContext`, `whoami` and
+`init` as the first row of profile resolution
+([AWS identity](08-aws-identity.md)). Plugin dispatch and the
+answered-yes teardown of `plugin remove` build their context through the
+same path, so they get the same identity line, pin and login offer.
 
 `plugin add` expands a short name to `blogwright-<name>`; an already prefixed or
 scoped name stays literal. Names must be npm-name shaped; version specs, URLs and
@@ -139,8 +148,11 @@ Package management is a lazy `PackageManagerFactory` passed from bin.ts into
 main, not a `packages` member on OpsContext/Ports. The adapter detects pnpm,
 npm, yarn or bun from repo lockfiles and crosses the process boundary. Management
 runs before config/AWS context creation, except an explicitly accepted teardown.
-`ModuleLoader` stays on CLI Ports alongside fs, terminal, vcs and ping; plugin
-ports expose only fs/terminal. [Port declarations](../../../packages/cli/src/ports.ts)
+`ModuleLoader` and `AwsLogin` stay on CLI Ports alongside fs, terminal,
+vcs and ping; plugin ports expose only fs/terminal. `AwsLogin`'s process
+adapter ([process-aws-login.ts](../../../packages/cli/src/adapters/process-aws-login.ts))
+runs `aws` with the terminal attached and reports a missing binary as
+`not-installed`. [Port declarations](../../../packages/cli/src/ports.ts)
 and [adapter tests](../../../packages/cli/src/adapters/process-package-manager.test.ts)
 define manager commands and detection failures.
 
@@ -153,6 +165,8 @@ splices the answered key into existing JSONC before the closing object brace,
 preserving comments/formatting. It refuses existing keys and non-object shapes;
 validates the resulting site config before writing. PDS declares publication init
 and has no config contributor. See [splice tests](../../../packages/cli/src/config-block.test.ts).
+First-run init also asks for an AWS profile and offers to detect and pin
+the account (`aws` block). Generic `<plugin> init` asks neither.
 
 ## Graph engine, state and teardown
 
@@ -196,6 +210,9 @@ alongside signing so plugin clients retain credentials, endpoint override and
 injected transport. [Endpoint](../../../packages/core/src/aws/endpoint.ts),
 [signer](../../../packages/core/src/aws/signer.ts) and their tests pin descriptor
 and built-in behavior; analytics's four new service clients remain plugin-local.
+`AwsClients.credentials` is the same provider both signers hold, so a
+plugin-local client built over `signing` or `signingUsEast1` and a
+plugin-built raw-credential consumer resolve identical credentials.
 
 ## Assumptions and open questions
 

@@ -16,6 +16,9 @@ import {
   colors,
   findRepoRoot,
   parseConfig,
+  readAwsProfiles,
+  shortIdentity,
+  type AwsConfig,
   type ConfigBlockEntry,
   type FileSystem,
   type Plugin,
@@ -24,8 +27,10 @@ import {
   WEB_FUNCTION_REGIONS,
 } from 'blogwright-core';
 
+import { resolveAwsSession, type AwsHost } from './aws-session.js';
 import { renderConfigBlock, type ConfigBlockEntry as BlockEntry } from './config-block.js';
-import type { Logger } from './logger.js';
+import { confirm, type Logger } from './logger.js';
+import type { AwsLogin } from './ports.js';
 
 const SITE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GITHUB_REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
@@ -287,6 +292,93 @@ async function askSsrFramework(
   return SSR_FRAMEWORKS[choice!.toLowerCase()];
 }
 
+/** What `init`'s AWS questions need from the composition root. */
+export interface InitAwsOptions {
+  /** `--profile`, the first default for the profile question. */
+  profile?: string | undefined;
+  host: AwsHost;
+  awsLogin: AwsLogin;
+}
+
+/** Where the wizard writes, relative to the repo root - also how AWS messages name it. */
+const INIT_CONFIG_FILE = 'config/production.jsonc';
+
+/**
+ * Ask which named profile this environment uses - only when the shared AWS
+ * files define at least one. Defaults to `--profile`, then `AWS_PROFILE`; a
+ * nonblank answer must be a listed profile. Undefined means default credentials.
+ */
+async function askAwsProfile(
+  fs: FileSystem,
+  terminal: Terminal,
+  logger: Logger,
+  aws: InitAwsOptions,
+): Promise<string | undefined> {
+  const profiles = await readAwsProfiles(fs, aws.host.processEnv, aws.host.home);
+  if (profiles.names.length === 0) return undefined;
+  const defaultValue = aws.profile?.trim() || aws.host.processEnv.AWS_PROFILE?.trim() || undefined;
+  return ask(terminal, logger, {
+    prompt: 'AWS profile for this environment (blank for default credentials)',
+    defaultValue,
+    validate: (v) =>
+      profiles.has(v)
+        ? undefined
+        : `no profile "${v}" - expected one of ${profiles.names.join(', ')}`,
+  });
+}
+
+/**
+ * Offer to detect the account the chosen credentials belong to and pin it.
+ * Runs the same session resolution every command does - login offer included
+ * - with no endpoint override, so the pin is a real account. An AWS failure
+ * never fails `init`: it warns and leaves the account unpinned.
+ */
+async function askAccountPin(
+  fs: FileSystem,
+  terminal: Terminal,
+  logger: Logger,
+  opts: { region: string; profile: string | undefined; aws: InitAwsOptions },
+): Promise<string | undefined> {
+  if (!(await confirm(terminal, 'Detect the AWS account and pin it to this config?'))) {
+    return undefined;
+  }
+  const processEnv = { ...opts.aws.host.processEnv, AWS_ENDPOINT_URL: undefined };
+  try {
+    const session = await resolveAwsSession({
+      region: opts.region,
+      endpointOverride: undefined,
+      flag: opts.profile,
+      configLabel: INIT_CONFIG_FILE,
+      host: { ...opts.aws.host, processEnv },
+      ports: { fs, terminal, awsLogin: opts.aws.awsLogin },
+      logger,
+    });
+    const { account, arn } = session.identity;
+    logger.ok(`AWS account ${account} (${shortIdentity(arn)}) - pinned as aws.accountId`);
+    return account;
+  } catch (err) {
+    logger.warn((err as Error).message);
+    logger.warn('account not pinned - add aws.accountId later');
+    return undefined;
+  }
+}
+
+/**
+ * The `aws` block, or undefined when there is nothing to write. Rendered in
+ * `renderConfigBlock`'s style; the pin carries its own explanatory comment.
+ */
+function renderAwsBlock(aws: AwsConfig): string | undefined {
+  const entries: BlockEntry[] = [];
+  if (aws.profile) entries.push({ prop: `"profile": ${JSON.stringify(aws.profile)}` });
+  if (aws.accountId) {
+    entries.push({
+      prop: `"accountId": "${aws.accountId}"`,
+      comment: 'deploys refuse credentials for any other account',
+    });
+  }
+  return entries.length > 0 ? renderConfigBlock('aws', entries) : undefined;
+}
+
 /** One core `"key": value` entry, or a plugin's pre-rendered `"key": { ... }` block, at the top level. */
 type TopLevelItem = { prop: string; comment?: string } | { block: string };
 
@@ -313,6 +405,7 @@ function renderConfig(opts: {
   domain?: string | undefined;
   githubRepo?: string | undefined;
   ssr?: SsrFramework | undefined;
+  aws?: AwsConfig | undefined;
   pluginBlocks: readonly string[];
 }): string {
   const items: TopLevelItem[] = [
@@ -330,6 +423,8 @@ function renderConfig(opts: {
     });
   }
   if (opts.ssr) items.push({ block: renderConfigBlock('ssr', opts.ssr.entries) });
+  const awsBlock = opts.aws ? renderAwsBlock(opts.aws) : undefined;
+  if (awsBlock) items.push({ block: awsBlock });
   for (const block of opts.pluginBlocks) items.push({ block });
 
   const body = items.map((item, i) => renderTopLevelItem(item, i === items.length - 1));
@@ -353,7 +448,7 @@ export async function initSite(
   terminal: Terminal,
   logger: Logger,
   plugins: readonly Plugin[],
-  root?: string,
+  options: { aws: InitAwsOptions; root?: string | undefined },
 ): Promise<number> {
   if (!terminal.isInteractive) {
     logger.error(
@@ -362,8 +457,8 @@ export async function initSite(
     );
     return 1;
   }
-  const repoRoot = root ?? (await findRepoRoot(fs).catch(() => process.cwd()));
-  const configPath = `${repoRoot}/config/production.jsonc`;
+  const repoRoot = options.root ?? (await findRepoRoot(fs).catch(() => process.cwd()));
+  const configPath = `${repoRoot}/${INIT_CONFIG_FILE}`;
   if (await fs.exists(configPath)) {
     logger.error(`${configPath} already exists - edit it directly, or pass --config elsewhere`);
     return 1;
@@ -399,6 +494,12 @@ export async function initSite(
       validate: (v) => (WEB_FUNCTION_REGIONS.includes(v) ? undefined : `expected ${regions}`),
     });
   }
+  const profile = await askAwsProfile(fs, terminal, logger, options.aws);
+  const accountId = await askAccountPin(fs, terminal, logger, {
+    region: region!,
+    profile,
+    aws: options.aws,
+  });
   const pluginBlocks = await collectPluginBlocks(plugins, terminal, logger);
 
   const rendered = renderConfig({
@@ -407,6 +508,7 @@ export async function initSite(
     domain,
     githubRepo,
     ssr,
+    aws: { profile, accountId },
     pluginBlocks,
   });
   // Re-parsed before it is trusted onto disk, mirroring `plugin-commands.ts`'s

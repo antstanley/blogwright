@@ -2,9 +2,10 @@
 import { createNodeFileSystem, createNodeTerminal } from 'blogwright-core';
 
 import { createNodeModuleLoader } from './adapters/node-module-loader.js';
+import { createProcessAwsLogin } from './adapters/process-aws-login.js';
 import { createProcessPackageManager } from './adapters/process-package-manager.js';
 import { main } from './cli.js';
-import { createContext } from './context.js';
+import { createAwsHost, createContext } from './context.js';
 import { createLogger } from './logger.js';
 
 const makeTerminal = (opts: { plain: boolean }) => createNodeTerminal(opts);
@@ -16,8 +17,18 @@ const makeDiscoveryPorts = () => ({ fs: createNodeFileSystem(), loader: createNo
 // `PackageManagerFactory`. The adapter resolves the repo and the manager
 // governing it itself, so it needs nothing here but a FileSystem.
 const makePackages = () => createProcessPackageManager(createNodeFileSystem());
+// `blogwright whoami` and `init` resolve an AWS session before any OpsContext
+// exists - see cli.ts's `AwsAccessFactory`.
+const makeAwsAccess = () => ({ host: createAwsHost(), awsLogin: createProcessAwsLogin() });
 
-main(process.argv.slice(2), makeTerminal, createContext, makeDiscoveryPorts, makePackages)
+main(
+  process.argv.slice(2),
+  makeTerminal,
+  createContext,
+  makeDiscoveryPorts,
+  makePackages,
+  makeAwsAccess,
+)
   .then((code) => {
     process.exitCode = code;
   })

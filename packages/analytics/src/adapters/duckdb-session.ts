@@ -19,8 +19,8 @@
  * here rather than across the dashboard and the backfill.
  *
  * **Credentials are injected, never resolved by DuckDB.** A session takes a
- * `CredentialProvider` - core's own chain, the one `deploy` already signs with
- * (`createCredentialProvider`, `packages/core/src/aws/credentials.ts`) -
+ * `CredentialProvider` - the host's resolved provider, the one `deploy` already
+ * signs with (`ctx.clients.credentials`, bound to the selected profile) -
  * resolves it, and names the secret it builds in the `ATTACH`. DuckDB
  * therefore has exactly one credential source and no reason to consult its
  * own; a session that works for `deploy` works for the dashboard and for a
@@ -111,8 +111,8 @@ export interface DuckDbSessionOptions {
    */
   readonly ctx: DuckDbSessionContext;
   /**
-   * Credentials for the catalog, resolved through core's provider chain
-   * (`createCredentialProvider`). A test passes `staticCredentials`.
+   * Credentials for the catalog: the host's provider
+   * (`ctx.clients.credentials`). A test passes `staticCredentials`.
    */
   readonly credentials: CredentialProvider;
   /**

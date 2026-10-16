@@ -55,6 +55,7 @@ No TTY? Create the config by hand - only two fields are required:
 | `bootstrap [env]` | Create/reconcile the infrastructure (idempotent; re-run after config changes) |
 | `deploy [env]` | Zip the repo, build in a MicroVM, sync to S3, invalidate only changed paths |
 | `status [env]` | Planned infrastructure vs live state, as a drift tree |
+| `whoami [env]` | The AWS account, identity and profile commands would use, and whether the `aws.accountId` pin accepts them |
 | `history [env]` | Deployment history with a `← live` marker |
 | `logs <hash>` | CloudWatch build logs for a deploy |
 | `rollback <hash>` | Re-deploy an earlier build's stored artifact |
@@ -68,6 +69,8 @@ tags) on a PUT - so use it once after an upgrade that fixes a content type or
 adds tags, to push that metadata onto live objects.
 
 Environment defaults to `production`; pass `staging` (or anything) positionally.
+`--profile <name>` picks a profile from your shared AWS files; it beats
+`AWS_PROFILE`, exported credentials and the config's `aws.profile`.
 Each environment is fully isolated: its own bucket, distribution, roles, and
 state, all named `<env>-<siteName>-…`.
 

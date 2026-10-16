@@ -124,4 +124,10 @@ describe('createClients', () => {
       service: 's3',
     });
   });
+
+  it('exposes the provider both signers hold as credentials', async () => {
+    const provider = staticCredentials({ accessKeyId: 'AKIA', secretAccessKey: 'secret' });
+    const clients = createClients({ region: CONFIG_REGION, credentials: provider });
+    expect(clients.credentials).toBe(provider);
+  });
 });
