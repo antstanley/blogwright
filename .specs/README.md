@@ -62,6 +62,15 @@ Internal documentation does not offer a supported third-party plugin API.
   contract; spec review and merge remain open. No canonical JSON Schema type
   changed - `ssr` is site-owned config of the same kind as `microvm` and `paths`.
 
+- [AWS profiles, account detection and account pinning](changes/2026-10-16-aws_profiles_and_account_pinning.md)
+  — proposed: a global `--profile` flag and `aws.profile` config key (exported
+  environment credentials beat the config's profile), `sts:GetCallerIdentity`
+  on every context-building command with an optional `aws.accountId` pin
+  checked before state loads, an interactive choice of `aws sso login` or
+  `aws login` on expired credentials, a `whoami` command, and `init` profile
+  and pin prompts. Adds canonical page `08-aws-identity.md` on merge; no JSON
+  Schema change.
+
 - [Analytics dashboard design](changes/merged/2026-09-05-analytics_dashboard_design.md)
   — merged 2026-09-05: responsive reporting layout, accessible chart data, and design guidelines.
 
