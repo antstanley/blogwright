@@ -48,13 +48,10 @@ describe('collectProfiles', () => {
   });
 
   it('puts default first and sorts the rest by code point', () => {
-    expect(collectProfiles('[default]\n', '[zeta]\n[alpha]\n[Beta]\n')).toEqual([
-      'default',
-      'Beta',
-      'alpha',
-      'zeta',
-    ]);
-    expect(collectProfiles('', '[zeta]\n[alpha]\n')).toEqual(['alpha', 'zeta']);
+    expect(
+      collectProfiles('[default]\na = 1\n', '[zeta]\na = 1\n[alpha]\na = 1\n[Beta]\na = 1\n'),
+    ).toEqual(['default', 'Beta', 'alpha', 'zeta']);
+    expect(collectProfiles('', '[zeta]\na = 1\n[alpha]\na = 1\n')).toEqual(['alpha', 'zeta']);
   });
 
   it('takes `[default]` from either file', () => {
@@ -62,7 +59,7 @@ describe('collectProfiles', () => {
   });
 
   it('de-duplicates names that appear in both files', () => {
-    expect(collectProfiles('[profile shared]\n', '[shared]\n')).toEqual(['shared']);
+    expect(collectProfiles('[profile shared]\na = 1\n', '[shared]\nb = 2\n')).toEqual(['shared']);
   });
 
   it('ignores comments, blank lines and config sections that are not profiles', () => {
@@ -71,11 +68,38 @@ describe('collectProfiles', () => {
     expect(names).toEqual(['default', 'acme-prod', 'playroom']);
   });
 
-  it('keeps profile names with spaces and dashes', () => {
-    expect(collectProfiles('[profile my sso role]\n', '[legacy-key]\n')).toEqual([
-      'legacy-key',
-      'my sso role',
+  it('keeps names with dashes, dots and @, and drops names the SDK cannot read (spaces)', () => {
+    expect(
+      collectProfiles(
+        '[profile my sso role]\na = 1\n[profile team.prod@acme]\na = 1\n',
+        '[legacy-key]\na = 1\n[two words]\na = 1\n',
+      ),
+    ).toEqual(['legacy-key', 'team.prod@acme']);
+  });
+
+  it('does not count a section with no settings as a profile, as the SDK does not', () => {
+    expect(collectProfiles('[profile empty]\n# nothing\n', '[blank]\n')).toEqual([]);
+  });
+
+  it('strips inline comments after whitespace, from headers and values', () => {
+    const commented = '[profile prod] # production\nsso_session = corp ; the corp portal\n';
+    expect(collectProfiles(commented, '')).toEqual(['prod']);
+    expect(readProfileStyle(commented, '', 'prod').style).toBe('sso');
+    expect(
+      readProfileStyle('[profile p]\ncredential_process = /bin/creds#1\n', '', 'p').detail,
+    ).toBe('/bin/creds#1');
+  });
+
+  it('reads quoted profile names without their quotes', () => {
+    expect(collectProfiles('[profile "prod"]\na = 1\n[profile \'dev\']\na = 1\n', '')).toEqual([
+      'dev',
+      'prod',
     ]);
+  });
+
+  it('ignores the settings under a header it cannot read, rather than giving them to the previous profile', () => {
+    const unreadable = '[default]\nregion = us-east-1\n[profile two words]\nsso_session = s\n';
+    expect(readProfileStyle(unreadable, '', 'default').style).toBe('unconfigured');
   });
 
   it('returns an empty list for missing files', () => {
@@ -85,10 +109,14 @@ describe('collectProfiles', () => {
 
 describe('readProfileStyle', () => {
   it('recognises SSO profiles, including through an sso-session', () => {
-    expect(readProfileStyle(SSO_CONFIG, '', 'acme-prod')).toEqual({ style: 'sso' });
+    expect(readProfileStyle(SSO_CONFIG, '', 'acme-prod')).toEqual({
+      style: 'sso',
+      profile: 'acme-prod',
+    });
     expect(
-      readProfileStyle('[default]\nsso_start_url = https://x.awsapps.com/start', '', 'default'),
-    ).toEqual({ style: 'sso' });
+      readProfileStyle('[default]\nsso_start_url = https://x.awsapps.com/start', '', 'default')
+        .style,
+    ).toBe('sso');
   });
 
   it('recognises console sign-in profiles', () => {
@@ -119,6 +147,7 @@ describe('readProfileStyle', () => {
   it('recognises credential_process profiles, carrying the command', () => {
     expect(readProfileStyle(PROCESS_CONFIG, '', 'deployed')).toEqual({
       style: 'process',
+      profile: 'deployed',
       detail: '/usr/local/bin/get-creds --profile deployed',
     });
   });
@@ -133,7 +162,7 @@ source_profile = hop
 role_arn = arn:aws:iam::123456789012:role/Hop
 source_profile = acme-prod
 `;
-    expect(readProfileStyle(config, '', 'deploy').style).toBe('sso');
+    expect(readProfileStyle(config, '', 'deploy')).toEqual({ style: 'sso', profile: 'acme-prod' });
   });
 
   it('resolves a source_profile cycle to unconfigured', () => {
@@ -154,6 +183,7 @@ credential_source = Ec2InstanceMetadata
 `;
     expect(readProfileStyle(config, '', 'ec2')).toEqual({
       style: 'external',
+      profile: 'ec2',
       detail: 'Ec2InstanceMetadata',
     });
   });
@@ -163,6 +193,16 @@ credential_source = Ec2InstanceMetadata
     expect(readProfileStyle('[default]\nregion = us-west-1\n', '', 'default').style).toBe(
       'unconfigured',
     );
+  });
+
+  it('lets [profile default] replace [default] outright, as the SDK does', () => {
+    const config = '[default]\nsso_session = s\n[profile default]\nregion = eu-west-2\n';
+    expect(readProfileStyle(config, '', 'default').style).toBe('unconfigured');
+  });
+
+  it('keeps indented sub-section keys out of the profile settings', () => {
+    const config = '[profile p]\ns3 =\n  aws_access_key_id = nested\nregion = eu-west-2\n';
+    expect(readProfileStyle(config, '', 'p').style).toBe('unconfigured');
   });
 
   it('does not read a bare `[name]` config section as a profile', () => {
@@ -221,7 +261,7 @@ describe('readAwsProfiles', () => {
   it('reads the files the environment overrides name', async () => {
     const fs = createMemoryFileSystem({
       '/alt/config': '[profile alt]\nsso_session = x\n',
-      '/alt/credentials': '[other]\n',
+      '/alt/credentials': '[other]\naws_access_key_id = A\n',
     });
     const env = { AWS_CONFIG_FILE: '/alt/config', AWS_SHARED_CREDENTIALS_FILE: '/alt/credentials' };
     expect((await readAwsProfiles(fs, env, '/h')).names).toEqual(['alt', 'other']);

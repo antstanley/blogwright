@@ -69,6 +69,16 @@ below applies.
 
 ## Shared AWS files
 
+Parsing follows the SDK's own `parseIni` and `getConfigData`, so a profile
+Blogwright accepts is one `fromIni` resolves: `#`/`;` comments are stripped,
+including inline ones after whitespace; a header is read as `<kind> <name>`
+with an optionally quoted name of `[\w-@+.%:/]` characters, and a header
+that does not match (a name with a space, say) is ignored along with its
+settings; a section exists only once it holds a setting; a key with an empty
+value opens an indented sub-section whose keys do not count as the
+profile's own; and `[profile default]` replaces `[default]` outright. Where
+both files set a key, the credentials file wins.
+
 The config file is `AWS_CONFIG_FILE`, or `~/.aws/config` when that is unset.
 The credentials file is `AWS_SHARED_CREDENTIALS_FILE`, or
 `~/.aws/credentials` when that is unset. Both are read through the
@@ -90,7 +100,10 @@ sign-in style:
 - `unconfigured`: none of these, or the profile is absent.
 
 They are checked in that order. The style of a null profile is the style of
-the `default` profile.
+the `default` profile. The result also names the profile the style was read
+from - the source profile at the end of a `source_profile` chain - and the
+login offer and guidance target that profile, not the role profile that
+chains to it.
 
 ## Credential provider
 
@@ -152,7 +165,10 @@ Each context-building command then emits one identity line:
 aws  123456789012 · AdminRole · profile mysite-prod (config) · pinned
 ```
 
-The last field is `pinned`, `unpinned`, or `pin skipped`. A null profile
+The last field is `pinned`, `unpinned`, or `pin skipped`. The session's
+other notices (`ignoring aws.profile ...`, `profile ... not found - using
+emulator credentials`, `account pin skipped: endpoint override`) are routed
+the same way, so no non-interactive stdout gains a line. A null profile
 shows as `environment credentials` or `default credentials`.
 `shortIdentity(arn)` returns the role or user name, and drops the session
 name of an assumed role and the IAM path of a role or user. When `terminal.isInteractive` is true the line
@@ -265,11 +281,18 @@ at least one:
 AWS profile for this environment (blank for default credentials) [mysite-prod]:
 ```
 
-The default is `--profile`, then `AWS_PROFILE`, then blank. A nonblank
-answer must be a listed profile.
+The default is `--profile`, then `AWS_PROFILE`, then blank - but only a
+listed profile is offered; a suggestion the files do not define is dropped
+with a warning. With no default, blank means default credentials. With a
+default, blank takes it and `none` chooses default credentials, and the
+prompt says so (`("none" for default credentials)`). A nonblank answer must
+be a listed profile or `none`.
 
-It then asks, whether or not the profile question was asked (exported
-credentials need no profile), `Detect the AWS account and pin it to this config? [Y/n]`.
+When `AWS_ENDPOINT_URL` is exported, `init` does not offer detection: the
+SDK's own SSO and STS clients that resolve a profile read that variable too,
+so detection would ask the emulator. It warns that the account cannot be
+detected and that it is not pinned. Otherwise it then asks, whether or not
+the profile question was asked (exported credentials need no profile), `Detect the AWS account and pin it to this config? [Y/n]`.
 Yes runs `resolveAwsSession` with the answer as the `flag` row (blank
 answers fall through to the remaining rows), the final region, and no
 endpoint override, including the login offer.
@@ -300,7 +323,7 @@ on its position in the file):
 | Precedence, session, failure classification, login offer, headless detection | `packages/cli/src/aws-session.ts` |
 | `AwsLogin` port and process adapter | `packages/cli/src/ports.ts`, `packages/cli/src/adapters/process-aws-login.ts` |
 | `whoami` | `packages/cli/src/whoami.ts` |
-| `AwsHost` (environment, home, platform, client factory) and its real values | `packages/cli/src/aws-session.ts`, `createAwsHost` in `packages/cli/src/context.ts` |
+| `AwsHost` (environment, home, platform, working directory, client factory) and its real values | `packages/cli/src/aws-session.ts`, `createAwsHost` in `packages/cli/src/context.ts` |
 | `AwsAccessFactory`, `main`'s sixth parameter, built in `bin.ts` for `whoami` and `init` | `packages/cli/src/cli.ts` |
 
 `whoami` and `init` run before any `OpsContext` exists, so they cannot take

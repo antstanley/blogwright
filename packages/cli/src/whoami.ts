@@ -51,9 +51,9 @@ type LocatedConfig =
   | { found: true; config: OpsConfig; label: string }
   | { found: false; reason: 'no config found' | 'outside a repository' };
 
-async function repoRootOrUndefined(fs: FileSystem): Promise<string | undefined> {
+async function repoRootOrUndefined(fs: FileSystem, cwd: string): Promise<string | undefined> {
   try {
-    return await findRepoRoot(fs);
+    return await findRepoRoot(fs, cwd);
   } catch (err) {
     if (err instanceof RepoRootNotFoundError) return undefined;
     throw err;
@@ -64,11 +64,15 @@ async function repoRootOrUndefined(fs: FileSystem): Promise<string | undefined> 
  * Load the environment's config. An explicit `--config` must exist; without
  * one, a missing candidate or a missing repository is reported, not raised.
  */
-async function locateConfig(fs: FileSystem, opts: WhoamiOptions): Promise<LocatedConfig> {
-  const root = await repoRootOrUndefined(fs);
+async function locateConfig(
+  fs: FileSystem,
+  cwd: string,
+  opts: WhoamiOptions,
+): Promise<LocatedConfig> {
+  const root = await repoRootOrUndefined(fs, cwd);
   if (root === undefined && !opts.configPath)
     return { found: false, reason: 'outside a repository' };
-  const base = root ?? process.cwd();
+  const base = root ?? cwd;
   try {
     const { config, path } = await loadConfig(fs, {
       env: opts.env,
@@ -101,7 +105,7 @@ const PIN_VALUES: Readonly<Record<AccountPinStatus, string>> = {
  * profile, unusable credentials or a pin mismatch is raised (exit 1).
  */
 export async function whoami(opts: WhoamiOptions, deps: WhoamiDeps): Promise<number> {
-  const located = await locateConfig(deps.fs, opts);
+  const located = await locateConfig(deps.fs, deps.host.cwd, opts);
   const config = located.found ? located.config : undefined;
   const session = await resolveAwsSession({
     region: config?.region ?? NO_CONFIG_REGION,

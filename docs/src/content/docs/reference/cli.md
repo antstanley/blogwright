@@ -41,7 +41,7 @@ Unrecognized flags are an error. `--help` prints usage and exits 0; running with
 blogwright init
 ```
 
-First-run wizard. Asks for the site name (a lowercase slug that names every AWS resource), AWS region (default `us-east-1`), optional custom domain and optional GitHub repo for CI deploys, then whether the app is server-rendered. For a server-rendered app it asks the framework (`astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs` or `other`) and writes its `ssr` block, with the entry shim settings for a known framework. When your shared AWS files define profiles, it asks which one this environment uses (defaulting to `--profile`, then `AWS_PROFILE`). It then offers to detect the AWS account those credentials belong to and pin it as `aws.accountId` - signing in through `aws sso login` or `aws login` first if the credentials have expired. A failed detection only warns; `init` carries on and leaves the account unpinned. It also asks each installed plugin's questions, then writes a commented `config/production.jsonc` at the repo root and prints the next steps.
+First-run wizard. Asks for the site name (a lowercase slug that names every AWS resource), AWS region (default `us-east-1`), optional custom domain and optional GitHub repo for CI deploys, then whether the app is server-rendered. For a server-rendered app it asks the framework (`astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs` or `other`) and writes its `ssr` block, with the entry shim settings for a known framework. When your shared AWS files define profiles, it asks which one this environment uses (defaulting to `--profile`, then `AWS_PROFILE`, when the files define it; answer `none` for default credentials). It then offers to detect the AWS account those credentials belong to and pin it as `aws.accountId` - signing in through `aws sso login` or `aws login` first if the credentials have expired. A failed detection only warns; `init` carries on and leaves the account unpinned. Detection is not offered while `AWS_ENDPOINT_URL` is exported. It also asks each installed plugin's questions, then writes a commented `config/production.jsonc` at the repo root and prints the next steps.
 
 `init` runs before any config or AWS context exists, so it takes no environment and only `--profile`. It refuses to run (exit 1) when:
 
@@ -379,7 +379,7 @@ Every command that loads an environment first prints one identity line naming th
 aws  123456789012 · AdminRole · profile mysite-prod (config) · pinned
 ```
 
-The last field is `pinned`, `unpinned` or `pin skipped`. Interactive sessions print it with the rest of the output; plain and piped sessions write it to stderr, so the plain stdout of `history` and `status` is unchanged.
+The last field is `pinned`, `unpinned` or `pin skipped`. Interactive sessions print it with the rest of the output; plain and piped sessions write it - and notices such as `ignoring aws.profile ...` or `account pin skipped` - to stderr, so the plain stdout of `history`, `status` and `whoami` is unchanged.
 
 ## Exit codes
 

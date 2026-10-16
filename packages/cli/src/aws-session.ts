@@ -45,6 +45,8 @@ export interface AwsHost {
   processEnv: NodeJS.ProcessEnv;
   home: string;
   platform: NodeJS.Platform;
+  /** Working directory the repository root is searched from. */
+  cwd: string;
   /** Builds the AWS clients; defaults to core's `createClients`. Tests substitute it. */
   createClients?: ((opts: ClientBundleOptions) => AwsClients) | undefined;
 }
@@ -186,11 +188,11 @@ function credentialsSubject(profile: ResolvedAwsProfile): string {
 function checkProfileExists(
   profile: ResolvedAwsProfile,
   profiles: AwsProfiles,
-  opts: { override: boolean; configLabel: string; logger: Logger },
+  opts: { override: boolean; configLabel: string; notice: (line: string) => void },
 ): ResolvedAwsProfile {
   if (profile.name === null || profiles.has(profile.name)) return profile;
   if (opts.override) {
-    opts.logger.info(`profile "${profile.name}" not found - using emulator credentials`);
+    opts.notice(`profile "${profile.name}" not found - using emulator credentials`);
     return { name: null, source: 'default' };
   }
   const available = profiles.names.length > 0 ? profiles.names.join(', ') : 'none';
@@ -243,6 +245,19 @@ function commandLine(choice: LoginChoice): string {
 /** Styles a sign-in command can repair. */
 const SIGN_IN_STYLES: ReadonlySet<ProfileStyle> = new Set(['sso', 'login', 'unconfigured']);
 
+const DEFAULT_PROFILE_NAME = 'default';
+
+/**
+ * The profile a repair targets: the one whose settings decided the style,
+ * which for a `source_profile` chain is its source - the login that repairs
+ * a role chain is the login of its source profile. A null profile stays null
+ * (no `--profile`) unless the default profile chains to another one.
+ */
+function repairProfile(profile: ResolvedAwsProfile, signIn: ProfileSignIn): string | null {
+  if (profile.name === null && signIn.profile === DEFAULT_PROFILE_NAME) return null;
+  return signIn.profile;
+}
+
 /** The one line of guidance shown when no login is offered. */
 function credentialGuidance(
   profile: ResolvedAwsProfile,
@@ -252,12 +267,13 @@ function credentialGuidance(
   if (profile.source === 'env-keys') {
     return 'Refresh the exported credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN).';
   }
-  const named = profile.name === null ? '' : ` --profile ${profile.name}`;
+  const target = repairProfile(profile, signIn);
+  const named = target === null ? '' : ` --profile ${target}`;
   switch (signIn.style) {
     case 'sso':
     case 'login':
     case 'unconfigured': {
-      const menu = buildLoginChoices(profile.name, signIn.style, headless);
+      const menu = buildLoginChoices(target, signIn.style, headless);
       const commands =
         signIn.style === 'unconfigured'
           ? menu.choices.map(commandLine).join('  or  ')
@@ -343,7 +359,7 @@ async function repairCredentials(
   const reason = failure instanceof Error ? failure.message : String(failure);
   opts.logger.warn(`${credentialsSubject(profile)} are not usable:\n  ${reason}`);
   const choice = await askLoginChoice(
-    buildLoginChoices(profile.name, signIn.style, headless),
+    buildLoginChoices(repairProfile(profile, signIn), signIn.style, headless),
     opts.ports.terminal,
     opts.logger,
   );
@@ -371,15 +387,16 @@ export async function resolveAwsSession(opts: AwsSessionOptions): Promise<AwsSes
     processEnv: opts.host.processEnv,
     config: opts.aws,
   });
+  const notice = (line: string) => emitSessionLine(line, opts.ports.terminal, opts.logger);
   const configProfile = present(opts.aws?.profile);
   if (resolved.source === 'env-keys' && configProfile) {
-    opts.logger.info(`ignoring aws.profile "${configProfile}": environment credentials are set`);
+    notice(`ignoring aws.profile "${configProfile}": environment credentials are set`);
   }
   const profiles = await readAwsProfiles(opts.ports.fs, opts.host.processEnv, opts.host.home);
   const profile = checkProfileExists(resolved, profiles, {
     override,
     configLabel: opts.configLabel,
-    logger: opts.logger,
+    notice,
   });
 
   const makeClients = opts.host.createClients ?? createClients;
@@ -406,7 +423,7 @@ export async function resolveAwsSession(opts: AwsSessionOptions): Promise<AwsSes
     pinSource: opts.configLabel,
     credentialsDescription: `${shortIdentity(identity.arn)}, ${describeCredentialsOrigin(profile, opts.configLabel)}`,
   });
-  if (pin === 'skipped') opts.logger.info('account pin skipped: endpoint override');
+  if (pin === 'skipped') notice('account pin skipped: endpoint override');
   return { profile, clients, identity, pin };
 }
 
@@ -435,11 +452,12 @@ export function formatIdentityLine(
 }
 
 /**
- * Emit the identity line. Interactive sessions get it through the logger;
- * otherwise (`--plain`, piped output, CI) it goes to stderr, so the
- * non-interactive stdout of `history` and `status` stays byte-identical.
+ * Emit a session line - the identity line, or a notice such as `account pin
+ * skipped`. Interactive sessions get it through the logger; otherwise
+ * (`--plain`, piped output, CI) it goes to stderr, so the non-interactive
+ * stdout of `history`, `status` and `whoami` stays byte-identical.
  */
-export function emitIdentityLine(line: string, terminal: Terminal, logger: Logger): void {
+export function emitSessionLine(line: string, terminal: Terminal, logger: Logger): void {
   if (terminal.isInteractive) logger.info(line);
   else terminal.error(line);
 }

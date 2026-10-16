@@ -209,7 +209,8 @@ export function createRecordingAwsLogin(
 
 /**
  * An {@link AwsAccessFactory} over no real machine state: an empty
- * environment, a `/home/test` home whose shared AWS files are read through
+ * environment, the real working directory (so in-memory repos seeded there
+ * are found), a `/home/test` home whose shared AWS files are read through
  * whatever FileSystem the caller hands the command, a Linux platform, and a
  * transport and sign-in that fail fast until overridden.
  */
@@ -221,6 +222,7 @@ export function testAwsAccess(
       processEnv: {},
       home: TEST_HOME,
       platform: 'linux',
+      cwd: process.cwd(),
       createClients: (opts) => testClients(opts.region, {}),
       ...overrides.host,
     },

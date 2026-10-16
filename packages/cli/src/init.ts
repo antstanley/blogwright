@@ -303,10 +303,25 @@ export interface InitAwsOptions {
 /** Where the wizard writes, relative to the repo root - also how AWS messages name it. */
 const INIT_CONFIG_FILE = 'config/production.jsonc';
 
+/** The answer that chooses default credentials when the profile question has a default. */
+const NO_PROFILE_ANSWER = 'none';
+
+/** The profile `--profile`, then `AWS_PROFILE`, suggests - with which of the two it came from. */
+function suggestedProfile(aws: InitAwsOptions): { name: string; source: string } | undefined {
+  const flag = aws.profile?.trim();
+  if (flag) return { name: flag, source: '--profile' };
+  const env = aws.host.processEnv.AWS_PROFILE?.trim();
+  return env ? { name: env, source: 'AWS_PROFILE' } : undefined;
+}
+
 /**
  * Ask which named profile this environment uses - only when the shared AWS
- * files define at least one. Defaults to `--profile`, then `AWS_PROFILE`; a
- * nonblank answer must be a listed profile. Undefined means default credentials.
+ * files define at least one. Defaults to `--profile`, then `AWS_PROFILE`,
+ * but only when the files define it: a stale suggestion is dropped with a
+ * warning rather than offered as an answer that can never validate. Blank
+ * means default credentials when there is no default; with a default, blank
+ * takes it and `none` chooses default credentials. A nonblank answer must be
+ * a listed profile. Undefined means default credentials.
  */
 async function askAwsProfile(
   fs: FileSystem,
@@ -316,22 +331,37 @@ async function askAwsProfile(
 ): Promise<string | undefined> {
   const profiles = await readAwsProfiles(fs, aws.host.processEnv, aws.host.home);
   if (profiles.names.length === 0) return undefined;
-  const defaultValue = aws.profile?.trim() || aws.host.processEnv.AWS_PROFILE?.trim() || undefined;
-  return ask(terminal, logger, {
-    prompt: 'AWS profile for this environment (blank for default credentials)',
+  const suggested = suggestedProfile(aws);
+  if (suggested && !profiles.has(suggested.name)) {
+    logger.warn(
+      `profile "${suggested.name}" from ${suggested.source} is not in your AWS config files - ` +
+        'not offering it as the default',
+    );
+  }
+  const defaultValue = suggested && profiles.has(suggested.name) ? suggested.name : undefined;
+  const choice = defaultValue
+    ? `"${NO_PROFILE_ANSWER}" for default credentials`
+    : 'blank for default credentials';
+  const answer = await ask(terminal, logger, {
+    prompt: `AWS profile for this environment (${choice})`,
     defaultValue,
     validate: (v) =>
-      profiles.has(v)
+      profiles.has(v) || v === NO_PROFILE_ANSWER
         ? undefined
-        : `no profile "${v}" - expected one of ${profiles.names.join(', ')}`,
+        : `no profile "${v}" - expected one of ${profiles.names.join(', ')}, or "${NO_PROFILE_ANSWER}"`,
   });
+  return answer === NO_PROFILE_ANSWER && !profiles.has(answer) ? undefined : answer;
 }
 
 /**
  * Offer to detect the account the chosen credentials belong to and pin it.
  * Runs the same session resolution every command does - login offer included
- * - with no endpoint override, so the pin is a real account. An AWS failure
- * never fails `init`: it warns and leaves the account unpinned.
+ * - against real AWS, so the pin is a real account. With `AWS_ENDPOINT_URL`
+ * exported it is not offered at all: the SDK's own SSO and STS clients that
+ * resolve a profile read that variable too, so detection would ask the
+ * emulator. An AWS failure never fails `init`: every error the session
+ * raises is an AWS or sign-in failure, so it warns and leaves the account
+ * unpinned.
  */
 async function askAccountPin(
   fs: FileSystem,
@@ -339,17 +369,21 @@ async function askAccountPin(
   logger: Logger,
   opts: { region: string; profile: string | undefined; aws: InitAwsOptions },
 ): Promise<string | undefined> {
+  if (opts.aws.host.processEnv.AWS_ENDPOINT_URL?.trim()) {
+    logger.warn('AWS_ENDPOINT_URL is set, so the AWS account cannot be detected');
+    logger.warn(ACCOUNT_NOT_PINNED);
+    return undefined;
+  }
   if (!(await confirm(terminal, 'Detect the AWS account and pin it to this config?'))) {
     return undefined;
   }
-  const processEnv = { ...opts.aws.host.processEnv, AWS_ENDPOINT_URL: undefined };
   try {
     const session = await resolveAwsSession({
       region: opts.region,
       endpointOverride: undefined,
       flag: opts.profile,
       configLabel: INIT_CONFIG_FILE,
-      host: { ...opts.aws.host, processEnv },
+      host: opts.aws.host,
       ports: { fs, terminal, awsLogin: opts.aws.awsLogin },
       logger,
     });
@@ -357,11 +391,13 @@ async function askAccountPin(
     logger.ok(`AWS account ${account} (${shortIdentity(arn)}) - pinned as aws.accountId`);
     return account;
   } catch (err) {
-    logger.warn((err as Error).message);
-    logger.warn('account not pinned - add aws.accountId later');
+    logger.warn(err instanceof Error ? err.message : String(err));
+    logger.warn(ACCOUNT_NOT_PINNED);
     return undefined;
   }
 }
+
+const ACCOUNT_NOT_PINNED = 'account not pinned - add aws.accountId later';
 
 /**
  * The `aws` block, or undefined when there is nothing to write. Rendered in

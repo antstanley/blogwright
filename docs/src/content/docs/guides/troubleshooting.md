@@ -53,7 +53,7 @@ How do you want to sign in?
 choice [1]:
 ```
 
-The default matches how the profile is configured. Pick one and blogwright runs it, then retries once. Over SSH, or on Linux with no display, the commands use `--use-device-code` and `--remote` so no local browser is needed (set `BLOGWRIGHT_HEADLESS=1` or `0` to force either way). Signing in needs [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on your `PATH`.
+The default matches how the profile is configured. For a role profile that chains to another through `source_profile`, the commands target that source profile, because its sign-in is the one that repairs the chain. Pick one and blogwright runs it, then retries once. Over SSH, or on Linux with no display, the commands use `--use-device-code` and `--remote` so no local browser is needed (set `BLOGWRIGHT_HEADLESS=1` or `0` to force either way). Signing in needs [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on your `PATH`.
 
 In CI, plain mode or piped output there is no prompt: the error ends with the command to run instead. Profiles that sign in some other way get a matching hint - `aws configure --profile <name>` for static keys, the profile's `credential_process`, or the role's `credential_source` - and exported environment credentials need refreshing at their source.
 

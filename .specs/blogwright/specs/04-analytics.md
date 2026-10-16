@@ -221,7 +221,9 @@ DuckDB vendor calls and errors stay in [adapters](../../../packages/analytics/sr
 fixture/recording implementations support domain tests. Credentials come
 from the host's resolved provider (`ctx.clients.credentials`, bound to the
 selected profile; see [AWS identity](08-aws-identity.md)) and are explicitly
-supplied to DuckDB's secret;
+supplied to DuckDB's secret (under an endpoint override that provider falls
+back to the emulator's dummy credentials, so analytics commands run against
+an emulator fail at AWS, not at credential resolution);
 the query attachment is read-only and the ingest attachment permits transactions.
 They do not use an unrelated DuckDB credential chain.
 

@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildLoginChoices,
-  emitIdentityLine,
+  emitSessionLine,
   formatIdentityLine,
   isCredentialFailure,
   isHeadless,
@@ -55,6 +55,14 @@ credential_source = Ec2InstanceMetadata
 
 [profile personal]
 sso_start_url = https://personal.awsapps.com/start
+
+[profile app]
+role_arn = arn:aws:iam::123456789012:role/App
+source_profile = mysite-prod
+
+[profile keyed-role]
+role_arn = arn:aws:iam::123456789012:role/Keyed
+source_profile = keys
 `;
 
 const SHARED_CREDENTIALS = `[keys]
@@ -169,6 +177,7 @@ function sessionWorld(
       processEnv: setup.env ?? {},
       home: TEST_HOME,
       platform: setup.platform ?? 'darwin',
+      cwd: '/repo',
       createClients: (opts) => {
         world.builtProfiles.push(opts.profile);
         world.builtEndpoints.push(opts.endpointOverride);
@@ -355,7 +364,7 @@ describe('resolveAwsSession - profile resolution', () => {
 
     await expect(resolveAwsSession(world.options)).rejects.toThrow(
       'AWS profile "mysite-staging" not found (from config/production.jsonc)\n' +
-        'available: default, bare, console, deployed, ec2, keys, mysite-prod, personal',
+        'available: default, app, bare, console, deployed, ec2, keyed-role, keys, mysite-prod, personal',
     );
     expect(world.builtProfiles).toEqual([]);
   });
@@ -401,6 +410,43 @@ describe('resolveAwsSession - profile resolution', () => {
     await resolveAwsSession(world.options);
 
     expect(world.builtEndpoints).toEqual([undefined]);
+  });
+});
+
+describe('resolveAwsSession - notices off a TTY', () => {
+  it('writes the ignored-profile notice to stderr, leaving stdout empty', async () => {
+    const world = sessionWorld({
+      interactive: false,
+      env: { AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 'secret' },
+      options: { aws: { profile: 'mysite-prod' } },
+    });
+
+    await resolveAwsSession(world.options);
+
+    expect(world.terminal.writes).toEqual([]);
+    expect(world.logger.lines).toEqual([]);
+    expect(world.terminal.errors).toEqual([
+      'ignoring aws.profile "mysite-prod": environment credentials are set',
+    ]);
+  });
+
+  it('writes the emulator notices to stderr, leaving stdout empty', async () => {
+    const world = sessionWorld({
+      interactive: false,
+      outcomes: [{ ...IDENTITY, account: '000000000000' }],
+      options: {
+        aws: { profile: 'mysite-staging', accountId: ACCOUNT },
+        endpointOverride: 'http://localhost:4566',
+      },
+    });
+
+    await resolveAwsSession(world.options);
+
+    expect(world.terminal.writes).toEqual([]);
+    expect(world.terminal.errors).toEqual([
+      'profile "mysite-staging" not found - using emulator credentials',
+      'account pin skipped: endpoint override',
+    ]);
   });
 });
 
@@ -460,6 +506,20 @@ describe('resolveAwsSession - login offer', () => {
       'info   2) aws login --profile mysite-prod        (AWS console credentials)',
       'info   3) cancel',
     ]);
+  });
+
+  it('targets the source profile of a role chain, whose login repairs it', async () => {
+    const world = sessionWorld({
+      outcomes: ['provider-fails', IDENTITY],
+      answers: [''],
+      options: { flag: 'app' },
+    });
+
+    await resolveAwsSession(world.options);
+
+    expect(world.terminal.prompts).toEqual(['choice [1]: ']);
+    expect(world.awsLogin.calls).toEqual([['sso', 'login', '--profile', 'mysite-prod']]);
+    expect(world.builtProfiles).toEqual(['app', 'app']);
   });
 
   it('offers on an STS credential code as well as a provider failure', async () => {
@@ -616,6 +676,12 @@ describe('resolveAwsSession - no login offer', () => {
     );
   });
 
+  it('points a role chain over static keys at the source profile', async () => {
+    expect(await refusal({ options: { flag: 'keyed-role' } })).toContain(
+      'Update the access keys with: aws configure --profile keys',
+    );
+  });
+
   it("names a process profile's credential_process", async () => {
     expect(await refusal({ options: { flag: 'deployed' } })).toContain(
       "Check the profile's credential_process: /usr/local/bin/get-creds",
@@ -671,7 +737,7 @@ describe('identity line', () => {
   it('goes through the logger on an interactive terminal', () => {
     const terminal = createScriptedTerminal({ interactive: true });
     const logger = capturingLogger();
-    emitIdentityLine('aws  line', terminal, logger);
+    emitSessionLine('aws  line', terminal, logger);
     expect(logger.lines).toEqual(['info aws  line']);
     expect(terminal.errors).toEqual([]);
   });
@@ -679,7 +745,7 @@ describe('identity line', () => {
   it('goes to stderr, leaving stdout untouched, otherwise', () => {
     const terminal = createScriptedTerminal({ interactive: false });
     const logger = capturingLogger();
-    emitIdentityLine('aws  line', terminal, logger);
+    emitSessionLine('aws  line', terminal, logger);
     expect(terminal.errors).toEqual(['aws  line']);
     expect(terminal.writes).toEqual([]);
     expect(logger.lines).toEqual([]);

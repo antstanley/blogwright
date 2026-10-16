@@ -23,7 +23,7 @@ import { createNodeModuleLoader } from './adapters/node-module-loader.js';
 import { createProcessAwsLogin } from './adapters/process-aws-login.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
 import {
-  emitIdentityLine,
+  emitSessionLine,
   formatIdentityLine,
   resolveAwsSession,
   type AwsHost,
@@ -133,6 +133,7 @@ export function createAwsHost(
     processEnv: overrides.processEnv ?? process.env,
     home: overrides.home ?? homedir(),
     platform: process.platform,
+    cwd: process.cwd(),
     createClients: overrides.createClients,
   };
 }
@@ -291,7 +292,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     ports,
     logger,
   });
-  emitIdentityLine(formatIdentityLine(session), ports.terminal, logger);
+  emitSessionLine(formatIdentityLine(session), ports.terminal, logger);
   const { clients, identity } = session;
   const accountId = identity.account;
   const names = deriveNames(opts.env, accountId, config);

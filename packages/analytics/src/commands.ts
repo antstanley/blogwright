@@ -343,7 +343,11 @@ function untilStopped(): Promise<StopSignal> {
  * works for `deploy` works for the dashboard. The plugin never builds a
  * provider of its own, so `--profile` reaches the DuckDB secret too. By the
  * time this runs the host has already proved the provider works with
- * `sts:GetCallerIdentity`.
+ * `sts:GetCallerIdentity`. Under an endpoint override that provider is the
+ * host's emulator one, which falls back to dummy `test` credentials; the
+ * dashboard and backfill attach a real S3 Tables ARN regardless, so against an
+ * emulator they fail at AWS rather than at credential resolution - analytics
+ * has no emulator path to begin with.
  *
  * Constructing the adapter touches neither the network nor the native library
  * - it opens its connection lazily on the first query - so the listener is

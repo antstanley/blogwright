@@ -137,6 +137,9 @@ describe('whoami', () => {
 
     expect(await result).toBe(0);
     expect(terminal.writes).toContain('pin       skipped (endpoint override)');
+    // stdout stays the seven fixed keys; the session's notice goes to stderr.
+    expect(terminal.writes).toHaveLength(7);
+    expect(terminal.errors).toEqual(['account pin skipped: endpoint override']);
   });
 
   it('fails (exit 1 at bin.ts) on a pin mismatch, printing no identity', async () => {

@@ -558,6 +558,8 @@ describe('initSite AWS profile and account pin', () => {
   }
 
   const PROFILE_PROMPT = 'AWS profile for this environment (blank for default credentials)';
+  const PROFILE_PROMPT_WITH_DEFAULT =
+    'AWS profile for this environment ("none" for default credentials)';
   const PIN_PROMPT = 'Detect the AWS account and pin it to this config? [Y/n] ';
 
   it('skips the profile question when no profiles are defined, and writes no aws block when declined', async () => {
@@ -578,11 +580,13 @@ describe('initSite AWS profile and account pin', () => {
 
     expect(terminal.prompts.slice(4)).toEqual([
       'server-rendered (SSR) app on a Lambda Web Function? (y/n) [n]: ',
-      `${PROFILE_PROMPT} [mysite-prod]: `,
-      `${PROFILE_PROMPT} [mysite-prod]: `,
+      `${PROFILE_PROMPT_WITH_DEFAULT} [mysite-prod]: `,
+      `${PROFILE_PROMPT_WITH_DEFAULT} [mysite-prod]: `,
       PIN_PROMPT,
     ]);
-    expect(logger.lines).toContain('no profile "nope" - expected one of default, mysite-prod');
+    expect(logger.lines).toContain(
+      'no profile "nope" - expected one of default, mysite-prod, or "none"',
+    );
     expect(parseConfig(written).aws).toEqual({ profile: 'mysite-prod' });
     expect(written).toContain('  "aws": {\n    "profile": "mysite-prod"\n  }\n}');
   });
@@ -594,7 +598,32 @@ describe('initSite AWS profile and account pin', () => {
       answers: ['myblog', '', '', '', '', '', 'n'],
     });
 
-    expect(terminal.prompts).toContain(`${PROFILE_PROMPT} [default]: `);
+    expect(terminal.prompts).toContain(`${PROFILE_PROMPT_WITH_DEFAULT} [default]: `);
+  });
+
+  it('chooses default credentials with "none" when a default is offered', async () => {
+    const { written } = await initAws({
+      sharedConfig: PROFILES,
+      profile: 'mysite-prod',
+      answers: ['myblog', '', '', '', '', 'none', 'n'],
+    });
+
+    expect(parseConfig(written).aws).toBeUndefined();
+  });
+
+  it('drops a suggested profile the files do not define, so blank still means default credentials', async () => {
+    const { code, written, terminal, logger } = await initAws({
+      sharedConfig: PROFILES,
+      processEnv: { AWS_PROFILE: 'old-project' },
+      answers: ['myblog', '', '', '', '', '', 'n'],
+    });
+
+    expect(code).toBe(0);
+    expect(terminal.prompts).toContain(`${PROFILE_PROMPT}: `);
+    expect(logger.lines).toContain(
+      'profile "old-project" from AWS_PROFILE is not in your AWS config files - not offering it as the default',
+    );
+    expect(parseConfig(written).aws).toBeUndefined();
   });
 
   it('pins the detected account through the chosen profile, rendering a block that parses', async () => {
@@ -647,11 +676,25 @@ describe('initSite AWS profile and account pin', () => {
     expect(parseConfigDocument(written).raw['alpha']).toEqual({ one: 1 });
   });
 
-  it('ignores AWS_ENDPOINT_URL: the pin must be a real account', async () => {
-    const { built } = await initAws({
+  it('does not offer detection while AWS_ENDPOINT_URL is set: the pin must be a real account', async () => {
+    const { code, built, terminal, logger } = await initAws({
       processEnv: { AWS_ENDPOINT_URL: 'http://localhost:4566' },
-      answers: ['myblog', '', '', '', '', 'y'],
+      answers: ['myblog', '', '', '', ''],
     });
+
+    expect(code).toBe(0);
+    expect(built).toEqual([]);
+    expect(terminal.prompts).not.toContain(PIN_PROMPT);
+    expect(logger.lines).toEqual(
+      expect.arrayContaining([
+        'AWS_ENDPOINT_URL is set, so the AWS account cannot be detected',
+        'account not pinned - add aws.accountId later',
+      ]),
+    );
+  });
+
+  it('passes no endpoint override to the session', async () => {
+    const { built } = await initAws({ answers: ['myblog', '', '', '', '', 'y'] });
 
     expect(built).toEqual([{ profile: null, endpoint: undefined }]);
   });
