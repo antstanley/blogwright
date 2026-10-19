@@ -35,7 +35,7 @@ Every command that loads an environment resolves its AWS profile and checks whos
 
 ### `AWS profile "<name>" not found (from <source>)`
 
-The profile named by `--profile`, `AWS_PROFILE` or the config's `aws.profile` (the source says which) is not defined in your shared AWS files - `~/.aws/config` and `~/.aws/credentials`, or the files `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` point at. The second line lists the profiles that do exist. Fix the name, or create the profile with `aws configure sso` or `aws configure`. Under `--endpoint` (an emulator) a missing profile is ignored instead.
+The profile named by `--profile`, `AWS_PROFILE` or the config's `aws.profile` (the source says which) is not defined in your shared AWS files - `~/.aws/config` and `~/.aws/credentials`, or the files `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` point at. The second line lists the profiles that do exist. Fix the name, or create the profile with `aws configure sso` or `aws configure`. Under `--endpoint` (an emulator) a missing profile is ignored instead. On a CI runner that uses an EC2 instance role, a committed `aws.profile` applies because nothing is exported - export the instance credentials first with `eval "$(aws configure export-credentials --format env)"` so they take precedence.
 
 ### `<config> pins AWS account <id>, but the credentials in use belong to <other>`
 
@@ -57,7 +57,7 @@ The default matches how the profile is configured. For a role profile that chain
 
 In CI, plain mode or piped output there is no prompt: the error ends with the command to run instead. Profiles that sign in some other way get a matching hint - `aws configure --profile <name>` for static keys, the profile's `credential_process`, the role's `credential_source` or `web_identity_token_file` - and exported environment credentials need refreshing at their source.
 
-A role profile with `mfa_serial` cannot be used directly, because blogwright does not prompt for MFA codes. Export temporary credentials for it with `eval "$(aws configure export-credentials --profile <name> --format env)"` (the AWS CLI asks for the code), then run the command again without `--profile` or `AWS_PROFILE` so the exported credentials are used.
+A role profile with `mfa_serial` cannot be used directly, because blogwright does not prompt for MFA codes. Export temporary credentials for the profile you asked for with `eval "$(aws configure export-credentials --profile <name> --format env)"` (the AWS CLI asks for the code), then run the command again with neither `--profile` nor `AWS_PROFILE` set, so the exported credentials are used.
 
 ### `config.siteName is required - a stable lowercase slug used in every derived AWS resource name`
 

@@ -11,6 +11,7 @@ interface Recorded {
   iniProfiles: string[];
   ignoreCache: boolean[];
   chainCalls: number;
+  chainProfiles: (string | undefined)[];
   environmentCalls: number;
   resolutions: number;
   clock: { now: number };
@@ -23,6 +24,7 @@ function fakeSources(opts: { expiresInMs?: number; fail?: boolean } = {}): Recor
     iniProfiles: [],
     ignoreCache: [],
     chainCalls: 0,
+    chainProfiles: [],
     environmentCalls: 0,
     resolutions: 0,
     clock,
@@ -36,8 +38,9 @@ function fakeSources(opts: { expiresInMs?: number; fail?: boolean } = {}): Recor
         recorded.environmentCalls += 1;
         return resolve;
       },
-      fromNodeProviderChain: ({ ignoreCache }) => {
+      fromNodeProviderChain: ({ profile, ignoreCache }) => {
         recorded.chainCalls += 1;
+        recorded.chainProfiles.push(profile);
         recorded.ignoreCache.push(ignoreCache);
         return resolve;
       },
@@ -84,6 +87,13 @@ describe('createCredentialProvider', () => {
       expect(fake.iniProfiles).toEqual([]);
       expect(fake.chainCalls).toBe(1);
     }
+  });
+
+  it('holds the chain to the default profile for a default-profile selection', async () => {
+    const fake = fakeSources();
+    await createCredentialProvider({ selection: { kind: 'default-profile' } }, fake.sources)();
+    await createCredentialProvider({ selection: { kind: 'chain' } }, fake.sources)();
+    expect(fake.chainProfiles).toEqual(['default', undefined]);
   });
 
   it('never lets the SDK reuse shared files it read earlier', async () => {

@@ -18,13 +18,20 @@ export type CredentialProvider = () => Promise<AwsCredentials>;
 /**
  * Which credentials to resolve: a named profile from the shared AWS files,
  * only the credentials exported into the environment (access keys, a web
- * identity token file, a container credentials endpoint), or the SDK's
- * default Node provider chain.
+ * identity token file, a container credentials endpoint), the default Node
+ * provider chain over the shared files' `default` profile whatever
+ * `AWS_PROFILE` says (`default-profile`, for a caller that has already
+ * decided `AWS_PROFILE` does not apply), or the SDK's ambient default chain,
+ * which reads `AWS_PROFILE` itself (`chain`).
  */
 export type CredentialSelection =
   | { kind: 'profile'; name: string }
   | { kind: 'environment' }
+  | { kind: 'default-profile' }
   | { kind: 'chain' };
+
+/** The profile the default chain reads from the shared files when `AWS_PROFILE` is unset. */
+const DEFAULT_CHAIN_PROFILE = 'default';
 
 /** What the SDK's providers resolve: credentials, optionally with an expiry. */
 interface SdkCredentials extends AwsCredentials {
@@ -51,7 +58,7 @@ interface SharedFileReads {
 export interface CredentialSources {
   fromIni(init: { profile: string } & SharedFileReads): SdkCredentialProvider;
   fromEnvironment(): SdkCredentialProvider;
-  fromNodeProviderChain(init: SharedFileReads): SdkCredentialProvider;
+  fromNodeProviderChain(init: { profile?: string } & SharedFileReads): SdkCredentialProvider;
   now(): number;
 }
 
@@ -146,6 +153,11 @@ function selectedProvider(
       return sources.fromIni({ profile: selection.name, ...SHARED_FILE_READS });
     case 'environment':
       return sources.fromEnvironment();
+    case 'default-profile':
+      return sources.fromNodeProviderChain({
+        profile: DEFAULT_CHAIN_PROFILE,
+        ...SHARED_FILE_READS,
+      });
     case 'chain':
       return sources.fromNodeProviderChain(SHARED_FILE_READS);
   }
@@ -157,7 +169,9 @@ function selectedProvider(
  * `login_session`, `credential_process`, `source_profile` role chains), and
  * never consults environment keys. An `environment` selection uses only the
  * exported credentials. The default `chain` is the standard Node provider
- * chain (environment, shared files, SSO, container/instance metadata). Each
+ * chain (environment, shared files, SSO, container/instance metadata), and
+ * `default-profile` is that chain held to the `default` profile, so a
+ * stray `AWS_PROFILE` cannot redirect it. Each
  * provider reads the shared files afresh and is memoized until its
  * credentials near expiry.
  *

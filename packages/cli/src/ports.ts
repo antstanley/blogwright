@@ -36,7 +36,7 @@ export interface AddPackageOptions {
  *
  * Deliberately NOT a member of {@link Ports}. Its only two callers -
  * `blogwright plugin add` and `plugin remove` - dispatch BEFORE any
- * `OpsContext` exists, and must: `createContext` calls `sts.getAccountId()`,
+ * `OpsContext` exists, and must: `createContext` calls `sts:GetCallerIdentity`,
  * while installing a plugin is what an operator does on a repo that has no
  * config and no credentials yet. A member of `Ports` is therefore unreachable
  * from the only code that wants this port, and every `deploy`, `status` and

@@ -189,6 +189,19 @@ credential_source = Ec2InstanceMetadata
     });
   });
 
+  it('resolves a role that is its own source profile through its keys, as the SDK does', () => {
+    const config = `[profile self]
+aws_access_key_id = A
+aws_secret_access_key = s
+role_arn = arn:aws:iam::123456789012:role/Self
+source_profile = self
+`;
+    expect(readProfileStyle(config, '', 'self')).toEqual({ style: 'static', profile: 'self' });
+    const keyless =
+      '[profile loop]\nrole_arn = arn:aws:iam::123456789012:role/L\nsource_profile = loop\n';
+    expect(readProfileStyle(keyless, '', 'loop').style).toBe('unconfigured');
+  });
+
   it('reports a role that needs an MFA code as mfa, ahead of its source', () => {
     const config = `${STATIC_CONFIG}
 [profile admin]

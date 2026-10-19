@@ -75,7 +75,7 @@ arn:aws:iam::<accountId>:role/<env>-<siteName>-gh
 
 ## Profiles and the account pin in CI
 
-`aws-actions/configure-aws-credentials` exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` into the job. Exported credentials take precedence over the config's [`aws.profile`](/reference/configuration/#awsprofile), so a profile you committed for local use is ignored in CI - the command logs `ignoring aws.profile "<name>": environment credentials are set` - and nothing breaks for want of a `~/.aws/config` on the runner.
+`aws-actions/configure-aws-credentials` exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` into the job. Exported credentials take precedence over the config's [`aws.profile`](/reference/configuration/#awsprofile), so a profile you committed for local use is ignored in CI - the command logs `ignoring aws.profile "<name>": environment credentials are set` - and nothing breaks for want of a `~/.aws/config` on the runner. (A self-hosted runner on an EC2 instance role exports nothing, so there export the instance credentials first - see [troubleshooting](/guides/troubleshooting/#aws-profile-name-not-found-from-source).)
 
 The [`aws.accountId`](/reference/configuration/#awsaccountid) pin still applies. If the role CI assumed belongs to another account, the deploy stops before it reads any state. The identity line each command prints goes to stderr in CI, so the job log always records which account the deploy ran against.
 

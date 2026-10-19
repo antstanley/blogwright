@@ -436,7 +436,7 @@ export async function main(
     // Dispatched HERE, beside `init` and ahead of the built-in switch, and
     // never from the switch itself: the switch runs past the `makeContext`
     // call below, which loads the environment's config and calls
-    // `sts.getAccountId()`. `blogwright plugin list` and `plugin add` are what
+    // `sts:GetCallerIdentity`. `blogwright plugin list` and `plugin add` are what
     // an operator runs BEFORE the repo is configured, so dispatching them
     // after that build would answer both with `no config found for
     // environment "production"` on exactly the repo they exist to serve -

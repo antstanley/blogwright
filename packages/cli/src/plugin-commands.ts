@@ -733,7 +733,7 @@ export async function runPlugin(
  * can ever claim the name, and `cli.ts` dispatches it directly. It is
  * dispatched BEFORE `createContext` - beside the `init` branch, not from the
  * built-in `switch` - because `createContext` loads the environment's config
- * and calls `sts.getAccountId()`, neither of which holds on the repo this
+ * and calls `sts:GetCallerIdentity`, neither of which holds on the repo this
  * namespace exists to serve: `blogwright plugin list` on a checkout with no
  * `config/<env>.jsonc` and no AWS credentials would otherwise fail with `no
  * config found for environment "production"` instead of printing the

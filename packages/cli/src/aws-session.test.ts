@@ -69,6 +69,10 @@ role_arn = arn:aws:iam::123456789012:role/Admin
 source_profile = keys
 mfa_serial = arn:aws:iam::123456789012:mfa/ant
 
+[profile mfa-deploy]
+role_arn = arn:aws:iam::210987654321:role/Deploy
+source_profile = mfa-role
+
 [profile ci]
 role_arn = arn:aws:iam::123456789012:role/Ci
 web_identity_token_file = /var/run/token
@@ -324,13 +328,6 @@ describe('buildLoginChoices', () => {
     expect(buildLoginChoices('p', 'unconfigured', false).defaultIndex).toBe(1);
   });
 
-  it('omits --profile for unnamed credentials', () => {
-    expect(buildLoginChoices(undefined, 'sso', false).choices.map((c) => c.args)).toEqual([
-      ['sso', 'login'],
-      ['login'],
-    ]);
-  });
-
   it('adds each command its browserless flag on a headless host', () => {
     expect(buildLoginChoices('p', 'sso', true).choices.map((c) => c.args)).toEqual([
       ['sso', 'login', '--profile', 'p', '--use-device-code'],
@@ -373,7 +370,7 @@ describe('resolveAwsSession - profile resolution', () => {
 
     await expect(resolveAwsSession(world.options)).rejects.toThrow(
       'AWS profile "mysite-staging" not found (from config/production.jsonc)\n' +
-        'available: default, app, bare, ci, console, deployed, ec2, keyed-role, keys, mfa-role, mysite-prod, personal',
+        'available: default, app, bare, ci, console, deployed, ec2, keyed-role, keys, mfa-deploy, mfa-role, mysite-prod, personal',
     );
     expect(world.builtProfiles).toEqual([]);
   });
@@ -398,7 +395,7 @@ describe('resolveAwsSession - profile resolution', () => {
     const session = await resolveAwsSession(world.options);
 
     expect(session.profile).toEqual({ source: 'default' });
-    expect(world.builtProfiles).toEqual(['chain']);
+    expect(world.builtProfiles).toEqual(['default-profile']);
     expect(world.builtEndpoints).toEqual(['http://localhost:4566']);
     expect(world.logger.lines).toContain(
       'info profile "mysite-staging" not found - using emulator credentials',
@@ -559,12 +556,12 @@ describe('resolveAwsSession - login offer', () => {
     expect(world.terminal.prompts).toEqual([prompt]);
   });
 
-  it('follows the default profile style and omits --profile for a null profile', async () => {
+  it('follows the default profile style for unnamed credentials, naming the profile', async () => {
     const world = sessionWorld({ outcomes: ['provider-fails', IDENTITY], answers: [''] });
 
     await resolveAwsSession(world.options);
 
-    expect(world.awsLogin.calls).toEqual([['login']]);
+    expect(world.awsLogin.calls).toEqual([['login', '--profile', 'default']]);
   });
 
   it('adds the headless flags on a headless host', async () => {
@@ -703,12 +700,18 @@ describe('resolveAwsSession - no login offer', () => {
     );
   });
 
-  it('explains that an MFA role needs exported credentials, run without the flag that named it', async () => {
+  it('explains that an MFA role needs exported credentials, run with neither --profile nor AWS_PROFILE', async () => {
     expect(await refusal({ options: { flag: 'mfa-role' } })).toContain(
       'The role needs an MFA code for arn:aws:iam::123456789012:mfa/ant, which blogwright cannot ask for. ' +
         'Export temporary credentials with: eval "$(aws configure export-credentials --profile mfa-role --format env)", ' +
-        'then run again without --profile',
+        'then run again with neither --profile nor AWS_PROFILE set',
     );
+  });
+
+  it('exports the requested role, not the intermediate role holding mfa_serial', async () => {
+    const message = await refusal({ options: { flag: 'mfa-deploy' } });
+    expect(message).toContain('MFA code for arn:aws:iam::123456789012:mfa/ant');
+    expect(message).toContain('aws configure export-credentials --profile mfa-deploy --format env');
   });
 
   it("names a web identity profile's token file rather than offering a sign-in", async () => {

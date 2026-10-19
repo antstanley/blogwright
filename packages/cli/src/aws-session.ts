@@ -55,10 +55,15 @@ export function isNamedProfile(profile: ResolvedAwsProfile): profile is NamedAws
   return 'name' in profile;
 }
 
-/** The credentials a resolved profile selects in core. */
+/**
+ * The credentials a resolved profile selects in core. The default row holds
+ * the chain to the `default` profile: it only wins with `AWS_PROFILE` unset,
+ * or deliberately ignored (`init` detecting for a config with no profile),
+ * and the SDK would otherwise read `AWS_PROFILE` from the process itself.
+ */
 function credentialSelection(profile: ResolvedAwsProfile): CredentialSelection {
   if (isNamedProfile(profile)) return { kind: 'profile', name: profile.name };
-  return profile.source === 'env-keys' ? { kind: 'environment' } : { kind: 'chain' };
+  return profile.source === 'env-keys' ? { kind: 'environment' } : { kind: 'default-profile' };
 }
 
 /** The parts of the operator's machine AWS resolution reads, injected by the composition root. */
@@ -240,14 +245,18 @@ export interface LoginMenu {
 /**
  * The two sign-in commands for a profile. The default follows the style: SSO
  * profiles default to `aws sso login`, console and unconfigured ones to
- * `aws login`. Headless hosts get each command's browserless flag.
+ * `aws login`. Headless hosts get each command's browserless flag. The
+ * profile is the one whose settings decided the style - for a
+ * `source_profile` chain, its source, whose login repairs the chain - and is
+ * always passed, `default` included, so the AWS CLI cannot fall back to an
+ * inherited `AWS_PROFILE` this session ignored.
  */
 export function buildLoginChoices(
-  profileName: string | undefined,
+  profileName: string,
   style: ProfileStyle,
   headless: boolean,
 ): LoginMenu {
-  const profileArgs = profileName === undefined ? [] : ['--profile', profileName];
+  const profileArgs = ['--profile', profileName];
   const sso: LoginChoice = {
     args: ['sso', 'login', ...profileArgs, ...(headless ? ['--use-device-code'] : [])],
     hint: style === 'sso' ? 'profile uses IAM Identity Center' : 'IAM Identity Center',
@@ -266,20 +275,14 @@ function commandLine(choice: LoginChoice): string {
 /** Styles a sign-in command can repair. */
 const SIGN_IN_STYLES: ReadonlySet<ProfileStyle> = new Set(['sso', 'login', 'unconfigured']);
 
-/**
- * The profile a repair targets: the one whose settings decided the style,
- * which for a `source_profile` chain is its source - the login that repairs
- * a role chain is the login of its source profile. Unnamed credentials get
- * no `--profile` unless the default profile chains to another one.
- */
-function repairProfile(profile: ResolvedAwsProfile, signIn: ProfileSignIn): string | undefined {
-  if (!isNamedProfile(profile) && signIn.profile === DEFAULT_PROFILE) return undefined;
-  return signIn.profile;
+/** The profile the operator asked for; unnamed credentials read `default`. */
+function requestedProfile(profile: ResolvedAwsProfile): string {
+  return isNamedProfile(profile) ? profile.name : DEFAULT_PROFILE;
 }
 
 /** The sign-in style of the resolved credentials; unnamed ones read the `default` profile. */
 function signInOf(profile: ResolvedAwsProfile, profiles: AwsProfiles): ProfileSignIn {
-  return profiles.signIn(isNamedProfile(profile) ? profile.name : DEFAULT_PROFILE);
+  return profiles.signIn(requestedProfile(profile));
 }
 
 /** The one line of guidance shown when no login is offered. */
@@ -291,8 +294,7 @@ function credentialGuidance(
   if (profile.source === 'env-keys') {
     return 'Refresh the exported credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN).';
   }
-  const target = repairProfile(profile, signIn);
-  const named = target === undefined ? '' : ` --profile ${target}`;
+  const target = signIn.profile;
   switch (signIn.style) {
     case 'sso':
     case 'login':
@@ -305,7 +307,7 @@ function credentialGuidance(
       return `Sign in with: ${commands}`;
     }
     case 'static':
-      return `Update the access keys with: aws configure${named}`;
+      return `Update the access keys with: aws configure --profile ${target}`;
     case 'process':
       return `Check the profile's credential_process: ${signIn.detail ?? '(unset)'}`;
     case 'external':
@@ -315,9 +317,10 @@ function credentialGuidance(
     case 'mfa':
       return (
         `The role needs an MFA code for ${signIn.detail ?? 'its mfa_serial'}, which blogwright cannot ask for. ` +
-        `Export temporary credentials with: eval "$(aws configure export-credentials${named} --format env)"` +
+        'Export temporary credentials with: ' +
+        `eval "$(aws configure export-credentials --profile ${requestedProfile(profile)} --format env)"` +
         (profile.source === 'flag' || profile.source === 'env'
-          ? `, then run again without ${profileSourceLabel(profile.source)}`
+          ? ', then run again with neither --profile nor AWS_PROFILE set'
           : ', then run again')
       );
   }
@@ -393,7 +396,7 @@ async function repairCredentials(
   const reason = failure instanceof Error ? failure.message : String(failure);
   opts.logger.warn(`${credentialsSubject(profile)} are not usable:\n  ${reason}`);
   const choice = await askLoginChoice(
-    buildLoginChoices(repairProfile(profile, signIn), signIn.style, headless),
+    buildLoginChoices(signIn.profile, signIn.style, headless),
     opts.ports.terminal,
     opts.logger,
   );

@@ -616,6 +616,19 @@ describe('initSite AWS profile and account pin', () => {
     expect(parseConfig(written).aws).toBeUndefined();
   });
 
+  it('warns that --profile is ignored when the files define no profiles', async () => {
+    const { code, logger, written } = await initAws({
+      profile: 'mysite-prod',
+      answers: ['myblog', '', '', '', '', 'n'],
+    });
+
+    expect(code).toBe(0);
+    expect(logger.lines).toContain(
+      'profile "mysite-prod" from --profile is not in your AWS config files - ignoring it',
+    );
+    expect(parseConfig(written).aws).toBeUndefined();
+  });
+
   it('drops a suggested profile the files do not define, so blank still means default credentials', async () => {
     const { code, written, terminal, logger } = await initAws({
       sharedConfig: PROFILES,
@@ -682,7 +695,7 @@ describe('initSite AWS profile and account pin', () => {
       answers: ['myblog', '', '', '', '', 'none', 'y'],
     });
 
-    expect(built).toEqual([{ profile: 'chain', endpoint: undefined }]);
+    expect(built).toEqual([{ profile: 'default-profile', endpoint: undefined }]);
     expect(logger.lines).toContain(
       'AWS_PROFILE=mysite-prod is set in this shell and is not saved to the config - unset it before running blogwright in this shell',
     );
@@ -751,7 +764,7 @@ describe('initSite AWS profile and account pin', () => {
   it('passes no endpoint override to the session', async () => {
     const { built } = await initAws({ answers: ['myblog', '', '', '', '', 'y'] });
 
-    expect(built).toEqual([{ profile: 'chain', endpoint: undefined }]);
+    expect(built).toEqual([{ profile: 'default-profile', endpoint: undefined }]);
   });
 
   it('warns and carries on, unpinned, when the account cannot be detected', async () => {

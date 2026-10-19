@@ -318,7 +318,7 @@ function suggestedProfile(aws: InitAwsOptions): { name: string; source: string }
  * Ask which named profile this environment uses - only when the shared AWS
  * files define at least one. Defaults to `--profile`, then `AWS_PROFILE`,
  * but only when the files define it: a stale suggestion is dropped with a
- * warning rather than offered as an answer that can never validate. Blank
+ * warning (even when nothing is asked) rather than offered as an answer that can never validate. Blank
  * means default credentials when there is no default; with a default, blank
  * takes it and `none` chooses default credentials. A nonblank answer must be
  * a listed profile. Undefined means default credentials.
@@ -330,14 +330,15 @@ async function askAwsProfile(
   aws: InitAwsOptions,
 ): Promise<string | undefined> {
   const profiles = await readAwsProfiles(fs, aws.host.processEnv, aws.host.home);
-  if (profiles.names.length === 0) return undefined;
   const suggested = suggestedProfile(aws);
+  const asked = profiles.names.length > 0;
   if (suggested && !profiles.has(suggested.name)) {
     logger.warn(
       `profile "${suggested.name}" from ${suggested.source} is not in your AWS config files - ` +
-        'not offering it as the default',
+        (asked ? 'not offering it as the default' : 'ignoring it'),
     );
   }
+  if (!asked) return undefined;
   const defaultValue = suggested && profiles.has(suggested.name) ? suggested.name : undefined;
   const choice = defaultValue
     ? `"${NO_PROFILE_ANSWER}" for default credentials`

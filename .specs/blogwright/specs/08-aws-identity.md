@@ -98,7 +98,7 @@ the advice matches the provider that actually failed:
 1. A role - `role_arn` with exactly one of `source_profile` or
    `credential_source`: `mfa` when it sets `mfa_serial` (the provider has
    no MFA code callback); otherwise the style of the source profile,
-   followed recursively (a cycle resolves to `unconfigured`), or `external`
+   followed recursively, or `external`
    for a `credential_source` (environment, instance or container
    credentials).
 2. `static`: `aws_access_key_id` and `aws_secret_access_key`.
@@ -111,7 +111,11 @@ the advice matches the provider that actually failed:
 
 Inside a role chain a source profile's access keys win over everything,
 and a source profile with a `credential_source` but no `role_arn` is
-`external`, as in the SDK. Unnamed credentials take the style of the
+`external`, as in the SDK. As in the SDK, only the source profiles followed
+so far count toward a cycle, not the profile asked for: a role that names
+itself as its own `source_profile` (keys and `role_arn` in one profile)
+resolves through its keys as `static`, and a source reached twice is a
+cycle, `unconfigured`. Unnamed credentials take the style of the
 `default` profile. The result also names the profile the style was read
 from - the source profile at the end of a `source_profile` chain - and the
 login offer and guidance target that profile, not the role profile that
@@ -132,8 +136,16 @@ chains to it.
   `fromContainerMetadata` for a container credentials URI. The full chain
   would try the shared files' `[default]` profile before the token file and
   the container endpoint.
-- `{ kind: 'chain' }`, the default (row 5): `fromNodeProviderChain()`, as
-  before.
+- `{ kind: 'default-profile' }` (row 5): `fromNodeProviderChain({ profile:
+  'default' })`. Row 5 only wins with `AWS_PROFILE` unset - or, in `init`,
+  deliberately ignored - and the chain would otherwise read `AWS_PROFILE`
+  from the process itself. Row 5 never has an exported key pair (row 3 would
+  have won), so the chain skipping `fromEnv` for a named profile loses
+  nothing.
+- `{ kind: 'chain' }`, the default when no selection is given:
+  `fromNodeProviderChain()`, as before. Callers outside the CLI's session -
+  the analytics transform Lambda - keep it, because there the exported keys
+  must win.
 
 Every provider is built with `ignoreCache: true`. The SDK caches each
 shared-file read for the life of the process, including `~/.aws/config` and
@@ -163,7 +175,7 @@ that returns `account`. `resolveAwsSession` runs these steps in order:
 
 1. Resolve the profile.
 2. Check that a named profile exists.
-3. `createClients({ region, endpointOverride, profile })`.
+3. `createClients({ region, endpointOverride, selection })`.
 4. `getCallerIdentity()`. A credential failure goes to the login offer.
 5. `assertAccountPin(config.aws?.accountId, identity, { override, pinSource, credentialsDescription })`,
    which returns the pin status (`matched`, `unset` or `skipped`) the identity
@@ -236,7 +248,9 @@ choice [1]:
 ```
 
 The `sso` style defaults to option 1. The `login` and `unconfigured` styles
-default to option 2. For unnamed credentials, `--profile` is omitted. On a
+default to option 2. The `--profile` is always passed - `default` for
+unnamed credentials - so the AWS CLI cannot fall back to an inherited
+`AWS_PROFILE` the session ignored. On a
 headless host, `aws sso login` gains `--use-device-code` and `aws login`
 gains `--remote`. A host is headless when any of these is true:
 
@@ -262,10 +276,11 @@ code is 1:
 - `process` profile: the profile's `credential_process`;
 - `external` profile: the role's `credential_source`;
 - `web-identity` profile: the role's `web_identity_token_file`;
-- `mfa` profile: export temporary credentials with
+- `mfa` profile: export temporary credentials for the requested profile
+  (not an intermediate role in its chain) with
   `aws configure export-credentials --profile <name> --format env`, then
-  run again (without `--profile` or `AWS_PROFILE` when one of them named
-  the role);
+  run again - with neither `--profile` nor `AWS_PROFILE` set when one of
+  them named the profile, since both beat exported credentials;
 - `env-keys` source: refresh the exported credentials.
 
 ## `whoami`
@@ -313,7 +328,8 @@ AWS profile for this environment (blank for default credentials) [mysite-prod]:
 
 The default is `--profile`, then `AWS_PROFILE`, then blank - but only a
 listed profile is offered; a suggestion the files do not define is dropped
-with a warning. With no default, blank means default credentials. With a
+with a warning, which is given even when the files define no profiles and
+the question is skipped (`... - ignoring it`). With no default, blank means default credentials. With a
 default, blank takes it and `none` chooses default credentials, and the
 prompt says so (`("none" for default credentials)`). A nonblank answer must
 be a listed profile or `none`.
@@ -382,7 +398,7 @@ defaulting to `process.env`, `os.homedir()` and core's `createClients`.
 
 **Decisions**
 
-- *Precedence.* **Exported environment credentials beat the config's profile; a flag or `AWS_PROFILE` beats both.** CI exports keys and has no profiles, so a committed `aws.profile` must not break it. An explicit operator choice still wins, and the pin catches stale exported keys.
+- *Precedence.* **Exported environment credentials beat the config's profile; a flag or `AWS_PROFILE` beats both.** CI that exports credentials has no profiles, so a committed `aws.profile` must not break it. An explicit operator choice still wins, and the pin catches stale exported keys. Known limit: a runner on an EC2 instance role exports nothing, so a committed `aws.profile` it does not define is refused; the documented workaround is to export the instance credentials first (`aws configure export-credentials --format env`).
 - *Provider choice.* **`fromIni` for a named profile instead of `fromNodeProviderChain({ profile })`.** The chain currently skips environment keys when a profile is set, but its own warning says a future version may prefer environment keys. Calling `fromIni` makes the resolved profile authoritative and silences that warning.
 - *Pin placement.* **Checked before `StateStore.load`.** The bucket name contains the account id, so any later check would already have read, or bootstrap created, state in the wrong account.
 - *Login choice.* **Always offer both commands, defaulting by profile style.** The operator knows how they sign in better than a heuristic does. A wrong pick fails in the AWS CLI with its own message, and nothing is changed.

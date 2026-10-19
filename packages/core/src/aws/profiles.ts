@@ -202,7 +202,8 @@ function profileSettings(
  *
  * 1. a role (`role_arn` with exactly one of `source_profile` or
  *    `credential_source`): `mfa` when it sets `mfa_serial`; otherwise the
- *    source profile's style, followed recursively (a cycle is unconfigured),
+ *    source profile's style, followed recursively (a source followed twice
+ *    is a cycle, unconfigured; a profile may be its own source),
  *    or `external` for a `credential_source`;
  * 2. access keys (`aws_access_key_id` and `aws_secret_access_key`): `static`;
  * 3. `role_arn` with `web_identity_token_file`: `web-identity`;
@@ -224,11 +225,14 @@ export function readProfileStyle(
 ): ProfileSignIn {
   const config = configProfiles(configText);
   const credentials = parseIni(credentialsText);
-  const visited = new Set<string>();
 
-  const follow = (name: string, isSource: boolean): ProfileSignIn => {
-    if (visited.has(name)) return { style: 'unconfigured', profile };
-    visited.add(name);
+  /**
+   * `sources` holds the source profiles followed so far - not the profile
+   * asked for, as in the SDK, so a role that names itself as its own source
+   * (keys and `role_arn` in one profile) resolves through its keys.
+   */
+  const follow = (name: string, sources: ReadonlySet<string>): ProfileSignIn => {
+    const isSource = sources.size > 0;
     const settings = profileSettings(config, credentials, name);
     const setting = (key: string) => nonBlank(settings?.get(key));
     const isStatic = Boolean(setting('aws_access_key_id') && setting('aws_secret_access_key'));
@@ -241,7 +245,10 @@ export function readProfileStyle(
     if (isRole || (isSource && !role && external)) {
       const mfa = setting('mfa_serial');
       if (role && mfa) return { style: 'mfa', profile: name, detail: mfa };
-      if (source) return follow(source, true);
+      if (source) {
+        if (sources.has(source)) return { style: 'unconfigured', profile };
+        return follow(source, new Set([...sources, source]));
+      }
       return { style: 'external', profile: name, detail: external };
     }
     if (isStatic) return { style: 'static', profile: name };
@@ -254,7 +261,7 @@ export function readProfileStyle(
     return { style: 'unconfigured', profile: name };
   };
 
-  return follow(profile, false);
+  return follow(profile, new Set());
 }
 
 /** Settings any one of which makes the SDK resolve a profile through SSO. */
