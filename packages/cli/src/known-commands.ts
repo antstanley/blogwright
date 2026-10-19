@@ -43,6 +43,8 @@
  * `KNOWN_COMMANDS`), but the name is reserved from the moment any plugin
  * could collide with it, and the union keeps this set correct both before
  * and after that command exists - no second edit required either way.
+ * `whoami` is named explicitly too: like `init` it is dispatched ahead of the
+ * membership test, because it builds no context.
  *
  * `pds` is deliberately absent from `RESERVED_COMMANDS`, and adding it here
  * would break `blogwright pds` outright. There is no built-in `pds` command:
@@ -77,4 +79,5 @@ export const RESERVED_COMMANDS: ReadonlySet<string> = new Set([
   'init',
   'preview',
   'plugin',
+  'whoami',
 ]);

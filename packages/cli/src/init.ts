@@ -16,6 +16,9 @@ import {
   colors,
   findRepoRoot,
   parseConfig,
+  readAwsProfiles,
+  shortIdentity,
+  type AwsConfig,
   type ConfigBlockEntry,
   type FileSystem,
   type Plugin,
@@ -24,8 +27,10 @@ import {
   WEB_FUNCTION_REGIONS,
 } from 'blogwright-core';
 
+import { resolveAwsProfile, resolveAwsSession, type AwsHost } from './aws-session.js';
 import { renderConfigBlock, type ConfigBlockEntry as BlockEntry } from './config-block.js';
-import type { Logger } from './logger.js';
+import { confirm, type Logger } from './logger.js';
+import type { AwsLogin } from './ports.js';
 
 const SITE_NAME_PATTERN = /^[a-z0-9-]+$/;
 const GITHUB_REPO_PATTERN = /^[\w.-]+\/[\w.-]+$/;
@@ -287,6 +292,165 @@ async function askSsrFramework(
   return SSR_FRAMEWORKS[choice!.toLowerCase()];
 }
 
+/** What `init`'s AWS questions need from the composition root. */
+export interface InitAwsOptions {
+  /** `--profile`, the first default for the profile question. */
+  profile?: string | undefined;
+  host: AwsHost;
+  awsLogin: AwsLogin;
+}
+
+/** Where the wizard writes, relative to the repo root - also how AWS messages name it. */
+const INIT_CONFIG_FILE = 'config/production.jsonc';
+
+/** The answer that chooses default credentials when the profile question has a default. */
+const NO_PROFILE_ANSWER = 'none';
+
+/** The profile `--profile`, then `AWS_PROFILE`, suggests - with which of the two it came from. */
+function suggestedProfile(aws: InitAwsOptions): { name: string; source: string } | undefined {
+  const flag = aws.profile?.trim();
+  if (flag) return { name: flag, source: '--profile' };
+  const env = aws.host.processEnv.AWS_PROFILE?.trim();
+  return env ? { name: env, source: 'AWS_PROFILE' } : undefined;
+}
+
+/**
+ * Ask which named profile this environment uses - only when the shared AWS
+ * files define at least one. Defaults to `--profile`, then `AWS_PROFILE`,
+ * but only when the files define it: a stale suggestion is dropped with a
+ * warning (even when nothing is asked) rather than offered as an answer that can never validate. Blank
+ * means default credentials when there is no default; with a default, blank
+ * takes it and `none` chooses default credentials. A nonblank answer must be
+ * a listed profile. Undefined means default credentials.
+ */
+async function askAwsProfile(
+  fs: FileSystem,
+  terminal: Terminal,
+  logger: Logger,
+  aws: InitAwsOptions,
+): Promise<string | undefined> {
+  const profiles = await readAwsProfiles(fs, aws.host.processEnv, aws.host.home);
+  const suggested = suggestedProfile(aws);
+  const asked = profiles.names.length > 0;
+  if (suggested && !profiles.has(suggested.name)) {
+    logger.warn(
+      `profile "${suggested.name}" from ${suggested.source} is not in your AWS config files - ` +
+        (asked ? 'not offering it as the default' : 'ignoring it'),
+    );
+  }
+  if (!asked) return undefined;
+  const defaultValue = suggested && profiles.has(suggested.name) ? suggested.name : undefined;
+  const choice = defaultValue
+    ? `"${NO_PROFILE_ANSWER}" for default credentials`
+    : 'blank for default credentials';
+  const answer = await ask(terminal, logger, {
+    prompt: `AWS profile for this environment (${choice})`,
+    defaultValue,
+    validate: (v) =>
+      profiles.has(v) || v === NO_PROFILE_ANSWER
+        ? undefined
+        : `no profile "${v}" - expected one of ${profiles.names.join(', ')}, or "${NO_PROFILE_ANSWER}"`,
+  });
+  return answer === NO_PROFILE_ANSWER && !profiles.has(answer) ? undefined : answer;
+}
+
+/**
+ * Warn when this shell would override what the config is about to say: the
+ * pin is detected for the config's credentials, so a command run here under
+ * a different `AWS_PROFILE` or exported credentials could be refused.
+ */
+function warnShellOverride(
+  logger: Logger,
+  processEnv: NodeJS.ProcessEnv,
+  profile: string | undefined,
+): void {
+  const shell = resolveAwsProfile({ processEnv, config: { profile } });
+  const advice = 'unset it before running blogwright in this shell';
+  if (shell.source === 'env' && shell.name !== profile) {
+    const saved = profile === undefined ? 'is not saved to the config' : 'overrides aws.profile';
+    logger.warn(`AWS_PROFILE=${shell.name} is set in this shell and ${saved} - ${advice}`);
+  } else if (shell.source === 'env-keys' && profile !== undefined) {
+    logger.warn('AWS credentials exported in this shell override aws.profile - unset them first');
+  }
+}
+
+/** The environment without `AWS_PROFILE`, so detection sees what a config with no profile uses. */
+function withoutAwsProfile(processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { AWS_PROFILE: _ignored, ...rest } = processEnv;
+  return rest;
+}
+
+/**
+ * Offer to detect the account the chosen credentials belong to and pin it.
+ * The credentials are the ones the written config selects: the chosen
+ * profile, or - with none - exported credentials or the default chain, never
+ * this shell's `AWS_PROFILE`, which the config does not record. A shell that
+ * would override the config is warned about. Runs the same session
+ * resolution every command does - login offer included - against real AWS,
+ * so the pin is a real account. With `AWS_ENDPOINT_URL`
+ * exported it is not offered at all: the SDK's own SSO and STS clients that
+ * resolve a profile read that variable too, so detection would ask the
+ * emulator. An AWS failure never fails `init`: every error the session
+ * raises is an AWS or sign-in failure, so it warns and leaves the account
+ * unpinned.
+ */
+async function askAccountPin(
+  fs: FileSystem,
+  terminal: Terminal,
+  logger: Logger,
+  opts: { region: string; profile: string | undefined; aws: InitAwsOptions },
+): Promise<string | undefined> {
+  if (opts.aws.host.processEnv.AWS_ENDPOINT_URL?.trim()) {
+    logger.warn('AWS_ENDPOINT_URL is set, so the AWS account cannot be detected');
+    logger.warn(ACCOUNT_NOT_PINNED);
+    return undefined;
+  }
+  if (!(await confirm(terminal, 'Detect the AWS account and pin it to this config?'))) {
+    return undefined;
+  }
+  const { host } = opts.aws;
+  warnShellOverride(logger, host.processEnv, opts.profile);
+  try {
+    const session = await resolveAwsSession({
+      region: opts.region,
+      endpointOverride: undefined,
+      flag: opts.profile,
+      configLabel: INIT_CONFIG_FILE,
+      host:
+        opts.profile === undefined
+          ? { ...host, processEnv: withoutAwsProfile(host.processEnv) }
+          : host,
+      ports: { fs, terminal, awsLogin: opts.aws.awsLogin },
+      logger,
+    });
+    const { account, arn } = session.identity;
+    logger.ok(`AWS account ${account} (${shortIdentity(arn)}) - pinned as aws.accountId`);
+    return account;
+  } catch (err) {
+    logger.warn(err instanceof Error ? err.message : String(err));
+    logger.warn(ACCOUNT_NOT_PINNED);
+    return undefined;
+  }
+}
+
+const ACCOUNT_NOT_PINNED = 'account not pinned - add aws.accountId later';
+
+/**
+ * The `aws` block, or undefined when there is nothing to write. Rendered in
+ * `renderConfigBlock`'s style; the pin carries its own explanatory comment.
+ */
+function renderAwsBlock(aws: AwsConfig): string | undefined {
+  const entries: BlockEntry[] = [];
+  if (aws.profile) entries.push({ prop: `"profile": ${JSON.stringify(aws.profile)}` });
+  if (aws.accountId) {
+    entries.push({
+      prop: `"accountId": "${aws.accountId}"`,
+      comment: 'deploys refuse credentials for any other account',
+    });
+  }
+  return entries.length > 0 ? renderConfigBlock('aws', entries) : undefined;
+}
+
 /** One core `"key": value` entry, or a plugin's pre-rendered `"key": { ... }` block, at the top level. */
 type TopLevelItem = { prop: string; comment?: string } | { block: string };
 
@@ -313,6 +477,7 @@ function renderConfig(opts: {
   domain?: string | undefined;
   githubRepo?: string | undefined;
   ssr?: SsrFramework | undefined;
+  aws?: AwsConfig | undefined;
   pluginBlocks: readonly string[];
 }): string {
   const items: TopLevelItem[] = [
@@ -330,6 +495,8 @@ function renderConfig(opts: {
     });
   }
   if (opts.ssr) items.push({ block: renderConfigBlock('ssr', opts.ssr.entries) });
+  const awsBlock = opts.aws ? renderAwsBlock(opts.aws) : undefined;
+  if (awsBlock) items.push({ block: awsBlock });
   for (const block of opts.pluginBlocks) items.push({ block });
 
   const body = items.map((item, i) => renderTopLevelItem(item, i === items.length - 1));
@@ -353,7 +520,7 @@ export async function initSite(
   terminal: Terminal,
   logger: Logger,
   plugins: readonly Plugin[],
-  root?: string,
+  options: { aws: InitAwsOptions; root?: string | undefined },
 ): Promise<number> {
   if (!terminal.isInteractive) {
     logger.error(
@@ -362,8 +529,8 @@ export async function initSite(
     );
     return 1;
   }
-  const repoRoot = root ?? (await findRepoRoot(fs).catch(() => process.cwd()));
-  const configPath = `${repoRoot}/config/production.jsonc`;
+  const repoRoot = options.root ?? (await findRepoRoot(fs).catch(() => process.cwd()));
+  const configPath = `${repoRoot}/${INIT_CONFIG_FILE}`;
   if (await fs.exists(configPath)) {
     logger.error(`${configPath} already exists - edit it directly, or pass --config elsewhere`);
     return 1;
@@ -399,6 +566,12 @@ export async function initSite(
       validate: (v) => (WEB_FUNCTION_REGIONS.includes(v) ? undefined : `expected ${regions}`),
     });
   }
+  const profile = await askAwsProfile(fs, terminal, logger, options.aws);
+  const accountId = await askAccountPin(fs, terminal, logger, {
+    region: region!,
+    profile,
+    aws: options.aws,
+  });
   const pluginBlocks = await collectPluginBlocks(plugins, terminal, logger);
 
   const rendered = renderConfig({
@@ -407,6 +580,7 @@ export async function initSite(
     domain,
     githubRepo,
     ssr,
+    aws: { profile, accountId },
     pluginBlocks,
   });
   // Re-parsed before it is trusted onto disk, mirroring `plugin-commands.ts`'s

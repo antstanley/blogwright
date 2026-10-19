@@ -453,3 +453,53 @@ describe('ssr config', () => {
     expect(names.ssrCachePolicy).toBe('staging-example-ssr');
   });
 });
+
+describe('aws config', () => {
+  it('is absent by default and carries no defaults', () => {
+    expect(parseConfig(withSite('{}')).aws).toBeUndefined();
+    expect(parseConfig(withSite('{ "aws": {} }')).aws).toEqual({});
+  });
+
+  it('accepts a profile and a quoted 12-digit account id, leading zeros intact', () => {
+    const aws = parseConfig(
+      withSite('{ "aws": { "profile": "mysite-prod", "accountId": "012345678901" } }'),
+    ).aws;
+    expect(aws).toEqual({ profile: 'mysite-prod', accountId: '012345678901' });
+  });
+
+  it('refuses a block that is not an object', () => {
+    for (const block of ['null', '"aws"', '[]', '42', 'true']) {
+      expect(() => parseConfig(withSite(`{ "aws": ${block} }`))).toThrow(
+        'config.aws must be an object',
+      );
+    }
+  });
+
+  it('refuses an unknown key, naming it', () => {
+    expect(() => parseConfig(withSite('{ "aws": { "region": "eu-west-2" } }'))).toThrow(
+      'config.aws has unknown key "region"',
+    );
+  });
+
+  it('refuses a blank or non-string profile', () => {
+    for (const profile of ['""', '"   "', '42', 'null']) {
+      expect(() => parseConfig(withSite(`{ "aws": { "profile": ${profile} } }`))).toThrow(
+        'config.aws.profile must be a nonblank profile name',
+      );
+    }
+  });
+
+  it('refuses a numeric account id with "quote it"', () => {
+    expect(() => parseConfig(withSite('{ "aws": { "accountId": 123456789012 } }'))).toThrow(
+      /config\.aws\.accountId must be a string - quote it/,
+    );
+  });
+
+  it('refuses an account id one digit short, one digit long, or not digits', () => {
+    for (const id of ['"12345678901"', '"1234567890123"', '"12345678901a"', 'null']) {
+      expect(() => parseConfig(withSite(`{ "aws": { "accountId": ${id} } }`))).toThrow(
+        'config.aws.accountId must be a string of exactly 12 digits',
+      );
+    }
+  });
+});

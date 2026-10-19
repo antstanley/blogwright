@@ -12,4 +12,5 @@ These are current implementation contracts, not a supported third-party SPI.
 - [Dashboard design](specs/05-design.md)
 - [Documentation design](specs/06-docs-design.md)
 - [Web Functions (SSR)](specs/07-web-functions.md)
+- [AWS identity](specs/08-aws-identity.md)
 - [Canonical JSON schema](specs/canonical-types.schema.json)

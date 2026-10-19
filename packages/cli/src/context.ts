@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  createClients,
   createNodeFileSystem,
   createNodeTerminal,
   deriveNames,
@@ -11,6 +11,7 @@ import {
   parseConfigDocument,
   StateStore,
   type AwsClients,
+  type CallerIdentity,
   type FileSystem,
   type Names,
   type OpsConfig,
@@ -19,7 +20,15 @@ import {
 
 import { createFetchPing } from './adapters/fetch-ping.js';
 import { createNodeModuleLoader } from './adapters/node-module-loader.js';
+import { createProcessAwsLogin } from './adapters/process-aws-login.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
+import {
+  emitSessionLine,
+  formatIdentityLine,
+  resolveAwsSession,
+  type AwsHost,
+  type ResolvedAwsProfile,
+} from './aws-session.js';
 import { createLogger, type Logger } from './logger.js';
 import type { Ports } from './ports.js';
 
@@ -43,7 +52,12 @@ export interface OpsContext {
    */
   configDocument: Readonly<Record<string, unknown>>;
   names: Names;
+  /** Equals `identity.account`. */
   accountId: string;
+  /** Whose credentials this invocation signs with, from `sts:GetCallerIdentity`. */
+  identity: CallerIdentity;
+  /** The profile those credentials came from, and which precedence row chose it. */
+  awsProfile: ResolvedAwsProfile;
   clients: AwsClients;
   ports: Ports;
   /**
@@ -83,8 +97,45 @@ export interface ContextOptions {
   domain?: string | undefined;
   endpointOverride?: string | undefined;
   preview?: boolean | undefined;
+  /** `--profile`: the first row of AWS profile resolution. */
+  profile?: string | undefined;
+  /** The environment AWS resolution reads; defaults to `process.env`. */
+  processEnv?: NodeJS.ProcessEnv | undefined;
+  /** Home directory the shared AWS files resolve against; defaults to `os.homedir()`. */
+  home?: string | undefined;
+  /** Builds the AWS clients; defaults to core's `createClients`. Tests substitute it. */
+  createClients?: AwsHost['createClients'];
   /** Adapter overrides; anything omitted defaults to the real (node) adapter. */
   ports?: Partial<Ports> | undefined;
+}
+
+/**
+ * The real adapter for every port not supplied in `overrides`. Shared by
+ * `createContext` and the pre-context paths (`whoami`, `init`) through
+ * `bin.ts`, so all three wire the same adapters.
+ */
+function createPorts(overrides: Partial<Ports> = {}): Ports {
+  return {
+    fs: overrides.fs ?? createNodeFileSystem(),
+    vcs: overrides.vcs ?? createProcessVcs(),
+    terminal: overrides.terminal ?? createNodeTerminal(),
+    ping: overrides.ping ?? createFetchPing(),
+    loader: overrides.loader ?? createNodeModuleLoader(),
+    awsLogin: overrides.awsLogin ?? createProcessAwsLogin(),
+  };
+}
+
+/** The operator's machine as AWS resolution sees it, from `process` and `os`. */
+export function createAwsHost(
+  overrides: Pick<ContextOptions, 'processEnv' | 'home' | 'createClients'> = {},
+): AwsHost {
+  return {
+    processEnv: overrides.processEnv ?? process.env,
+    home: overrides.home ?? homedir(),
+    platform: process.platform,
+    cwd: process.cwd(),
+    createClients: overrides.createClients,
+  };
 }
 
 /**
@@ -180,9 +231,15 @@ export async function resolveConfigPath(fs: FileSystem, source: ConfigSource): P
   for (const path of candidates) {
     if (await fs.exists(path)) return path;
   }
-  throw new Error(
-    `no config found for environment "${source.env}" - looked for ${candidates.join(', ')}`,
-  );
+  throw new ConfigNotFoundError(source.env, candidates);
+}
+
+/** Raised by {@link resolveConfigPath} when no candidate config file exists. */
+export class ConfigNotFoundError extends Error {
+  constructor(env: string, candidates: readonly string[]) {
+    super(`no config found for environment "${env}" - looked for ${candidates.join(', ')}`);
+    this.name = 'ConfigNotFoundError';
+  }
 }
 
 /**
@@ -197,41 +254,47 @@ export async function resolveConfigPath(fs: FileSystem, source: ConfigSource): P
 export async function loadConfig(
   fs: FileSystem,
   source: ConfigSource,
-): Promise<{ config: OpsConfig; raw: Readonly<Record<string, unknown>> }> {
-  return parseConfigDocument(await fs.readText(await resolveConfigPath(fs, source)));
+): Promise<{ config: OpsConfig; raw: Readonly<Record<string, unknown>>; path: string }> {
+  const path = await resolveConfigPath(fs, source);
+  return { ...parseConfigDocument(await fs.readText(path)), path };
 }
 
 /**
- * Build the runtime context: load config, resolve the account id, derive names, create
- * clients, and load topology state from S3. The state bucket name is deterministic, which
- * resolves the bootstrap chicken-and-egg. This is the composition root - the only place
- * real adapters are constructed and wired.
+ * Build the runtime context: load config, resolve the AWS session (profile, caller
+ * identity, account pin), derive names, and load topology state from S3. The state
+ * bucket name is deterministic, which resolves the bootstrap chicken-and-egg; the pin
+ * is checked before it is derived, so a wrong account never reads or creates state.
+ * This is the composition root - the only place real adapters are constructed and wired.
  */
 export async function createContext(opts: ContextOptions): Promise<OpsContext> {
-  const fs = opts.ports?.fs ?? createNodeFileSystem();
-  const ports: Ports = {
-    fs,
-    vcs: opts.ports?.vcs ?? createProcessVcs(),
-    terminal: opts.ports?.terminal ?? createNodeTerminal(),
-    ping: opts.ports?.ping ?? createFetchPing(),
-    loader: opts.ports?.loader ?? createNodeModuleLoader(),
-  };
+  const ports = createPorts(opts.ports);
   const logger = createLogger(ports.terminal);
   const agentDir = join(cliPackageDir(), 'agent');
   const root = await findRepoRoot(ports.fs);
-  const { config, raw: configDocument } = await loadConfig(ports.fs, {
+  const {
+    config,
+    raw: configDocument,
+    path: configPath,
+  } = await loadConfig(ports.fs, {
     env: opts.env,
     root,
     configPath: opts.configPath,
   });
   const domain = opts.domain ?? config.domain;
 
-  const clients = createClients({
+  const session = await resolveAwsSession({
     region: config.region,
     endpointOverride: opts.endpointOverride,
+    flag: opts.profile,
+    aws: config.aws,
+    configLabel: relative(root, configPath) || configPath,
+    host: createAwsHost(opts),
+    ports,
+    logger,
   });
-
-  const accountId = await clients.sts.getAccountId();
+  emitSessionLine(formatIdentityLine(session), ports.terminal, logger);
+  const { clients, identity } = session;
+  const accountId = identity.account;
   const names = deriveNames(opts.env, accountId, config);
   const store = new StateStore(clients.s3, names.bucket, opts.env);
   // load() already returns empty state for a not-yet-created bucket/object; any other
@@ -246,6 +309,8 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     configDocument,
     names,
     accountId,
+    identity,
+    awsProfile: session.profile,
     clients,
     ports,
     agentDir,

@@ -43,6 +43,7 @@ import {
   withBrokenPlugin,
   type FakePluginSpec,
   type RecordedRun,
+  testAwsAccess,
 } from './test-support.js';
 
 /**
@@ -81,6 +82,8 @@ Commands:
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
+  whoami      [env]           Show the AWS account, identity and profile in
+                              use, and whether the account pin accepts them
 
   preview bootstrap           Provision the shared preview stack
   preview deploy <id>         Build + publish a PR preview (id like pr-42)
@@ -100,6 +103,8 @@ Options:
   --domain <fqdn>   Custom domain (ACM cert + CloudFront alias)
   --config <path>   Path to a JSONC config file
   --endpoint <url>  AWS endpoint override (e.g. http://localhost:4566 for floci)
+  --profile <name>  AWS profile from the shared AWS files (beats AWS_PROFILE,
+                    exported credentials and the config's aws.profile)
   --id <preview>    Preview id for preview deploy/destroy (also accepted positionally)
   --plain           Minimal machine-friendly output (no colour, no live status,
                     no prompts) - for CI systems and agents; also automatic when
@@ -248,6 +253,7 @@ describe('main - help and error surface', () => {
       testContextFactory(terminal).makeContext,
       makeDiscoveryPorts,
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -276,6 +282,7 @@ describe('main - help and error surface', () => {
       testContextFactory(terminal).makeContext,
       makeDiscoveryPorts,
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -313,6 +320,7 @@ describe('main - help and error surface', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -361,6 +369,7 @@ Plugins:
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -406,6 +415,7 @@ Plugins:
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -439,6 +449,7 @@ Plugins that failed to load:
       testContextFactory(terminal).makeContext,
       () => base,
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -471,6 +482,7 @@ Plugins that failed to load:
       refuseContext,
       () => base,
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -495,6 +507,7 @@ Plugins that failed to load:
       testContextFactory(terminal).makeContext,
       () => ({ fs: createMemoryFileSystem(), loader: neverLoader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -511,6 +524,7 @@ Plugins that failed to load:
       testContextFactory(terminal).makeContext,
       () => ({ fs: createMemoryFileSystem(), loader: neverLoader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -532,6 +546,7 @@ Plugins that failed to load:
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader: neverLoader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -550,6 +565,7 @@ Plugins that failed to load:
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader: neverLoader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -581,6 +597,7 @@ Plugins that failed to load:
           loader: neverLoader,
         }),
         unreachablePackages,
+        testAwsAccess(),
       ),
     ).rejects.toThrow(/failed to parse .*package\.json as JSON/);
   });
@@ -606,6 +623,7 @@ Plugins that failed to load:
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -619,7 +637,7 @@ Plugins that failed to load:
 
 describe('main - init dispatch', () => {
   it('discovers installed plugins and asks their questions in deterministic (name-sorted) order, writing every block into the one file', async () => {
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
     const asked: string[] = [];
     const zzz: Plugin = {
       name: 'zzz',
@@ -664,6 +682,7 @@ describe('main - init dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -684,7 +703,7 @@ describe('main - init dispatch', () => {
     // `helpText`'s own `isMissingPackageJsonError` - so this also pins that
     // the warning names the SPECIFIC "missing package.json" precondition,
     // not a blanket "something went wrong" catch-all.
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
     const fs = createMemoryFileSystem();
     const loader = createFakeModuleLoader([]);
 
@@ -694,6 +713,7 @@ describe('main - init dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -734,6 +754,7 @@ describe('main - init dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -750,7 +771,7 @@ describe('main - init dispatch', () => {
     // Otherwise an operator with a typo'd package.json and a plugin
     // installed gets a config silently missing that plugin's block and a
     // success exit, discovering the problem only later.
-    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', ''] });
+    const terminal = createScriptedTerminal({ answers: ['myblog', '', '', '', '', 'n'] });
     const repoRoot = await findRepoRoot(createNodeFileSystem());
     const fs = createMemoryFileSystem({
       [`${repoRoot}/.jj`]: '',
@@ -769,6 +790,7 @@ describe('main - init dispatch', () => {
           loader,
         }),
         unreachablePackages,
+        testAwsAccess(),
       ),
     ).rejects.toThrow(/failed to (read or )?parse/);
 
@@ -790,6 +812,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -813,6 +836,7 @@ describe('main - generic plugin dispatch', () => {
       factory.makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -843,6 +867,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -867,6 +892,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -888,6 +914,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -918,6 +945,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -971,6 +999,7 @@ describe('main - generic plugin dispatch', () => {
       makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -990,6 +1019,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -1011,6 +1041,7 @@ describe('main - generic plugin dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -1052,6 +1083,7 @@ describe('main - generic plugin dispatch', () => {
         makeContext,
         makeDiscoveryPorts,
         unreachablePackages,
+        testAwsAccess(),
       ).catch(() => undefined);
     }
 
@@ -1233,6 +1265,7 @@ ${ALL_PDS_LINES.map((line) => `    ${line}`).join('\n')}
       makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
     return { run, calls, terminal, contexts };
   }
@@ -1395,6 +1428,7 @@ ${ALL_PDS_LINES.map((line) => `    ${line}`).join('\n')}
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -1457,6 +1491,7 @@ describe('main - preview dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -1476,6 +1511,7 @@ describe('main - preview dispatch', () => {
       testContextFactory(terminal).makeContext,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(1);
@@ -1495,6 +1531,7 @@ describe('main - status dispatch', () => {
       makeContext,
       unreachableDiscoveryPorts,
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -1546,6 +1583,7 @@ describe('main - bootstrap --switch-mode', () => {
         modeSwitchFactory(terminal),
         unreachableDiscoveryPorts,
         unreachablePackages,
+        testAwsAccess(),
       ),
     ).rejects.toThrow(/refusing to switch "production" from static to ssr serving/);
   });
@@ -1562,6 +1600,7 @@ describe('main - bootstrap --switch-mode', () => {
         modeSwitchFactory(terminal),
         unreachableDiscoveryPorts,
         unreachablePackages,
+        testAwsAccess(),
       ),
     ).rejects.toThrow(/unexpected AWS request in test/);
     // `logger.warn` writes to the terminal's error stream, like every warning.
@@ -1572,12 +1611,12 @@ describe('main - bootstrap --switch-mode', () => {
 });
 
 describe('RESERVED_COMMANDS', () => {
-  it('equals the CLI\'s own dispatch set, including "init", "preview" and "plugin" which dispatch outside KNOWN_COMMANDS', () => {
+  it('equals the CLI\'s own dispatch set, including "init", "preview", "plugin" and "whoami" which dispatch outside KNOWN_COMMANDS', () => {
     // This literal list is independent of known-commands.ts's own
     // KNOWN_COMMANDS/union construction on purpose: if a built-in is ever
     // added to KNOWN_COMMANDS without being folded into RESERVED_COMMANDS
-    // too (or one of the three names dispatched ahead of KNOWN_COMMANDS -
-    // init, preview, plugin - is ever dropped from the union), this test
+    // too (or one of the four names dispatched ahead of KNOWN_COMMANDS -
+    // init, preview, plugin, whoami - is ever dropped from the union), this test
     // fails instead of silently letting a plugin shadow that command.
     expect([...RESERVED_COMMANDS].sort()).toEqual(
       [
@@ -1592,11 +1631,94 @@ describe('RESERVED_COMMANDS', () => {
         'preview',
         'rollback',
         'status',
+        'whoami',
       ].sort(),
     );
   });
 
   it('does not reserve "pds" - see plugins.ts\'s module comment for why', () => {
     expect(RESERVED_COMMANDS.has('pds')).toBe(false);
+  });
+});
+
+describe('main - --profile reaches every context', () => {
+  /** Records each context request's options, then builds an ordinary test context. */
+  function recordingContexts(terminal: ScriptedTerminal): {
+    makeContext: ContextFactory;
+    requested: ContextOptions[];
+  } {
+    const requested: ContextOptions[] = [];
+    const inner = testContextFactory(terminal).makeContext;
+    return {
+      requested,
+      makeContext: async (opts) => {
+        requested.push(opts);
+        return inner(opts);
+      },
+    };
+  }
+
+  it('passes --profile to the built-in context', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext, requested } = recordingContexts(terminal);
+    const sentinel = new Error('stop after the context request');
+
+    await expect(
+      main(
+        ['status', '--profile', 'ops'],
+        fixedTerminal(terminal),
+        async (opts) => {
+          await makeContext(opts);
+          throw sentinel;
+        },
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+        testAwsAccess(),
+      ),
+    ).rejects.toBe(sentinel);
+    expect(requested.map((opts) => opts.profile)).toEqual(['ops']);
+  });
+
+  it('passes --profile to the preview context', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext, requested } = recordingContexts(terminal);
+    const sentinel = new Error('stop after the context request');
+
+    await expect(
+      main(
+        ['preview', 'list', '--profile', 'ops'],
+        fixedTerminal(terminal),
+        async (opts) => {
+          await makeContext(opts);
+          throw sentinel;
+        },
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+        testAwsAccess(),
+      ),
+    ).rejects.toBe(sentinel);
+    expect(requested.map((opts) => opts.profile)).toEqual(['ops']);
+  });
+
+  it("passes --profile to a plugin's context and never into its args", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const calls: RecordedRun[] = [];
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-fake', namespace: 'fake', plugin: makeFakePlugin(calls) },
+    ]);
+    const { makeContext, requested } = recordingContexts(terminal);
+
+    const code = await main(
+      ['fake', 'sync', '--profile', 'ops', '--yes'],
+      fixedTerminal(terminal),
+      makeContext,
+      () => ({ fs, loader }),
+      unreachablePackages,
+      testAwsAccess(),
+    );
+
+    expect(code).toBe(0);
+    expect(requested.map((opts) => opts.profile)).toEqual(['ops']);
+    expect(calls[0]?.args).toEqual(['--yes']);
   });
 });

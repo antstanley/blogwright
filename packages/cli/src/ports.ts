@@ -36,7 +36,7 @@ export interface AddPackageOptions {
  *
  * Deliberately NOT a member of {@link Ports}. Its only two callers -
  * `blogwright plugin add` and `plugin remove` - dispatch BEFORE any
- * `OpsContext` exists, and must: `createContext` calls `sts.getAccountId()`,
+ * `OpsContext` exists, and must: `createContext` calls `sts:GetCallerIdentity`,
  * while installing a plugin is what an operator does on a repo that has no
  * config and no credentials yet. A member of `Ports` is therefore unreachable
  * from the only code that wants this port, and every `deploy`, `status` and
@@ -107,6 +107,22 @@ export interface ModuleLoader {
   load(path: string): Promise<unknown>;
 }
 
+/** How an `aws` sign-in command ended. */
+export type AwsLoginResult =
+  | { ok: true }
+  | { ok: false; reason: 'not-installed' }
+  | { ok: false; reason: 'exit'; code: number };
+
+/**
+ * Runs an AWS CLI sign-in (`aws sso login`, `aws login`) with the operator's
+ * terminal attached, so its browser or device-code prompts reach them.
+ * Blogwright never stores credentials itself; the AWS CLI writes its own cache.
+ */
+export interface AwsLogin {
+  /** Run `aws` with `args` (without the leading `aws`) and report how it exited. */
+  run(args: readonly string[]): Promise<AwsLoginResult>;
+}
+
 /** The ports domain code reaches side effects through; adapters are wired in createContext. */
 export interface Ports {
   fs: FileSystem;
@@ -114,4 +130,5 @@ export interface Ports {
   terminal: Terminal;
   ping: PingBuilder;
   loader: ModuleLoader;
+  awsLogin: AwsLogin;
 }

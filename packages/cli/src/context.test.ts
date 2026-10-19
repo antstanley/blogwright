@@ -1,17 +1,20 @@
 import { join } from 'node:path';
 
 import {
+  createClients,
   createMemoryFileSystem,
   createNodeFileSystem,
   createScriptedTerminal,
   emptyState,
   findRepoRoot,
   parseConfig,
+  staticCredentials,
   type OpsState,
   type Plugin,
   type PluginContext,
   type ResourceNode,
   type ResourceOutputs,
+  type Transport,
 } from 'blogwright-core';
 import pdsPlugin, { type PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +27,7 @@ import {
 } from './cli.js';
 import {
   cliPackageDir,
+  createContext,
   deriveAppTag,
   loadConfig,
   resolveConfigPath,
@@ -39,6 +43,8 @@ import {
   createTestContext,
   type FakePluginSpec,
   type RecordedRun,
+  selectionLabel,
+  testAwsAccess,
 } from './test-support.js';
 
 const ROOT = '/repo';
@@ -690,6 +696,7 @@ describe('plugin config validation', () => {
         fixture.makeContext,
         () => ({ fs: fixture.fs, loader: fixture.loader }),
         unreachablePackages,
+        testAwsAccess(),
       ),
     ).rejects.toThrow('plugin "fake" rejected the "fake" config block');
   });
@@ -808,6 +815,7 @@ describe('plugin config validation', () => {
         makeContext,
         makeDiscoveryPorts,
         unreachablePackages,
+        testAwsAccess(),
       ).catch(() => undefined);
     }
 
@@ -918,7 +926,14 @@ describe('pds config validation timing', () => {
 
     /** Run `main` and answer with whatever it threw, or `undefined` on success. */
     async function failure(argv: string[]): Promise<unknown> {
-      return main(argv, () => terminal, makeContext, makeDiscoveryPorts, unreachablePackages).then(
+      return main(
+        argv,
+        () => terminal,
+        makeContext,
+        makeDiscoveryPorts,
+        unreachablePackages,
+        testAwsAccess(),
+      ).then(
         () => undefined,
         (err: unknown) => err,
       );
@@ -931,7 +946,14 @@ describe('pds config validation timing', () => {
       failure,
       s3Keys,
       main: (argv: string[]) =>
-        main(argv, () => terminal, makeContext, makeDiscoveryPorts, unreachablePackages),
+        main(
+          argv,
+          () => terminal,
+          makeContext,
+          makeDiscoveryPorts,
+          unreachablePackages,
+          testAwsAccess(),
+        ),
       discoveryPortsCalls: () => discoveryPortsCalls,
     };
   }
@@ -1076,5 +1098,106 @@ describe('pds config validation timing', () => {
     expect((dispatched as Error).message).toBe(
       `${REFUSED}config.pds.handleResolver must be https, got "http://resolver"`,
     );
+  });
+});
+
+describe('createContext - AWS session', () => {
+  const CWD = process.cwd();
+  const PINNED = '123456789012';
+
+  function identityXml(account: string): string {
+    return (
+      '<GetCallerIdentityResponse><GetCallerIdentityResult>' +
+      `<Arn>arn:aws:sts::${account}:assumed-role/AdminRole/ant</Arn>` +
+      `<UserId>AROA:ant</UserId><Account>${account}</Account>` +
+      '</GetCallerIdentityResult></GetCallerIdentityResponse>'
+    );
+  }
+
+  /** A repo at the real cwd with a pinned config, over a recording transport. */
+  function world(opts: { account: string; interactive?: boolean }) {
+    const requests: string[] = [];
+    const builtProfiles: string[] = [];
+    const transport: Transport = async (req) => {
+      const body = String(req.body);
+      requests.push(body.includes('GetCallerIdentity') ? 'sts' : `${req.method} ${req.url}`);
+      const text = body.includes('GetCallerIdentity')
+        ? identityXml(opts.account)
+        : '<Error><Code>NoSuchKey</Code><Message>none</Message></Error>';
+      const statusCode = body.includes('GetCallerIdentity') ? 200 : 404;
+      return { statusCode, headers: {}, body: new TextEncoder().encode(text), text: () => text };
+    };
+    const fs = createMemoryFileSystem({
+      [`${CWD}/.jj`]: '',
+      [`${CWD}/config/production.jsonc`]: JSON.stringify({
+        siteName: 'example',
+        region: 'eu-west-2',
+        aws: { accountId: PINNED },
+      }),
+      '/home/test/.aws/config': '[profile mysite-prod]\nsso_session = s\n',
+    });
+    const terminal = createScriptedTerminal({ interactive: opts.interactive ?? false });
+    const options: ContextOptions = {
+      env: 'production',
+      profile: 'mysite-prod',
+      processEnv: {},
+      home: '/home/test',
+      createClients: (clientOpts) => {
+        builtProfiles.push(selectionLabel(clientOpts.selection));
+        return createClients({
+          ...clientOpts,
+          credentials: staticCredentials({ accessKeyId: 'AKIA', secretAccessKey: 'secret' }),
+          transport,
+        });
+      },
+      ports: { fs, terminal },
+    };
+    return { options, requests, builtProfiles, terminal };
+  }
+
+  it('refuses a mismatched account before any S3 call is made', async () => {
+    const run = world({ account: '210987654321' });
+
+    await expect(createContext(run.options)).rejects.toThrow(
+      `config/production.jsonc pins AWS account ${PINNED}`,
+    );
+    expect(run.requests).toEqual(['sts']);
+  });
+
+  it('loads state only after the pin passes, recording the identity and profile', async () => {
+    const run = world({ account: PINNED });
+
+    const ctx = await createContext(run.options);
+
+    expect(run.requests[0]).toBe('sts');
+    expect(run.requests.slice(1).every((r) => r.startsWith('GET '))).toBe(true);
+    expect(run.requests.length).toBeGreaterThan(1);
+    expect(run.builtProfiles).toEqual(['mysite-prod']);
+    expect(ctx.accountId).toBe(PINNED);
+    expect(ctx.identity.account).toBe(PINNED);
+    expect(ctx.awsProfile).toEqual({ name: 'mysite-prod', source: 'flag' });
+    expect(ctx.names.bucket).toBe(`production-example-${PINNED}`);
+  });
+
+  it('writes the identity line to stderr off a TTY, leaving stdout untouched', async () => {
+    const run = world({ account: PINNED });
+
+    await createContext(run.options);
+
+    expect(run.terminal.writes).toEqual([]);
+    expect(run.terminal.errors).toEqual([
+      `aws  ${PINNED} · AdminRole · profile mysite-prod (--profile) · pinned`,
+    ]);
+  });
+
+  it('logs the identity line on an interactive terminal', async () => {
+    const run = world({ account: PINNED, interactive: true });
+
+    await createContext(run.options);
+
+    expect(run.terminal.writes).toEqual([
+      `aws  ${PINNED} · AdminRole · profile mysite-prod (--profile) · pinned`,
+    ]);
+    expect(run.terminal.errors).toEqual([]);
   });
 });

@@ -52,6 +52,21 @@ To give staging its own hostname, add a `domain` - see [Custom domains](/guides/
 
 Want one file for every environment instead? See [Configuration files](/guides/configuration-files/#one-config-for-every-environment).
 
+## One AWS profile and account per environment
+
+Each environment file can name the profile its commands use and pin the account they must run against, so staging and production can live in different AWS accounts without anyone exporting `AWS_PROFILE` by hand:
+
+```jsonc
+// config/staging.jsonc
+{
+  "region": "us-east-1",
+  "siteName": "example",
+  "aws": { "profile": "example-staging", "accountId": "210987654321" },
+}
+```
+
+With a pin in place, credentials for the wrong account fail before any state is read - so `status` can never report an empty stack, and `bootstrap` can never build a second one, in an account you did not mean. Run `blogwright whoami staging` to check which account and profile a command would use. See [`aws`](/reference/configuration/#aws) for the precedence rules.
+
 ## What an environment owns
 
 Each environment gets one S3 bucket, `<env>-<siteName>-<accountId>`, holding the build artifacts, the live site and the state. Every other resource name carries the same environment and site name - the build and exec roles, the builder MicroVM image, the log groups - so each environment is a fully isolated stack. The layout is in the [architecture reference](/reference/architecture/).

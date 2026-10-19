@@ -1,6 +1,10 @@
 import { AcmClient } from './aws/acm.js';
 import { CloudFrontClient } from './aws/cloudfront.js';
-import { createCredentialProvider, type CredentialProvider } from './aws/credentials.js';
+import {
+  createCredentialProvider,
+  type CredentialProvider,
+  type CredentialSelection,
+} from './aws/credentials.js';
 import { IamClient } from './aws/iam.js';
 import { LambdaWebClient } from './aws/lambda-web.js';
 import { LogsClient } from './aws/logs.js';
@@ -13,8 +17,18 @@ import { StsClient } from './aws/sts.js';
 
 export interface ClientBundleOptions {
   region: string;
-  /** Endpoint override (config or AWS_ENDPOINT_URL); routes all services to one origin. */
+  /**
+   * Endpoint override; routes all services to one origin. When the key is
+   * omitted, `AWS_ENDPOINT_URL` applies; passing it (even as undefined) means
+   * the caller already decided, so the environment is not consulted.
+   */
   endpointOverride?: string | undefined;
+  /**
+   * Which credentials the clients sign with: a named profile, only the
+   * exported environment credentials, or (when absent) the default Node
+   * provider chain. Ignored when `credentials` is supplied.
+   */
+  selection?: CredentialSelection | undefined;
   credentials?: CredentialProvider | undefined;
   transport?: Transport | undefined;
 }
@@ -32,6 +46,13 @@ export interface AwsClients {
    * `route53` below are the only ones it signs for.
    */
   signingUsEast1: SigningClient;
+  /**
+   * The credential provider both signers hold, already bound to the selected
+   * profile. Anything that needs raw credentials (analytics's DuckDB secret)
+   * reads this rather than building its own provider, so `--profile` reaches
+   * every local AWS call.
+   */
+  credentials: CredentialProvider;
   s3: S3Client;
   sts: StsClient;
   iam: IamClient;
@@ -53,9 +74,11 @@ export interface AwsClients {
 
 /** Build the full set of service clients that share one signing transport. */
 export function createClients(opts: ClientBundleOptions): AwsClients {
-  const endpointOverride = opts.endpointOverride ?? process.env.AWS_ENDPOINT_URL;
+  const endpointOverride =
+    'endpointOverride' in opts ? opts.endpointOverride : process.env.AWS_ENDPOINT_URL;
   const credentials =
-    opts.credentials ?? createCredentialProvider({ override: Boolean(endpointOverride) });
+    opts.credentials ??
+    createCredentialProvider({ override: Boolean(endpointOverride), selection: opts.selection });
 
   const base = {
     endpointOverride,
@@ -71,6 +94,7 @@ export function createClients(opts: ClientBundleOptions): AwsClients {
     region: opts.region,
     signing,
     signingUsEast1: usEast1,
+    credentials,
     s3: new S3Client(signing),
     sts: new StsClient(signing),
     iam: new IamClient(signing),

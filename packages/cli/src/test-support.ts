@@ -20,7 +20,9 @@ import {
   staticCredentials,
   StateStore,
   type AwsClients,
+  type CallerIdentity,
   type ConfigInput,
+  type CredentialSelection,
   type FileSystem,
   type Names,
   type OpsState,
@@ -31,10 +33,14 @@ import {
   type Transport,
 } from 'blogwright-core';
 
+import type { AwsHost, ResolvedAwsProfile } from './aws-session.js';
+import type { AwsAccessFactory } from './cli.js';
 import { cliPackageDir, type OpsContext } from './context.js';
 import type { Logger } from './logger.js';
 import type {
   AddPackageOptions,
+  AwsLogin,
+  AwsLoginResult,
   ModuleLoader,
   ModuleResolution,
   PackageManager,
@@ -44,7 +50,7 @@ import type {
   Vcs,
 } from './ports.js';
 
-type ServiceName = Exclude<keyof AwsClients, 'region'>;
+type ServiceName = Exclude<keyof AwsClients, 'region' | 'credentials'>;
 
 /** Per-service method overrides; anything not overridden rejects when called. */
 type ClientOverrides = { [Service in ServiceName]?: Partial<AwsClients[Service]> };
@@ -54,6 +60,8 @@ export interface TestContextOverrides {
   domain?: string | undefined;
   preview?: boolean | undefined;
   accountId?: string | undefined;
+  identity?: Partial<CallerIdentity> | undefined;
+  awsProfile?: ResolvedAwsProfile | undefined;
   config?: ConfigInput | undefined;
   configDocument?: Readonly<Record<string, unknown>> | undefined;
   names?: Partial<Names> | undefined;
@@ -173,6 +181,65 @@ export function createRecordingPackageManager(
   };
 }
 
+/** A sign-in in a test is a missing override: the default refuses. */
+const rejectAllAwsLogin: AwsLogin = {
+  run: async (args) => {
+    throw new Error(
+      `unexpected AWS sign-in in test: aws ${args.join(' ')} - override ports.awsLogin`,
+    );
+  },
+};
+
+/** A built client's credential selection in one word: the profile name, `environment` or `chain`. */
+export function selectionLabel(selection: CredentialSelection | undefined): string {
+  if (selection?.kind === 'profile') return selection.name;
+  return selection?.kind ?? 'chain';
+}
+
+/**
+ * Records every sign-in and answers each with the next of `results` (success
+ * when the script runs out). The test substitute for the `AwsLogin` port.
+ */
+export function createRecordingAwsLogin(
+  results: AwsLoginResult[] = [],
+): AwsLogin & { readonly calls: string[][] } {
+  const pending = [...results];
+  const calls: string[][] = [];
+  return {
+    calls,
+    run: async (args) => {
+      calls.push([...args]);
+      return pending.shift() ?? { ok: true };
+    },
+  };
+}
+
+/**
+ * An {@link AwsAccessFactory} over no real machine state: an empty
+ * environment, the real working directory (so in-memory repos seeded there
+ * are found), a `/home/test` home whose shared AWS files are read through
+ * whatever FileSystem the caller hands the command, a Linux platform, and a
+ * transport and sign-in that fail fast until overridden.
+ */
+export function testAwsAccess(
+  overrides: { host?: Partial<AwsHost>; awsLogin?: AwsLogin } = {},
+): AwsAccessFactory {
+  return () => ({
+    host: {
+      processEnv: {},
+      home: TEST_HOME,
+      platform: 'linux',
+      cwd: process.cwd(),
+      createClients: (opts) => testClients(opts.region, {}),
+      ...overrides.host,
+    },
+    awsLogin: overrides.awsLogin ?? rejectAllAwsLogin,
+  });
+}
+
+/** Home directory {@link testAwsAccess} resolves the shared AWS files against. */
+export const TEST_HOME = '/home/test';
+
 /** Pings are best-effort fire-and-forget by contract; the default resolves silently. */
 const noopPing: PingBuilder = async () => undefined;
 
@@ -212,7 +279,7 @@ export async function removeTempDir(dir: string): Promise<void> {
 
 /**
  * Build a complete OpsContext for tests. Defaults: env "test", site "example",
- * account 123456789012, config merged over DEFAULT_CONFIG, derived names,
+ * account 123456789012 (a TestRole identity, default credentials), config merged over DEFAULT_CONFIG, derived names,
  * empty state, an empty raw config document, a fresh in-memory FileSystem, a
  * Vcs that fails fast until overridden, TEST_AGENT_DIR as the agent
  * directory, a silent logger, and a no-op save.
@@ -230,6 +297,13 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     terminal: overrides.ports?.terminal ?? silentTerminal,
     ping: overrides.ports?.ping ?? noopPing,
     loader: overrides.ports?.loader ?? rejectAllLoader,
+    awsLogin: overrides.ports?.awsLogin ?? rejectAllAwsLogin,
+  };
+  const identity: CallerIdentity = {
+    account: accountId,
+    arn: `arn:aws:sts::${accountId}:assumed-role/TestRole/test`,
+    userId: 'AROATEST:test',
+    ...overrides.identity,
   };
 
   return {
@@ -250,6 +324,8 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     configDocument: overrides.configDocument ?? {},
     names,
     accountId,
+    identity,
+    awsProfile: overrides.awsProfile ?? { source: 'default' },
     clients,
     ports,
     agentDir: overrides.agentDir ?? TEST_AGENT_DIR,

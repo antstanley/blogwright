@@ -67,6 +67,47 @@ Value of the `app` tag applied to every AWS resource blogwright creates (alongsi
 
 GitHub `owner/repo`, used to scope the trust policy of the GitHub OIDC deploy roles that `bootstrap` (role `<env>-<siteName>-gh`) and `preview bootstrap` (role `preview-<siteName>-gh`) provision. When unset, `bootstrap` skips the OIDC role; `preview bootstrap` always creates one, so the preview stack requires this key. See [CI deploys with GitHub OIDC](/guides/ci-github-oidc/) and [PR previews](/guides/pr-previews/).
 
+### `aws`
+
+`object` · optional · no default
+
+Which AWS credentials this environment uses, and which account it accepts. Both keys are optional, and the block is left out entirely when neither is set. Unknown keys are refused.
+
+```jsonc
+"aws": {
+  "profile": "mysite-prod",
+  "accountId": "123456789012" // deploys refuse credentials for any other account
+}
+```
+
+#### `aws.profile`
+
+`string` · optional · no default
+
+A named profile from your shared AWS files (`~/.aws/config` and `~/.aws/credentials`, or `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`). Every command resolves credentials in this order, and the first match wins:
+
+1. `--profile <name>`
+2. `AWS_PROFILE`
+3. Credentials exported into the environment - `AWS_ACCESS_KEY_ID` with `AWS_SECRET_ACCESS_KEY`, `AWS_WEB_IDENTITY_TOKEN_FILE`, or a container credentials URI - as CI exports them
+4. `aws.profile`
+5. The default AWS provider chain
+
+So a committed `aws.profile` does not break CI that exports credentials: exported credentials win over it - only the exported credentials are used, never a `[default]` profile from your AWS files - and the command says so (`ignoring aws.profile "...": environment credentials are set`). A runner that uses an EC2 instance role exports nothing, so there the profile still applies and is refused if the runner's AWS files do not define it; export the instance credentials first with `eval "$(aws configure export-credentials --format env)"`. A named profile that your AWS files do not define stops the command before any AWS call, listing the profiles that do exist. Only the profile's credentials are used - never its `region`; the deploy region is always [`region`](#region).
+
+#### `aws.accountId`
+
+`string` · optional · no default
+
+The only AWS account this environment's commands accept: exactly 12 digits, **quoted** (a JSON number would drop leading zeros, so a number is refused). Every command calls `sts:GetCallerIdentity` before it loads any state and refuses credentials for any other account:
+
+```text
+config/production.jsonc pins AWS account 123456789012, but the credentials in use
+belong to 210987654321 (AdminRole, profile "personal" from AWS_PROFILE).
+Switch credentials with --profile, or change aws.accountId.
+```
+
+Because the check comes before the state bucket (`<env>-<siteName>-<accountId>`) is read, the wrong credentials can never make `status` report an empty stack or `bootstrap` build a second one in the wrong account. There is no flag to bypass the pin. Under an endpoint override (`--endpoint` or `AWS_ENDPOINT_URL`) the check is skipped, because an emulator answers with its own account. `blogwright init` can detect and write this for you; `blogwright whoami` shows whether the current credentials match.
+
 ## MicroVM builder
 
 Sizing and lifecycle of the Lambda MicroVM that runs `pnpm install && pnpm build` on every deploy.

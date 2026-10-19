@@ -79,6 +79,7 @@ blogwright init                             # first-run wizard: config/productio
 blogwright bootstrap --domain example.com   # create infra; prints ACM validation CNAMEs
 blogwright deploy                           # zip + build in a MicroVM + publish
 blogwright status staging                   # planned graph vs. live state
+blogwright whoami                           # AWS account, identity, profile and pin in use
 blogwright history                          # deployment history
 blogwright logs <hash>                      # CloudWatch build logs for a hash
 blogwright rollback <hash>                  # re-deploy an earlier build
@@ -95,7 +96,8 @@ blogwright <plugin> <action>                # run an installed plugin's own comm
 ```
 
 Environment defaults to `production`; pass another as the positional `[env]` or
-`--env`. Full flags, positional layouts, and output contracts are in the
+`--env`. Choose AWS credentials with `--profile <name>` (or `aws.profile` in the
+config), and pin an environment to one account with `aws.accountId`. Full flags, positional layouts, and output contracts are in the
 [CLI reference](https://blogwright.iamstan.dev/reference/cli/).
 
 An installed plugin claims its own namespace: `blogwright <plugin> <action>` runs

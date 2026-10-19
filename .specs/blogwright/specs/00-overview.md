@@ -1,6 +1,6 @@
 # Blogwright implementation overview
 
-**Status:** Implemented · **Date:** 2026-09-06 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [development guidelines](../../../DEVELOPMENT.md) and [spec index](../../README.md).
 
@@ -23,6 +23,13 @@ Static browser assets may still be published to `site/` and served from S3
 under the managed caching policy. The builder image is created and kept as
 Arm64 in every environment, so native dependencies compiled during the build
 match the Web Function runtime.
+
+Every invocation that reaches AWS first resolves which credentials to use,
+from `--profile`, `AWS_PROFILE`, exported environment credentials, or the
+config's `aws.profile`. It then confirms whose they are with
+`sts:GetCallerIdentity`. An environment may pin `aws.accountId`, and a
+command refuses to run against any other account. Expired sign-ins are
+repaired interactively through `aws sso login` or `aws login`.
 
 ## Non-goals
 
@@ -62,6 +69,7 @@ CLI composition root --> core config, signing, state and ports
 | [Dashboard design](05-design.md) | Visual foundations, responsive reporting and design acceptance |
 | [Documentation design](06-docs-design.md) | Starlight reading surface, navigation and design acceptance |
 | [Web Functions (SSR)](07-web-functions.md) | `SsrConfig`, package/revision/deploy contract, CloudFront origins, caching and limits |
+| [AWS identity](08-aws-identity.md) | Profile resolution, caller identity, account pin, login offer, `whoami` |
 | [Canonical schema](canonical-types.schema.json) | Draft 2020-12 JSON entities; callable TypeScript contracts stay in prose/source |
 
 ## Package layout and dependency direction
@@ -94,6 +102,7 @@ context and adds no lifecycle hook.
 | Site lifecycle | Bootstrap, deployment (static publish or Web Function revision), rollback, status, history, logs, live-prefix deletion and guarded destruction |
 | SSR | Optional `ssr` config mode: MicroVM-built output packaged and published as an immutable Lambda Web Function revision behind the site's CloudFront distribution; preview stacks and multi-region endpoints are not supported |
 | Preview | Separate fixed `preview` environment; shared stack with per-PR prefixes |
+| AWS identity | `--profile`/`AWS_PROFILE`/env-credentials/`aws.profile` precedence, identity line on every context-building command, optional `aws.accountId` pin checked before state loads, interactive SSO/console login offer, `whoami` |
 | Plugins | Two manifest-declared consumers; separate state keys and resource graphs |
 | PDS | Stable config/rkeys, production sync and plugin-owned deploy-role grant |
 | Analytics | us-east-1 pipeline, fourteen nodes, daily visitor pseudonyms, fixed named queries, optional historical import |
@@ -108,7 +117,7 @@ it does not assert a new live AWS deployment or publication.
 
 **Assumptions**
 
-- Installed packages are trusted code; AWS services and the ambient credential provider remain external dependencies.
+- Installed packages are trusted code. AWS services, the shared AWS config files and the AWS CLI (for sign-in) remain external dependencies.
 
 **Decisions**
 

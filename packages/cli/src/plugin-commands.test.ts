@@ -53,6 +53,7 @@ import {
   withBrokenPlugin,
   type RecordedRun,
   type TestContextOverrides,
+  testAwsAccess,
 } from './test-support.js';
 
 /**
@@ -1337,6 +1338,7 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
       async () => ctx,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     // The whole graph applied. `main` does not catch, so a node that threw
@@ -1402,6 +1404,7 @@ describe("the site's own bootstrap, with a node-contributing plugin installed", 
       async () => ctx,
       () => ({ fs, loader }),
       unreachablePackages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -1946,6 +1949,7 @@ describe('runPluginNamespace - blogwright plugin add', () => {
       },
       () => ({ fs, loader }),
       () => packages,
+      testAwsAccess(),
     );
 
     expect(code).toBe(0);
@@ -2265,6 +2269,7 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
       refuseContext,
       () => ({ fs, loader }),
       () => packages,
+      testAwsAccess(),
     );
 
     expect(refused).toBe(1);
@@ -2278,6 +2283,7 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
       refuseContext,
       () => ({ fs, loader }),
       () => packages,
+      testAwsAccess(),
     );
 
     expect(asked).toBe(0);
@@ -2285,6 +2291,31 @@ describe('runPluginNamespace - blogwright plugin remove', () => {
       'tear down "demo"\'s resources in "production" before removing blogwright-demo? [y/N] ',
     ]);
     expect(packages.calls).toEqual([{ op: 'remove', name: 'blogwright-demo' }]);
+  });
+
+  it("passes --profile to the answered-yes teardown's context", async () => {
+    const order: string[] = [];
+    const tty = createScriptedTerminal({ interactive: true, answers: ['y'] });
+    const { fs, loader } = await buildDiscoveryPorts([
+      { packageName: 'blogwright-demo', namespace: 'demo', plugin: makeRemovalPlugin(order) },
+    ]);
+    const requested: ContextOptions[] = [];
+    const sentinel = new Error('stop after the context request');
+
+    await expect(
+      main(
+        ['plugin', 'remove', 'demo', '--profile', 'ops'],
+        () => tty,
+        async (opts) => {
+          requested.push(opts);
+          throw sentinel;
+        },
+        () => ({ fs, loader }),
+        () => orderedPackages(order),
+        testAwsAccess(),
+      ),
+    ).rejects.toBe(sentinel);
+    expect(requested.map((opts) => opts.profile)).toEqual(['ops']);
   });
 
   it('--yes uninstalls without asking, in an interactive session and a non-interactive one alike', async () => {

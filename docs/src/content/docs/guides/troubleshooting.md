@@ -29,6 +29,36 @@ The environment defaults to `production`, so a bare `blogwright deploy` looks fo
 
 blogwright finds the repo root by walking up from the invocation directory to the nearest `.git` or `.jj`, so it works from any subdirectory - but only inside a version-controlled repo. Run it from within your site's repository (or initialize one).
 
+## AWS credentials and accounts
+
+Every command that loads an environment resolves its AWS profile and checks whose credentials it has before touching any state. `blogwright whoami [env]` shows what it resolved without running anything else.
+
+### `AWS profile "<name>" not found (from <source>)`
+
+The profile named by `--profile`, `AWS_PROFILE` or the config's `aws.profile` (the source says which) is not defined in your shared AWS files - `~/.aws/config` and `~/.aws/credentials`, or the files `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` point at. The second line lists the profiles that do exist. Fix the name, or create the profile with `aws configure sso` or `aws configure`. Under `--endpoint` (an emulator) a missing profile is ignored instead. On a CI runner that uses an EC2 instance role, a committed `aws.profile` applies because nothing is exported - export the instance credentials first with `eval "$(aws configure export-credentials --format env)"` so they take precedence.
+
+### `<config> pins AWS account <id>, but the credentials in use belong to <other>`
+
+The environment's `aws.accountId` pins one account and your credentials are for another. Nothing was read or changed. The message names the identity and where its profile came from - often a stale `AWS_PROFILE` or exported keys left over from another project. Switch credentials with `--profile <name>` (or unset the stray variable); if the pin itself is wrong, change `aws.accountId`. There is deliberately no flag that skips the check.
+
+### `AWS credentials for profile "<name>" are not usable`
+
+The profile's sign-in has expired or was never made. In an interactive terminal blogwright offers to fix it:
+
+```text
+How do you want to sign in?
+  1) aws sso login --profile mysite-prod    (profile uses IAM Identity Center)
+  2) aws login --profile mysite-prod        (AWS console credentials)
+  3) cancel
+choice [1]:
+```
+
+The default matches how the profile is configured. For a role profile that chains to another through `source_profile`, the commands target that source profile, because its sign-in is the one that repairs the chain. Pick one and blogwright runs it, then retries once. Over SSH, or on Linux with no display, the commands use `--use-device-code` and `--remote` so no local browser is needed (set `BLOGWRIGHT_HEADLESS=1` or `0` to force either way). Signing in needs [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) on your `PATH`.
+
+In CI, plain mode or piped output there is no prompt: the error ends with the command to run instead. Profiles that sign in some other way get a matching hint - `aws configure --profile <name>` for static keys, the profile's `credential_process`, the role's `credential_source` or `web_identity_token_file` - and exported environment credentials need refreshing at their source.
+
+A role profile with `mfa_serial` cannot be used directly, because blogwright does not prompt for MFA codes. Export temporary credentials for the profile you asked for with `eval "$(aws configure export-credentials --profile <name> --format env)"` (the AWS CLI asks for the code), then run the command again with neither `--profile` nor `AWS_PROFILE` set, so the exported credentials are used.
+
 ### `config.siteName is required - a stable lowercase slug used in every derived AWS resource name`
 
 Every AWS resource name is derived from `siteName`, so there is no default. Add it to your config and never change it afterwards - a changed `siteName` derives a whole new set of resources.

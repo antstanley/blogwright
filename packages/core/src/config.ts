@@ -221,6 +221,18 @@ export interface PathsConfig {
   dist: string;
 }
 
+/**
+ * Which AWS credentials an environment uses and which account it accepts.
+ * Site-owned config like `ssr`; no defaults, so `OpsConfig.aws` stays
+ * undefined when the block is absent.
+ */
+export interface AwsConfig {
+  /** Named profile from the shared AWS files. Ignored when env credentials are set. */
+  profile?: string | undefined;
+  /** 12-digit account id, as a string. Commands refuse other accounts. */
+  accountId?: string | undefined;
+}
+
 export interface OpsConfig {
   /** Primary region for S3 / MicroVM / logs. ACM+CloudFront are always us-east-1. */
   region: string;
@@ -278,6 +290,8 @@ export interface OpsConfig {
    * existing static contract applies unchanged.
    */
   ssr?: SsrConfig | undefined;
+  /** AWS profile and account pin for this environment; see {@link AwsConfig}. */
+  aws?: AwsConfig | undefined;
   /** Site-repo layout; the defaults match a stock Astro project. */
   paths: PathsConfig;
 }
@@ -453,7 +467,7 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
   const paths: PathsConfig = { ...DEFAULT_CONFIG.paths, ...raw.paths };
   // `ssr` is pulled out of the spread so its raw, partial block never reaches
   // `OpsConfig` un-normalised.
-  const { ssr: rawSsr, ...rest } = raw;
+  const { ssr: rawSsr, aws: rawAws, ...rest } = raw;
   const cfg: OpsConfig = {
     ...DEFAULT_CONFIG,
     ...rest,
@@ -472,8 +486,47 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
   // past validation.
   const ssr = normalizeSsrConfig(rawSsr, paths.dist);
   if (ssr) cfg.ssr = ssr;
+  const aws = normalizeAwsConfig(rawAws);
+  if (aws) cfg.aws = aws;
   validateConfig(cfg);
   return cfg;
+}
+
+/** Every key `aws` declares. */
+const AWS_KEYS = new Set<string>(['profile', 'accountId']);
+
+/** An AWS account id: exactly twelve digits, leading zeros significant. */
+const ACCOUNT_ID_PATTERN = /^\d{12}$/;
+
+/** Validate a raw `aws` block, or return undefined when it is absent. */
+function normalizeAwsConfig(raw: unknown): AwsConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) throw new Error('config.aws must be an object');
+  for (const key of Object.keys(raw)) {
+    if (!AWS_KEYS.has(key)) throw new Error(`config.aws has unknown key "${key}"`);
+  }
+  const aws: AwsConfig = {};
+  if (raw.profile !== undefined) {
+    if (typeof raw.profile !== 'string' || raw.profile.trim() === '') {
+      throw new Error('config.aws.profile must be a nonblank profile name');
+    }
+    aws.profile = raw.profile;
+  }
+  if (raw.accountId !== undefined) {
+    if (typeof raw.accountId === 'number') {
+      throw new Error(
+        `config.aws.accountId must be a string - quote it ("${raw.accountId}"), because a ` +
+          'number drops leading zeros',
+      );
+    }
+    if (typeof raw.accountId !== 'string' || !ACCOUNT_ID_PATTERN.test(raw.accountId)) {
+      throw new Error(
+        `config.aws.accountId must be a string of exactly 12 digits, got ${JSON.stringify(raw.accountId)}`,
+      );
+    }
+    aws.accountId = raw.accountId;
+  }
+  return aws;
 }
 
 /** RFC 7230 token characters - what an HTTP header name may contain. */

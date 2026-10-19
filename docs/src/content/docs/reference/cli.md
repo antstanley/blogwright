@@ -41,9 +41,9 @@ Unrecognized flags are an error. `--help` prints usage and exits 0; running with
 blogwright init
 ```
 
-First-run wizard. Asks for the site name (a lowercase slug that names every AWS resource), AWS region (default `us-east-1`), optional custom domain and optional GitHub repo for CI deploys, then whether the app is server-rendered. For a server-rendered app it asks the framework (`astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs` or `other`) and writes its `ssr` block, with the entry shim settings for a known framework. It also asks each installed plugin's questions, then writes a commented `config/production.jsonc` at the repo root and prints the next steps.
+First-run wizard. Asks for the site name (a lowercase slug that names every AWS resource), AWS region (default `us-east-1`), optional custom domain and optional GitHub repo for CI deploys, then whether the app is server-rendered. For a server-rendered app it asks the framework (`astro`, `sveltekit`, `nuxt`, `tanstack-start`, `nextjs` or `other`) and writes its `ssr` block, with the entry shim settings for a known framework. When your shared AWS files define profiles, it asks which one this environment uses (defaulting to `--profile`, then `AWS_PROFILE`, when the files define it; answer `none` for default credentials). It then offers to detect the AWS account the config's credentials belong to - the chosen profile, or with none your exported or default credentials, never an unsaved `AWS_PROFILE` - and pin it as `aws.accountId`, warning when `AWS_PROFILE` or exported credentials in the shell would override the config - signing in through `aws sso login` or `aws login` first if the credentials have expired. A failed detection only warns; `init` carries on and leaves the account unpinned. Detection is not offered while `AWS_ENDPOINT_URL` is exported. It also asks each installed plugin's questions, then writes a commented `config/production.jsonc` at the repo root and prints the next steps.
 
-`init` runs before any config or AWS context exists, so it takes no environment or options. It refuses to run (exit 1) when:
+`init` runs before any config or AWS context exists, so it takes no environment and only `--profile`. It refuses to run (exit 1) when:
 
 - the terminal is not interactive - in CI or plain mode, write the config by hand instead; only `region` and `siteName` are required
 - `config/production.jsonc` already exists - edit it directly
@@ -144,6 +144,26 @@ blogwright status [env]
 ```
 
 Shows the planned infrastructure graph against live state: each resource node is read from AWS and reported as present or missing, with its recorded outputs. On a TTY this renders as a drift tree; plain output is one stable line per resource. Read failures are reported per node without aborting the rest. See [operations](/guides/operations/).
+
+### whoami
+
+```sh
+blogwright whoami [env]
+```
+
+Shows which AWS credentials this environment's commands would use, whose they are, and whether the [account pin](/reference/configuration/#aws) accepts them. It resolves the profile exactly as every other command does and calls `sts:GetCallerIdentity`, but loads no state. It works before a repo is configured: with no config file, or outside a repository, it signs STS in `us-east-1` and reports no pin. An explicit `--config` that does not exist is still an error.
+
+```text
+account   123456789012
+identity  AdminRole
+arn       arn:aws:sts::123456789012:assumed-role/AdminRole/ant
+profile   mysite-prod (config)
+env       production (config/production.jsonc)
+region    eu-west-2
+pin       matches aws.accountId
+```
+
+`profile` shows `none (environment credentials)` or `none (default credentials)` when no profile is named; `pin` is `matches aws.accountId`, `not set`, or `skipped (endpoint override)`. Exits 0 when the identity resolves and the pin matches or is absent, and 1 for a missing profile, unusable credentials, or a pin mismatch. Accepts `--env`, `--config`, `--profile` and `--endpoint`.
 
 ## Preview commands
 
@@ -332,7 +352,8 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--env <name>` | env-scoped commands | Select the environment (default `production`); wins over the positional. Ignored by `preview` commands, which always run in the `preview` environment. |
 | `--domain <fqdn>` | all but `init` | Custom domain - ACM certificate and CloudFront alias. Overrides `domain` in the config. Required (flag or config) for `preview bootstrap`, `pds keygen`, `pds login`, `pds init`, and `pds sync`. |
 | `--config <path>` | all but `init` | Explicit JSONC config file. When set it is the only file tried - the `config/<env>.jsonc` → `ops.config.jsonc` fallback chain is skipped. |
-| `--endpoint <url>` | all but `init` | AWS endpoint override, e.g. `http://localhost:4566` for the floci emulator. |
+| `--endpoint <url>` | all but `init` | AWS endpoint override, e.g. `http://localhost:4566` for the floci emulator. Under an override the account pin is skipped and a configured profile missing from your AWS files is ignored. |
+| `--profile <name>` | all | AWS profile from your shared AWS files (`~/.aws/config`, `~/.aws/credentials`). Beats `AWS_PROFILE`, exported credentials and the config's `aws.profile`; see [AWS credentials](/reference/configuration/#aws). `init` uses it as the default answer to its profile question. |
 | `--hash <hash>` | `rollback`, `logs` | The build hash; wins over the first positional. |
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
@@ -352,11 +373,19 @@ Output has two presentations, chosen once at startup:
 
 `NO_COLOR` disables color only - interactive rendering is otherwise kept. Progress and results go to stdout; warnings and errors go to stderr.
 
+Every command that loads an environment first prints one identity line naming the AWS account, the identity, the profile and the pin state:
+
+```text
+aws  123456789012 · AdminRole · profile mysite-prod (config) · pinned
+```
+
+The last field is `pinned`, `unpinned` or `pin skipped`. Interactive sessions print it with the rest of the output; plain and piped sessions write it - and notices such as `ignoring aws.profile ...` or `account pin skipped` - to stderr, so the plain stdout of `history`, `status` and `whoami` is unchanged.
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | The command completed. Also `--help`. |
-| `1` | No command given (usage is printed); unknown plugin namespace, plugin management action, preview action, or plugin action; or any runtime failure - missing required positional, refused destructive operation, missing config, AWS error - with the message on stderr. |
+| `1` | No command given (usage is printed); unknown plugin namespace, plugin management action, preview action, or plugin action; or any runtime failure - missing required positional, refused destructive operation, missing config, missing AWS profile, unusable credentials, account pin mismatch, AWS error - with the message on stderr. |
 
 See [troubleshooting](/guides/troubleshooting/) for what common failures mean and how to recover.

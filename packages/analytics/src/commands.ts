@@ -36,7 +36,7 @@
 
 import { fileURLToPath } from 'node:url';
 
-import { colors, createCredentialProvider, type PluginContext } from 'blogwright-core';
+import { colors, type PluginContext } from 'blogwright-core';
 
 import { createDuckDbAnalyticsIngest } from './adapters/duckdb-ingest.js';
 import { createDuckDbAnalyticsQuery } from './adapters/duckdb-query.js';
@@ -275,10 +275,7 @@ async function logRowCount(
 export async function status(
   ctx: PluginContext<AnalyticsConfig>,
   _args: string[] = [],
-  query: AnalyticsQuery = createDuckDbAnalyticsQuery({
-    ctx,
-    credentials: createCredentialProvider({}),
-  }),
+  query: AnalyticsQuery = createDuckDbAnalyticsQuery({ ctx, credentials: ctx.clients.credentials }),
 ): Promise<void> {
   ctx.logger.info(colors.bold(`Analytics status for "${ctx.env}" (bucket ${ctx.names.bucket})`));
   const entries = await readNodeEntries(ctx);
@@ -296,7 +293,7 @@ export async function status(
  */
 export type DashboardCommandContext = Pick<
   PluginContext<AnalyticsConfig>,
-  'env' | 'config' | 'pluginConfig' | 'accountId' | 'ports' | 'logger'
+  'env' | 'config' | 'pluginConfig' | 'accountId' | 'clients' | 'ports' | 'logger'
 >;
 
 /**
@@ -339,16 +336,18 @@ function untilStopped(): Promise<StopSignal> {
  *
  * This is the composition root the module comment describes, and the three
  * lines that make it one are the adapter construction, the credential
- * resolution and the `appDir`. **Credentials are core's own provider chain**
- * (`createCredentialProvider`, `packages/core/src/aws/credentials.ts`),
- * resolved here and handed to the adapter, which is the spec's §Analytics
- * dashboard → Credentials: one credential source serves the whole CLI, so a
- * session that works for `deploy` works for the dashboard. It is built with no
- * `override`, matching `transform/entry.ts`: that flag substitutes an
- * emulator's dummy `test`/`test` pair when a real chain fails, and the
- * dashboard has no emulator to talk to - the adapter attaches a real S3 Tables
- * ARN with no endpoint override at all, so dummy credentials would turn "you
- * are not logged in" into an opaque authorisation failure from AWS.
+ * resolution and the `appDir`. **Credentials are the host's resolved provider**
+ * (`ctx.clients.credentials`, already bound to the selected `--profile`),
+ * handed to the adapter, which is the spec's §Analytics dashboard →
+ * Credentials: one credential source serves the whole CLI, so a session that
+ * works for `deploy` works for the dashboard. The plugin never builds a
+ * provider of its own, so `--profile` reaches the DuckDB secret too. By the
+ * time this runs the host has already proved the provider works with
+ * `sts:GetCallerIdentity`. Under an endpoint override that provider is the
+ * host's emulator one, which falls back to dummy `test` credentials; the
+ * dashboard and backfill attach a real S3 Tables ARN regardless, so against an
+ * emulator they fail at AWS rather than at credential resolution - analytics
+ * has no emulator path to begin with.
  *
  * Constructing the adapter touches neither the network nor the native library
  * - it opens its connection lazily on the first query - so the listener is
@@ -362,7 +361,7 @@ function untilStopped(): Promise<StopSignal> {
 export async function dashboard(ctx: DashboardCommandContext): Promise<void> {
   const config = resolveAnalyticsConfig(ctx);
   const server = await createDashboardServer({
-    query: createDuckDbAnalyticsQuery({ ctx, credentials: createCredentialProvider({}) }),
+    query: createDuckDbAnalyticsQuery({ ctx, credentials: ctx.clients.credentials }),
     config: ctx.pluginConfig,
     port: config.dashboard.port,
     appDir: dashboardAppDir(),
@@ -401,8 +400,8 @@ export async function backfill(
   ctx: PluginContext<AnalyticsConfig>,
   _args: string[] = [],
   ports: BackfillPorts = {
-    query: createDuckDbAnalyticsQuery({ ctx, credentials: createCredentialProvider({}) }),
-    ingest: createDuckDbAnalyticsIngest({ ctx, credentials: createCredentialProvider({}) }),
+    query: createDuckDbAnalyticsQuery({ ctx, credentials: ctx.clients.credentials }),
+    ingest: createDuckDbAnalyticsIngest({ ctx, credentials: ctx.clients.credentials }),
   },
 ): Promise<void> {
   await runBackfill(ctx, ports);

@@ -8,6 +8,7 @@ import {
   type Terminal,
 } from 'blogwright-core';
 
+import type { AwsHost } from './aws-session.js';
 import * as commands from './commands.js';
 import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from './context.js';
 import { initSite } from './init.js';
@@ -15,7 +16,8 @@ import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
 import { genericLifecycleActions, runPlugin, runPluginNamespace } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
-import type { PackageManager, Ports } from './ports.js';
+import type { AwsLogin, PackageManager, Ports } from './ports.js';
+import { whoami } from './whoami.js';
 
 const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
 
@@ -34,6 +36,8 @@ Commands:
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
+  whoami      [env]           Show the AWS account, identity and profile in
+                              use, and whether the account pin accepts them
 
   preview bootstrap           Provision the shared preview stack
   preview deploy <id>         Build + publish a PR preview (id like pr-42)
@@ -53,6 +57,8 @@ Options:
   --domain <fqdn>   Custom domain (ACM cert + CloudFront alias)
   --config <path>   Path to a JSONC config file
   --endpoint <url>  AWS endpoint override (e.g. http://localhost:4566 for floci)
+  --profile <name>  AWS profile from the shared AWS files (beats AWS_PROFILE,
+                    exported credentials and the config's aws.profile)
   --id <preview>    Preview id for preview deploy/destroy (also accepted positionally)
   --plain           Minimal machine-friendly output (no colour, no live status,
                     no prompts) - for CI systems and agents; also automatic when
@@ -298,12 +304,28 @@ export type DiscoveryPortsFactory = () => Pick<Ports, 'fs' | 'loader'>;
  */
 export type PackageManagerFactory = () => PackageManager;
 
+/** What the pre-context AWS paths need: the machine AWS resolution reads, and the sign-in port. */
+export interface AwsAccess {
+  host: AwsHost;
+  awsLogin: AwsLogin;
+}
+
+/**
+ * Builds the {@link AwsAccess} `blogwright whoami` and `blogwright init`
+ * resolve an AWS session through - both run before any `OpsContext` exists,
+ * so they cannot take it from `Ports`. Called only on those two paths.
+ * Declared as a required parameter for the reason `ContextFactory` is: the
+ * composition root (`bin.ts`) is the only place real adapters get constructed.
+ */
+export type AwsAccessFactory = () => AwsAccess;
+
 export async function main(
   argv: string[],
   makeTerminal: TerminalFactory,
   makeContext: ContextFactory,
   makeDiscoveryPorts: DiscoveryPortsFactory,
   makePackages: PackageManagerFactory,
+  makeAwsAccess: AwsAccessFactory,
 ): Promise<number> {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -313,6 +335,7 @@ export async function main(
       domain: { type: 'string' },
       config: { type: 'string' },
       endpoint: { type: 'string' },
+      profile: { type: 'string' },
       hash: { type: 'string' },
       id: { type: 'string' },
       // Declared here even though no built-in command reads it. `main`
@@ -355,7 +378,9 @@ export async function main(
       // importing - every installed plugin's module for a command that was
       // always going to decline; `makeDiscoveryPorts()` above is cheap
       // (adapter construction only, no I/O), unlike `discover` itself.
-      return initSite(discoveryPorts.fs, terminal, logger, []);
+      return initSite(discoveryPorts.fs, terminal, logger, [], {
+        aws: { profile: values.profile, ...makeAwsAccess() },
+      });
     }
     // Runs before any context exists - there is no config to load yet.
     // `init` is one of the four discovery-running paths `DiscoveryPortsFactory`
@@ -387,13 +412,31 @@ export async function main(
       if (!isMissingPackageJsonError(err)) throw err;
       logger.warn(`${(err as Error).message} - continuing with no plugins discovered`);
     }
-    return initSite(discoveryPorts.fs, terminal, logger, plugins, repoRoot);
+    return initSite(discoveryPorts.fs, terminal, logger, plugins, {
+      root: repoRoot,
+      aws: { profile: values.profile, ...makeAwsAccess() },
+    });
+  }
+  if (command === 'whoami') {
+    // Dispatched beside `init`, before the `makeContext` call below: it
+    // resolves the same AWS session but loads no state, and it must work
+    // before the repo has a config at all.
+    const { host, awsLogin } = makeAwsAccess();
+    return whoami(
+      {
+        env: values.env ?? positionals[1] ?? 'production',
+        configPath: values.config,
+        profile: values.profile,
+        endpointOverride: values.endpoint,
+      },
+      { fs: makeDiscoveryPorts().fs, terminal, logger, awsLogin, host },
+    );
   }
   if (command === 'plugin') {
     // Dispatched HERE, beside `init` and ahead of the built-in switch, and
     // never from the switch itself: the switch runs past the `makeContext`
     // call below, which loads the environment's config and calls
-    // `sts.getAccountId()`. `blogwright plugin list` and `plugin add` are what
+    // `sts:GetCallerIdentity`. `blogwright plugin list` and `plugin add` are what
     // an operator runs BEFORE the repo is configured, so dispatching them
     // after that build would answer both with `no config found for
     // environment "production"` on exactly the repo they exist to serve -
@@ -459,6 +502,7 @@ export async function main(
     configPath: values.config,
     domain: values.domain,
     endpointOverride: values.endpoint,
+    profile: values.profile,
     ports: { terminal },
   });
 
@@ -507,6 +551,7 @@ interface PreviewValues {
   domain?: string | undefined;
   config?: string | undefined;
   endpoint?: string | undefined;
+  profile?: string | undefined;
   id?: string | undefined;
   refresh: boolean;
   yes: boolean;
@@ -536,6 +581,7 @@ async function runPreview(
     configPath: values.config,
     domain: values.domain,
     endpointOverride: values.endpoint,
+    profile: values.profile,
     ports: { terminal },
   });
 

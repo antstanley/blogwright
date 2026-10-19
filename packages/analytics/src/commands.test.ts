@@ -1,7 +1,7 @@
 /**
  * The `analytics dashboard` command - the plugin's composition root - driven
  * end to end with **no seam injected**: the real `createDuckDbAnalyticsQuery`,
- * the real `createCredentialProvider` and the real listener. That is
+ * the host's credential provider (`ctx.clients.credentials`) and the real listener. That is
  * affordable, and worth more than a stubbed version, because the adapter opens
  * its DuckDB connection lazily and resolves its credentials inside that
  * connection: constructing it touches neither the native library nor AWS. So
@@ -92,6 +92,13 @@ function contextFor(port?: number): TestContext {
     config: parseConfig(JSON.stringify({ siteName: 'example', region: 'us-east-1' })),
     pluginConfig: validateAnalyticsConfig(port === undefined ? {} : { dashboard: { port } }),
     accountId: '123456789012',
+    clients: createClients({
+      region: 'us-east-1',
+      credentials: staticCredentials({ accessKeyId: 'AKIA', secretAccessKey: 'secret' }),
+      transport: async (req) => {
+        throw new Error(`unexpected AWS request in the dashboard test: ${req.url}`);
+      },
+    }),
     // An in-memory filesystem holding nothing: the prebuilt application (task
     // 57's `dist/app`) does not exist beside the sources, which is the state a
     // reader of this suite should expect the static route to report.
@@ -1107,6 +1114,30 @@ describe('analytics status - the plain form, which is the contract for CI and ag
     // so no PUT and no DELETE may reach `state/test.analytics.json`.
     expect(stateCalls(calls).filter((call) => call.method !== 'GET')).toEqual([]);
     expect(calls.filter((call) => call.url.includes(SITE_STATE_KEY))).toEqual([]);
+  });
+});
+
+describe('analytics status - credentials', () => {
+  it("resolves the row count's DuckDB credentials through the host's provider", async () => {
+    const built = await analyticsContext();
+    let resolutions = 0;
+    const ctx: PluginContext<AnalyticsConfig> = {
+      ...built.ctx,
+      clients: {
+        ...built.ctx.clients,
+        credentials: async () => {
+          resolutions += 1;
+          throw new Error('host provider: profile mysite-prod has expired');
+        },
+      },
+    };
+
+    await status(ctx);
+
+    expect(resolutions).toBe(1);
+    expect(linesAt(built.logger, 'warn').join('\n')).toContain(
+      'host provider: profile mysite-prod has expired',
+    );
   });
 });
 
