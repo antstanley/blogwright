@@ -1,5 +1,11 @@
 # blogwright-core
 
+## 0.5.0
+
+### Minor Changes
+
+- [#45](https://github.com/antstanley/blogwright/pull/45) [`9808142`](https://github.com/antstanley/blogwright/commit/980814232364d305a0027245dfcde3b8944d54b3) Thanks [@antstanley](https://github.com/antstanley)! - Choose AWS credentials with `--profile`, `AWS_PROFILE` or a new `aws.profile` config key (exported environment credentials beat the config's profile, so CI is unaffected), and pin an environment to one account with `aws.accountId`. Every command now checks `sts:GetCallerIdentity` before loading state, prints one identity line, refuses credentials for any other pinned account, and offers `aws sso login` or `aws login` when a sign-in has expired. Adds `blogwright whoami`, and `blogwright init` now asks for a profile and offers to detect and pin the account. The analytics plugin's DuckDB credentials come from the same profile.
+
 ## 0.4.0
 
 ### Minor Changes
