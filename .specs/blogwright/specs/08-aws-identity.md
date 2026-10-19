@@ -1,6 +1,6 @@
 # AWS profiles, caller identity and account pinning
 
-**Status:** Implemented · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-10-19 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [overview](00-overview.md), [domain model](01-domain-model.md) and [development guidelines](../../../DEVELOPMENT.md).
 
@@ -37,9 +37,10 @@ to another account means changing the credentials or `aws.accountId`.
 
 ## Profile resolution
 
-`resolveAwsProfile({ flag, processEnv, config })` is pure. It returns
-`ResolvedAwsProfile = { name: string | null; source }`. The first matching
-row wins. Every value is trimmed, and a blank value counts as absent.
+`resolveAwsProfile({ flag, processEnv, config })` is pure. It returns a
+`ResolvedAwsProfile`: `{ source: 'flag' | 'env' | 'config'; name }` for a
+named profile, or `{ source: 'env-keys' | 'default' }` with no name. The
+first matching row wins. Every value is trimmed, and a blank value counts as absent.
 
 | # | Source | `source` | Matches when |
 |---|---|---|---|
@@ -49,7 +50,9 @@ row wins. Every value is trimmed, and a blank value counts as absent.
 | 4 | `aws.profile` in the env config | `config` | the key is set |
 | 5 | none | `default` | always |
 
-Rows 3 and 5 return `name: null`. When row 3 wins while the config names a
+Rows 3 and 5 name no profile. Row 3 selects only the exported credentials
+(see [Credential provider](#credential-provider)), so a `[default]` profile
+in the shared files can never stand in for them. When row 3 wins while the config names a
 profile, one info line says so: `ignoring aws.profile "<name>": environment
 credentials are set`.
 
@@ -64,8 +67,8 @@ available: default, mysite-dev, personal
 The parenthetical names the source: `--profile`, `AWS_PROFILE`, or the
 config path. Under an endpoint override a missing profile is not an error:
 the info line `profile "<name>" not found - using emulator credentials` is
-logged and the profile resolves to `name: null`, so the emulator fallback
-below applies.
+logged and the profile resolves to the unnamed `default` row, so the
+emulator fallback below applies.
 
 ## Shared AWS files
 
@@ -82,48 +85,71 @@ both files set a key, the credentials file wins.
 The config file is `AWS_CONFIG_FILE`, or `~/.aws/config` when that is unset.
 The credentials file is `AWS_SHARED_CREDENTIALS_FILE`, or
 `~/.aws/credentials` when that is unset. Both are read through the
-`FileSystem` port, and a missing file reads as empty. The config file
+`FileSystem` port, and a file that cannot be read - missing, a directory,
+unreadable - reads as empty, as the SDK treats it, so exported credentials
+and the default chain keep working when `~/.aws` is unusable. The config file
 contributes `[default]` and `[profile <name>]` sections, and other section
 kinds (for example `[sso-session x]`) are ignored. The credentials file
 contributes `[<name>]` sections. The profile list is de-duplicated, with
 `default` first and the rest in code-point order. Each profile has a
-sign-in style:
+sign-in style, classified in the order the SDK's `fromIni` resolves it, so
+the advice matches the provider that actually failed:
 
-- `sso`: `sso_session` or `sso_start_url`.
-- `login`: `login_session`.
-- `process`: `credential_process`.
-- `static`: `aws_access_key_id`.
-- `role` + `source_profile`: the style of the source profile, followed
-  recursively. A cycle resolves to `unconfigured`.
-- `external`: `role_arn` with `credential_source` (environment, instance
-  or container credentials).
-- `unconfigured`: none of these, or the profile is absent.
+1. A role - `role_arn` with exactly one of `source_profile` or
+   `credential_source`: `mfa` when it sets `mfa_serial` (the provider has
+   no MFA code callback); otherwise the style of the source profile,
+   followed recursively (a cycle resolves to `unconfigured`), or `external`
+   for a `credential_source` (environment, instance or container
+   credentials).
+2. `static`: `aws_access_key_id` and `aws_secret_access_key`.
+3. `web-identity`: `role_arn` with `web_identity_token_file`.
+4. `process`: `credential_process`.
+5. `sso`: any of `sso_session`, `sso_start_url`, `sso_account_id`,
+   `sso_region`, `sso_role_name`.
+6. `login`: `login_session`.
+7. `unconfigured`: none of these, or the profile is absent.
 
-They are checked in that order. The style of a null profile is the style of
-the `default` profile. The result also names the profile the style was read
+Inside a role chain a source profile's access keys win over everything,
+and a source profile with a `credential_source` but no `role_arn` is
+`external`, as in the SDK. Unnamed credentials take the style of the
+`default` profile. The result also names the profile the style was read
 from - the source profile at the end of a `source_profile` chain - and the
 login offer and guidance target that profile, not the role profile that
 chains to it.
 
 ## Credential provider
 
-`createCredentialProvider({ override, profile })` builds one of two
-providers. With a profile name, it uses `fromIni({ profile })`, which
-resolves SSO, `login_session`, `credential_process`, `source_profile` and
-role assumption exactly as the AWS CLI does. Environment keys are never
-consulted on this path. Without a name, it uses `fromNodeProviderChain()`,
-as before. Either provider is memoized until its credentials expire: the
-chain memoizes itself, and the `fromIni` provider is wrapped in core's own
-expiry-aware memoizer, which refreshes credentials within five minutes of
-their expiry and never caches a failure. The existing emulator fallback
-applies to both: when `override` is true and resolution fails, the provider
+`createCredentialProvider({ override, selection })` builds the provider a
+`CredentialSelection` names:
+
+- `{ kind: 'profile', name }` (rows 1, 2 and 4): `fromIni({ profile })`,
+  which resolves SSO, `login_session`, `credential_process`,
+  `source_profile` and role assumption exactly as the AWS CLI does.
+  Environment keys are never consulted on this path.
+- `{ kind: 'environment' }` (row 3): only the exported credentials, in the
+  order the Node chain tries them - `fromEnv` for an access key pair,
+  `fromTokenFile` for `AWS_WEB_IDENTITY_TOKEN_FILE`, then `fromHttp` and
+  `fromContainerMetadata` for a container credentials URI. The full chain
+  would try the shared files' `[default]` profile before the token file and
+  the container endpoint.
+- `{ kind: 'chain' }`, the default (row 5): `fromNodeProviderChain()`, as
+  before.
+
+Every provider is built with `ignoreCache: true`. The SDK caches each
+shared-file read for the life of the process, including `~/.aws/config` and
+the console-login token, so the provider rebuilt after a sign-in would
+otherwise resolve the files as they were before `aws login` rewrote them.
+Each provider is wrapped in core's own expiry-aware memoizer, which
+refreshes credentials within five minutes of their expiry and never caches
+a failure, so the files are read once per resolution, not per request. The
+existing emulator fallback applies to every selection: when `override` is true and resolution fails, the provider
 returns `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` from the
 environment, each falling back to `test`. Any other resolution failure is
 raised as core's `AwsCredentialsError`, keeping the SDK error as `cause`, so
 the CLI can tell a provider failure from a rejected request without reading
 vendor error types.
 
-`createClients` accepts `profile` and exposes the provider it built as
+`createClients` accepts `selection` and exposes the provider it built as
 `AwsClients.credentials`. An `endpointOverride` key that is present, even
 as `undefined`, is the caller's decision; only an omitted key falls back to
 `AWS_ENDPOINT_URL`, so the session's own override resolution is final. Every local AWS caller signs through that one
@@ -168,8 +194,7 @@ aws  123456789012 · AdminRole · profile mysite-prod (config) · pinned
 The last field is `pinned`, `unpinned`, or `pin skipped`. The session's
 other notices (`ignoring aws.profile ...`, `profile ... not found - using
 emulator credentials`, `account pin skipped: endpoint override`) are routed
-the same way, so no non-interactive stdout gains a line. A null profile
-shows as `environment credentials` or `default credentials`.
+the same way, so no non-interactive stdout gains a line. An unnamed profile shows as `environment credentials` or `default credentials`.
 `shortIdentity(arn)` returns the role or user name, and drops the session
 name of an assumed role and the IAM path of a role or user. When `terminal.isInteractive` is true the line
 goes through `logger.info`. Otherwise (`--plain`, piped output or CI) it is
@@ -211,7 +236,7 @@ choice [1]:
 ```
 
 The `sso` style defaults to option 1. The `login` and `unconfigured` styles
-default to option 2. For a null profile, `--profile` is omitted. On a
+default to option 2. For unnamed credentials, `--profile` is omitted. On a
 headless host, `aws sso login` gains `--use-device-code` and `aws login`
 gains `--remote`. A host is headless when any of these is true:
 
@@ -236,6 +261,11 @@ code is 1:
 - `static` profile: `aws configure --profile <name>`;
 - `process` profile: the profile's `credential_process`;
 - `external` profile: the role's `credential_source`;
+- `web-identity` profile: the role's `web_identity_token_file`;
+- `mfa` profile: export temporary credentials with
+  `aws configure export-credentials --profile <name> --format env`, then
+  run again (without `--profile` or `AWS_PROFILE` when one of them named
+  the role);
 - `env-keys` source: refresh the exported credentials.
 
 ## `whoami`
@@ -293,9 +323,19 @@ SDK's own SSO and STS clients that resolve a profile read that variable too,
 so detection would ask the emulator. It warns that the account cannot be
 detected and that it is not pinned. Otherwise it then asks, whether or not
 the profile question was asked (exported credentials need no profile), `Detect the AWS account and pin it to this config? [Y/n]`.
-Yes runs `resolveAwsSession` with the answer as the `flag` row (blank
-answers fall through to the remaining rows), the final region, and no
-endpoint override, including the login offer.
+Yes runs `resolveAwsSession`, login offer included, with the final region
+and no endpoint override, for the credentials the written config selects.
+A chosen profile is passed as the `flag` row. With no profile, detection
+runs without the shell's `AWS_PROFILE`, which the config does not record,
+so it uses exported credentials or the default chain. Before detecting,
+`init` warns when this shell would override the config, since a command run
+here could then be refused by the pin:
+
+- `AWS_PROFILE=<name> is set in this shell and overrides aws.profile - unset it before running blogwright in this shell`
+  when it names a different profile, or `... and is not saved to the config - ...`
+  when no profile was chosen;
+- `AWS credentials exported in this shell override aws.profile - unset them first`
+  when a profile was chosen and credentials are exported.
 When that succeeds, it reports the identity and pins the account. When it
 fails or the operator cancels, `init` warns `account not pinned - add
 aws.accountId later` and carries on. An AWS failure never fails `init`.
@@ -355,6 +395,11 @@ defaulting to `process.env`, `os.homedir()` and core's `createClients`.
 - *Region.* **Never taken from the profile.** The deploy region belongs to the stack, not to whoever deploys it.
 - *Memoizer.* **Core's own, not `@smithy/property-provider`.** That package is no longer in the SDK's dependency tree (its exports moved into `@smithy/core`), and a dozen lines in `credentials.ts` avoid a new dependency for one function.
 - *Pin question in `init`.* **Asked even when no profiles are defined.** Exported environment credentials (or a default chain without files) can still be detected and pinned.
+- *Detection in `init`.* **The config's credentials, not this shell's.** The pin is written for the config, so it must be the account of the profile the config names (or, with none, of the credentials a shell without `AWS_PROFILE` resolves). A shell that would override the config is warned about rather than silently pinned.
+- *Shared-file cache.* **`ignoreCache: true` on every provider.** The SDK's process-wide file cache made the retry after `aws login` resolve the pre-login token and config; the memoizer keeps the extra reads to one per resolution.
+- *Row 3 provider.* **Only the exported sources, not the full chain.** The chain reads a `[default]` profile before the web identity token file and the container endpoint, so "exported credentials win" would not hold on a host with both.
+- *MFA roles.* **Not prompted for; guided instead.** The SDK needs an MFA code callback, which a non-interactive run cannot satisfy. The guidance names `aws configure export-credentials`, whose exports row 3 then uses.
+- *Unreadable shared files.* **Read as empty, as the SDK does.** Failing every command on an unreadable `~/.aws` would break exported-credential runs that never needed the files.
 
 **Open questions**
 

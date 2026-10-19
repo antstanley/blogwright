@@ -9,7 +9,9 @@ import {
 interface Recorded {
   sources: CredentialSources;
   iniProfiles: string[];
+  ignoreCache: boolean[];
   chainCalls: number;
+  environmentCalls: number;
   resolutions: number;
   clock: { now: number };
 }
@@ -19,16 +21,24 @@ function fakeSources(opts: { expiresInMs?: number; fail?: boolean } = {}): Recor
   const clock = { now: 1_000_000 };
   const recorded: Recorded = {
     iniProfiles: [],
+    ignoreCache: [],
     chainCalls: 0,
+    environmentCalls: 0,
     resolutions: 0,
     clock,
     sources: {
-      fromIni: ({ profile }) => {
+      fromIni: ({ profile, ignoreCache }) => {
         recorded.iniProfiles.push(profile);
+        recorded.ignoreCache.push(ignoreCache);
         return resolve;
       },
-      fromNodeProviderChain: () => {
+      fromEnvironment: () => {
+        recorded.environmentCalls += 1;
+        return resolve;
+      },
+      fromNodeProviderChain: ({ ignoreCache }) => {
         recorded.chainCalls += 1;
+        recorded.ignoreCache.push(ignoreCache);
         return resolve;
       },
       now: () => clock.now,
@@ -48,26 +58,44 @@ function fakeSources(opts: { expiresInMs?: number; fail?: boolean } = {}): Recor
   return recorded;
 }
 
+const PROFILE_P = { selection: { kind: 'profile', name: 'p' } } as const;
+
 describe('createCredentialProvider', () => {
   it('selects fromIni for a named profile', async () => {
     const fake = fakeSources();
-    await createCredentialProvider({ profile: 'mysite-prod' }, fake.sources)();
+    const selection = { kind: 'profile', name: 'mysite-prod' } as const;
+    await createCredentialProvider({ selection }, fake.sources)();
     expect(fake.iniProfiles).toEqual(['mysite-prod']);
+    expect(fake.chainCalls + fake.environmentCalls).toBe(0);
+  });
+
+  it('selects only the exported credentials for an environment selection', async () => {
+    const fake = fakeSources();
+    await createCredentialProvider({ selection: { kind: 'environment' } }, fake.sources)();
+    expect(fake.environmentCalls).toBe(1);
+    expect(fake.iniProfiles).toEqual([]);
     expect(fake.chainCalls).toBe(0);
   });
 
-  it('selects the node provider chain without a profile', async () => {
-    for (const profile of [undefined, null]) {
+  it('selects the node provider chain by default', async () => {
+    for (const selection of [undefined, { kind: 'chain' } as const]) {
       const fake = fakeSources();
-      await createCredentialProvider({ profile }, fake.sources)();
+      await createCredentialProvider({ selection }, fake.sources)();
       expect(fake.iniProfiles).toEqual([]);
       expect(fake.chainCalls).toBe(1);
     }
   });
 
+  it('never lets the SDK reuse shared files it read earlier', async () => {
+    const fake = fakeSources();
+    await createCredentialProvider({ selection: { kind: 'profile', name: 'p' } }, fake.sources)();
+    await createCredentialProvider({}, fake.sources)();
+    expect(fake.ignoreCache).toEqual([true, true]);
+  });
+
   it('memoizes profile credentials until they near expiry', async () => {
     const fake = fakeSources({ expiresInMs: 60 * 60 * 1000 });
-    const provider = createCredentialProvider({ profile: 'p' }, fake.sources);
+    const provider = createCredentialProvider(PROFILE_P, fake.sources);
     expect((await provider()).accessKeyId).toBe('AKIA1');
     expect((await provider()).accessKeyId).toBe('AKIA1');
     fake.clock.now += 56 * 60 * 1000;
@@ -76,23 +104,23 @@ describe('createCredentialProvider', () => {
 
   it('raises a provider failure as AwsCredentialsError, keeping the message', async () => {
     const fake = fakeSources({ fail: true });
-    const failure = createCredentialProvider({ profile: 'p' }, fake.sources)();
+    const failure = createCredentialProvider(PROFILE_P, fake.sources)();
     await expect(failure).rejects.toBeInstanceOf(AwsCredentialsError);
     await expect(failure).rejects.toThrow('The SSO session associated with this profile');
   });
 
   it('does not cache a failure', async () => {
     const fake = fakeSources({ fail: true });
-    const provider = createCredentialProvider({ profile: 'p' }, fake.sources);
+    const provider = createCredentialProvider(PROFILE_P, fake.sources);
     await expect(provider()).rejects.toThrow();
     await expect(provider()).rejects.toThrow();
     expect(fake.resolutions).toBe(2);
   });
 
-  it('falls back to emulator credentials under an override, for both providers', async () => {
-    for (const profile of ['p', undefined]) {
+  it('falls back to emulator credentials under an override, for every selection', async () => {
+    for (const selection of [PROFILE_P.selection, { kind: 'environment' } as const, undefined]) {
       const fake = fakeSources({ fail: true });
-      const creds = await createCredentialProvider({ override: true, profile }, fake.sources)();
+      const creds = await createCredentialProvider({ override: true, selection }, fake.sources)();
       expect(creds.accessKeyId).toBe(process.env.AWS_ACCESS_KEY_ID ?? 'test');
     }
   });

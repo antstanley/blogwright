@@ -14,6 +14,7 @@ import {
   AwsCredentialsError,
   AwsError,
   createClients,
+  DEFAULT_PROFILE,
   readAwsProfiles,
   shortIdentity,
   type AccountPinStatus,
@@ -22,6 +23,7 @@ import {
   type AwsProfiles,
   type CallerIdentity,
   type ClientBundleOptions,
+  type CredentialSelection,
   type FileSystem,
   type ProfileSignIn,
   type ProfileStyle,
@@ -34,10 +36,29 @@ import type { AwsLogin } from './ports.js';
 /** Which precedence row chose the credentials. */
 export type AwsProfileSource = 'flag' | 'env' | 'env-keys' | 'config' | 'default';
 
-/** The outcome of profile resolution: a named profile, or `null` for the provider chain. */
-export interface ResolvedAwsProfile {
-  name: string | null;
-  source: AwsProfileSource;
+/** A profile chosen by name: by `--profile`, `AWS_PROFILE` or the config's `aws.profile`. */
+export interface NamedAwsProfile {
+  source: 'flag' | 'env' | 'config';
+  name: string;
+}
+
+/** No profile named: the exported environment credentials, or the default chain. */
+interface UnnamedAwsProfile {
+  source: 'env-keys' | 'default';
+}
+
+/** The outcome of profile resolution; only the named rows carry a profile name. */
+export type ResolvedAwsProfile = NamedAwsProfile | UnnamedAwsProfile;
+
+/** True when a precedence row named a profile. */
+export function isNamedProfile(profile: ResolvedAwsProfile): profile is NamedAwsProfile {
+  return 'name' in profile;
+}
+
+/** The credentials a resolved profile selects in core. */
+function credentialSelection(profile: ResolvedAwsProfile): CredentialSelection {
+  if (isNamedProfile(profile)) return { kind: 'profile', name: profile.name };
+  return profile.source === 'env-keys' ? { kind: 'environment' } : { kind: 'chain' };
 }
 
 /** The parts of the operator's machine AWS resolution reads, injected by the composition root. */
@@ -109,10 +130,10 @@ export function resolveAwsProfile(input: {
   if (flag) return { name: flag, source: 'flag' };
   const env = present(input.processEnv.AWS_PROFILE);
   if (env) return { name: env, source: 'env' };
-  if (hasEnvironmentCredentials(input.processEnv)) return { name: null, source: 'env-keys' };
+  if (hasEnvironmentCredentials(input.processEnv)) return { source: 'env-keys' };
   const config = present(input.config?.profile);
   if (config) return { name: config, source: 'config' };
-  return { name: null, source: 'default' };
+  return { source: 'default' };
 }
 
 /**
@@ -168,12 +189,12 @@ function profileOrigin(source: AwsProfileSource, configLabel: string): string {
 /** `profile mysite-prod (config)`, or `environment credentials` / `default credentials`. */
 function describeProfile(profile: ResolvedAwsProfile): string {
   const label = profileSourceLabel(profile.source);
-  return profile.name === null ? label : `profile ${profile.name} (${label})`;
+  return isNamedProfile(profile) ? `profile ${profile.name} (${label})` : label;
 }
 
 /** How failures name the credentials: `AWS credentials for profile "x"`, or the unnamed kind. */
 function credentialsSubject(profile: ResolvedAwsProfile): string {
-  if (profile.name !== null) return `AWS credentials for profile "${profile.name}"`;
+  if (isNamedProfile(profile)) return `AWS credentials for profile "${profile.name}"`;
   return profile.source === 'env-keys'
     ? 'The AWS credentials exported in the environment'
     : 'The default AWS credentials';
@@ -190,10 +211,10 @@ function checkProfileExists(
   profiles: AwsProfiles,
   opts: { override: boolean; configLabel: string; notice: (line: string) => void },
 ): ResolvedAwsProfile {
-  if (profile.name === null || profiles.has(profile.name)) return profile;
+  if (!isNamedProfile(profile) || profiles.has(profile.name)) return profile;
   if (opts.override) {
     opts.notice(`profile "${profile.name}" not found - using emulator credentials`);
-    return { name: null, source: 'default' };
+    return { source: 'default' };
   }
   const available = profiles.names.length > 0 ? profiles.names.join(', ') : 'none';
   throw new Error(
@@ -222,11 +243,11 @@ export interface LoginMenu {
  * `aws login`. Headless hosts get each command's browserless flag.
  */
 export function buildLoginChoices(
-  profileName: string | null,
+  profileName: string | undefined,
   style: ProfileStyle,
   headless: boolean,
 ): LoginMenu {
-  const profileArgs = profileName === null ? [] : ['--profile', profileName];
+  const profileArgs = profileName === undefined ? [] : ['--profile', profileName];
   const sso: LoginChoice = {
     args: ['sso', 'login', ...profileArgs, ...(headless ? ['--use-device-code'] : [])],
     hint: style === 'sso' ? 'profile uses IAM Identity Center' : 'IAM Identity Center',
@@ -245,17 +266,20 @@ function commandLine(choice: LoginChoice): string {
 /** Styles a sign-in command can repair. */
 const SIGN_IN_STYLES: ReadonlySet<ProfileStyle> = new Set(['sso', 'login', 'unconfigured']);
 
-const DEFAULT_PROFILE_NAME = 'default';
-
 /**
  * The profile a repair targets: the one whose settings decided the style,
  * which for a `source_profile` chain is its source - the login that repairs
- * a role chain is the login of its source profile. A null profile stays null
- * (no `--profile`) unless the default profile chains to another one.
+ * a role chain is the login of its source profile. Unnamed credentials get
+ * no `--profile` unless the default profile chains to another one.
  */
-function repairProfile(profile: ResolvedAwsProfile, signIn: ProfileSignIn): string | null {
-  if (profile.name === null && signIn.profile === DEFAULT_PROFILE_NAME) return null;
+function repairProfile(profile: ResolvedAwsProfile, signIn: ProfileSignIn): string | undefined {
+  if (!isNamedProfile(profile) && signIn.profile === DEFAULT_PROFILE) return undefined;
   return signIn.profile;
+}
+
+/** The sign-in style of the resolved credentials; unnamed ones read the `default` profile. */
+function signInOf(profile: ResolvedAwsProfile, profiles: AwsProfiles): ProfileSignIn {
+  return profiles.signIn(isNamedProfile(profile) ? profile.name : DEFAULT_PROFILE);
 }
 
 /** The one line of guidance shown when no login is offered. */
@@ -268,7 +292,7 @@ function credentialGuidance(
     return 'Refresh the exported credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN).';
   }
   const target = repairProfile(profile, signIn);
-  const named = target === null ? '' : ` --profile ${target}`;
+  const named = target === undefined ? '' : ` --profile ${target}`;
   switch (signIn.style) {
     case 'sso':
     case 'login':
@@ -286,6 +310,16 @@ function credentialGuidance(
       return `Check the profile's credential_process: ${signIn.detail ?? '(unset)'}`;
     case 'external':
       return `Check the role's credential_source: ${signIn.detail ?? '(unset)'}`;
+    case 'web-identity':
+      return `Check the role's web_identity_token_file: ${signIn.detail ?? '(unset)'}`;
+    case 'mfa':
+      return (
+        `The role needs an MFA code for ${signIn.detail ?? 'its mfa_serial'}, which blogwright cannot ask for. ` +
+        `Export temporary credentials with: eval "$(aws configure export-credentials${named} --format env)"` +
+        (profile.source === 'flag' || profile.source === 'env'
+          ? `, then run again without ${profileSourceLabel(profile.source)}`
+          : ', then run again')
+      );
   }
 }
 
@@ -347,7 +381,7 @@ async function repairCredentials(
   profiles: AwsProfiles,
   opts: AwsSessionOptions,
 ): Promise<void> {
-  const signIn = profiles.signIn(profile.name);
+  const signIn = signInOf(profile, profiles);
   const headless = isHeadless(opts.host.processEnv, opts.host.platform);
   const offered =
     opts.ports.terminal.isInteractive &&
@@ -401,7 +435,7 @@ export async function resolveAwsSession(opts: AwsSessionOptions): Promise<AwsSes
 
   const makeClients = opts.host.createClients ?? createClients;
   const buildClients = () =>
-    makeClients({ region: opts.region, endpointOverride, profile: profile.name });
+    makeClients({ region: opts.region, endpointOverride, selection: credentialSelection(profile) });
   let clients = buildClients();
   let identity: CallerIdentity;
   try {
@@ -429,7 +463,7 @@ export async function resolveAwsSession(opts: AwsSessionOptions): Promise<AwsSes
 
 /** `profile "personal" from AWS_PROFILE`, or the unnamed kind of credentials. */
 function describeCredentialsOrigin(profile: ResolvedAwsProfile, configLabel: string): string {
-  if (profile.name === null) return profileOrigin(profile.source, configLabel);
+  if (!isNamedProfile(profile)) return profileOrigin(profile.source, configLabel);
   return `profile "${profile.name}" from ${profileOrigin(profile.source, configLabel)}`;
 }
 

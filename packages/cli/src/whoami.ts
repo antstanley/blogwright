@@ -19,6 +19,7 @@ import {
 } from 'blogwright-core';
 
 import {
+  isNamedProfile,
   profileSourceLabel,
   resolveAwsSession,
   type AwsHost,
@@ -90,7 +91,8 @@ async function locateConfig(
 
 /** `mysite-prod (config)`, or `none (default credentials)` when no profile is named. */
 function describeProfileValue(profile: ResolvedAwsProfile): string {
-  return `${profile.name ?? 'none'} (${profileSourceLabel(profile.source)})`;
+  const name = isNamedProfile(profile) ? profile.name : 'none';
+  return `${name} (${profileSourceLabel(profile.source)})`;
 }
 
 const PIN_VALUES: Readonly<Record<AccountPinStatus, string>> = {

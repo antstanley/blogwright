@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createMemoryFileSystem } from '../adapters/memory-fs.js';
+import type { FileSystem } from '../ports.js';
 import { collectProfiles, profileFiles, readAwsProfiles, readProfileStyle } from './profiles.js';
 
 const SSO_CONFIG = `[profile acme-prod]
@@ -137,7 +138,7 @@ describe('readProfileStyle', () => {
   it('merges a profile split across both files', () => {
     expect(
       readProfileStyle(
-        '[profile split]\nregion = eu-west-2\n',
+        '[profile split]\naws_secret_access_key = s\n',
         '[split]\naws_access_key_id = A\n',
         'split',
       ).style,
@@ -186,6 +187,68 @@ credential_source = Ec2InstanceMetadata
       profile: 'ec2',
       detail: 'Ec2InstanceMetadata',
     });
+  });
+
+  it('reports a role that needs an MFA code as mfa, ahead of its source', () => {
+    const config = `${STATIC_CONFIG}
+[profile admin]
+role_arn = arn:aws:iam::123456789012:role/Admin
+source_profile = keys
+mfa_serial = arn:aws:iam::123456789012:mfa/ant
+`;
+    expect(readProfileStyle(config, '', 'admin')).toEqual({
+      style: 'mfa',
+      profile: 'admin',
+      detail: 'arn:aws:iam::123456789012:mfa/ant',
+    });
+  });
+
+  it('recognises web identity profiles, carrying the token file', () => {
+    const config = `[profile ci]
+role_arn = arn:aws:iam::123456789012:role/Ci
+web_identity_token_file = /var/run/token
+`;
+    expect(readProfileStyle(config, '', 'ci')).toEqual({
+      style: 'web-identity',
+      profile: 'ci',
+      detail: '/var/run/token',
+    });
+  });
+
+  it('reports a source profile with only a credential_source as external', () => {
+    const config = `[profile deploy]
+role_arn = arn:aws:iam::123456789012:role/Deploy
+source_profile = host
+
+[profile host]
+credential_source = EcsContainer
+`;
+    expect(readProfileStyle(config, '', 'deploy')).toEqual({
+      style: 'external',
+      profile: 'host',
+      detail: 'EcsContainer',
+    });
+    expect(readProfileStyle(config, '', 'host').style).toBe('unconfigured');
+  });
+
+  it('checks a role before keys, and keys only as a pair, as the SDK does', () => {
+    const mixed = `${SSO_CONFIG}
+[profile mixed]
+aws_access_key_id = A
+aws_secret_access_key = s
+role_arn = arn:aws:iam::123456789012:role/Deploy
+source_profile = acme-prod
+`;
+    expect(readProfileStyle(mixed, '', 'mixed').style).toBe('sso');
+    expect(readProfileStyle('[default]\naws_access_key_id = A\n', '', 'default').style).toBe(
+      'unconfigured',
+    );
+  });
+
+  it('reads any sso_* setting as SSO', () => {
+    expect(
+      readProfileStyle('[default]\nsso_account_id = 123456789012\n', '', 'default').style,
+    ).toBe('sso');
   });
 
   it('reports unknown or empty profiles as unconfigured', () => {
@@ -238,7 +301,7 @@ describe('readAwsProfiles', () => {
   it('reads both files through the FileSystem port', async () => {
     const fs = createMemoryFileSystem({
       '/home/ant/.aws/config': `[default]\nsso_session = x\n${PROCESS_CONFIG}`,
-      '/home/ant/.aws/credentials': '[keys]\naws_access_key_id = A\n',
+      '/home/ant/.aws/credentials': '[keys]\naws_access_key_id = A\naws_secret_access_key = s\n',
     });
     const profiles = await readAwsProfiles(fs, {}, '/home/ant');
     expect(profiles.names).toEqual(['default', 'deployed', 'keys']);
@@ -247,15 +310,20 @@ describe('readAwsProfiles', () => {
     expect(profiles.signIn('keys').style).toBe('static');
   });
 
-  it("uses the default profile's style for a null profile", async () => {
-    const fs = createMemoryFileSystem({ '/h/.aws/config': '[default]\nlogin_session = s\n' });
-    expect((await readAwsProfiles(fs, {}, '/h')).signIn(null).style).toBe('login');
+  it('reads a file that cannot be read as empty, as the SDK does', async () => {
+    const fs: FileSystem = {
+      ...createMemoryFileSystem(),
+      readText: (path) => Promise.reject(new Error(`EISDIR: illegal operation on ${path}`)),
+    };
+    const profiles = await readAwsProfiles(fs, {}, '/h');
+    expect(profiles.names).toEqual([]);
+    expect(profiles.signIn('default').style).toBe('unconfigured');
   });
 
   it('reads missing files as empty', async () => {
     const profiles = await readAwsProfiles(createMemoryFileSystem(), {}, '/h');
     expect(profiles.names).toEqual([]);
-    expect(profiles.signIn(null).style).toBe('unconfigured');
+    expect(profiles.signIn('default').style).toBe('unconfigured');
   });
 
   it('reads the files the environment overrides name', async () => {

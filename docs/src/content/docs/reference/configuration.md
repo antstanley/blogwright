@@ -92,7 +92,7 @@ A named profile from your shared AWS files (`~/.aws/config` and `~/.aws/credenti
 4. `aws.profile`
 5. The default AWS provider chain
 
-So a committed `aws.profile` never breaks CI: exported credentials win over it, and the command says so (`ignoring aws.profile "...": environment credentials are set`). A named profile that your AWS files do not define stops the command before any AWS call, listing the profiles that do exist. Only the profile's credentials are used - never its `region`; the deploy region is always [`region`](#region).
+So a committed `aws.profile` never breaks CI: exported credentials win over it - only the exported credentials are used, never a `[default]` profile from your AWS files - and the command says so (`ignoring aws.profile "...": environment credentials are set`). A named profile that your AWS files do not define stops the command before any AWS call, listing the profiles that do exist. Only the profile's credentials are used - never its `region`; the deploy region is always [`region`](#region).
 
 #### `aws.accountId`
 

@@ -1,4 +1,11 @@
-import { fromIni, fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import {
+  fromContainerMetadata,
+  fromEnv,
+  fromHttp,
+  fromIni,
+  fromNodeProviderChain,
+  fromTokenFile,
+} from '@aws-sdk/credential-providers';
 
 export interface AwsCredentials {
   accessKeyId: string;
@@ -8,6 +15,17 @@ export interface AwsCredentials {
 
 export type CredentialProvider = () => Promise<AwsCredentials>;
 
+/**
+ * Which credentials to resolve: a named profile from the shared AWS files,
+ * only the credentials exported into the environment (access keys, a web
+ * identity token file, a container credentials endpoint), or the SDK's
+ * default Node provider chain.
+ */
+export type CredentialSelection =
+  | { kind: 'profile'; name: string }
+  | { kind: 'environment' }
+  | { kind: 'chain' };
+
 /** What the SDK's providers resolve: credentials, optionally with an expiry. */
 interface SdkCredentials extends AwsCredentials {
   expiration?: Date | undefined;
@@ -16,21 +34,66 @@ interface SdkCredentials extends AwsCredentials {
 type SdkCredentialProvider = () => Promise<SdkCredentials>;
 
 /**
+ * Whether the SDK may reuse shared-file contents it read earlier in the
+ * process. Always false here: the SDK caches `~/.aws/config` and the console
+ * login token for the life of the process, so a provider built after
+ * `aws login` rewrote them would otherwise resolve the stale contents.
+ */
+interface SharedFileReads {
+  ignoreCache: boolean;
+}
+
+/**
  * The SDK provider factories and clock {@link createCredentialProvider} builds
- * from. Injectable so a test can assert which provider a profile selects
- * without reading the operator's real AWS files.
+ * from. Injectable so a test can assert which provider a selection uses
+ * without reading the operator's real AWS files or environment.
  */
 export interface CredentialSources {
-  fromIni(init: { profile: string }): SdkCredentialProvider;
-  fromNodeProviderChain(): SdkCredentialProvider;
+  fromIni(init: { profile: string } & SharedFileReads): SdkCredentialProvider;
+  fromEnvironment(): SdkCredentialProvider;
+  fromNodeProviderChain(init: SharedFileReads): SdkCredentialProvider;
   now(): number;
+}
+
+/** Try each provider in order; the first to resolve wins, else the last failure is raised. */
+function firstResolving(providers: readonly SdkCredentialProvider[]): SdkCredentialProvider {
+  return async () => {
+    let failure: unknown = new Error('no credentials are exported in the environment');
+    for (const provider of providers) {
+      try {
+        return await provider();
+      } catch (err) {
+        failure = err;
+      }
+    }
+    throw failure;
+  };
+}
+
+/**
+ * Only the exported credentials, in the order the Node chain tries them:
+ * access keys, then a web identity token file, then a container credentials
+ * endpoint. Unlike the full chain, a `[default]` profile in the shared files
+ * is never consulted, so exported credentials always win.
+ */
+function fromExportedEnvironment(env: NodeJS.ProcessEnv): SdkCredentialProvider {
+  const providers: SdkCredentialProvider[] = [];
+  if (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY) providers.push(fromEnv());
+  if (env.AWS_WEB_IDENTITY_TOKEN_FILE) providers.push(fromTokenFile());
+  if (env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || env.AWS_CONTAINER_CREDENTIALS_FULL_URI) {
+    providers.push(fromHttp(), fromContainerMetadata());
+  }
+  return firstResolving(providers);
 }
 
 const SDK_SOURCES: CredentialSources = {
   fromIni,
-  fromNodeProviderChain: () => fromNodeProviderChain(),
+  fromEnvironment: () => fromExportedEnvironment(process.env),
+  fromNodeProviderChain: (init) => fromNodeProviderChain(init),
   now: () => Date.now(),
 };
+
+const SHARED_FILE_READS: SharedFileReads = { ignoreCache: true };
 
 /**
  * Credentials this close to expiry are refreshed rather than reused, so a
@@ -73,13 +136,30 @@ function memoizeUntilExpiry(
   };
 }
 
+/** The SDK provider a selection resolves through, before memoization. */
+function selectedProvider(
+  selection: CredentialSelection,
+  sources: CredentialSources,
+): SdkCredentialProvider {
+  switch (selection.kind) {
+    case 'profile':
+      return sources.fromIni({ profile: selection.name, ...SHARED_FILE_READS });
+    case 'environment':
+      return sources.fromEnvironment();
+    case 'chain':
+      return sources.fromNodeProviderChain(SHARED_FILE_READS);
+  }
+}
+
 /**
- * Resolve AWS credentials. With a `profile`, the SDK's `fromIni` resolves that
- * named profile exactly as the AWS CLI does (SSO, `login_session`,
- * `credential_process`, `source_profile` role chains) and environment keys are
- * never consulted. Without one, the standard Node provider chain (environment,
- * shared files, SSO, container/instance metadata) applies. Both are memoized
- * until their credentials near expiry.
+ * Resolve AWS credentials. A `profile` selection resolves that named profile
+ * with the SDK's `fromIni`, exactly as the AWS CLI does (SSO,
+ * `login_session`, `credential_process`, `source_profile` role chains), and
+ * never consults environment keys. An `environment` selection uses only the
+ * exported credentials. The default `chain` is the standard Node provider
+ * chain (environment, shared files, SSO, container/instance metadata). Each
+ * provider reads the shared files afresh and is memoized until its
+ * credentials near expiry.
  *
  * When an endpoint override is in play (floci/localstack) and resolution
  * fails, fall back to the environment's keys or the emulator's dummy
@@ -89,13 +169,14 @@ function memoizeUntilExpiry(
 export function createCredentialProvider(
   opts: {
     override?: boolean | undefined;
-    profile?: string | null | undefined;
+    selection?: CredentialSelection | undefined;
   },
   sources: CredentialSources = SDK_SOURCES,
 ): CredentialProvider {
-  const resolve = opts.profile
-    ? memoizeUntilExpiry(sources.fromIni({ profile: opts.profile }), sources.now)
-    : sources.fromNodeProviderChain();
+  const resolve = memoizeUntilExpiry(
+    selectedProvider(opts.selection ?? { kind: 'chain' }, sources),
+    sources.now,
+  );
   return async () => {
     try {
       const creds = await resolve();

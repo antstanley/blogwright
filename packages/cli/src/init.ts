@@ -27,7 +27,7 @@ import {
   WEB_FUNCTION_REGIONS,
 } from 'blogwright-core';
 
-import { resolveAwsSession, type AwsHost } from './aws-session.js';
+import { resolveAwsProfile, resolveAwsSession, type AwsHost } from './aws-session.js';
 import { renderConfigBlock, type ConfigBlockEntry as BlockEntry } from './config-block.js';
 import { confirm, type Logger } from './logger.js';
 import type { AwsLogin } from './ports.js';
@@ -354,9 +354,39 @@ async function askAwsProfile(
 }
 
 /**
+ * Warn when this shell would override what the config is about to say: the
+ * pin is detected for the config's credentials, so a command run here under
+ * a different `AWS_PROFILE` or exported credentials could be refused.
+ */
+function warnShellOverride(
+  logger: Logger,
+  processEnv: NodeJS.ProcessEnv,
+  profile: string | undefined,
+): void {
+  const shell = resolveAwsProfile({ processEnv, config: { profile } });
+  const advice = 'unset it before running blogwright in this shell';
+  if (shell.source === 'env' && shell.name !== profile) {
+    const saved = profile === undefined ? 'is not saved to the config' : 'overrides aws.profile';
+    logger.warn(`AWS_PROFILE=${shell.name} is set in this shell and ${saved} - ${advice}`);
+  } else if (shell.source === 'env-keys' && profile !== undefined) {
+    logger.warn('AWS credentials exported in this shell override aws.profile - unset them first');
+  }
+}
+
+/** The environment without `AWS_PROFILE`, so detection sees what a config with no profile uses. */
+function withoutAwsProfile(processEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { AWS_PROFILE: _ignored, ...rest } = processEnv;
+  return rest;
+}
+
+/**
  * Offer to detect the account the chosen credentials belong to and pin it.
- * Runs the same session resolution every command does - login offer included
- * - against real AWS, so the pin is a real account. With `AWS_ENDPOINT_URL`
+ * The credentials are the ones the written config selects: the chosen
+ * profile, or - with none - exported credentials or the default chain, never
+ * this shell's `AWS_PROFILE`, which the config does not record. A shell that
+ * would override the config is warned about. Runs the same session
+ * resolution every command does - login offer included - against real AWS,
+ * so the pin is a real account. With `AWS_ENDPOINT_URL`
  * exported it is not offered at all: the SDK's own SSO and STS clients that
  * resolve a profile read that variable too, so detection would ask the
  * emulator. An AWS failure never fails `init`: every error the session
@@ -377,13 +407,18 @@ async function askAccountPin(
   if (!(await confirm(terminal, 'Detect the AWS account and pin it to this config?'))) {
     return undefined;
   }
+  const { host } = opts.aws;
+  warnShellOverride(logger, host.processEnv, opts.profile);
   try {
     const session = await resolveAwsSession({
       region: opts.region,
       endpointOverride: undefined,
       flag: opts.profile,
       configLabel: INIT_CONFIG_FILE,
-      host: opts.aws.host,
+      host:
+        opts.profile === undefined
+          ? { ...host, processEnv: withoutAwsProfile(host.processEnv) }
+          : host,
       ports: { fs, terminal, awsLogin: opts.aws.awsLogin },
       logger,
     });

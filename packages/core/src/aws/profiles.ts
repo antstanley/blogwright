@@ -7,15 +7,25 @@
 
 import { join } from 'node:path';
 
-import { FileNotFoundError, type FileSystem } from '../ports.js';
+import type { FileSystem } from '../ports.js';
 
 /**
  * How a profile obtains credentials, which decides what repairs a failure:
  * `sso` (`aws sso login`), `login` (`aws login`), `process`
  * (`credential_process`), `static` (access keys), `external` (a role assumed
- * from environment, instance or container credentials) or `unconfigured`.
+ * from environment, instance or container credentials), `web-identity` (a
+ * role assumed with a `web_identity_token_file`), `mfa` (a role whose
+ * `mfa_serial` needs a code blogwright cannot prompt for) or `unconfigured`.
  */
-export type ProfileStyle = 'sso' | 'login' | 'process' | 'static' | 'external' | 'unconfigured';
+export type ProfileStyle =
+  | 'sso'
+  | 'login'
+  | 'process'
+  | 'static'
+  | 'external'
+  | 'web-identity'
+  | 'mfa'
+  | 'unconfigured';
 
 /** A profile's sign-in style plus the setting that names its source, when there is one. */
 export interface ProfileSignIn {
@@ -25,7 +35,11 @@ export interface ProfileSignIn {
    * profile at the end of a `source_profile` chain. A sign-in targets this one.
    */
   profile: string;
-  /** The `credential_process` (style `process`) or `credential_source` (style `external`). */
+  /**
+   * The `credential_process` (style `process`), `credential_source` (style
+   * `external`), `web_identity_token_file` (style `web-identity`) or
+   * `mfa_serial` (style `mfa`).
+   */
   detail?: string | undefined;
 }
 
@@ -40,11 +54,12 @@ export interface AwsProfiles {
   /** Every profile name, de-duplicated, `default` first and the rest in code-point order. */
   readonly names: readonly string[];
   has(name: string): boolean;
-  /** The sign-in of `name`, or of `default` when `name` is null. */
-  signIn(name: string | null): ProfileSignIn;
+  /** The sign-in of profile `name`; the default chain reads it from `default`. */
+  signIn(name: string): ProfileSignIn;
 }
 
-const DEFAULT_PROFILE = 'default';
+/** The profile the default credential chain reads from the shared files. */
+export const DEFAULT_PROFILE = 'default';
 
 function nonBlank(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -182,14 +197,25 @@ function profileSettings(
 }
 
 /**
- * How `profile` signs in, checked in this order: `sso_session` or
- * `sso_start_url` (sso), `login_session` (login), `credential_process`
- * (process), `aws_access_key_id` (static), `role_arn` with `source_profile`
- * (the source profile's style, followed recursively - a cycle is
- * unconfigured), `role_arn` with `credential_source` (external). Anything
- * else, or an absent profile, is unconfigured. `profile` in the result names
- * where the style was found - the source profile at the end of a role chain -
- * because that is the profile a sign-in must target.
+ * How `profile` signs in, classified in the order the SDK's `fromIni`
+ * resolves it, so the advice matches the provider that actually failed:
+ *
+ * 1. a role (`role_arn` with exactly one of `source_profile` or
+ *    `credential_source`): `mfa` when it sets `mfa_serial`; otherwise the
+ *    source profile's style, followed recursively (a cycle is unconfigured),
+ *    or `external` for a `credential_source`;
+ * 2. access keys (`aws_access_key_id` and `aws_secret_access_key`): `static`;
+ * 3. `role_arn` with `web_identity_token_file`: `web-identity`;
+ * 4. `credential_process`: `process`;
+ * 5. any `sso_*` setting: `sso`;
+ * 6. `login_session`: `login`;
+ * 7. anything else, or an absent profile: `unconfigured`.
+ *
+ * Inside a role chain, a source profile's access keys win over everything,
+ * and a `credential_source` without a `role_arn` is `external`, as in the
+ * SDK. `profile` in the result names where the style was found - the source
+ * profile at the end of a role chain - because that is the profile a
+ * sign-in must target.
  */
 export function readProfileStyle(
   configText: string,
@@ -200,35 +226,56 @@ export function readProfileStyle(
   const credentials = parseIni(credentialsText);
   const visited = new Set<string>();
 
-  const follow = (name: string): ProfileSignIn => {
+  const follow = (name: string, isSource: boolean): ProfileSignIn => {
     if (visited.has(name)) return { style: 'unconfigured', profile };
     visited.add(name);
     const settings = profileSettings(config, credentials, name);
     const setting = (key: string) => nonBlank(settings?.get(key));
-    if (setting('sso_session') || setting('sso_start_url')) return { style: 'sso', profile: name };
-    if (setting('login_session')) return { style: 'login', profile: name };
+    const isStatic = Boolean(setting('aws_access_key_id') && setting('aws_secret_access_key'));
+    if (isSource && isStatic) return { style: 'static', profile: name };
+
+    const role = setting('role_arn');
+    const source = setting('source_profile');
+    const external = setting('credential_source');
+    const isRole = Boolean(role) && Boolean(source) !== Boolean(external);
+    if (isRole || (isSource && !role && external)) {
+      const mfa = setting('mfa_serial');
+      if (role && mfa) return { style: 'mfa', profile: name, detail: mfa };
+      if (source) return follow(source, true);
+      return { style: 'external', profile: name, detail: external };
+    }
+    if (isStatic) return { style: 'static', profile: name };
+    const tokenFile = setting('web_identity_token_file');
+    if (role && tokenFile) return { style: 'web-identity', profile: name, detail: tokenFile };
     const process = setting('credential_process');
     if (process) return { style: 'process', profile: name, detail: process };
-    if (setting('aws_access_key_id')) return { style: 'static', profile: name };
-    if (setting('role_arn')) {
-      const source = setting('source_profile');
-      if (source) return follow(source);
-      const external = setting('credential_source');
-      if (external) return { style: 'external', profile: name, detail: external };
-    }
+    if (SSO_SETTINGS.some((key) => setting(key))) return { style: 'sso', profile: name };
+    if (setting('login_session')) return { style: 'login', profile: name };
     return { style: 'unconfigured', profile: name };
   };
 
-  return follow(profile);
+  return follow(profile, false);
 }
 
-/** Read a file through the port, treating an absent file as empty. */
+/** Settings any one of which makes the SDK resolve a profile through SSO. */
+const SSO_SETTINGS = [
+  'sso_session',
+  'sso_start_url',
+  'sso_account_id',
+  'sso_region',
+  'sso_role_name',
+] as const;
+
+/**
+ * Read a file through the port, treating one that cannot be read - absent,
+ * a directory, unreadable - as empty, as the SDK does. Exported credentials
+ * and the default chain must keep working when `~/.aws` is unusable.
+ */
 async function readOptional(fs: FileSystem, path: string): Promise<string> {
   try {
     return await fs.readText(path);
-  } catch (err) {
-    if (err instanceof FileNotFoundError) return '';
-    throw err;
+  } catch {
+    return '';
   }
 }
 
@@ -246,6 +293,6 @@ export async function readAwsProfiles(
   return {
     names,
     has: (name) => known.has(name),
-    signIn: (name) => readProfileStyle(configText, credentialsText, name ?? DEFAULT_PROFILE),
+    signIn: (name) => readProfileStyle(configText, credentialsText, name),
   };
 }

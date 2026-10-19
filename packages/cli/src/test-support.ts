@@ -22,6 +22,7 @@ import {
   type AwsClients,
   type CallerIdentity,
   type ConfigInput,
+  type CredentialSelection,
   type FileSystem,
   type Names,
   type OpsState,
@@ -189,6 +190,12 @@ const rejectAllAwsLogin: AwsLogin = {
   },
 };
 
+/** A built client's credential selection in one word: the profile name, `environment` or `chain`. */
+export function selectionLabel(selection: CredentialSelection | undefined): string {
+  if (selection?.kind === 'profile') return selection.name;
+  return selection?.kind ?? 'chain';
+}
+
 /**
  * Records every sign-in and answers each with the next of `results` (success
  * when the script runs out). The test substitute for the `AwsLogin` port.
@@ -318,7 +325,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     names,
     accountId,
     identity,
-    awsProfile: overrides.awsProfile ?? { name: null, source: 'default' },
+    awsProfile: overrides.awsProfile ?? { source: 'default' },
     clients,
     ports,
     agentDir: overrides.agentDir ?? TEST_AGENT_DIR,

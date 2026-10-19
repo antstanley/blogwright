@@ -12,7 +12,12 @@ import { describe, expect, it } from 'vitest';
 
 import { initSite } from './init.js';
 import type { Logger } from './logger.js';
-import { createRecordingAwsLogin, TEST_HOME, testAwsAccess } from './test-support.js';
+import {
+  createRecordingAwsLogin,
+  selectionLabel,
+  TEST_HOME,
+  testAwsAccess,
+} from './test-support.js';
 
 /** Writes under `/repo`; no shared AWS files, so the profile question is skipped. */
 const INIT_OPTIONS = { root: '/repo', aws: testAwsAccess()() };
@@ -519,7 +524,7 @@ describe('initSite AWS profile and account pin', () => {
     const terminal = createScriptedTerminal({ answers: setup.answers });
     const logger = capturingLogger();
     const sts = [...(setup.sts ?? ['identity'])];
-    const built: { profile: string | null | undefined; endpoint: string | undefined }[] = [];
+    const built: { profile: string; endpoint: string | undefined }[] = [];
     const transport: Transport = async () => {
       const text = identityXml();
       return {
@@ -535,7 +540,7 @@ describe('initSite AWS profile and account pin', () => {
       host: {
         processEnv: setup.processEnv ?? {},
         createClients: (opts) => {
-          built.push({ profile: opts.profile, endpoint: opts.endpointOverride });
+          built.push({ profile: selectionLabel(opts.selection), endpoint: opts.endpointOverride });
           return createClients({
             ...opts,
             transport,
@@ -644,6 +649,56 @@ describe('initSite AWS profile and account pin', () => {
     expect(parseConfig(written).aws).toEqual({ profile: 'mysite-prod', accountId: ACCOUNT });
   });
 
+  it('detects through the chosen profile, warning that AWS_PROFILE in this shell overrides it', async () => {
+    const { built, logger } = await initAws({
+      sharedConfig: PROFILES,
+      processEnv: { AWS_PROFILE: 'default' },
+      answers: ['myblog', '', '', '', '', 'mysite-prod', 'y'],
+    });
+
+    expect(built).toEqual([{ profile: 'mysite-prod', endpoint: undefined }]);
+    expect(logger.lines).toContain(
+      'AWS_PROFILE=default is set in this shell and overrides aws.profile - unset it before running blogwright in this shell',
+    );
+  });
+
+  it('warns that exported credentials in this shell override the chosen profile', async () => {
+    const { built, logger } = await initAws({
+      sharedConfig: PROFILES,
+      processEnv: { AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 'secret' },
+      answers: ['myblog', '', '', '', '', 'mysite-prod', 'y'],
+    });
+
+    expect(built).toEqual([{ profile: 'mysite-prod', endpoint: undefined }]);
+    expect(logger.lines).toContain(
+      'AWS credentials exported in this shell override aws.profile - unset them first',
+    );
+  });
+
+  it('detects default credentials for "none" without the unsaved AWS_PROFILE, and warns about it', async () => {
+    const { built, logger, written } = await initAws({
+      sharedConfig: PROFILES,
+      processEnv: { AWS_PROFILE: 'mysite-prod' },
+      answers: ['myblog', '', '', '', '', 'none', 'y'],
+    });
+
+    expect(built).toEqual([{ profile: 'chain', endpoint: undefined }]);
+    expect(logger.lines).toContain(
+      'AWS_PROFILE=mysite-prod is set in this shell and is not saved to the config - unset it before running blogwright in this shell',
+    );
+    expect(parseConfig(written).aws).toEqual({ accountId: ACCOUNT });
+  });
+
+  it('detects exported credentials when no profile is chosen, without a warning', async () => {
+    const { built, logger } = await initAws({
+      processEnv: { AWS_ACCESS_KEY_ID: 'AKIA', AWS_SECRET_ACCESS_KEY: 'secret' },
+      answers: ['myblog', '', '', '', '', 'y'],
+    });
+
+    expect(built).toEqual([{ profile: 'environment', endpoint: undefined }]);
+    expect(logger.lines.filter((line) => line.includes('in this shell'))).toEqual([]);
+  });
+
   it('commas the aws block when a plugin block follows it', async () => {
     const fs = createMemoryFileSystem();
     const alpha = fakeInitPlugin('alpha', async () => [{ property: '"one": 1' }], 'alpha');
@@ -696,7 +751,7 @@ describe('initSite AWS profile and account pin', () => {
   it('passes no endpoint override to the session', async () => {
     const { built } = await initAws({ answers: ['myblog', '', '', '', '', 'y'] });
 
-    expect(built).toEqual([{ profile: null, endpoint: undefined }]);
+    expect(built).toEqual([{ profile: 'chain', endpoint: undefined }]);
   });
 
   it('warns and carries on, unpinned, when the account cannot be detected', async () => {

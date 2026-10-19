@@ -23,7 +23,7 @@ import {
 } from './aws-session.js';
 import type { Logger } from './logger.js';
 import type { AwsLoginResult } from './ports.js';
-import { createRecordingAwsLogin, TEST_HOME } from './test-support.js';
+import { createRecordingAwsLogin, selectionLabel, TEST_HOME } from './test-support.js';
 
 const ACCOUNT = '123456789012';
 const OTHER_ACCOUNT = '210987654321';
@@ -63,6 +63,15 @@ source_profile = mysite-prod
 [profile keyed-role]
 role_arn = arn:aws:iam::123456789012:role/Keyed
 source_profile = keys
+
+[profile mfa-role]
+role_arn = arn:aws:iam::123456789012:role/Admin
+source_profile = keys
+mfa_serial = arn:aws:iam::123456789012:mfa/ant
+
+[profile ci]
+role_arn = arn:aws:iam::123456789012:role/Ci
+web_identity_token_file = /var/run/token
 `;
 
 const SHARED_CREDENTIALS = `[keys]
@@ -111,7 +120,7 @@ interface World {
   logger: ReturnType<typeof capturingLogger>;
   awsLogin: ReturnType<typeof createRecordingAwsLogin>;
   /** The `profile` each client bundle was built for, in order. */
-  builtProfiles: (string | null | undefined)[];
+  builtProfiles: string[];
   /** The endpoint override each bundle was built with. */
   builtEndpoints: (string | undefined)[];
   stsCalls: number;
@@ -179,7 +188,7 @@ function sessionWorld(
       platform: setup.platform ?? 'darwin',
       cwd: '/repo',
       createClients: (opts) => {
-        world.builtProfiles.push(opts.profile);
+        world.builtProfiles.push(selectionLabel(opts.selection));
         world.builtEndpoints.push(opts.endpointOverride);
         return createClients({
           region: opts.region,
@@ -210,13 +219,13 @@ describe('resolveAwsProfile', () => {
   it.each([
     ['--profile', { flag: 'a', processEnv: { AWS_PROFILE: 'b' } }, { name: 'a', source: 'flag' }],
     ['AWS_PROFILE', { processEnv: { AWS_PROFILE: 'b' } }, { name: 'b', source: 'env' }],
-    ['env keys', { processEnv: KEYS }, { name: null, source: 'env-keys' }],
+    ['env keys', { processEnv: KEYS }, { source: 'env-keys' }],
     ['config', { processEnv: {}, config: { profile: 'c' } }, { name: 'c', source: 'config' }],
-    ['default', { processEnv: {} }, { name: null, source: 'default' }],
+    ['default', { processEnv: {} }, { source: 'default' }],
     [
       'env keys beat the config profile',
       { processEnv: KEYS, config: { profile: 'c' } },
-      { name: null, source: 'env-keys' },
+      { source: 'env-keys' },
     ],
     [
       'the flag beats env keys',
@@ -231,12 +240,12 @@ describe('resolveAwsProfile', () => {
     [
       'a web identity token file is env credentials',
       { processEnv: { AWS_WEB_IDENTITY_TOKEN_FILE: '/t' }, config: { profile: 'c' } },
-      { name: null, source: 'env-keys' },
+      { source: 'env-keys' },
     ],
     [
       'a container credentials URI is env credentials',
       { processEnv: { AWS_CONTAINER_CREDENTIALS_FULL_URI: 'http://x' } },
-      { name: null, source: 'env-keys' },
+      { source: 'env-keys' },
     ],
     [
       'blank values are absent',
@@ -315,8 +324,8 @@ describe('buildLoginChoices', () => {
     expect(buildLoginChoices('p', 'unconfigured', false).defaultIndex).toBe(1);
   });
 
-  it('omits --profile for a null profile', () => {
-    expect(buildLoginChoices(null, 'sso', false).choices.map((c) => c.args)).toEqual([
+  it('omits --profile for unnamed credentials', () => {
+    expect(buildLoginChoices(undefined, 'sso', false).choices.map((c) => c.args)).toEqual([
       ['sso', 'login'],
       ['login'],
     ]);
@@ -352,8 +361,8 @@ describe('resolveAwsSession - profile resolution', () => {
 
     const session = await resolveAwsSession(world.options);
 
-    expect(session.profile).toEqual({ name: null, source: 'env-keys' });
-    expect(world.builtProfiles).toEqual([null]);
+    expect(session.profile).toEqual({ source: 'env-keys' });
+    expect(world.builtProfiles).toEqual(['environment']);
     expect(world.logger.lines).toEqual([
       'info ignoring aws.profile "mysite-prod": environment credentials are set',
     ]);
@@ -364,7 +373,7 @@ describe('resolveAwsSession - profile resolution', () => {
 
     await expect(resolveAwsSession(world.options)).rejects.toThrow(
       'AWS profile "mysite-staging" not found (from config/production.jsonc)\n' +
-        'available: default, app, bare, console, deployed, ec2, keyed-role, keys, mysite-prod, personal',
+        'available: default, app, bare, ci, console, deployed, ec2, keyed-role, keys, mfa-role, mysite-prod, personal',
     );
     expect(world.builtProfiles).toEqual([]);
   });
@@ -388,8 +397,8 @@ describe('resolveAwsSession - profile resolution', () => {
 
     const session = await resolveAwsSession(world.options);
 
-    expect(session.profile.name).toBeNull();
-    expect(world.builtProfiles).toEqual([null]);
+    expect(session.profile).toEqual({ source: 'default' });
+    expect(world.builtProfiles).toEqual(['chain']);
     expect(world.builtEndpoints).toEqual(['http://localhost:4566']);
     expect(world.logger.lines).toContain(
       'info profile "mysite-staging" not found - using emulator credentials',
@@ -694,6 +703,20 @@ describe('resolveAwsSession - no login offer', () => {
     );
   });
 
+  it('explains that an MFA role needs exported credentials, run without the flag that named it', async () => {
+    expect(await refusal({ options: { flag: 'mfa-role' } })).toContain(
+      'The role needs an MFA code for arn:aws:iam::123456789012:mfa/ant, which blogwright cannot ask for. ' +
+        'Export temporary credentials with: eval "$(aws configure export-credentials --profile mfa-role --format env)", ' +
+        'then run again without --profile',
+    );
+  });
+
+  it("names a web identity profile's token file rather than offering a sign-in", async () => {
+    expect(await refusal({ options: { flag: 'ci' } })).toContain(
+      "Check the role's web_identity_token_file: /var/run/token",
+    );
+  });
+
   it('reports credential failures unchanged under an endpoint override', async () => {
     const message = await refusal({
       outcomes: ['expired-token'],
@@ -722,13 +745,13 @@ describe('identity line', () => {
     expect(formatIdentityLine(session)).toBe(
       `aws  ${ACCOUNT} · AdminRole · profile mysite-prod (config) · pinned`,
     );
-    expect(
-      formatIdentityLine({ ...session, profile: { name: null, source: 'env-keys' }, pin: 'unset' }),
-    ).toBe(`aws  ${ACCOUNT} · AdminRole · environment credentials · unpinned`);
+    expect(formatIdentityLine({ ...session, profile: { source: 'env-keys' }, pin: 'unset' })).toBe(
+      `aws  ${ACCOUNT} · AdminRole · environment credentials · unpinned`,
+    );
     expect(
       formatIdentityLine({
         ...session,
-        profile: { name: null, source: 'default' },
+        profile: { source: 'default' },
         pin: 'skipped',
       }),
     ).toBe(`aws  ${ACCOUNT} · AdminRole · default credentials · pin skipped`);

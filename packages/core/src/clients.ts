@@ -1,6 +1,10 @@
 import { AcmClient } from './aws/acm.js';
 import { CloudFrontClient } from './aws/cloudfront.js';
-import { createCredentialProvider, type CredentialProvider } from './aws/credentials.js';
+import {
+  createCredentialProvider,
+  type CredentialProvider,
+  type CredentialSelection,
+} from './aws/credentials.js';
 import { IamClient } from './aws/iam.js';
 import { LambdaWebClient } from './aws/lambda-web.js';
 import { LogsClient } from './aws/logs.js';
@@ -20,11 +24,11 @@ export interface ClientBundleOptions {
    */
   endpointOverride?: string | undefined;
   /**
-   * Named profile from the shared AWS files, resolved with `fromIni`; absent
-   * or null uses the default Node provider chain. Ignored when `credentials`
-   * is supplied.
+   * Which credentials the clients sign with: a named profile, only the
+   * exported environment credentials, or (when absent) the default Node
+   * provider chain. Ignored when `credentials` is supplied.
    */
-  profile?: string | null | undefined;
+  selection?: CredentialSelection | undefined;
   credentials?: CredentialProvider | undefined;
   transport?: Transport | undefined;
 }
@@ -74,7 +78,7 @@ export function createClients(opts: ClientBundleOptions): AwsClients {
     'endpointOverride' in opts ? opts.endpointOverride : process.env.AWS_ENDPOINT_URL;
   const credentials =
     opts.credentials ??
-    createCredentialProvider({ override: Boolean(endpointOverride), profile: opts.profile });
+    createCredentialProvider({ override: Boolean(endpointOverride), selection: opts.selection });
 
   const base = {
     endpointOverride,

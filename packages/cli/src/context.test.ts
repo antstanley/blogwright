@@ -43,6 +43,7 @@ import {
   createTestContext,
   type FakePluginSpec,
   type RecordedRun,
+  selectionLabel,
   testAwsAccess,
 } from './test-support.js';
 
@@ -1116,7 +1117,7 @@ describe('createContext - AWS session', () => {
   /** A repo at the real cwd with a pinned config, over a recording transport. */
   function world(opts: { account: string; interactive?: boolean }) {
     const requests: string[] = [];
-    const builtProfiles: (string | null | undefined)[] = [];
+    const builtProfiles: string[] = [];
     const transport: Transport = async (req) => {
       const body = String(req.body);
       requests.push(body.includes('GetCallerIdentity') ? 'sts' : `${req.method} ${req.url}`);
@@ -1142,7 +1143,7 @@ describe('createContext - AWS session', () => {
       processEnv: {},
       home: '/home/test',
       createClients: (clientOpts) => {
-        builtProfiles.push(clientOpts.profile);
+        builtProfiles.push(selectionLabel(clientOpts.selection));
         return createClients({
           ...clientOpts,
           credentials: staticCredentials({ accessKeyId: 'AKIA', secretAccessKey: 'secret' }),
