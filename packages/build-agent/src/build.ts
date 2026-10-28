@@ -555,24 +555,54 @@ async function publishFiles(opts: {
   return { changedKeys, staleKeys, count: opts.files.length };
 }
 
-/** Write the changed-paths manifest the CLI reads for a targeted invalidation. */
+/** What a publish left behind for the CLI. */
+export interface PublishResult {
+  /** Keys this build uploaded, for the targeted invalidation. */
+  changedKeys: Set<string>;
+  count: number;
+  /** The `cacheControl` rules every uploaded file was written with, as the agent parsed them. */
+  cacheControl: CacheControlRule[];
+}
+
+/**
+ * The changed-paths manifest the CLI reads for a targeted invalidation. It
+ * also reports the `cacheControl` rules this agent applied: the CLI records a
+ * target's rules only on that evidence, because an agent older than
+ * `cacheControl` drops the rules and still finishes the build.
+ */
+export interface ChangedPathsManifest {
+  /** URL paths to invalidate. */
+  paths: string[];
+  cacheControl: CacheControlRule[];
+}
+
+/** Build the {@link ChangedPathsManifest} for a publish to `prefix`. */
+export function changedPathsManifest(
+  published: PublishResult,
+  prefix: string,
+): ChangedPathsManifest {
+  const paths = [
+    ...new Set([...published.changedKeys].flatMap((k) => invalidationPaths(k, prefix))),
+  ];
+  return { paths, cacheControl: published.cacheControl };
+}
+
+/** Write the {@link ChangedPathsManifest}, the build's last step. */
 async function writeChangedPaths(
   s3: S3Client,
   log: LogFn,
   bucket: string,
   hash: string,
-  changedKeys: Set<string>,
-  prefix: string,
+  manifest: ChangedPathsManifest,
 ): Promise<void> {
-  const changedPaths = [...new Set([...changedKeys].flatMap((k) => invalidationPaths(k, prefix)))];
-  // The changed-paths manifest is only an invalidation optimization: if writing it fails
-  // (e.g. the runtime role lacks build/changed/* PutObject), the site is already published,
-  // so log and continue - the CLI falls back to a wildcard invalidation.
+  // If writing the manifest fails (e.g. the runtime role lacks build/changed/* PutObject),
+  // the site is already published, so log and continue: the CLI falls back to a wildcard
+  // invalidation, and treats the rules as unconfirmed so the next build re-applies them.
   try {
     await s3.putObject(
       bucket,
       `build/changed/${hash}.json`,
-      JSON.stringify({ paths: changedPaths }),
+      JSON.stringify(manifest),
       'application/json',
     );
   } catch (err) {
@@ -591,11 +621,10 @@ export async function publishBuild(
   workDir: string,
   distDir: string,
   log: LogFn,
-): Promise<{ changedKeys: Set<string>; count: number }> {
+): Promise<PublishResult> {
   const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
-  const cacheControlFor = createCacheControlLookup(
-    parseCacheControlRules(payload.cacheControl ?? []),
-  );
+  const cacheControl = parseCacheControlRules(payload.cacheControl ?? []);
+  const cacheControlFor = createCacheControlLookup(cacheControl);
   const job = payload.webFunction;
   if (!job) {
     const built = await walkFiles(distDir);
@@ -615,7 +644,7 @@ export async function publishBuild(
     log(
       `published ${built.length} files (${published.changedKeys.size} changed) to s3://${payload.bucket}/${prefix}`,
     );
-    return published;
+    return { changedKeys: published.changedKeys, count: published.count, cacheControl };
   }
 
   // SSR: package the server output first, then publish only `staticDir` (when
@@ -674,7 +703,7 @@ export async function publishBuild(
     'application/json',
   );
   log(`wrote ${job.resultKey} (${staleKeys.length} stale site key(s) left for the CLI)`);
-  return { changedKeys, count: 0 };
+  return { changedKeys, count: 0, cacheControl };
 }
 
 function escapeXml(s: string): string {
@@ -766,7 +795,13 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   // The changed-paths manifest is the completion signal the CLI polls and reads.
   // It goes LAST: in SSR mode the result file the CLI's publish step reads must
   // already be in place when the manifest appears.
-  await writeChangedPaths(s3, log, payload.bucket, payload.hash, published.changedKeys, prefix);
+  await writeChangedPaths(
+    s3,
+    log,
+    payload.bucket,
+    payload.hash,
+    changedPathsManifest(published, prefix),
+  );
   await rm(workDir, { recursive: true, force: true });
 }
 

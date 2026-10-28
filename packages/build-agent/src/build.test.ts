@@ -20,6 +20,7 @@ import {
   DEFAULT_CONTENT_TYPE,
   extensionOf,
   generateSitemap,
+  changedPathsManifest,
   MAX_PACKAGE_BYTES,
   packageWebFunction,
   publishBuild,
@@ -648,6 +649,27 @@ describe('publishBuild (static) Cache-Control', () => {
     ]);
   });
 
+  it('returns the rules it applied, normalised, so the manifest can report them', async () => {
+    const dist = await builtSite();
+    const payload = {
+      hash: 'h1',
+      sourceKey: 'build/h1.zip',
+      bucket: 'b',
+      region: 'us-east-1',
+      sitePrefix: 'site/',
+    };
+    const applied = await publishBuild(
+      fakeS3([], []),
+      { ...payload, cacheControl: [{ match: ['**'], value: ' no-cache ' }] },
+      dirname(dist),
+      dist,
+      () => undefined,
+    );
+    expect(applied.cacheControl).toEqual([{ match: ['**'], value: 'no-cache' }]);
+    const none = await publishBuild(fakeS3([], []), payload, dirname(dist), dist, () => undefined);
+    expect(none.cacheControl).toEqual([]);
+  });
+
   it('fails the build on rules that do not validate, before uploading anything', async () => {
     const puts: Put[] = [];
     const dist = await builtSite();
@@ -668,5 +690,25 @@ describe('publishBuild (static) Cache-Control', () => {
       ),
     ).rejects.toThrow(/can never match/);
     expect(puts).toEqual([]);
+  });
+});
+
+describe('changedPathsManifest', () => {
+  it('lists the invalidation paths and reports the cacheControl rules the agent applied', () => {
+    const rules = [{ match: ['**'], value: 'no-cache' }];
+    expect(
+      changedPathsManifest(
+        { changedKeys: new Set(['site/index.html', 'site/a.css']), count: 2, cacheControl: rules },
+        'site/',
+      ),
+    ).toEqual({ paths: ['/index.html', '/', '/a.css'], cacheControl: rules });
+  });
+
+  it('reports empty rules as an empty list, not an absent field - absence means an older agent', () => {
+    const manifest = changedPathsManifest(
+      { changedKeys: new Set(), count: 0, cacheControl: [] },
+      'site/',
+    );
+    expect(JSON.parse(JSON.stringify(manifest))).toEqual({ paths: [], cacheControl: [] });
   });
 });

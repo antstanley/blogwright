@@ -12,7 +12,12 @@ import {
   type RunMicrovmInput,
 } from 'blogwright-core';
 
-import { cacheControlNeedsRefresh, recordCacheControl } from './cache-control.js';
+import {
+  cacheControlRefreshReason,
+  describeCacheControlRefresh,
+  markCacheControlUnconfirmed,
+  recordCacheControl,
+} from './cache-control.js';
 import type { OpsContext } from './context.js';
 import type { WebFunctionManifest } from './web-functions.js';
 import { formatDuration, spinnerFrame } from './render.js';
@@ -119,6 +124,14 @@ export interface AgentStatus {
 
 function manifestKey(hash: string): string {
   return `build/manifests/${hash}.json`;
+}
+
+/**
+ * The agent's changed-paths manifest: the paths to invalidate, the rules it
+ * wrote, and (by appearing) the build's completion signal.
+ */
+function changedManifestKey(hash: string): string {
+  return `build/changed/${hash}.json`;
 }
 
 /**
@@ -243,7 +256,7 @@ export async function pollBuild(
       // an authoritative completion signal too - a successful build then can't hang until the
       // deadline just because its logs never reached CloudWatch. runBuild clears any stale copy
       // before launch, so its presence means *this* build finished.
-      if (await ctx.clients.s3.objectExists(ctx.names.bucket, `build/changed/${hash}.json`)) {
+      if (await ctx.clients.s3.objectExists(ctx.names.bucket, changedManifestKey(hash))) {
         return { state: 'done' };
       }
       if (Date.now() >= deadline) return { state: 'failed', message: 'build timed out' };
@@ -299,10 +312,18 @@ export async function runBuild(
   // Clear any stale completion manifest from a prior aborted build of this same hash, so its
   // reappearance is an unambiguous "this build finished" signal for pollBuild's S3 fallback.
   await ctx.clients.s3
-    .deleteObject(ctx.names.bucket, `build/changed/${opts.hash}.json`)
+    .deleteObject(ctx.names.bucket, changedManifestKey(opts.hash))
     .catch(() => undefined);
 
-  const refresh = opts.refresh === true || (await cacheControlNeedsRefresh(ctx, target));
+  // Checked even under an explicit --refresh: a build that changes the rules
+  // must mark the record first, whatever asked for the re-upload.
+  const rulesRefresh = await cacheControlRefreshReason(ctx, target);
+  if (rulesRefresh !== undefined) {
+    const implicit = opts.refresh === true ? '' : ' (an implicit --refresh)';
+    ctx.logger.step(`${describeCacheControlRefresh(rulesRefresh)}${implicit}`);
+    await markCacheControlUnconfirmed(ctx, target);
+  }
+  const refresh = opts.refresh === true || rulesRefresh !== undefined;
   const connectors = networkConnectors(ctx.config.region);
   const startedAt = new Date();
   ctx.logger.step(`running builder MicroVM for ${opts.hash}`);
@@ -400,13 +421,14 @@ export async function runBuild(
   }
 
   if (manifest.status === 'failed') {
-    // The record is left as it was, so a rule change this build did not finish applying is retried.
+    // The record is left as it was - unconfirmed if this build was changing the rules - so the
+    // next build re-applies them.
     throw new Error(
       `build failed for ${opts.hash}${manifest.message ? `: ${manifest.message}` : ''}`,
     );
   }
   // The static files are published even in SSR mode, where the revision is still to come.
-  await recordCacheControl(ctx, target);
+  await recordCacheControl(ctx, target, changedManifestKey(opts.hash));
   return manifest;
 }
 
@@ -437,7 +459,7 @@ export async function invalidateChanged(
   hash: string,
 ): Promise<InvalidationSummary> {
   const text = await ctx.clients.s3
-    .getObjectText(ctx.names.bucket, `build/changed/${hash}.json`)
+    .getObjectText(ctx.names.bucket, changedManifestKey(hash))
     .catch(() => undefined);
   let paths: string[] | undefined;
   if (text) {
@@ -465,7 +487,7 @@ export async function invalidateChanged(
     summary = { mode: 'paths', count: paths.length };
   }
   await ctx.clients.s3
-    .deleteObject(ctx.names.bucket, `build/changed/${hash}.json`)
+    .deleteObject(ctx.names.bucket, changedManifestKey(hash))
     .catch(() => undefined);
   return summary;
 }

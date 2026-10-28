@@ -123,7 +123,7 @@ blogwright deploy --refresh
 
 `--refresh` is also accepted by `rollback` and `preview deploy`.
 
-You do not need it for `Cache-Control`: each build records the `cacheControl` rules it applied, and a build whose rules differ from the target's last one refreshes on its own and says so (`an implicit --refresh`). That includes the first deploy after upgrading to a version with `cacheControl`, which retrofits the default headers once. See [Caching and Cache-Control](/guides/caching/#when-the-rules-change).
+You do not need it for `Cache-Control`: each build records the `cacheControl` rules the builder confirms it applied, and a build whose rules differ from the target's record, or whose last rule change did not finish, refreshes on its own and says so (`an implicit --refresh`). That includes the first deploy after upgrading to a version with `cacheControl`, which retrofits the default headers once. See [Caching and Cache-Control](/guides/caching/#when-the-rules-change).
 
 :::note
 `--refresh` re-uploads every file, so every path counts as changed - the invalidation covers the whole site (falling back to `/*` past the cap) instead of the usual minimal set.

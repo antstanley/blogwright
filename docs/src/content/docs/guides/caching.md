@@ -101,10 +101,17 @@ The cache policy (`CachingOptimized`) and the 10-second error TTL are not config
 
 ## When the rules change
 
-S3 writes `Cache-Control` only when a file is uploaded, and a deploy skips unchanged files. To keep live files current, each successful build records the rules it applied at `build/cache-control/<target>.json` (`site.json`, or `preview-<id>.json` for a preview). When the next `deploy`, `rollback` or `preview deploy` to that target finds different rules, it re-uploads every file, as `--refresh` would, and logs:
+S3 writes `Cache-Control` only when a file is uploaded, and a deploy skips unchanged files. To keep live files current, blogwright keeps a record per target at `build/cache-control/<target>.json` (`site.json`, or `preview-<id>.json` for a preview) of the rules its files were written with. When the next `deploy`, `rollback` or `preview deploy` to that target finds different rules, it re-uploads every file, as `--refresh` would, and logs:
 
 ```
 cacheControl rules differ from the ones this target's files were written with - re-uploading every file so unchanged ones get the new Cache-Control too (an implicit --refresh)
 ```
 
-Every path then counts as changed, so the invalidation covers the whole site (or `/*` past `invalidationMaxPaths`). This happens once, on the first deploy after upgrading to a blogwright version with `cacheControl`, so that existing files get the defaults. A failed build does not update the record, so the next build tries again.
+Every path then counts as changed, so the invalidation covers the whole site (or `/*` past `invalidationMaxPaths`). A target with no record yet gets the same treatment, logged as `no Cache-Control record for this target yet`. That happens once on the first deploy after upgrading to a blogwright version with `cacheControl`, so that existing files get the defaults, and on the first deploy of a new target, where it costs nothing extra because every file is new.
+
+The record only claims what a build proved:
+
+- **The builder confirms the rules.** Its changed-paths manifest reports the rules it wrote, and only then is the record updated to them. A builder image older than `cacheControl` writes no header and reports nothing. That can happen on a `rollback`, which runs on whatever builder image is live without rebuilding it. The record is then marked unconfirmed, with a warning, and the next build re-applies the rules.
+- **A build that changes the rules marks the record unconfirmed before it starts.** A build that then fails or is cancelled partway may have rewritten only some files. The next build re-applies the rules in full, even if you have reverted the config in the meantime.
+
+A record that is not valid JSON or holds rules that no longer validate is ignored with a warning, and the next build re-applies the rules.
