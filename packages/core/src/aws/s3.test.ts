@@ -293,3 +293,35 @@ describe('S3Client versioning and version-aware deletion', () => {
     expect(await gone.objectVersionExists('b', 'web/artifacts/a.zip', 'v-9')).toBe(false);
   });
 });
+
+describe('S3Client.putObjectIfAbsent', () => {
+  it('sends If-None-Match: * and reports that it created the object', async () => {
+    const headers: Record<string, string>[] = [];
+    const transport: Transport = async (req) => {
+      headers.push(req.headers);
+      return response(200, '');
+    };
+    expect(await s3With(transport).putObjectIfAbsent('b', 'build/artifacts/h.json', '{}')).toBe(
+      true,
+    );
+    expect(headers[0]!['if-none-match']).toBe('*');
+  });
+
+  it('is false, without throwing, when an object already holds the key', async () => {
+    const taken: Transport = async () =>
+      response(412, '<Error><Code>PreconditionFailed</Code><Message>exists</Message></Error>');
+    expect(await s3With(taken).putObjectIfAbsent('b', 'k', '{}')).toBe(false);
+    const racing: Transport = async () =>
+      response(
+        409,
+        '<Error><Code>ConditionalRequestConflict</Code><Message>in flight</Message></Error>',
+      );
+    expect(await s3With(racing).putObjectIfAbsent('b', 'k', '{}')).toBe(false);
+  });
+
+  it('rethrows any other failure', async () => {
+    const denied: Transport = async () =>
+      response(403, '<Error><Code>AccessDenied</Code><Message>no</Message></Error>');
+    await expect(s3With(denied).putObjectIfAbsent('b', 'k', '{}')).rejects.toThrow(/AccessDenied/);
+  });
+});

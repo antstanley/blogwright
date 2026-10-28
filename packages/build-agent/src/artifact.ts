@@ -5,7 +5,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { join, relative } from 'node:path';
 
 import {
   createArtifactManifest,
@@ -18,13 +18,22 @@ import {
 
 import type { LogFn } from './build.js';
 
-/** Size and SHA-256 of each file, keyed by its `/`-separated path under `rootDir`. */
+/**
+ * A built file's path under the output directory, `/`-separated: the S3 key
+ * minus the site prefix. A backslash becomes `/` too, so a name like `a\b.html`
+ * publishes as `a/b.html` - the manifest and the upload must agree on that.
+ */
+export function sitePathOf(rootDir: string, file: string): string {
+  return relative(rootDir, file).split('\\').join('/');
+}
+
+/** Size and SHA-256 of each file, keyed by its site path (see {@link sitePathOf}). */
 export async function describeFiles(rootDir: string, files: string[]): Promise<ArtifactFile[]> {
   const described: ArtifactFile[] = [];
   for (const file of files) {
     const content = await readFile(file);
     described.push({
-      path: relative(rootDir, file).split(sep).join('/'),
+      path: sitePathOf(rootDir, file),
       bytes: content.byteLength,
       sha256: sha256Hex(content),
     });
@@ -32,10 +41,22 @@ export async function describeFiles(rootDir: string, files: string[]): Promise<A
   return described;
 }
 
-/** The `version` the app's own `package.json` declares, if any - part of the release identity. */
+/**
+ * The `version` the app's own `package.json` declares, if any - part of the
+ * release identity. Only `package.json` is read: an app whose pnpm manifest is
+ * `package.yaml` or `package.json5`, a missing or unparseable `package.json`, or
+ * one without a string version all mean "no version", never a failed build. A
+ * leading byte-order mark is ignored, as npm and pnpm ignore it.
+ */
 export async function readSiteVersion(appDir: string): Promise<string | undefined> {
-  const text = await readFile(join(appDir, 'package.json'), 'utf8');
-  const parsed: unknown = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    const text = await readFile(join(appDir, 'package.json'), 'utf8');
+    parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch {
+    // No readable package.json is a site without a version, not a broken build.
+    return undefined;
+  }
   if (typeof parsed !== 'object' || parsed === null) return undefined;
   const version = (parsed as { version?: unknown }).version;
   return typeof version === 'string' && version !== '' ? version : undefined;
@@ -56,10 +77,34 @@ export async function buildArtifactManifest(opts: {
 }
 
 /**
+ * Build the manifest of a published output directory and write it to
+ * `target.key`. Nothing here fails the build - the site is already published -
+ * so any failure, building the manifest or writing it, is logged as a warning.
+ * The CLI finds no manifest at the key and says so too.
+ */
+export async function recordArtifactManifest(
+  s3: S3Client,
+  log: LogFn,
+  target: { bucket: string; key: string },
+  build: { hash: string; appDir: string; rootDir: string; files: string[] },
+): Promise<void> {
+  let manifest: ArtifactManifest;
+  try {
+    manifest = await buildArtifactManifest(build);
+  } catch (err) {
+    log(
+      `warning: could not build the artifact manifest (${(err as Error).message}) - ` +
+        'the site is published, but this build records no release',
+    );
+    return;
+  }
+  await writeArtifactManifest(s3, log, target, manifest);
+}
+
+/**
  * Write the manifest. A failed write does not fail the build - the site is
  * already published - but it is logged with the fix: a stack bootstrapped
- * before artifact manifests existed has no `build/artifacts/*` grant. The CLI
- * notices the missing manifest and says so too.
+ * before artifact manifests existed has no `build/artifacts/*` grant.
  */
 export async function writeArtifactManifest(
   s3: S3Client,

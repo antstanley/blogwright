@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ARTIFACT_MANIFEST_VERSION,
+  artifactBuildManifestKey,
+  artifactBuildManifestPrefix,
   artifactManifestKey,
   computeReleaseHash,
   createArtifactManifest,
@@ -60,6 +62,22 @@ describe('releaseIdentity', () => {
 
   it('omits the version when the site declares none', () => {
     expect(releaseIdentity('abc123', 'f'.repeat(64))).toBe('abc123.ffffffffffff');
+  });
+
+  it('extends build metadata the version already carries, keeping a single +', () => {
+    expect(releaseIdentity('abc123', 'f'.repeat(64), '1.4.0+exp.sha.5114f85')).toBe(
+      '1.4.0+exp.sha.5114f85.abc123.ffffffffffff',
+    );
+  });
+});
+
+describe('artifact manifest keys', () => {
+  it('keeps the original record beside a prefix holding one manifest per build', () => {
+    expect(artifactManifestKey('abc123')).toBe('build/artifacts/abc123.json');
+    expect(artifactBuildManifestPrefix('abc123')).toBe('build/artifacts/abc123/');
+    expect(artifactBuildManifestKey('abc123', '20261028T182312Z-1a2b3c4d')).toBe(
+      'build/artifacts/abc123/20261028T182312Z-1a2b3c4d.json',
+    );
   });
 });
 

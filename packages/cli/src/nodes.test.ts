@@ -977,13 +977,16 @@ describe('site-write roles can tag objects (#7)', () => {
   );
 
   it.each(['iam-build-role', 'iam-exec-role'] as const)(
-    '%s may write artifact manifests to build/artifacts/*',
+    '%s may write per-build artifact manifests, but not the write-once originals',
     async (roleId) => {
       const policy = await policyFor(roleId);
-      const artifacts = policy.Statement.find((s) =>
-        String(s.Resource).endsWith('/build/artifacts/*'),
+      const artifacts = policy.Statement.filter((s) =>
+        String(s.Resource).includes('/build/artifacts/'),
       );
-      expect(artifacts?.Action).toEqual(['s3:PutObject']);
+      expect(artifacts).toHaveLength(1);
+      expect(artifacts[0]?.Action).toEqual(['s3:PutObject']);
+      // `*/*` matches build/artifacts/<hash>/<buildId>.json, never build/artifacts/<hash>.json.
+      expect(String(artifacts[0]?.Resource)).toMatch(/\/build\/artifacts\/\*\/\*$/);
     },
   );
 
@@ -1072,6 +1075,14 @@ describe('SSR build and exec role grants', () => {
     '%s can write web/artifacts and web/results in SSR mode',
     async (roleId) => {
       const statements = await policyForSsr(roleId, true);
+      // An SSR environment records no artifact manifest, so it gets no grant for one.
+      expect(
+        statements.some((s) =>
+          (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).some((r) =>
+            r.includes('/build/artifacts/'),
+          ),
+        ),
+      ).toBe(false);
       const web = statements.find((s) =>
         (Array.isArray(s.Resource) ? s.Resource : [s.Resource]).some((r) =>
           r.endsWith('/web/artifacts/*'),

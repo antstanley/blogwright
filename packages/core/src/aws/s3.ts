@@ -147,6 +147,38 @@ export class S3Client {
     return res.headers['x-amz-version-id'];
   }
 
+  /**
+   * Create an object only if the key is free (S3's conditional write,
+   * `If-None-Match: *`): true when this call created it, false when an object
+   * already exists there - or another conditional write to the key is in
+   * flight - and was left untouched. For write-once records.
+   */
+  async putObjectIfAbsent(
+    bucket: string,
+    key: string,
+    body: string | Uint8Array,
+    contentType = 'application/octet-stream',
+  ): Promise<boolean> {
+    try {
+      await this.client.send({
+        service: 's3',
+        method: 'PUT',
+        path: this.objectPath(bucket, key),
+        headers: { 'content-type': contentType, 'if-none-match': '*' },
+        body,
+      });
+      return true;
+    } catch (err) {
+      if (
+        err instanceof AwsError &&
+        (err.statusCode === 412 || /PreconditionFailed|ConditionalRequestConflict/i.test(err.code))
+      ) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
   /** Enable or suspend bucket versioning. Never suspended once enabled (see the SSR contract). */
   async putBucketVersioning(bucket: string, status: 'Enabled' | 'Suspended'): Promise<void> {
     const body =
