@@ -9,15 +9,17 @@ Read first: [overview](00-overview.md), [domain model](01-domain-model.md) and [
 [core/plugin.ts](../../../packages/core/src/plugin.ts) defines callable TypeScript
 vocabulary; the CLI owns discovery, dispatch and reconciliation. Feature packages
 declare a manifest and default export, own one optional config key, and supply
-commands, nodes and/or an init contributor. There are no lifecycle hooks,
-plugin-to-plugin dependencies or contributed ports/adapters in this interface.
+commands, nodes, an init contributor and/or an `afterDeploy` hook. That hook is
+the interface's only lifecycle hook; there are no plugin-to-plugin dependencies
+or contributed ports/adapters.
 
 ## Plugin and command contract
 
 `Plugin<TConfig = never>` requires `name`, `description` and `commands`.
 Optional members are `nodes(ctx): ResourceNode[]`, `configKey`,
-`validateConfig(raw: unknown): TConfig` and
-`init(io): Promise<ConfigBlockEntry[]>`. The validator receives only the raw
+`validateConfig(raw: unknown): TConfig`,
+`init(io): Promise<ConfigBlockEntry[]>` and
+`afterDeploy(ctx: PluginContext<TConfig>): Promise<void>`. The validator receives only the raw
 block, so site/environment-derived defaults belong in a feature consumer
 resolver. `PluginCommand<TConfig>` requires `action`, one-line `summary`, and
 `run(ctx: PluginContext<TConfig>, args: string[]): Promise<void>`.
@@ -28,8 +30,9 @@ assignable to everything; this is a recorded TypeScript limitation. Method
 signatures make commands/nodes bivariant so typed plugins join the host's
 `Plugin<unknown>[]` registry. The host constructs `PluginContext<unknown>`,
 never a fabricated `PluginContext<never>`. `validatePlugin` checks the module's
-default object, name pattern, description and command action/summary/run shapes;
-it does not execute commands, validators, init or nodes. It is not a security
+default object, name pattern, description, command action/summary/run shapes and
+that a declared `afterDeploy` is a function; it does not execute commands,
+validators, init, nodes or the hook. It is not a security
 sandbox for imported code or property getters. See [type/boundary tests](../../../packages/core/src/plugin.test.ts).
 
 ## PluginContext
@@ -80,8 +83,10 @@ provider, so `--profile` reaches every local AWS call.
 
 ## Discovery
 
-[discover](../../../packages/cli/src/plugins.ts) unions consumer and CLI
-`dependencies`/`devDependencies` whose names start with `blogwright-`.
+[discover](../../../packages/cli/src/plugins.ts) unions the consumer's
+`dependencies`/`devDependencies` and the CLI's own `dependencies` (never its
+`devDependencies`, which a published CLI does not install) whose names start
+with `blogwright-`. The CLI bundles no plugin today.
 Consumer candidates resolve from the repo root; bundled candidates resolve from
 the CLI package directory. An unresolved consumer declaration still falls back
 to the bundled copy; a resolved consumer plugin or failure prevents a second
@@ -106,11 +111,13 @@ Manifest namespace spelling and export name are individually checked, but their
 equality is not an additional host check.
 
 Discovery runs for generic dispatch, plugin list, interactive first-run init,
-help and bare usage. Ordinary context-taking built-ins do no discovery. Help
+help and bare usage, and for `deploy` once the site is published, to run
+`afterDeploy` hooks. Every other context-taking built-in, and a deploy that
+fails, does no discovery. Help
 falls back to built-in usage outside a repo or when package.json is missing;
 other failures still propagate. Noninteractive init refuses before discovery.
 [plugins.test.ts](../../../packages/cli/src/plugins.test.ts) includes real-loader
-bundled-only cases; [context.test.ts](../../../packages/cli/src/context.test.ts)
+cases for a repo with and without `blogwright-pds` installed; [context.test.ts](../../../packages/cli/src/context.test.ts)
 pins the discovery-free built-in path and config typing/validation.
 
 ## Invocation, management and init
@@ -141,8 +148,8 @@ Yes destroys the selected environment before uninstalling; an error prevents
 removal. No uninstalls while retaining resources/config. Noninteractive removal
 of a loadable node plugin refuses unless `--yes` is supplied. Here `--yes` means
 **uninstall and retain resources**, not approve teardown. A missing/broken module
-can be removed without a node prompt. Bundled-only dependencies cannot be removed
-from the consumer's manifest. Reinstall to regain a removed plugin's destroy verb.
+can be removed without a node prompt. A plugin only the CLI bundles cannot be
+removed from the consumer's manifest. Reinstall to regain a removed plugin's destroy verb.
 
 Package management is a lazy `PackageManagerFactory` passed from bin.ts into
 main, not a `packages` member on OpsContext/Ports. The adapter detects pnpm,
@@ -167,6 +174,24 @@ validates the resulting site config before writing. PDS declares publication ini
 and has no config contributor. See [splice tests](../../../packages/cli/src/config-block.test.ts).
 First-run init also asks for an AWS profile and offers to detect and pin
 the account (`aws` block). Generic `<plugin> init` asks neither.
+
+## Post-deploy hook
+
+`deploy` (static or SSR) calls an injected `afterDeploy` step once the site is
+published and the cache invalidated, before its summary card. `cli.ts` passes
+[runAfterDeployHooks](../../../packages/cli/src/plugin-commands.ts), which builds
+the discovery ports through the same factory dispatch uses, discovers, and runs
+each installed plugin's `afterDeploy` in discovery order. Each hook gets the
+dispatch context: the plugin's block through `resolvePluginConfig` and its scoped
+state through `toPluginContext`. Every environment runs hooks; a hook decides
+which environments it acts in (PDS syncs only production). Preview deploys and
+rollback run none.
+
+Nothing in this step is fatal. A discovery precondition failure, a load failure,
+a refused config block and a rejected hook each become one warning naming the
+package or plugin, the next plugin's hook still runs, and the deploy exits 0.
+A config block for a plugin that is not installed stays inert; the host does
+not install plugins on its own.
 
 ## Graph engine, state and teardown
 

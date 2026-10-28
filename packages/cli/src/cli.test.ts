@@ -8,7 +8,7 @@
  * unknown-command, `pds`, and `status` behaviour so later dispatch-rebuild
  * tasks have a regression net. Task 29 rewrote the `pds` half: the
  * namespace is dispatched by `runPlugin` now, so those cases assert generic
- * dispatch over the REAL bundled plugin object rather than a hardcoded
+ * dispatch over the REAL pds plugin object rather than a hardcoded
  * branch in `cli.ts`.
  */
 
@@ -55,7 +55,7 @@ import {
  * MOVED DELIBERATELY AT TASK 26, and this is the only edit this pin has
  * taken: the fifteen static `pds …` lines are gone from both copies. Task
  * 26 declares `"blogwright": { "plugin": "pds" }` in
- * `packages/pds/package.json`, which makes the bundled `blogwright-pds`
+ * `packages/pds/package.json`, which makes the installed `blogwright-pds`
  * package a DISCOVERED plugin, so task 11's dynamic `Plugins:` section
  * renders every pds action from the plugin's own `description` and its
  * commands' `summary` fields. Keeping the static block until task 29
@@ -138,7 +138,7 @@ function testContextFactory(
   // what `resolvePluginConfig` (`plugins.ts`) reads a dispatched plugin's
   // own block off. Defaults to `createTestContext`'s own empty document, so
   // every existing caller is unchanged; the pds cases below seed a real
-  // block, because the bundled plugin declares a `validateConfig` and
+  // block, because the pds plugin declares a `validateConfig` and
   // generic dispatch runs it.
   overrides: { configDocument?: Record<string, unknown> } = {},
 ): {
@@ -1195,7 +1195,7 @@ describe('main - pds dispatch (generic, through runPlugin)', () => {
 
   const ALL_PDS_LINES = [...PDS_ACTION_LINES, ...PDS_LIFECYCLE_LINES];
 
-  /** `--help` with the bundled plugin discovered and nothing else installed. */
+  /** `--help` with the pds plugin installed and nothing else. */
   const EXPECTED_HELP_WITH_PDS = `${EXPECTED_USAGE}
 Plugins:
 
@@ -1237,10 +1237,10 @@ ${ALL_PDS_LINES.map((line) => `    ${line}`).join('\n')}
   }
 
   /**
-   * Run `main` with the bundled plugin discovered as `blogwright-pds` from
-   * the CLI's OWN dependencies (`bundled: true`) - the shape task 26 proved
-   * against real disk, and the only way the plugin reaches a consuming repo
-   * that depends on `blogwright` alone.
+   * Run `main` with the plugin discovered as `blogwright-pds` from the
+   * consuming repo's own dependencies - the shape `blogwright plugin add pds`
+   * leaves, and the only way the plugin reaches a site, since the CLI does not
+   * install it.
    */
   async function dispatchPds(
     argv: string[],
@@ -1253,7 +1253,6 @@ ${ALL_PDS_LINES.map((line) => `    ${line}`).join('\n')}
         packageName: 'blogwright-pds',
         namespace: 'pds',
         plugin: recordingPdsPlugin(calls),
-        bundled: true,
       },
     ]);
     const { makeContext, contexts } = testContextFactory(terminal, {
@@ -1413,10 +1412,9 @@ ${ALL_PDS_LINES.map((line) => `    ${line}`).join('\n')}
    * still not reserving it (below). It replaces the two task-07 cases that
    * drove `blogwright pds` against an EMPTY discovery and still expected an
    * answer; a CLI that answers a namespace no installed plugin claims is
-   * precisely what this task removed. The real CLI cannot reach this state
-   * - `blogwright-pds` is a non-optional dependency of
-   * `packages/cli/package.json` (asserted in `commands.test.ts`) - which is
-   * why it is reachable here only by seeding discovery with nothing.
+   * precisely what this task removed. It is also exactly what a site that
+   * has not run `blogwright plugin add pds` sees, since the CLI does not
+   * install `blogwright-pds` (asserted in `commands.test.ts`).
    */
   it('treats `pds` as an unknown namespace when no plugin claims it, naming `blogwright plugin list`', async () => {
     const terminal = createScriptedTerminal({ interactive: false });

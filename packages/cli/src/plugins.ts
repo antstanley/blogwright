@@ -4,10 +4,12 @@
  * default export against core's `Plugin` contract.
  *
  * The candidate set is the UNION of two sources, each resolved from its own
- * directory - see `collectCandidates` below - because a consuming repo
- * depends on `blogwright`, not on `blogwright-pds`: scanning the consumer's
- * own `package.json` alone would never find a plugin bundled inside the CLI
- * itself.
+ * directory - see `collectCandidates` below - because a plugin listed in the
+ * CLI's own `dependencies` reaches a consuming repo that depends on
+ * `blogwright` alone, and scanning the consumer's `package.json` would never
+ * find it. The CLI bundles no plugin today - pds and analytics are both
+ * installed by the sites that use them (`blogwright plugin add`) - but the
+ * bundled half stays, and reads only `dependencies`, never `devDependencies`.
  *
  * Collect, never throw, for anything candidate-specific: a broken plugin -
  * one that fails to resolve, whose manifest is malformed, or whose default
@@ -37,17 +39,17 @@
  * now BREAK the namespace rather than merely shadow it. Task 29 deleted
  * `cli.ts`'s hardcoded `command === 'pds'` branch: there is no built-in
  * `pds` command left for a reservation to protect, and `blogwright pds
- * <action>` is answered by the bundled `blogwright-pds` package, which
- * declares the plugin name `pds` and is discovered here like any other
+ * <action>` is answered by the `blogwright-pds` package a site installs,
+ * which declares the plugin name `pds` and is discovered here like any other
  * plugin. Reserving the name would therefore aim
- * `resolveNamespaceCollisions` below at that bundled plugin itself: it would
+ * `resolveNamespaceCollisions` below at that plugin itself: it would
  * become a `failures` entry rather than an installed one, and the namespace
  * would stop working outright - `blogwright pds sync` exiting 1 with `no
  * built-in command or installed plugin claims "pds"`, `blogwright --help`
  * listing none of its six actions, and `blogwright plugin list` reporting it
  * as reserved for a built-in command that no longer exists. Verified by
- * adding `'pds'` to the set: discovery rejects the real bundled package and
- * this file's real-disk integration cases fail on exactly that reason
+ * adding `'pds'` to the set: discovery rejects the real installed package
+ * and this file's real-disk integration cases fail on exactly that reason
  * string. So the name stays unreserved on purpose, pinned by a test below.
  *
  * DECISION (task 13, record here for task 16 to find): a plugin's declared
@@ -222,10 +224,13 @@ async function readDependencyManifest(
   return parsed as DependencyManifest;
 }
 
-/** Every `dependencies`/`devDependencies` name starting with `blogwright-`, deduplicated and sorted. */
-function pluginDependencyNames(pkg: DependencyManifest): string[] {
+/** Every name starting with `blogwright-` in the given dependency maps, deduplicated and sorted. */
+function pluginDependencyNames(
+  pkg: DependencyManifest,
+  fields: readonly (keyof DependencyManifest)[] = ['dependencies', 'devDependencies'],
+): string[] {
   const names = new Set<string>();
-  for (const deps of [pkg.dependencies, pkg.devDependencies]) {
+  for (const deps of fields.map((field) => pkg[field])) {
     if (!deps) continue;
     for (const name of Object.keys(deps)) {
       if (name.startsWith(PLUGIN_PACKAGE_PREFIX)) names.add(name);
@@ -237,7 +242,7 @@ function pluginDependencyNames(pkg: DependencyManifest): string[] {
 /**
  * Build the candidate set: the consumer's own `blogwright-*` dependencies
  * (resolved from `repoRoot`) union the CLI's own bundled `blogwright-*`
- * dependencies (resolved from `cliPackageDir`). Both halves are required and
+ * `dependencies` (resolved from `cliPackageDir`). Both halves are required and
  * each is resolved from its own directory - see the module comment. Neither
  * `blogwright` nor `blogwright/package.json` is ever a candidate: the bare
  * name never matches the `blogwright-` prefix, so it is filtered out before
@@ -245,7 +250,7 @@ function pluginDependencyNames(pkg: DependencyManifest): string[] {
  *
  * A package name present in BOTH manifests - e.g. a plugin `blogwright
  * plugin add` (task 18) pinned directly into the consuming repo, which
- * already sits in the CLI's own bundled dependencies too - is one installed
+ * also sits in the CLI's own bundled dependencies - is one installed
  * package, not two: it is deduped here, consumer half winning, so it is
  * probed exactly once. Without this, the same package would reach
  * `resolveNamespaceCollisions` as two `InstalledPlugin` entries sharing one
@@ -282,10 +287,17 @@ async function collectCandidates(
   // two-source union exists to prevent. `discover` instead skips the bundled
   // probe only once the consumer's has actually resolved, so the consumer still
   // wins wherever both work.
-  const bundledCandidates = pluginDependencyNames(cliPkg).map((packageName): Candidate => ({
-    packageName,
-    fromDir: cliPackageDir,
-  }));
+  //
+  // Only the CLI's `dependencies` are bundled: its `devDependencies` are never
+  // installed with a published CLI, and reading them would let this workspace
+  // discover a plugin (blogwright-pds, a CLI devDependency for its integration
+  // tests) that no consuming site gets without installing it.
+  const bundledCandidates = pluginDependencyNames(cliPkg, ['dependencies']).map(
+    (packageName): Candidate => ({
+      packageName,
+      fromDir: cliPackageDir,
+    }),
+  );
 
   return [...consumerCandidates, ...bundledCandidates];
 }

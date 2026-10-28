@@ -154,9 +154,6 @@ importers:
       blogwright-core:
         specifier: workspace:*
         version: link:../core
-      blogwright-pds:
-        specifier: workspace:*
-        version: link:../pds
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
@@ -167,6 +164,9 @@ importers:
       blogwright-build-agent:
         specifier: workspace:*
         version: link:../build-agent
+      blogwright-pds:
+        specifier: workspace:*
+        version: link:../pds
       oxlint:
         specifier: ^1.90.0
         version: 1.90.0

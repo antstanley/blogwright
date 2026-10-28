@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
+      'blogwright-core/rkey': fileURLToPath(new URL('../core/src/rkey.ts', import.meta.url)),
       'blogwright-core': fileURLToPath(new URL('../core/src/index.ts', import.meta.url)),
     },
   },

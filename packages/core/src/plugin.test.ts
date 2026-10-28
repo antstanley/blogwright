@@ -156,6 +156,25 @@ describe('validatePlugin', () => {
     expect(() => validatePlugin(module, PACKAGE)).not.toThrow();
   });
 
+  it('rejects an afterDeploy that is not a function, and never calls one while validating', () => {
+    const base = {
+      name: 'ok',
+      description: 'd',
+      commands: [{ action: 'run', summary: 's', run: async () => undefined }],
+    };
+
+    expect(() => validatePlugin({ default: { ...base, afterDeploy: 'sync' } }, PACKAGE)).toThrow(
+      new RegExp(`plugin package "${PACKAGE}"'s Plugin.afterDeploy must be an async function`),
+    );
+    const hooked = {
+      ...base,
+      afterDeploy: async () => {
+        throw new Error('afterDeploy must never be invoked while validating');
+      },
+    };
+    expect(validatePlugin({ default: hooked }, PACKAGE).afterDeploy).toBe(hooked.afterDeploy);
+  });
+
   it('never includes a value read off the module in the raised message', () => {
     const marker = 'SECRET_MARKER_9f3a';
     const messageOf = (module: unknown): string => {

@@ -162,7 +162,7 @@ export interface PluginContext<TConfig = never> {
  * One command a plugin's namespace answers, generic over the same `TConfig`
  * as the owning {@link Plugin}. `action` is a plain string, not a nested
  * sub-namespace, so a multi-word action such as `secret status` (declared
- * by the bundled pds plugin, `packages/pds/src/plugin.ts`) is one
+ * by the pds plugin, `packages/pds/src/plugin.ts`) is one
  * `PluginCommand`, not two levels of dispatch; the host matches the longest
  * declared action first against the remaining positionals. Declared with a
  * method signature (`run(...)`), not an arrow-typed property
@@ -304,8 +304,9 @@ export interface PluginManifest {
  * the shape of the config block it owns (see {@link PluginContext.pluginConfig}
  * and its doc comment on why the block is read from there, never from
  * `ctx.config`). A plugin declares exactly these members and nothing else:
- * no lifecycle hooks, no plugin-to-plugin dependencies, no contributed
- * ports or adapters, and no merged config schema beyond the one owned key.
+ * one lifecycle hook ({@link Plugin.afterDeploy}) and no other, no
+ * plugin-to-plugin dependencies, no contributed ports or adapters, and no
+ * merged config schema beyond the one owned key.
  *
  * The default type argument is `never`, not `unknown`, so a plugin that
  * owns no `configKey` writes bare `Plugin` with no argument. Inside such a
@@ -358,6 +359,18 @@ export interface Plugin<TConfig = never> {
    * invoked by {@link validatePlugin}.
    */
   init?(io: PluginInitIo): Promise<ConfigBlockEntry[]>;
+  /**
+   * Runs once `blogwright deploy` has published the site and invalidated the
+   * cache, for every environment - the hook decides for itself which
+   * environments it acts in (pds syncs only `production`). Preview deploys
+   * do not run it. `ctx.pluginConfig` is resolved exactly as for a dispatched
+   * command, so a block the plugin's `validateConfig` refuses skips the hook.
+   *
+   * Never fatal: the site is already live when this runs, so the host reports
+   * a rejection as a warning naming the plugin and the deploy still succeeds.
+   * Never invoked by {@link validatePlugin}.
+   */
+  afterDeploy?(ctx: PluginContext<TConfig>): Promise<void>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -449,6 +462,12 @@ export function validatePlugin(module: unknown, packageName: string): Plugin {
         "'s Plugin.commands has an entry missing action, summary or run - each command needs a non-empty action, a non-empty summary and a run(ctx, args) function",
       );
     }
+  }
+
+  // Checked, unlike `nodes`/`init`/`validateConfig`, because the host calls it
+  // on every deploy without the operator having asked for this plugin by name.
+  if (candidate.afterDeploy !== undefined && typeof candidate.afterDeploy !== 'function') {
+    rejectPlugin(packageName, "'s Plugin.afterDeploy must be an async function of (ctx)");
   }
 
   return candidate as unknown as Plugin;

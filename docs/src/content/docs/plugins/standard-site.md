@@ -5,14 +5,18 @@ sidebar:
   order: 3
 ---
 
-Add `"pds": { "name": "My Blog" }` to `config/production.jsonc` to start. Setup is five commands, about 10 minutes including one deploy; after that, every production deploy keeps your posts in sync.
+Run `pnpm exec blogwright plugin add pds` and add `"pds": { "name": "My Blog" }` to `config/production.jsonc` to start. Setup is then five commands, about 10 minutes including one deploy; after that, every production deploy keeps your posts in sync.
 
 The standard.site plugin mirrors your blog to your AT Protocol PDS (Personal Data Server) as [standard.site](https://standard.site) records:
 
 - One `site.standard.publication` record for the site.
 - One `site.standard.document` record per post.
 
-It ships with the CLI, so there is nothing to install. Its namespace is `pds`: every command is `blogwright pds <action>`. Without a `pds` block in the config, it does nothing.
+Install it with `pnpm exec blogwright plugin add pds`, which pins `blogwright-pds` to the CLI's exact version. Its namespace is `pds`: every command is `blogwright pds <action>`. Without a `pds` block in the config, it does nothing.
+
+:::note[Upgrading from 0.4]
+The CLI no longer installs `blogwright-pds` for you. A site that publishes to standard.site must run `blogwright plugin add pds` once and commit the `package.json` and lockfile change. Until then `blogwright pds <action>` reports that no plugin claims `pds`, and production deploys stop syncing records without any warning.
+:::
 
 It suits a content site - a blog built from a content collection of Markdown posts. It needs a custom domain, because the site itself acts as the OAuth client.
 

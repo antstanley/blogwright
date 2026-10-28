@@ -260,6 +260,12 @@ describe('the blogwright-pds plugin declaration', () => {
   });
 });
 
+describe('the post-deploy hook', () => {
+  it("is this package's own syncAfterDeploy, which the CLI's deploy runs once the site is live", () => {
+    expect(plugin.afterDeploy).toBe(commands.syncAfterDeploy);
+  });
+});
+
 describe('the plugin config validator', () => {
   it("is this package's own validatePdsConfig, not a re-implementation", () => {
     expect(plugin.validateConfig).toBe(validatePdsConfig);
@@ -417,9 +423,9 @@ describe("the package's public surface", () => {
   });
 
   it('still exports all six command functions and syncAfterDeploy by name', () => {
-    // `packages/cli/src/commands.ts` imports `syncAfterDeploy` by name and
-    // `packages/cli/src/cli.ts` reaches the other six through a namespace
-    // import; adding a default export must move none of them.
+    // The host reaches all seven through the default export now, but they
+    // stay this package's own public API: adding a default export must move
+    // none of them.
     expect(packageExports.keygen).toBe(commands.keygen);
     expect(packageExports.login).toBe(commands.login);
     expect(packageExports.init).toBe(commands.init);

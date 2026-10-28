@@ -6,11 +6,14 @@ Read first: [overview](00-overview.md), [domain model](01-domain-model.md) and [
 
 ## Responsibilities and public paths
 
-`blogwright-pds` remains a default CLI dependency. Its package manifest declares
-`blogwright.plugin: pds`; its default export is `Plugin<PdsConfig>`. Named
-command exports remain available and `blogwright/rkey` still re-exports
-`blogwright-pds/rkey`. No config file, package name, slug derivation or rkey/TID
-vector changes in the plugin migration.
+`blogwright-pds` is installed separately by the sites that publish to
+standard.site (`blogwright plugin add pds`); the CLI does not depend on it. Its
+package manifest declares `blogwright.plugin: pds`; its default export is
+`Plugin<PdsConfig>` with `afterDeploy: syncAfterDeploy`. Named command exports
+remain available. The rkey implementation lives in core's `./rkey` subpath:
+`blogwright/rkey` and `blogwright-pds/rkey` both re-export it, so a site's link
+tags work without the plugin installed. No config file, package name, slug
+derivation or rkey/TID vector changes.
 
 ## Command contract
 
@@ -33,8 +36,11 @@ because records use production URLs.
 
 All dispatched PDS actions validate the pds block; keygen/login/init/sync also
 need the site's domain. Public OAuth files must be committed and deployed before
-login/init verification. A normal production deploy calls syncAfterDeploy
-non-fatally; rollback does not sync and warns if production PDS is configured.
+login/init verification. Once the plugin is installed, every deploy runs its
+`afterDeploy` hook, `syncAfterDeploy`, which syncs only in production with a pds
+block and is non-fatal; rollback does not sync and warns if production PDS is
+configured. A site with a pds block but no installed plugin does not sync, and
+`blogwright pds <action>` reports that no plugin claims `pds`.
 The [publishing guide](../../../docs/src/content/docs/plugins/standard-site.md)
 and [commands](../../../packages/pds/src/commands.ts) detail the operator flow.
 
@@ -132,6 +138,5 @@ argument, missing-input, grant-scope and structural-type evidence.
 
 **Open questions**
 
-- Should an afterDeploy hook exist once a second consumer needs it?
 - Should PdsConfig remain a typed core member indefinitely?
 - Should PDS gain shorter action aliases? None are implemented by this migration.

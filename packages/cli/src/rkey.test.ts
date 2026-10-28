@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { documentUri, extractDate, postPath, tidFromPath } from './rkey.js';
 
 /**
- * The `blogwright/rkey` subpath is a published contract; since task 08 it is a
- * re-export of blogwright-pds. These tests pin the re-exported surface - the
- * exhaustive on-the-wire vectors live in packages/pds/src/rkey.test.ts.
+ * The `blogwright/rkey` subpath is a published contract; it is a re-export of
+ * blogwright-core's `./rkey`. These tests pin the re-exported surface - the
+ * exhaustive on-the-wire vectors live in packages/core/src/rkey.test.ts.
  */
 describe('blogwright/rkey re-export', () => {
   it('exposes the rkey surface consuming sites import', () => {

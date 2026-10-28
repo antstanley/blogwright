@@ -9,7 +9,7 @@ sidebar:
 
 ## What it is
 
-The subpath is a re-export of `blogwright-pds/rkey`; the implementation lives in the `blogwright-pds` package and is published through the CLI package (`blogwright`) as a stable contract:
+The subpath is a re-export of `blogwright-core/rkey`; the implementation lives in `blogwright-core` and is published through the CLI package (`blogwright`) as a stable contract, so it works whether or not the site installs the standard.site plugin:
 
 ```ts
 import { tidFromPath, postPath, documentUri } from 'blogwright/rkey';
