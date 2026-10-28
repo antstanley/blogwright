@@ -62,11 +62,15 @@ test('mobile menu and theme selector retain keyboard access', async ({ page }) =
   await page.goto('/getting-started/quickstart/');
   const menu = page.getByRole('button', { name: 'Menu', exact: true });
   if (await menu.isVisible()) {
+    // A native popover: its open state is the :popover-open pseudo-class, not an attribute.
+    const sidebar = page.locator('#starlight__sidebar');
+    const isOpen = () => sidebar.evaluate((el) => el.matches(':popover-open'));
+    await expect(menu).toHaveAttribute('popovertarget', 'starlight__sidebar');
     await menu.focus();
     await page.keyboard.press('Enter');
-    await expect(menu).toHaveAttribute('aria-expanded', 'true');
+    await expect.poll(isOpen).toBe(true);
     await page.keyboard.press('Escape');
-    await expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await expect.poll(isOpen).toBe(false);
     await expect(menu).toBeFocused();
     await menu.click();
   }

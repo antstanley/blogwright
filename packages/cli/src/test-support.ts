@@ -5,9 +5,9 @@
  * Tests substitute behaviour here - at the ports - never by casting.
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import {
   createClients,
@@ -275,6 +275,21 @@ export async function makeTempDir(prefix: string): Promise<string> {
 /** Delete a directory created by {@link makeTempDir}. */
 export async function removeTempDir(dir: string): Promise<void> {
   await rm(dir, { recursive: true, force: true });
+}
+
+/**
+ * Install the workspace package at `packageDir` into `<consumerRoot>/node_modules`
+ * as a symlink - the layout pnpm leaves - so the real resolver finds it from
+ * the consumer and its own dependencies from the workspace copy.
+ */
+export async function linkPackage(
+  consumerRoot: string,
+  packageName: string,
+  packageDir: string,
+): Promise<void> {
+  const linkPath = join(consumerRoot, 'node_modules', packageName);
+  await mkdir(dirname(linkPath), { recursive: true });
+  await symlink(packageDir, linkPath, 'dir');
 }
 
 /**

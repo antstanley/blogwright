@@ -4,9 +4,12 @@
  * arrive through ports (see ports.ts; the process adapter owns jj/git).
  */
 
-import { zipSync, type Zippable } from 'fflate';
-
-import { FileNotFoundError, REPRODUCIBLE_ZIP_MTIME, type FileSystem } from 'blogwright-core';
+import {
+  createZip,
+  FileNotFoundError,
+  REPRODUCIBLE_ZIP_MTIME,
+  type FileSystem,
+} from 'blogwright-core';
 
 import type { Ports } from './ports.js';
 
@@ -83,12 +86,12 @@ export async function buildRepoZip(
   files: string[],
   extra: Record<string, string> = {},
 ): Promise<Uint8Array> {
-  const entries: Zippable = {};
+  const entries: Record<string, Uint8Array> = {};
   for (const file of files) {
     entries[file] = await fs.readBytes(`${cwd}/${file}`);
   }
   for (const [path, content] of Object.entries(extra)) {
     entries[path] = new TextEncoder().encode(content);
   }
-  return zipSync(entries, { level: 6, mtime: ZIP_MTIME });
+  return createZip(entries, { mtime: ZIP_MTIME });
 }

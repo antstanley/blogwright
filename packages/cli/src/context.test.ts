@@ -840,7 +840,7 @@ describe('plugin config validation', () => {
  * command, and `blogwright pds <action>` is where it is rejected instead -
  * with core's original message strings.
  *
- * These use the REAL bundled plugin: `validateConfig` and `nodes` are the
+ * These use the REAL pds plugin: `validateConfig` and `nodes` are the
  * shipped functions (only the six commands' `run` bodies are replaced with
  * recorders), so what is exercised here is `validatePdsConfig` itself and not
  * a fixture standing in for it.
@@ -861,7 +861,7 @@ describe('pds config validation timing', () => {
   const REFUSED = 'plugin "pds" rejected the "pds" config block: ';
 
   /**
-   * The bundled plugin with recording `run`s. Every other member - crucially
+   * The real plugin with recording `run`s. Every other member - crucially
    * `validateConfig` - is the real one.
    */
   function recordingPdsPlugin(calls: RecordedRun[]): Plugin<unknown> {
@@ -878,7 +878,7 @@ describe('pds config validation timing', () => {
   }
 
   /**
-   * Seed `blogwright-pds` as the CLI's OWN bundled dependency plus a
+   * Seed `blogwright-pds` as the consuming repo's own dependency plus a
    * `config/production.jsonc` holding `configText`, and record every context
    * `main` builds through the real `loadConfig`. The `contexts` array is what
    * proves a built-in command ACCEPTED a block: a context only exists if
@@ -891,7 +891,6 @@ describe('pds config validation timing', () => {
         packageName: 'blogwright-pds',
         namespace: 'pds',
         plugin: recordingPdsPlugin(calls),
-        bundled: true,
       },
     ]);
     const repoRoot = await findRepoRoot(createNodeFileSystem());

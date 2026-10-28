@@ -12,7 +12,7 @@ Plugins add features beyond deploying. Each one claims a command namespace (`blo
 | Plugin | Namespace | How you get it | What it adds |
 | --- | --- | --- | --- |
 | [Analytics](/plugins/analytics/) | `analytics` | `blogwright plugin add analytics` | Page views from CloudFront access logs in an Iceberg table, with a local dashboard |
-| [standard.site](/plugins/standard-site/) | `pds` | Bundled with the CLI | Mirrors blog posts to your AT Protocol PDS |
+| [standard.site](/plugins/standard-site/) | `pds` | `blogwright plugin add pds` | Mirrors blog posts to your AT Protocol PDS |
 
 ## Add a plugin
 
@@ -22,7 +22,7 @@ Plugins add features beyond deploying. Each one claims a command namespace (`blo
 
 Steps 2 and 3 take an environment (`[env]` or `--env`), defaulting to `production`. Repeat them for each environment that should have the plugin.
 
-standard.site skips step 1 because it ships with the CLI. Its `init` creates the publication rather than writing config - follow the [standard.site setup](/plugins/standard-site/#one-time-setup).
+standard.site differs at step 2: you write its `pds` block by hand, and its `init` creates the publication instead - follow the [standard.site setup](/plugins/standard-site/#one-time-setup).
 
 ### What `plugin add` installs
 
@@ -47,6 +47,8 @@ The pin is made once, at install time:
 
 A plugin can declare its own commands on top, such as `analytics dashboard` or `pds sync`. `blogwright --help` lists every installed plugin's commands, and any plugin that failed to load and why.
 
+A plugin can also run a step after every `blogwright deploy`, once the site is live - standard.site re-syncs its records this way. A failing step warns and never fails the deploy. Preview deploys run none.
+
 `blogwright init`, the first-run wizard, also asks each installed plugin's questions. Plugins add questions only when they have a config block to write.
 
 ## Where plugin state lives
@@ -68,7 +70,7 @@ Run interactively without `--yes`, `plugin remove` asks whether to destroy the s
 
 **`plugin remove --yes` keeps resources.** It uninstalls without tearing anything down. A non-interactive run without `--yes` refuses, because it cannot ask.
 
-The config block stays in your config files either way, ready for a reinstall. standard.site cannot be removed from a repo that never declared it, because it is bundled with the CLI.
+The config block stays in your config files either way, ready for a reinstall. A block for a plugin that is not installed does nothing.
 
 ## Writing your own plugin
 

@@ -13,7 +13,7 @@ repository hygiene, agent-specific emphases, and the definition of done.
 | ---------- | ------------------------ | --------------------------------------------------------------------- |
 | TypeScript | ^6 (strict)              | shared `tsconfig.base.json`; see [TypeScript conventions](#typescript-conventions) |
 | Node       | ≥ 22 (CI runs 24)        | `engines` in every package; ESM only (`"type": "module"`)             |
-| pnpm       | 11                       | five packages under `packages/`, plus private docs workspace                         |
+| pnpm       | 11                       | six packages under `packages/`, plus private docs workspace                          |
 | oxlint     | ^1.72                   | linter; per-package `pnpm lint`, config in `.oxlintrc.json`           |
 | oxfmt      | ^0.57                   | formatter; config in `.oxfmtrc.json`, run via `pnpm exec oxfmt`       |
 | vitest     | 4                        | test runner in every package; `pnpm test` at the root runs all        |
@@ -22,12 +22,22 @@ repository hygiene, agent-specific emphases, and the definition of done.
 | Vite / SvelteKit | 8 / 2 (Svelte 5)   | builds the analytics dashboard only (`packages/analytics/app` → `dist/app`); static adapter, no server |
 | jj         | 0.43+                    | version-control front end (colocated Git backend)                     |
 
-CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `TZ=America/New_York pnpm test`,
-`pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` on every push to `main`
-and every pull request. There are no local pre-commit or pre-push hooks; CI is
-the enforcement gate.
+CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm size:check`, `pnpm typecheck`,
+`TZ=America/New_York pnpm test`, `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip`
+on every push to `main` and every pull request. There are no local pre-commit or
+pre-push hooks; CI is the enforcement gate.
 
-Browser acceptance uses Playwright 1.63.0 and `@axe-core/playwright` 4.13.0.
+**Package size budget.** `package-sizes.json` records the approved maximum install
+size of each published package: its own packed files plus every production
+dependency at the lockfile's versions, measured for linux-x64 (glibc) so the figure
+is the same on every machine. `pnpm size:check` (after `pnpm build`) fails when a
+package is above its maximum, and the release workflow repeats it before staging.
+Smaller is always fine. An intended increase is approved by running
+`pnpm size:update` and committing the rewritten file, so the new maximum is a
+reviewed line in the pull request; the PR description says why the package grew.
+The tool is `packages/size-budget` (private).
+
+Browser acceptance uses Playwright 1.64.1 and `@axe-core/playwright` 4.14.0.
 `pnpm test:ui` and `pnpm test:a11y` run against local production builds; no cloud
 credentials are needed. `pnpm test:ui:update` updates reference images for review.
 The browser CI job uses a pinned Linux ARM64 container and retains both suites'
@@ -114,8 +124,10 @@ Conventions:
   the ports only it uses (the CLI's VCS and builder-ping ports).
 - **Features live in their own packages, and the plugin manifest is the mechanism.**
   A coherent feature with its own domain - the standard.site integration in
-  `blogwright-pds` is the model - is its own workspace package depending on
-  `blogwright-core`. It announces itself by declaring
+  `blogwright-pds` is the model - is its own workspace package with
+  `blogwright-core` as a **peer** dependency (`workspace:^`, plus a
+  `workspace:*` devDependency so the workspace links it), so a site's plugins
+  and its CLI share the one core the CLI installs. It announces itself by declaring
   `"blogwright": { "plugin": "<namespace>" }` in its own `package.json`: that
   manifest field is what CLI discovery scans a dependency tree for, and the
   package's default export is then the `Plugin` declaring its namespace, its
@@ -295,7 +307,8 @@ name is derived, with an error that says how to fix it.
   change hashing inputs casually - a changed hash forces a builder-image rebuild for
   every consumer.
 - **`blogwright-build-agent` stays `private: true`.** It ships inside the CLI
-  package; it is never published on its own.
+  package; it is never published on its own. `blogwright-size-budget` is private too:
+  it is repository tooling, so it is never published and has no size budget itself.
 
 ## Guidelines for AI agents
 
@@ -342,9 +355,11 @@ A change is done when:
 - Errors are raised with context; no `null` is returned or passed for a domain value.
 - New external interactions (network, disk, process, terminal) go through a port;
   no direct Node API or vendor-SDK calls were added to domain modules.
-- `pnpm build`, `pnpm typecheck`, `TZ=America/New_York pnpm test`, `pnpm lint`,
-  `pnpm exec oxfmt --check .`, and `pnpm knip` all pass locally - the same six gates CI runs.
-- UI changes pass `pnpm test:ui` and `pnpm test:a11y` alongside the six code gates.
+- `pnpm build`, `pnpm size:check`, `pnpm typecheck`, `TZ=America/New_York pnpm test`,
+  `pnpm lint`, `pnpm exec oxfmt --check .`, and `pnpm knip` all pass locally - the same
+  seven gates CI runs. A package that grew has its new maximum committed in
+  `package-sizes.json` and the reason in the change description.
+- UI changes pass `pnpm test:ui` and `pnpm test:a11y` alongside the seven code gates.
   Relevant manual design evidence accompanies the change; screenshots and scanners
   do not replace screen-reader acceptance.
 - A user-facing change ships with a changeset (`pnpm changeset`) describing its
@@ -361,7 +376,8 @@ A change is done when:
   joins an existing package, and a new package is added only for a coherent feature
   with its own domain. `blogwright-pds` (extracted 2026-07-11) and
   `blogwright-analytics` (added 2026-07-26, installed on demand and never shipped with
-  the CLI) are the two worked instances of that exception.
+  the CLI) are the two worked instances of that exception. `blogwright-size-budget`
+  is private release tooling (the package size gate), not product code.
 - Consumers run the CLI via `pnpm exec` in their own repos; global installs are not a
   supported surface (the `bw` bin collides with Bitwarden's CLI when global).
 
@@ -403,7 +419,7 @@ A change is done when:
 
 - oxfmt already runs in CI via `pnpm exec oxfmt --check .`; should root
   `fmt`/`fmt:check` convenience scripts also be added?
-- Should a pre-push hook mirror the six CI gates locally, or is CI-only enforcement
+- Should a pre-push hook mirror the seven CI gates locally, or is CI-only enforcement
   sufficient at this repo's size?
 - Commit subjects follow an imperative sentence-case convention, not Conventional
   Commits - adopt Conventional Commits before the first external contribution, or

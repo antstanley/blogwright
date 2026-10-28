@@ -15,9 +15,8 @@
 /**
  * The CLI's command-name registries, isolated in their own leaf module with
  * no imports of its own. Both `cli.ts` (the dispatcher - it pulls in every
- * built-in command implementation, and since task 29 no plugin package by
- * name: `blogwright-pds` reaches it only transitively, through the
- * post-deploy sync `commands.ts` imports) and
+ * built-in command implementation, and no plugin package by name - pds
+ * reaches `deploy` only through its `afterDeploy` hook) and
  * `plugins.ts` (a domain module that must stay inside the port boundary -
  * see DEVELOPMENT.md §Hexagonal architecture) need to read the same set of
  * reserved names, and neither may import the other: `plugins.ts` importing
@@ -49,8 +48,9 @@
  * `pds` is deliberately absent from `RESERVED_COMMANDS`, and adding it here
  * would break `blogwright pds` outright. There is no built-in `pds` command:
  * task 29 deleted `cli.ts`'s hardcoded `command === 'pds'` branch, and the
- * namespace is now served by the bundled `blogwright-pds` package, which
- * declares the plugin name `pds` and is discovered like any other plugin.
+ * namespace is now served by the `blogwright-pds` package a site installs
+ * (`blogwright plugin add pds`), which declares the plugin name `pds` and is
+ * discovered like any other plugin.
  * Reserving the name would make `discover`'s reserved-name check
  * (`plugins.ts`) reject that package - a load `failures` entry, never an
  * installed plugin - so `blogwright pds <action>` would exit 1 with `no

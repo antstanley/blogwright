@@ -7,6 +7,7 @@ import {
   MICROVM_CPU_ARCHITECTURE,
   pollUntil,
   REPRODUCIBLE_ZIP_MTIME,
+  createZip,
   textTag,
   WEB_FUNCTION_RUNTIME,
   withRetry,
@@ -19,7 +20,6 @@ import {
   type SsrConfig,
   type WebFunctionEndpoint,
 } from 'blogwright-core';
-import { strToU8, zipSync } from 'fflate';
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
@@ -626,7 +626,10 @@ export function placeholderPackageZip(): Uint8Array {
     `  res.writeHead(503, { 'content-type': 'text/plain' });\n` +
     `  res.end('blogwright: waiting for the first SSR deploy\\n');\n` +
     `}).listen(port, host);\n`;
-  return zipSync({ 'index.js': strToU8(code) }, { level: 6, mtime: REPRODUCIBLE_ZIP_MTIME });
+  return createZip(
+    { 'index.js': new TextEncoder().encode(code) },
+    { mtime: REPRODUCIBLE_ZIP_MTIME },
+  );
 }
 
 /**

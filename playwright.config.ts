@@ -40,6 +40,9 @@ export default defineConfig({
       command: 'pnpm --filter blogwright-docs preview --host 127.0.0.1 --port 4322',
       url: baseURL.docs,
       reuseExistingServer: false,
+      // Astro 7.2+ detaches `astro preview` when it detects an AI agent; Playwright
+      // must own the foreground process so it can stop it after the run.
+      env: { ASTRO_PREVIEW_BACKGROUND: '0' },
     },
   ],
   projects: [

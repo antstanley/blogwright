@@ -24,16 +24,16 @@
     "start": "node ./dist/bin.js"
   },
   "dependencies": {
-    "blogwright-core": "workspace:*",
-    "blogwright-pds": "workspace:*",
-    "fflate": "^0.8.3"
+    "blogwright-core": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "blogwright-build-agent": "workspace:*",
-    "@types/node": "^26.1.0",
-    "oxlint": "^1.72.0",
+    "blogwright-pds": "workspace:*",
+    "fflate": "^0.8.3",
+    "oxlint": "^1.90.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^5.0.5"
   },
   "description": "Deploy static sites, single-page apps and server-rendered apps to AWS: S3 + CloudFront hosting, builds in a Lambda MicroVM, Lambda Web Functions for SSR, PR previews, GitHub-OIDC CI deploys, and plugins for analytics and standard.site publishing",
   "keywords": [
@@ -52,7 +52,7 @@
     "url": "git+https://github.com/antstanley/blogwright.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2"
   },
   "homepage": "https://github.com/antstanley/blogwright#readme",
   "bugs": "https://github.com/antstanley/blogwright/issues"

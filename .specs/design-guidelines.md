@@ -128,7 +128,7 @@ success state. Avoid implying live data or freshness without supporting metadata
 | Motion | Changed motion retains a usable reduced-motion alternative | Interaction with normal and reduced-motion preferences | Manual |
 | Code health | UI change passes repository checks | Commands in development guidelines | Existing build/typecheck/test/lint/format/knip scripts |
 
-Browser checks use Playwright 1.63.0 and axe integration. `pnpm test:ui` exercises
+Browser checks use Playwright 1.64.1 and axe integration. `pnpm test:ui` exercises
 Chromium, Firefox and WebKit journeys at narrow/wide widths; `pnpm test:a11y` scans
 sampled states in both themes. Exact screenshot comparisons run in pinned Linux
 ARM64 at 320, 390, 768 and 1440 CSS pixels. Unexpected differences and scanner

@@ -84,6 +84,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
+      # The same gate CI runs on every pull request, repeated here so a hand-tagged
+      # release cannot stage packages larger than their approved maximums.
+      - name: Check package install sizes (package-sizes.json)
+        run: pnpm size:check
+
       - name: Validate package metadata (publint)
         run: |
           set -euo pipefail

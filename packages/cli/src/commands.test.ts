@@ -41,12 +41,21 @@ import {
   readNodeStatus,
   rollback,
   status,
+  type AfterDeploy,
+  type DeployOptions,
 } from './commands.js';
 import { cliPackageDir, type OpsContext } from './context.js';
 import { destroyGraph } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
 import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
+
+/** For a deploy that must fail first: its post-deploy step must never run. */
+const UNREACHABLE_AFTER_DEPLOY: DeployOptions = {
+  afterDeploy: async () => {
+    throw new Error('afterDeploy ran for a deploy that should have failed first');
+  },
+};
 
 /**
  * Three nodes - present, missing, and one whose `read` throws - small enough
@@ -736,44 +745,21 @@ describe('previewTeardown', () => {
 });
 
 /*
- * TASK 29 - the post-deploy PDS sync, which the removal of `cli.ts`'s
- * hardcoded `pds` branch must leave untouched.
- *
- * `deploy` reaches `syncAfterDeploy` through the static import at the top of
- * `commands.ts` (see the comment there for why it stays), not through plugin
- * dispatch - the SPI has no lifecycle hook it could be registered on. That
- * makes it the one pds code path in the CLI with no dispatch test behind it,
- * and the one a reader of task 29's diff would most reasonably assume had
- * been migrated away. It has not been, and these cases say so by running the
- * real `deploy` end to end against stubbed ports and clients.
- *
- * The observable is `syncAfterDeploy`'s own "not initialised" line: it is
- * emitted only past BOTH of that function's guards (`ctx.env !==
- * 'production' || !ctx.config.pds` returns before it), and the memory
- * filesystem below carries no `atproto.json`, so a repo that has configured
- * the block but never run `pds init` is exactly the state that produces it.
- * Nothing is asserted about a real PDS: the point is which code the deploy
- * reaches, not what it would publish.
+ * The post-deploy plugin hook. `deploy` runs whatever `afterDeploy` it is
+ * handed - `cli.ts` passes `runAfterDeployHooks` (`plugin-commands.ts`, tested
+ * there) - once the site is published, and never for a deploy that fails. The
+ * cases below run the real `deploy` end to end against stubbed ports and
+ * clients; what each installed plugin's hook then does is the plugin's own
+ * business (pds's environment and config guards are `syncAfterDeploy`'s tests).
  */
-describe('deploy reaches syncAfterDeploy', () => {
+describe('deploy runs its afterDeploy step', () => {
   const HASH = 'abc123';
   /** The agent bundle's own content hash, read from `agent-manifest.json`. */
   const AGENT_HASH = '0123456789ab';
-  /** `syncAfterDeploy`'s line for a configured-but-uninitialised production site. */
-  const NOT_INITIALISED =
-    'standard.site publishing not initialised (`blogwright pds init`) - skipping';
+  /** What the recording hook below logs, so its position in the run is visible. */
+  const HOOK_LINE = 'afterDeploy ran';
 
-  /**
-   * Run the real `deploy` to completion. Every AWS call is answered by a
-   * stub client and every file read by an in-memory filesystem - the same
-   * substitution `deploy.test.ts`'s own `runBuild` fixture makes, extended
-   * far enough forward to reach the post-deploy sync. The builder image is
-   * seeded as already current (`builderImageAction` returns `skip`), the
-   * build's completion artifact is present (`objectExists` - `pollBuild`'s
-   * authoritative done signal), and the changed-paths manifest is empty, so
-   * no CloudFront invalidation is attempted either.
-   */
-  async function runDeploy(opts: { env: string; pds: boolean }): Promise<string[]> {
+  async function runDeploy(afterDeploy: AfterDeploy): Promise<string[]> {
     const repoRoot = await findRepoRoot(createNodeFileSystem());
     const fs = createMemoryFileSystem({
       [`${repoRoot}/.jj`]: '',
@@ -785,8 +771,7 @@ describe('deploy reaches syncAfterDeploy', () => {
     const logged: string[] = [];
     const record = (msg: string) => logged.push(stripColors(msg));
     const ctx = createTestContext({
-      env: opts.env,
-      config: opts.pds ? { pds: { name: 'Example', secretName: 'example/atproto' } } : {},
+      env: 'production',
       ports: {
         fs,
         terminal: createScriptedTerminal({ interactive: false }),
@@ -839,51 +824,47 @@ describe('deploy reaches syncAfterDeploy', () => {
     ctx.state.resources['iam-build-role'] = { arn: 'arn:build' };
     ctx.state.resources['iam-exec-role'] = { arn: 'arn:role' };
 
-    await deploy(ctx);
+    await deploy(ctx, {
+      afterDeploy: async (deployed) => {
+        expect(deployed).toBe(ctx);
+        await afterDeploy(deployed);
+      },
+    });
     return logged;
   }
 
-  it('runs the sync for production with a pds block', async () => {
-    const logged = await runDeploy({ env: 'production', pds: true });
+  it('runs the hook once, after the site is published and before the summary', async () => {
+    let runs = 0;
+    // Logged through the deploy's own logger, so the hook's line lands
+    // between the upload and the summary card exactly where it ran.
+    const logged = await runDeploy(async (deployed) => {
+      runs += 1;
+      deployed.logger.info(HOOK_LINE);
+    });
 
-    expect(logged).toContain(NOT_INITIALISED);
-    // And the deploy itself completed - the line is from the post-deploy
-    // step, not from a run that fell over before reaching it. Raw, with no
-    // `✓` prefix: `createTestContext` takes a plain object logger, and the
-    // level glyphs are `createLogger`'s (`logger.ts`), a layer above.
-    expect(logged.some((line) => line.startsWith(`deployed ${HASH} in `))).toBe(true);
+    expect(runs).toBe(1);
+    const hookAt = logged.indexOf(HOOK_LINE);
+    expect(hookAt).toBeGreaterThan(
+      logged.findIndex((line) => line.startsWith(`uploaded build/${HASH}.zip`)),
+    );
+    expect(logged.findIndex((line) => line.startsWith(`deployed ${HASH} in `))).toBeGreaterThan(
+      hookAt,
+    );
   });
 
-  it('skips the sync outside production, even with a pds block', async () => {
-    const logged = await runDeploy({ env: 'staging', pds: true });
-
-    expect(logged).not.toContain(NOT_INITIALISED);
-    expect(logged.some((line) => line.startsWith(`deployed ${HASH} in `))).toBe(true);
-  });
-
-  it('skips the sync for production when the site configures no pds block', async () => {
-    const logged = await runDeploy({ env: 'production', pds: false });
-
-    expect(logged).not.toContain(NOT_INITIALISED);
-    expect(logged.some((line) => line.startsWith(`deployed ${HASH} in `))).toBe(true);
-  });
-
-  it('keeps blogwright-pds a non-optional dependency of the CLI package', async () => {
-    // The other half of the guarantee: the static import above can only be
-    // relied on while the package ships with the CLI. A move to
-    // `optionalDependencies`, `peerDependencies` or `devDependencies` would
-    // leave `deploy` importing something a consuming install need not have -
-    // and would equally stop the bundled plugin from being discovered at all
-    // (`plugins.test.ts`'s real-disk case resolves it from `cliPackageDir()`'s
-    // own `dependencies`).
+  it('does not ship blogwright-pds with the CLI package', async () => {
+    // pds is installed by the sites that use it (`blogwright plugin add pds`)
+    // and reaches `deploy` only through its `afterDeploy` hook. A
+    // devDependency is fine - the CLI's own integration tests import the real
+    // plugin - because a published CLI never installs those, and discovery's
+    // bundled half reads only `dependencies` (`plugins.ts`).
     const manifest = JSON.parse(
       await createNodeFileSystem().readText(`${cliPackageDir()}/package.json`),
     ) as Record<string, Record<string, string> | undefined>;
 
-    expect(manifest.dependencies?.['blogwright-pds']).toBe('workspace:*');
+    expect(manifest.dependencies?.['blogwright-pds']).toBeUndefined();
     expect(manifest.optionalDependencies?.['blogwright-pds']).toBeUndefined();
     expect(manifest.peerDependencies?.['blogwright-pds']).toBeUndefined();
-    expect(manifest.devDependencies?.['blogwright-pds']).toBeUndefined();
   });
 });
 
@@ -1172,7 +1153,9 @@ describe('SSR mode command contract', () => {
         },
       },
     });
-    await expect(deploy(ctx)).rejects.toThrow(/lambda:InvokeWebFunctionEndpoint/);
+    await expect(deploy(ctx, UNREACHABLE_AFTER_DEPLOY)).rejects.toThrow(
+      /lambda:InvokeWebFunctionEndpoint/,
+    );
     // Nothing was zipped, uploaded or launched.
     expect(calls).toEqual([]);
   });
@@ -1208,7 +1191,7 @@ describe('SSR mode command contract', () => {
   it('deploy and rollback refuse a mode the distribution is not serving', async () => {
     // SSR configured, distribution still static: nothing is probed or built.
     const ahead = ssrCtx({ mode: 'static' });
-    await expect(deploy(ahead.ctx)).rejects.toThrow(
+    await expect(deploy(ahead.ctx, UNREACHABLE_AFTER_DEPLOY)).rejects.toThrow(
       /configured for ssr serving but its distribution serves static/,
     );
     await expect(rollback(ahead.ctx, HASH)).rejects.toThrow(/bootstrap production --switch-mode/);
@@ -1218,7 +1201,7 @@ describe('SSR mode command contract', () => {
     // site/ assets the live revision references.
     const behind = ssrCtx({ mode: 'ssr' });
     behind.ctx.config = { ...behind.ctx.config, ssr: undefined };
-    await expect(deploy(behind.ctx)).rejects.toThrow(
+    await expect(deploy(behind.ctx, UNREACHABLE_AFTER_DEPLOY)).rejects.toThrow(
       /configured for static serving but its distribution serves ssr/,
     );
     expect(behind.calls).toEqual([]);

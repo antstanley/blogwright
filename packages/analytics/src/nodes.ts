@@ -77,6 +77,7 @@ import {
   AwsError,
   pollUntil,
   REPRODUCIBLE_ZIP_MTIME,
+  createZip,
   withRetry,
   type DeliveryOutputFormat,
   type DeliverySummary,
@@ -87,7 +88,6 @@ import {
   type S3Client,
   type SecretsManagerClient,
 } from 'blogwright-core';
-import { zipSync } from 'fflate';
 
 import { createAnalyticsClients } from './aws/clients.js';
 import {
@@ -777,9 +777,6 @@ const MAX_INLINE_ZIP_BYTES = 50 * 1024 * 1024;
  * claimed above. See {@link REPRODUCIBLE_ZIP_MTIME}.
  */
 const ZIP_MTIME = REPRODUCIBLE_ZIP_MTIME;
-
-/** The deflate level `packageAndUploadAgent` uses. */
-const ZIP_LEVEL = 6;
 
 /**
  * The prefix Lambda derives a function's log group from, and therefore the
@@ -1480,7 +1477,7 @@ async function readTransformManifest(
 /**
  * The deployment package: the bundled transform, read through the FileSystem
  * port and zipped the way `packageAndUploadAgent` zips the build agent
- * (`packages/cli/src/agent-package.ts:48-53`) - `zipSync` with a fixed `mtime`,
+ * (`packages/cli/src/agent-package.ts`) - core's `createZip` with a fixed `mtime`,
  * so identical bundle bytes always produce identical archive bytes.
  *
  * **Exactly one entry, under the bundle's own name**, never the artifact
@@ -1503,7 +1500,7 @@ async function packTransformBundle(ctx: AnalyticsContext): Promise<Uint8Array> {
   } catch (cause) {
     throw missingArtifact(TRANSFORM_BUNDLE_FILE, cause);
   }
-  const zip = zipSync({ [TRANSFORM_BUNDLE_FILE]: bundle }, { level: ZIP_LEVEL, mtime: ZIP_MTIME });
+  const zip = createZip({ [TRANSFORM_BUNDLE_FILE]: bundle }, { mtime: ZIP_MTIME });
   if (zip.length > MAX_INLINE_ZIP_BYTES) {
     throw new Error(
       `the analytics transform's deployment package is ${zip.length} bytes, over the ${MAX_INLINE_ZIP_BYTES}-byte limit Lambda accepts for a zip sent inline - the code would have to move to an S3 code bucket in ${ANALYTICS_REGION}, which this pipeline deliberately does not have (see MAX_INLINE_ZIP_BYTES)`,

@@ -52,7 +52,7 @@ CLI composition root --> core config, signing, state and ports
   |                                                          |
   |                             CloudFront distribution (S3 + Web Function origins, OAC)
   | generic plugin dispatch
-  +--> bundled PDS --> Secrets Manager / AT Protocol publication
+  +--> optional PDS --> Secrets Manager / AT Protocol publication
   +--> optional analytics --> Firehose transform --> S3 Tables Iceberg
                                                  ^
                                   local DuckDB dashboard/backfill
@@ -76,9 +76,9 @@ CLI composition root --> core config, signing, state and ports
 
 | Package | Responsibility and distribution |
 | --- | --- |
-| `blogwright-core` | Shared config, names, state, graph/SPI vocabulary, transport, AWS clients, filesystem/terminal ports and adapters; published |
+| `blogwright-core` | Shared config, names, state, graph/SPI vocabulary, transport, AWS clients, filesystem/terminal ports and adapters, and the `./rkey` subpath the CLI and PDS re-export; published |
 | `blogwright` (`packages/cli`) | Composition root, graph engine, site nodes, commands, plugin discovery and package management; published, bins `blogwright` and `bw` |
-| `blogwright-pds` | AT Protocol publishing, OAuth and named IAM policy; published and a CLI default dependency |
+| `blogwright-pds` | AT Protocol publishing, OAuth and named IAM policy; published and installed separately |
 | `blogwright-analytics` | Plugin-local AWS clients, transform, nodes, DuckDB adapters and static dashboard; published and installed separately |
 | `blogwright-build-agent` | Private MicroVM HTTP build server, bundled into the CLI |
 | `blogwright-docs` (`docs`) | Private Astro/Starlight documentation site |
@@ -90,10 +90,12 @@ builds its rolldown Lambda bundle and Vite/SvelteKit static app. Root
 [package scripts](../../../package.json), [workspace](../../../pnpm-workspace.yaml)
 and [release group](../../../.changeset/config.json) are authoritative.
 
-Core never imports the CLI or feature packages. Plugins depend on core; feature
-AWS clients remain in their packages. The CLI imports PDS's `syncAfterDeploy`
-directly for production deploys; this explicit exception uses the narrow PDS
-context and adds no lifecycle hook.
+Core never imports the CLI or feature packages. Plugins peer-depend on core
+(`^` the release they were built with), so they share the CLI's copy; feature
+AWS clients remain in their packages. The CLI imports no feature package: PDS's
+post-deploy sync reaches `deploy` through the plugin's `afterDeploy` hook, the
+interface's one lifecycle hook ([plugin architecture](02-plugin-architecture.md)).
+A feature package is installed by the sites that use it (`blogwright plugin add`).
 
 ## Scope summary
 

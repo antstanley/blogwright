@@ -232,8 +232,8 @@ Current discovery scans only names starting with `blogwright-`; accepting a scop
 package name for installation does not make it discoverable.
 
 `plugin list` reports namespace, package, version and owned config key, plus named
-load failures. PDS is discovered from the CLI's bundled dependencies without a
-consumer install. Listing returns 0 even when it reports a failed plugin; unknown
+load failures. Both first-party plugins, PDS included, are discovered only once
+the consumer installs them. Listing returns 0 even when it reports a failed plugin; unknown
 namespaces/actions return 1 with available-action or plugin-list guidance.
 Add/list/remove run without site config or AWS credentials, except when an
 operator chooses resource teardown during removal.
@@ -247,8 +247,7 @@ session without that flag refuses when it cannot ask about a node plugin.
 For scripted teardown run `<plugin> destroy <env> --yes` first, then
 `plugin remove <name> --yes`. Configuration remains for later reuse. A broken
 package can be removed without running its unavailable lifecycle; reinstall it
-when resources still need teardown. Bundled-only PDS cannot be removed from a
-consumer manifest that does not declare it.
+when resources still need teardown.
 
 Generic init asks the plugin's contributor and textually inserts its block into
 existing JSONC, preserving comments and formatting. Existing keys and non-object
@@ -280,7 +279,7 @@ blogwright pds status [env]
 blogwright pds destroy [env] --yes
 ```
 
-PDS is bundled but owns a separate IAM inline policy. Run `pds bootstrap <env>`
+PDS owns a separate IAM inline policy. Run `pds bootstrap <env>`
 once per GitHub OIDC stack to attach `blogwright-pds` to the site's deploy role
 before relying on production post-deploy sync. Site bootstrap must create the
 role first. The policy grants access only to the configured PDS secret; it is

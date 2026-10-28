@@ -30,3 +30,4 @@ export * from './repo-root.js';
 export * from './state.js';
 export * from './tags.js';
 export * from './util.js';
+export * from './zip.js';

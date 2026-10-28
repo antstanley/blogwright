@@ -27,7 +27,7 @@
         "app/src/app.d.ts"
       ],
       "sveltekit": {
-        "config": ["app/svelte.config.js", "app/vite.config.ts"],
+        "config": ["app/vite.config.ts"],
         "entry": ["app/src/routes/**/+{page,layout}{,@*}.{js,ts,svelte}"]
       }
     },
@@ -35,6 +35,7 @@
       "project": "src/**/*.ts",
       "ignoreDependencies": ["blogwright-build-agent"]
     },
-    "packages/build-agent": { "project": "src/**/*.ts" }
+    "packages/build-agent": { "project": "src/**/*.ts" },
+    "packages/size-budget": { "project": "src/**/*.ts", "entry": ["src/bin.ts"] }
   }
 }

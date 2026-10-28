@@ -725,6 +725,62 @@ export async function runPlugin(
   return 0;
 }
 
+/**
+ * Run every installed plugin's `afterDeploy` hook (`blogwright-core`'s
+ * `plugin.ts`) once `deploy` has published the site - the one point at which
+ * a built-in command runs discovery, and only after its own work is done, so
+ * a deploy that fails never loads a plugin.
+ *
+ * Nothing here is fatal, at any step: the site is already live, so a
+ * discovery precondition failing, a plugin failing to load, a plugin's config
+ * block being refused, and a hook rejecting are each reported as one warning
+ * and the deploy still exits 0 - the same contract the pds sync has always
+ * had (`syncAfterDeploy`, `packages/pds/src/commands.ts`). One plugin's
+ * failure never stops the next plugin's hook.
+ *
+ * Each hook gets the same context a dispatched command does: the plugin's own
+ * block resolved through {@link resolvePluginConfig} and the scoped
+ * {@link toPluginContext}, so a hook reads `pluginConfig` and its own state
+ * exactly as its commands do.
+ */
+export async function runAfterDeployHooks(
+  ops: OpsContext,
+  ports: Pick<Ports, 'fs' | 'loader'>,
+): Promise<void> {
+  let plugins: readonly Plugin[];
+  try {
+    const discovered = await discover(await findRepoRoot(ports.fs), cliPackageDir(), ports);
+    for (const failure of discovered.failures) {
+      ops.logger.warn(
+        `${failure.packageName} could not be loaded, so no post-deploy step it adds ran ` +
+          `(deploy unaffected): ${failure.reason}`,
+      );
+    }
+    plugins = discovered.plugins;
+  } catch (err) {
+    ops.logger.warn(
+      `plugin discovery failed, so no plugin post-deploy step ran (deploy unaffected): ` +
+        (err as Error).message,
+    );
+    return;
+  }
+
+  for (const found of plugins) {
+    // Widened to `Plugin<unknown>` without a cast, exactly as `runPlugin` does.
+    const plugin: Plugin<unknown> = found;
+    if (typeof plugin.afterDeploy !== 'function') continue;
+    try {
+      const pluginConfig = resolvePluginConfig(plugin, ops.configDocument);
+      await plugin.afterDeploy(await toPluginContext(ops, plugin.name, pluginConfig));
+    } catch (err) {
+      ops.logger.warn(
+        `plugin "${plugin.name}" post-deploy step failed (deploy unaffected): ` +
+          (err as Error).message,
+      );
+    }
+  }
+}
+
 /*
  * TASK 17 - the built-in `plugin` namespace.
  *

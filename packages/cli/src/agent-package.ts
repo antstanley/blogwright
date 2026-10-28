@@ -5,8 +5,7 @@
  * `ctx.agentDir`; this module touches no Node API directly.
  */
 
-import { REPRODUCIBLE_ZIP_MTIME } from 'blogwright-core';
-import { zipSync, type Zippable } from 'fflate';
+import { createZip, REPRODUCIBLE_ZIP_MTIME } from 'blogwright-core';
 
 import type { OpsContext } from './context.js';
 
@@ -46,12 +45,12 @@ export async function packageAndUploadAgent(
     throw new Error(`agent-manifest.json in ${dir} has no valid hash - rebuild the agent`);
   }
 
-  const entries: Zippable = {
+  const entries = {
     Dockerfile: dockerfile,
     'server.js': server,
     'package.json': new TextEncoder().encode(IMAGE_PACKAGE_JSON),
   };
-  const zip = zipSync(entries, { level: 6, mtime: REPRODUCIBLE_ZIP_MTIME });
+  const zip = createZip(entries, { mtime: REPRODUCIBLE_ZIP_MTIME });
   const key = `build/agent/agent-${hash}.zip`;
 
   await ctx.clients.s3.putObject(ctx.names.bucket, key, zip, 'application/zip');

@@ -1,11 +1,12 @@
-import {
-  fromContainerMetadata,
-  fromEnv,
-  fromHttp,
-  fromIni,
-  fromNodeProviderChain,
-  fromTokenFile,
-} from '@aws-sdk/credential-providers';
+// The individual provider packages, not the `@aws-sdk/credential-providers`
+// umbrella: it re-exports these same functions but also installs the Cognito
+// provider and its client, which nothing here uses.
+import { fromEnv } from '@aws-sdk/credential-provider-env';
+import { fromHttp } from '@aws-sdk/credential-provider-http';
+import { fromIni } from '@aws-sdk/credential-provider-ini';
+import { defaultProvider as fromNodeProviderChain } from '@aws-sdk/credential-provider-node';
+import { fromTokenFile } from '@aws-sdk/credential-provider-web-identity';
+import { fromContainerMetadata } from '@smithy/credential-provider-imds';
 
 export interface AwsCredentials {
   accessKeyId: string;

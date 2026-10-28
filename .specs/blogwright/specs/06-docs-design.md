@@ -23,9 +23,8 @@ introduction. Existing Getting started, Guides and Reference routes remain intac
 ## Navigation and reading
 
 Starlight supplies skip navigation, mobile navigation, search and theme selection.
-The [mobile-menu override](../../../docs/src/components/MobileMenuToggle.astro)
-mirrors the custom element's expanded state to its button; Starlight retains
-responsibility for opening, Escape dismissal, focus return and background inertness.
+The mobile menu is a native popover whose button is its `popovertarget` invoker, so
+the browser exposes the expanded state and handles Escape dismissal and focus return.
 Browser tests exercise menu/search entry, dismissal and focus return.
 
 The [Markdown override](../../../docs/src/components/MarkdownContent.astro) makes

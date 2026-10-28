@@ -32,12 +32,12 @@ export type PdsPorts = PluginPorts;
  * Everything else on `PluginContext` is left out on purpose. `preview`,
  * `names` and `accountId` are host surface pds has never needed.
  * `pluginConfig`, `state`, `store`, `siteState`, `record()` and `save()` are
- * all built at a dispatch boundary that no pds command function runs behind:
- * `deploy` calls `syncAfterDeploy(ctx)` with a plain `OpsContext`
- * (`packages/cli/src/commands.ts`), which has none of them, so picking any
- * of the six would break that call. The plugin's one resource node
- * (`nodes.ts`) takes a full `PluginContext<PdsConfig>` instead, because only
- * the lifecycle verbs have a dispatch boundary to build one.
+ * left out because no pds command function reads them, and leaving them out
+ * keeps `createTestContext` (`packages/pds/src/test-support.ts`) small: the
+ * host hands every command and the `afterDeploy` hook a full `PluginContext`,
+ * which satisfies this `Pick` by plain assignment. The plugin's one resource
+ * node (`nodes.ts`) takes the full `PluginContext<PdsConfig>` instead, because
+ * it reads `siteState`, `names`, `accountId` and `record()`.
  *
  * `Pick`, never `Omit`: an `Omit` of those six dispatch-boundary members
  * from `PluginContext`'s sixteen would drag `preview`, `names` and

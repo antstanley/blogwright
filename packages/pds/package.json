@@ -26,14 +26,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@atproto/oauth-client-node": "^0.4.7",
-    "blogwright-core": "workspace:*"
+    "@atproto/oauth-client-node": "^0.5.13"
+  },
+  "peerDependencies": {
+    "blogwright-core": "workspace:^"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
-    "oxlint": "^1.72.0",
+    "@types/node": "^26.6.5",
+    "blogwright-core": "workspace:*",
+    "oxlint": "^1.90.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^5.0.5"
   },
   "description": "standard.site (AT Protocol) publishing for blogwright: OAuth client, PDS record sync, and URL-derived rkeys",
   "keywords": [
@@ -48,6 +51,6 @@
     "url": "git+https://github.com/antstanley/blogwright.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2"
   }
 }

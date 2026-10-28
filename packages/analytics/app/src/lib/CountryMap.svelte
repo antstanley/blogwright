@@ -36,6 +36,14 @@
     detailOpen = true;
   }
 
+  /**
+   * A country's hover tooltip text. The country's button name starts with it, so
+   * the visible label is part of the accessible name (WCAG 2.5.3 Label in Name).
+   */
+  function countryLabel(name: string, value: number | undefined): string {
+    return `${name}: ${value === undefined ? 'No data' : `${formatCount(value)} requests`}`;
+  }
+
   function fill(value: number | undefined): string {
     if (value === undefined || value <= 0) return 'var(--color-surface-200)';
     return `color-mix(in srgb, var(--color-primary) ${20 + 80 * value / maximum}%, var(--color-surface-200))`;
@@ -78,14 +86,15 @@
         <Svg role="group" aria-label="World map of requests by country. Select a country for daily viewers.">
           {#each countries as country, index (index)}
             {@const value = country.properties.code === '-99' ? undefined : values.get(country.properties.code)}
-            <GeoPath geojson={country} fill={fill(value)} aria-label={`${country.properties.name}: ${value === undefined ? 'No data' : `${formatCount(value)} requests`}`}>
+            {@const label = countryLabel(country.properties.name, value)}
+            <GeoPath geojson={country} fill={fill(value)} aria-label={label}>
               {#snippet children({ geoPath })}
                 <path d={geoPath?.(country) ?? ''} style:fill={fill(value)}
                   class:country-search-muted={highlightedCountry !== undefined}
-                  role="button" tabindex="0" aria-label={`View ${country.properties.name} details`}
+                  role="button" tabindex="0" aria-label={`${label}, view details`}
                   onclick={(event) => selectCountry(country, event.currentTarget)}
                   onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectCountry(country, event.currentTarget); } }}>
-                  <title>{country.properties.name}: {value === undefined ? 'No data' : `${formatCount(value)} requests`}</title>
+                  <title>{label}</title>
                 </path>
               {/snippet}
             </GeoPath>
@@ -94,10 +103,10 @@
             <GeoPath geojson={highlightedCountry}>
               {#snippet children({ geoPath })}
                 <path d={geoPath?.(highlightedCountry) ?? ''} class="country-search-highlight"
-                  role="button" tabindex="0" aria-label={`View ${highlightedCountry.properties.name} details`}
+                  role="button" tabindex="0" aria-label={`${countryLabel(highlightedCountry.properties.name, highlightedValue)}, view details`}
                   onclick={(event) => selectCountry(highlightedCountry, event.currentTarget)}
                   onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectCountry(highlightedCountry, event.currentTarget); } }}>
-                  <title>{highlightedCountry.properties.name}: {highlightedValue === undefined ? 'No data' : `${formatCount(highlightedValue)} requests`}</title>
+                  <title>{countryLabel(highlightedCountry.properties.name, highlightedValue)}</title>
                 </path>
               {/snippet}
             </GeoPath>

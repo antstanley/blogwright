@@ -68,7 +68,7 @@ Plugins add features beyond deploying. Each one has its own commands, config blo
 | Plugin | What it does | How you get it |
 | --- | --- | --- |
 | [Analytics](/plugins/analytics/) | Page views from CloudFront access logs, with a local dashboard. No tracking script, no cookies. | `blogwright plugin add analytics` |
-| [standard.site](/plugins/standard-site/) | Mirrors blog posts to your AT Protocol PDS | Bundled; add a `pds` config block |
+| [standard.site](/plugins/standard-site/) | Mirrors blog posts to your AT Protocol PDS | `blogwright plugin add pds` |
 
 See [Plugins overview](/plugins/overview/) for how plugins install, store state and tear down.
 
@@ -80,7 +80,7 @@ When you run `blogwright deploy`:
 2. A MicroVM starts from the builder image made at `bootstrap`, pulls the zip, and runs `pnpm install && pnpm build`. Build logs stream to your terminal and CloudWatch.
 3. The build output syncs to `site/`. Each file's MD5 is compared with the live object's ETag, so only changed files upload and only their paths are invalidated.
 4. For an SSR app, the server package becomes a new Web Function revision. The CLI waits for it to go active and probes it before removing stale files and invalidating the cache.
-5. On a successful **production** deploy with a `pds` block, standard.site records re-sync. A failure here warns but never fails the deploy.
+5. Each installed plugin's post-deploy step runs. With [standard.site](/plugins/standard-site/) installed, a **production** deploy with a `pds` block re-syncs its records. A failure here warns but never fails the deploy.
 
 One S3 bucket per environment (`<env>-<siteName>-<accountId>`) holds everything: `build/` for source zips and manifests, `site/` for the live files (private to CloudFront), and `state/<env>.json` for the infrastructure state. The [architecture reference](/reference/architecture/) has the full picture.
 
@@ -94,7 +94,7 @@ Infrastructure commands take an optional environment (`[env]` or `--env`) that d
 | --- | --- |
 | `blogwright` | The CLI (`blogwright` / `bw`): graph engine, resource nodes, commands, plugin dispatch. Also exports `blogwright/rkey`. |
 | `blogwright-core` | SigV4 transport, per-service AWS clients, config, S3 state store, shared ports |
-| `blogwright-pds` | The standard.site plugin. Ships with the CLI. |
+| `blogwright-pds` | The standard.site plugin. Installed on demand. |
 | `blogwright-analytics` | The analytics plugin. Installed on demand. |
 | `blogwright-build-agent` | The build server inside the builder MicroVM. Not published; its bundle ships inside the CLI. |
 

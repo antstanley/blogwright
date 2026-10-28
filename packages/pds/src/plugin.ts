@@ -1,14 +1,14 @@
 /**
  * The SPI declaration this package default-exports: the `pds` namespace, the
  * six actions `blogwright pds <action>` has always answered, the `pds` config
- * key with this package's own validator, and the one resource node
- * (`nodes.ts`) the plugin contributes to the graph engine.
+ * key with this package's own validator, the one resource node (`nodes.ts`)
+ * the plugin contributes to the graph engine, and the `afterDeploy` hook that
+ * mirrors a production deploy to the PDS (`syncAfterDeploy`).
  *
  * Every command here is a WRAPPER and nothing more. It parses its own flags
  * out of the token array the host hands it and calls the matching function in
  * `commands.ts`, whose signature is unchanged and which stays individually
- * exported - `deploy` still calls `syncAfterDeploy(ctx)` with a plain
- * `OpsContext` and never goes through this table.
+ * exported.
  *
  * The context boundary is a plain assignment, not a conversion: every command
  * function takes `PdsContext`, which `context.ts` declares as a `Pick` over
@@ -30,7 +30,15 @@
 
 import type { PdsConfig, Plugin, PluginCommand } from 'blogwright-core';
 
-import { init, keygen, login, secretDelete, secretStatus, sync } from './commands.js';
+import {
+  init,
+  keygen,
+  login,
+  secretDelete,
+  secretStatus,
+  sync,
+  syncAfterDeploy,
+} from './commands.js';
 import { validatePdsConfig } from './config.js';
 import { buildPdsNodes } from './nodes.js';
 
@@ -167,10 +175,11 @@ function pdsCommands(fns: PdsCommandFunctions): PluginCommand<PdsConfig>[] {
  * only - see {@link PdsCommandFunctions}; every consumer uses the package's
  * default export, which is {@link createPdsPlugin} called with the real ones.
  *
- * `validateConfig` and `nodes` are the imported functions THEMSELVES, not
- * wrappers around them: this package owns `validatePdsConfig` and
- * `buildPdsNodes` outright, and a wrapper is the one place a filter or a
- * re-ordering could later appear between the host and what those two return.
+ * `validateConfig`, `nodes` and `afterDeploy` are the imported functions
+ * THEMSELVES, not wrappers around them: this package owns `validatePdsConfig`,
+ * `buildPdsNodes` and `syncAfterDeploy` outright, and a wrapper is the one
+ * place a filter or a re-ordering could later appear between the host and
+ * what those return.
  */
 export function createPdsPlugin(fns: PdsCommandFunctions = pdsCommandFunctions): Plugin<PdsConfig> {
   return {
@@ -180,17 +189,16 @@ export function createPdsPlugin(fns: PdsCommandFunctions = pdsCommandFunctions):
     configKey: PDS_CONFIG_KEY,
     validateConfig: validatePdsConfig,
     nodes: buildPdsNodes,
+    afterDeploy: syncAfterDeploy,
   };
 }
 
 /**
- * The package's default export, and since task 29 the LIVE path for
- * `blogwright pds <action>`: task 26 added the `blogwright.plugin` manifest
- * field to this package's `package.json`, which is what makes discovery
- * import it at all, and task 29 deleted the CLI's `runPds` branch that used
- * to answer the namespace ahead of plugin dispatch. Remove that manifest
- * field and the namespace does not fall back to anything - it stops
- * existing.
+ * The package's default export, and the ONLY path for `blogwright pds
+ * <action>` and the post-deploy sync: the `blogwright.plugin` manifest field
+ * in this package's `package.json` is what makes discovery import it at all,
+ * once a site has installed it (`blogwright plugin add pds`). Remove that
+ * manifest field and neither falls back to anything - both stop existing.
  */
 const pdsPlugin: Plugin<PdsConfig> = createPdsPlugin();
 

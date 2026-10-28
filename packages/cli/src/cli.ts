@@ -14,7 +14,12 @@ import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from 
 import { initSite } from './init.js';
 import { KNOWN_COMMANDS } from './known-commands.js';
 import { createLogger, type Logger } from './logger.js';
-import { genericLifecycleActions, runPlugin, runPluginNamespace } from './plugin-commands.js';
+import {
+  genericLifecycleActions,
+  runAfterDeployHooks,
+  runPlugin,
+  runPluginNamespace,
+} from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { AwsLogin, PackageManager, Ports } from './ports.js';
 import { whoami } from './whoami.js';
@@ -278,9 +283,14 @@ export type ContextFactory = (opts: ContextOptions) => Promise<OpsContext>;
  * `cli.test.ts` pins directly), and likewise `rollback`, `delete`,
  * `destroy`, `history`, `logs` and `preview` dispatched successfully. A
  * plugin NAMESPACE is not a built-in and never was: dispatching one runs
- * discovery by construction (case 1), which is the whole reason a bundled
+ * discovery by construction (case 1), which is the whole reason a
  * plugin's actions can reach `--help`, and its own refusals, once no
  * branch in this module knows any namespace by name (task 29).
+ *
+ * `deploy` is the one built-in with a fifth, late path: once the site is
+ * published it calls this factory to run each installed plugin's
+ * `afterDeploy` hook (`runAfterDeployHooks`, `plugin-commands.ts`). A deploy
+ * that fails before then - and every other built-in - never reaches it.
  */
 export type DiscoveryPortsFactory = () => Pick<Ports, 'fs' | 'loader'>;
 
@@ -468,10 +478,10 @@ export async function main(
     //
     // TASK 29 - this is now the ONLY route into a plugin's namespace. The
     // hardcoded branch that used to sit immediately above this membership
-    // test, ahead of it precisely so it would win, is gone: the bundled
-    // plugin the CLI ships in its own `dependencies` is discovered and
-    // dispatched here exactly like an installed one, which is why the name
-    // it claims stays out of `RESERVED_COMMANDS` (`known-commands.ts`).
+    // test, ahead of it precisely so it would win, is gone: the pds plugin a
+    // site installs is discovered and dispatched here exactly like any
+    // other, which is why the name it claims stays out of
+    // `RESERVED_COMMANDS` (`known-commands.ts`).
     // This module knows no namespace by name any more, and adding one back
     // would re-open the split where `--help` advertised verbs the
     // hand-rolled branch refused.
@@ -511,7 +521,12 @@ export async function main(
       await commands.bootstrap(ctx, undefined, { switchMode: values['switch-mode'] });
       break;
     case 'deploy':
-      await commands.deploy(ctx, { refresh: values.refresh });
+      // Discovery runs only once the site is live, through the same factory
+      // plugin dispatch uses - a deploy that fails never loads a plugin.
+      await commands.deploy(ctx, {
+        refresh: values.refresh,
+        afterDeploy: (deployed) => runAfterDeployHooks(deployed, makeDiscoveryPorts()),
+      });
       break;
     case 'rollback':
       if (!hash) throw new Error('rollback requires a <hash>');

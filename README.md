@@ -87,7 +87,7 @@ blogwright delete                           # empty site/ only
 blogwright destroy --yes                    # tear down site infrastructure (plugin state blocks)
 
 blogwright preview …                        # per-PR preview stack
-blogwright pds …                            # standard.site (AT Protocol) publishing
+blogwright pds …                            # standard.site publishing (after `plugin add pds`)
 
 blogwright plugin add <name>                # install a plugin, pinned to this version
 blogwright plugin list                      # list installed plugins and their versions
@@ -121,7 +121,9 @@ Plugin resources use `state/<env>.<plugin>.json` in the site bucket. Site bootst
 warns to re-run each recorded plugin's bootstrap for that environment; site destroy
 and preview teardown refuse until plugin teardown removes those keys. For GitHub
 OIDC publishing, run `blogwright pds bootstrap <env>` once per eligible stack to
-install PDS's own secret-access policy. `plugin remove --yes` uninstalls while
+install PDS's own secret-access policy. PDS is not installed with the CLI: a site
+that publishes to standard.site runs `blogwright plugin add pds` once, and its
+post-deploy record sync then runs through the plugin's `afterDeploy` hook. `plugin remove --yes` uninstalls while
 **keeping** resources; run `<plugin> destroy <env> --yes` first when teardown is wanted.
 
 The optional [analytics plugin](https://blogwright.iamstan.dev/plugins/analytics/) provides a fourteen-node
@@ -165,9 +167,9 @@ start from [blogwright.iamstan.dev/llms.txt](https://blogwright.iamstan.dev/llms
 
 | Package                  | What it is                                                                                                       |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, dispatch - plus the `blogwright/rkey` subpath export (a re-export of `blogwright-pds/rkey`) |
-| `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store, shared ports (filesystem, terminal)          |
-| `blogwright-pds`         | standard.site (AT Protocol) publishing: OAuth client, secret store, PDS record sync, URL-derived rkeys           |
+| `blogwright`             | The CLI (`blogwright` / `bw` bins): graph engine, resource nodes, commands, dispatch - plus the `blogwright/rkey` subpath export (a re-export of `blogwright-core/rkey`) |
+| `blogwright-core`        | SigV4 transport + per-service HTTP clients, config, S3 state store, shared ports, URL-derived rkeys             |
+| `blogwright-pds`         | Optional plugin: standard.site (AT Protocol) publishing - OAuth client, secret store, PDS record sync            |
 | `blogwright-analytics`   | Optional plugin: CloudFront/Firehose to S3 Tables Iceberg, transform Lambda and local DuckDB dashboard |
 | `blogwright-build-agent` | HTTP build server baked into the builder MicroVM image (not published - its bundle ships inside the CLI package) |
 

@@ -19,16 +19,19 @@
 import { join } from 'node:path';
 
 import {
+  createMemoryFileSystem,
   createNodeFileSystem,
   createScriptedTerminal,
   findRepoRoot,
   parseConfig,
   parseConfigDocument,
+  stripColors,
   type FileSystem,
   type Plugin,
   type PluginContext,
   type ResourceNode,
 } from 'blogwright-core';
+import pdsPlugin from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
 
 import { main, type PackageManagerFactory } from './cli.js';
@@ -37,6 +40,7 @@ import { cliPackageDir, cliVersion, type ContextOptions, type OpsContext } from 
 import { createLogger } from './logger.js';
 import { buildNodes } from './nodes.js';
 import {
+  runAfterDeployHooks,
   runPlugin,
   runPluginNamespace,
   toPluginContext,
@@ -2845,5 +2849,146 @@ describe("the site's own destroy, with a bootstrapped twelve-node plugin", () =>
     expect([...bucket.objects.keys()]).toEqual(['state/production.analytics.json']);
     expect(run.deleted).toEqual([]);
     expect(run.world.size).toBe(ANALYTICS_GRAPH.length);
+  });
+});
+
+/** A plugin whose `afterDeploy` records the context it was handed. */
+function makeHookPlugin(
+  name: string,
+  seen: PluginContext<unknown>[],
+  overrides: Partial<Plugin<unknown>> = {},
+): Plugin<unknown> {
+  return {
+    name,
+    description: `${name} plugin`,
+    commands: [],
+    afterDeploy: async (ctx) => {
+      seen.push(ctx);
+    },
+    ...overrides,
+  };
+}
+
+describe('runAfterDeployHooks', () => {
+  function deployedContext(
+    terminal: ReturnType<typeof createScriptedTerminal>,
+    overrides: TestContextOverrides = {},
+  ): OpsContext {
+    return createTestContext({
+      env: 'production',
+      logger: createLogger(terminal),
+      clients: { s3: scopedStateOnlyS3() },
+      ...overrides,
+    });
+  }
+
+  it("runs each installed plugin's hook with its own validated block and scoped state, skipping plugins without one", async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const seen: PluginContext<unknown>[] = [];
+    const ports = await buildDiscoveryPorts([
+      {
+        packageName: 'blogwright-hooked',
+        namespace: 'hooked',
+        plugin: makeHookPlugin('hooked', seen, {
+          configKey: 'hooked',
+          validateConfig: (raw) => ({ ...(raw as object), defaulted: true }),
+        }),
+      },
+      { packageName: 'blogwright-plain', namespace: 'plain', plugin: makeFakePlugin([]) },
+    ]);
+    const ops = deployedContext(terminal, { configDocument: { hooked: { flag: 1 } } });
+
+    await runAfterDeployHooks(ops, ports);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.pluginConfig).toEqual({ flag: 1, defaulted: true });
+    expect(seen[0]?.env).toBe('production');
+    expect(seen[0]?.siteState).toBe(ops.state);
+    expect(seen[0]?.state).not.toBe(ops.state);
+    expect(terminal.errors).toEqual([]);
+  });
+
+  it('warns and moves on when a hook rejects, a block is refused or a plugin fails to load - and never throws', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const seen: PluginContext<unknown>[] = [];
+    const ports = await withBrokenPlugin(
+      await buildDiscoveryPorts([
+        {
+          packageName: 'blogwright-failing',
+          namespace: 'failing',
+          plugin: makeHookPlugin('failing', seen, {
+            afterDeploy: async () => {
+              throw new Error('PDS unreachable');
+            },
+          }),
+        },
+        {
+          packageName: 'blogwright-refusing',
+          namespace: 'refusing',
+          plugin: makeHookPlugin('refusing', seen, {
+            configKey: 'refusing',
+            validateConfig: () => {
+              throw new Error('config.refusing.name is required');
+            },
+          }),
+        },
+        {
+          packageName: 'blogwright-working',
+          namespace: 'working',
+          plugin: makeHookPlugin('working', seen),
+        },
+      ]),
+      'blogwright-broken',
+    );
+
+    await expect(runAfterDeployHooks(deployedContext(terminal), ports)).resolves.toBeUndefined();
+
+    // The working plugin still ran, after the failing one was reported.
+    expect(seen.map((ctx) => ctx.env)).toEqual(['production']);
+    const warnings = terminal.errors.map(stripColors).join('\n');
+    expect(warnings).toContain('blogwright-broken could not be loaded');
+    expect(warnings).toContain(
+      'plugin "failing" post-deploy step failed (deploy unaffected): PDS unreachable',
+    );
+    expect(warnings).toContain(
+      'plugin "refusing" post-deploy step failed (deploy unaffected): plugin "refusing" rejected the "refusing" config block: config.refusing.name is required',
+    );
+  });
+
+  it('runs no hook, and warns, when discovery cannot read the repo', async () => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { loader } = await buildDiscoveryPorts([]);
+    // A repo root with no package.json: discovery's own precondition fails.
+    const fs = createMemoryFileSystem({ [`${await realRepoRoot()}/.jj`]: '' });
+
+    await runAfterDeployHooks(deployedContext(terminal), { fs, loader });
+
+    expect(terminal.errors.map(stripColors).join('\n')).toContain(
+      'plugin discovery failed, so no plugin post-deploy step ran (deploy unaffected)',
+    );
+  });
+
+  it("reaches the real pds plugin's sync for a production site with a pds block", async () => {
+    // The real plugin object: `afterDeploy` is `syncAfterDeploy`, whose own
+    // "not initialised" line is emitted only past its production and
+    // configured-block guards. The memory filesystem carries no
+    // `atproto.json`, which is a site that has never run `pds init`.
+    const terminal = createScriptedTerminal({ interactive: false });
+    const ports = await buildDiscoveryPorts([
+      { packageName: 'blogwright-pds', namespace: 'pds', plugin: pdsPlugin },
+    ]);
+    const pds = { name: 'Example', secretName: 'example/atproto' };
+    const ops = deployedContext(terminal, {
+      config: { pds },
+      configDocument: { siteName: 'example', pds },
+      ports: { fs: ports.fs },
+    });
+
+    await runAfterDeployHooks(ops, ports);
+
+    expect(terminal.writes.map(stripColors).join('\n')).toContain(
+      'standard.site publishing not initialised (`blogwright pds init`) - skipping',
+    );
+    expect(terminal.errors).toEqual([]);
   });
 });
