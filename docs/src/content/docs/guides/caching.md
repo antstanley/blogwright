@@ -79,13 +79,16 @@ In an [SSR environment](/guides/server-rendered-sites/), the rules apply to the 
 
 A leading `**/` also matches top-level files, so `**/*.html` matches `/index.html`. Character classes (`[ab]`), braces (`{a,b}`) and backslashes are rejected. List alternatives as separate patterns instead.
 
+Patterns match the decoded path, exactly as the file is named in the build output. Write non-ASCII names as themselves (`/blog/café/*.html`), never percent-encoded: a pattern containing an escape such as `%20` or `%C3%A9` is rejected. A `?` matches one character, including one outside the Basic Multilingual Plane such as an emoji.
+
 ### Validation
 
 The config fails to load, naming the rule and pattern, when:
 
 - `cacheControl` is not an array, a rule is not an object, a rule has a key other than `match` and `value`, or `match` is empty.
 - `value` is not a valid `Cache-Control` value: comma-separated directives such as `max-age=3600` or `private="set-cookie"`.
-- A pattern can never match. That covers a pattern that does not start with `/` or `**`, one that ends in `/` or has an empty segment, a `**` inside a segment, and a pattern an earlier rule already covers. A pattern counts as covered when it repeats an earlier one, follows a match-everything pattern (`**`), sits under an earlier `/<dir>/**`, or is a literal path an earlier pattern matches. Overlaps between two wildcard patterns outside these shapes, such as `**/*.html` followed by `/blog/*.html`, are not detected.
+- A pattern can never match. That covers a pattern that does not start with `/` or `**`, one that ends in `/` or has an empty segment, a `.` or `..` segment, a percent-encoded character, a `**` inside a segment, and a pattern an earlier rule already covers. A pattern counts as covered when it repeats an earlier one, follows a match-everything pattern (`**` or `**/*`), sits under an earlier `/<dir>/**` (or `/<dir>/**/*`), or is a literal path an earlier pattern matches. Overlaps between two wildcard patterns outside these shapes, such as `**/*.html` followed by `/blog/*.html`, are not detected.
+- A pattern is redundant within its own rule: it repeats, or is covered by, an earlier pattern in the same `match` list, by the same shapes as above.
 
 ## Error responses and the 404 page
 

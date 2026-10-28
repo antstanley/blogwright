@@ -51,6 +51,16 @@ const CACHE_CONTROL_VALUE = new RegExp(`^\\s*${DIRECTIVE}(?:\\s*,\\s*${DIRECTIVE
 /** Glob syntax deliberately not supported, so a pattern never means something unexpected. */
 const UNSUPPORTED_GLOB_CHARACTERS = /[[\]{}\\]/;
 
+/**
+ * A percent-encoded octet (`%20`, `%C3`). Patterns match the build output's
+ * file paths, which are never encoded, so an escape would only ever match a
+ * file whose name literally contains it.
+ */
+const PERCENT_ENCODED = /%[0-9A-Fa-f]{2}/;
+
+/** Segments a built file's path never contains: the walk yields normalised paths. */
+const DOT_SEGMENTS = new Set(['.', '..']);
+
 /** A validated pattern, compiled once. */
 interface CompiledPattern {
   /** As written in the config, for error messages. */
@@ -58,6 +68,12 @@ interface CompiledPattern {
   /** With a leading `**` given its implied `/`, so every pattern starts with `/`. */
   rooted: string;
   regex: RegExp;
+  /**
+   * The directory (`/`, `/_astro/`) under which this pattern matches every
+   * file - set for `**` and `/<dir>/**`, also spelled with a trailing `/*`
+   * after the `**` - or undefined when it matches only some of them.
+   */
+  catchAllPrefix: string | undefined;
   label: string;
 }
 
@@ -69,7 +85,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Validate a raw `cacheControl` list and return it normalised (`match` always
  * an array). Rejects malformed rules and any pattern that can never match:
  * one no URL path can satisfy, or one an earlier rule's pattern already
- * covers - the first matching rule wins, so a later rule never sees it.
+ * covers - the first matching rule wins, so a later rule never sees it. A
+ * pattern covered by an earlier pattern of its own rule is rejected too.
  */
 export function parseCacheControlRules(raw: unknown): CacheControlRule[] {
   if (!Array.isArray(raw)) {
@@ -85,7 +102,10 @@ export function parseCacheControlRules(raw: unknown): CacheControlRule[] {
     const compiled = rule.match.map((pattern, i) =>
       compilePattern(pattern, `config.cacheControl[${index}].match[${i}]`),
     );
-    for (const pattern of compiled) rejectShadowedPattern(pattern, earlier);
+    for (const [i, pattern] of compiled.entries()) {
+      rejectRedundantPattern(pattern, compiled.slice(0, i));
+      rejectShadowedPattern(pattern, earlier);
+    }
     earlier.push(...compiled);
     rules.push(rule);
   }
@@ -145,6 +165,12 @@ function compilePattern(source: string, label: string): CompiledPattern {
         'list alternatives as separate patterns',
     );
   }
+  if (PERCENT_ENCODED.test(source)) {
+    throw new Error(
+      `${label} ${quoted} can never match: patterns match the decoded file path, so write the ` +
+        'character itself ("/café.html", not "/caf%C3%A9.html")',
+    );
+  }
   const rooted = source.startsWith('/') ? source : `/${source}`;
   const segments = rooted.slice(1).split('/');
   if (segments.includes('')) {
@@ -154,13 +180,44 @@ function compilePattern(source: string, label: string): CompiledPattern {
         '".../index.html" or ".../**"',
     );
   }
+  if (segments.some((segment) => DOT_SEGMENTS.has(segment))) {
+    throw new Error(
+      `${label} ${quoted} can never match: built file paths have no "." or ".." segments - ` +
+        'write the path they resolve to',
+    );
+  }
   if (segments.some((segment) => segment.includes('**') && segment !== '**')) {
     throw new Error(
       `${label} ${quoted}: "**" must be a whole path segment ("/a/**/b"); ` +
         'use "*" to match within one segment',
     );
   }
-  return { source, rooted, regex: segmentsToRegExp(segments), label };
+  return {
+    source,
+    rooted,
+    regex: segmentsToRegExp(segments),
+    catchAllPrefix: catchAllPrefix(segments),
+    label,
+  };
+}
+
+/**
+ * The directory under which the pattern matches every file: a literal head
+ * followed by `**` segments and a final `**` or `*` (`*` matches any name,
+ * and `**` already spans the directories before it). `/a/*` alone is not
+ * one - it misses `/a/b/c`.
+ */
+function catchAllPrefix(segments: string[]): string | undefined {
+  const firstWildcard = segments.findIndex(hasWildcard);
+  if (firstWildcard === -1 || segments[firstWildcard] !== '**') return undefined;
+  const tail = segments.slice(firstWildcard);
+  const last = tail.at(-1);
+  const spansDirectories = tail.slice(0, -1).every((segment) => segment === '**');
+  if (!spansDirectories || (last !== '**' && last !== '*')) return undefined;
+  return `/${segments
+    .slice(0, firstWildcard)
+    .map((segment) => `${segment}/`)
+    .join('')}`;
 }
 
 /**
@@ -176,7 +233,8 @@ function segmentsToRegExp(segments: string[]): RegExp {
       return `/${segmentToRegExp(segment)}`;
     })
     .join('');
-  return new RegExp(`^${body}$`);
+  // `u`: "?" and "*" step over whole code points, so "?" matches one emoji.
+  return new RegExp(`^${body}$`, 'u');
 }
 
 function segmentToRegExp(segment: string): string {
@@ -193,12 +251,13 @@ function hasWildcard(pattern: string): boolean {
 
 /**
  * Reject a pattern an earlier rule always matches first. Covered: a repeated
- * pattern, anything after a match-everything pattern or under an earlier
- * literal `<dir>/**`, and a literal path an earlier pattern matches. Overlaps
- * between two wildcard patterns that are not one of these shapes are allowed.
+ * pattern, anything after a match-everything pattern (`**`, `**\/*`) or under
+ * an earlier literal `<dir>/**` (or `<dir>/**\/*`), and a literal path an
+ * earlier pattern matches. Overlaps between two wildcard patterns that are
+ * not one of these shapes are allowed.
  */
 function rejectShadowedPattern(pattern: CompiledPattern, earlier: CompiledPattern[]): void {
-  const shadowing = earlier.find((previous) => shadows(previous, pattern.rooted));
+  const shadowing = earlier.find((previous) => covers(previous, pattern.rooted));
   if (shadowing === undefined) return;
   throw new Error(
     `${pattern.label} ${JSON.stringify(pattern.source)} can never match: ${shadowing.label} ` +
@@ -207,12 +266,24 @@ function rejectShadowedPattern(pattern: CompiledPattern, earlier: CompiledPatter
   );
 }
 
-function shadows(previous: CompiledPattern, rooted: string): boolean {
+/**
+ * Reject a pattern an earlier pattern of the same rule already covers: it
+ * changes nothing, and is most likely a typo for a different path.
+ */
+function rejectRedundantPattern(pattern: CompiledPattern, siblings: CompiledPattern[]): void {
+  const covering = siblings.find((previous) => covers(previous, pattern.rooted));
+  if (covering === undefined) return;
+  throw new Error(
+    `${pattern.label} ${JSON.stringify(pattern.source)} is redundant: ${covering.label} ` +
+      `${JSON.stringify(covering.source)} in the same rule already matches every path it would - ` +
+      'remove it',
+  );
+}
+
+function covers(previous: CompiledPattern, rooted: string): boolean {
   if (previous.rooted === rooted) return true;
   if (!hasWildcard(rooted)) return previous.regex.test(rooted);
-  if (!previous.rooted.endsWith('/**')) return false;
-  const directory = previous.rooted.slice(0, -'**'.length);
-  return !hasWildcard(directory) && rooted.startsWith(directory);
+  return previous.catchAllPrefix !== undefined && rooted.startsWith(previous.catchAllPrefix);
 }
 
 /**

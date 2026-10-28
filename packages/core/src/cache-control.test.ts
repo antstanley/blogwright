@@ -67,6 +67,18 @@ describe('createCacheControlLookup', () => {
     expect(find('/img/logo-ab.png')).toBeUndefined();
   });
 
+  it('treats "?" as one code point, so it matches a character outside the BMP', () => {
+    const find = lookup([{ match: '/icons/?.svg', value: 'x' }]);
+    expect(find('/icons/\u{1F600}.svg')).toBe('x');
+    expect(find('/icons/é.svg')).toBe('x');
+    expect(find('/icons/ab.svg')).toBeUndefined();
+  });
+
+  it('matches non-ASCII file names written as themselves', () => {
+    const find = lookup([{ match: '/blog/café/*.html', value: 'x' }]);
+    expect(find('/blog/café/index.html')).toBe('x');
+  });
+
   it('matches regex metacharacters in a pattern literally', () => {
     const find = lookup([{ match: '/a+b.(1).js', value: 'x' }]);
     expect(find('/a+b.(1).js')).toBe('x');
@@ -151,6 +163,12 @@ describe('parseCacheControlRules', () => {
       ['a character class', '/img/[ab].png', /unsupported syntax/],
       ['a brace alternative', '/{a,b}.js', /unsupported syntax/],
       ['a backslash', '/a\\b.js', /unsupported syntax/],
+      ['a "." segment', '/a/./b.html', /no "\." or "\.\." segments/],
+      ['a ".." segment', '/a/../b.html', /no "\." or "\.\." segments/],
+      ['a trailing ".." segment', '/a/..', /no "\." or "\.\." segments/],
+      ['a percent-encoded space', '/a%20b.html', /decoded file path/],
+      ['percent-encoded UTF-8', '/caf%C3%A9.html', /decoded file path/],
+      ['a lowercase escape', '/caf%c3%a9.html', /decoded file path/],
     ])('rejects %s', (_label, pattern, message) => {
       expect(() => parseCacheControlRules([{ match: pattern, value: SHORT }])).toThrow(message);
     });
@@ -171,6 +189,40 @@ describe('parseCacheControlRules', () => {
           { match: '**/*.html', value: LONG },
         ]),
       ).toThrow(/can never match/);
+    });
+
+    it.each([['**/*'], ['/**/*'], ['/**/**'], ['/**/**/*']])(
+      'treats %s as a catch-all, rejecting any rule after it',
+      (catchAll) => {
+        for (const later of ['/_astro/**', '**/*.html', '/blog/*']) {
+          expect(() =>
+            parseCacheControlRules([
+              { match: catchAll, value: SHORT },
+              { match: later, value: LONG },
+            ]),
+          ).toThrow(/cacheControl\[1\]\.match\[0\] .* can never match/);
+        }
+      },
+    );
+
+    it('rejects a pattern under an earlier "/<dir>/**/*", the same as "/<dir>/**"', () => {
+      expect(() =>
+        parseCacheControlRules([
+          { match: '/_astro/**/*', value: LONG },
+          { match: '/_astro/fonts/*.woff2', value: SHORT },
+        ]),
+      ).toThrow(/"\/_astro\/fonts\/\*\.woff2" can never match/);
+    });
+
+    it('does not treat a one-level "/<dir>/*" or a filtered "**/*.js" as a catch-all', () => {
+      expect(() =>
+        parseCacheControlRules([
+          { match: '/_astro/*', value: LONG },
+          { match: '/_astro/fonts/*.woff2', value: SHORT },
+          { match: '**/*.js', value: SHORT },
+          { match: '/app/*.css', value: LONG },
+        ]),
+      ).not.toThrow();
     });
 
     it('rejects a pattern under an earlier literal directory wildcard', () => {
@@ -198,6 +250,33 @@ describe('parseCacheControlRules', () => {
           { match: '/sw.js', value: 'no-store' },
         ]),
       ).toThrow(/can never match/);
+    });
+
+    it('rejects a pattern repeated within one rule', () => {
+      expect(() =>
+        parseCacheControlRules([{ match: ['/sw.js', '/manifest.json', '/sw.js'], value: SHORT }]),
+      ).toThrow(
+        'config.cacheControl[0].match[2] "/sw.js" is redundant: ' +
+          'config.cacheControl[0].match[0] "/sw.js" in the same rule already matches',
+      );
+    });
+
+    it('rejects a pattern an earlier pattern of the same rule already covers', () => {
+      expect(() =>
+        parseCacheControlRules([{ match: ['/_astro/**', '/_astro/app.js'], value: LONG }]),
+      ).toThrow(/match\[1\] "\/_astro\/app\.js" is redundant/);
+      expect(() => parseCacheControlRules([{ match: ['**', '/x/**'], value: LONG }])).toThrow(
+        /is redundant/,
+      );
+    });
+
+    it('accepts distinct patterns within one rule, in either order', () => {
+      expect(() =>
+        parseCacheControlRules([
+          { match: ['/_app/immutable/**', '/_astro/**'], value: LONG },
+          { match: ['/sw.js', '/manifest.webmanifest'], value: SHORT },
+        ]),
+      ).not.toThrow();
     });
 
     it('accepts the specific rule when it comes first', () => {
