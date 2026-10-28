@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -7,6 +8,7 @@ import {
   AwsError,
   entryShim,
   mergeConfig,
+  type ObjectMetadata,
   type S3Client,
   type SsrShimConfig,
 } from 'blogwright-core';
@@ -187,28 +189,38 @@ describe('createSiteUploader (issue #7 fail-soft tagging)', () => {
   }
 
   function fakeS3(failTagged: boolean) {
-    const puts: Array<{ key: string; tags: Record<string, string> | undefined }> = [];
+    const puts: Array<{
+      key: string;
+      tags: Record<string, string> | undefined;
+      cacheControl?: string | undefined;
+    }> = [];
     const s3 = {
       putObject: async (
         _b: string,
         key: string,
         _c: Uint8Array,
         _t: string,
-        tags?: Record<string, string>,
+        metadata: ObjectMetadata = {},
       ) => {
-        if (failTagged && tags) throw denied();
-        puts.push({ key, tags });
+        if (failTagged && metadata.tags) throw denied();
+        puts.push({
+          key,
+          tags: metadata.tags,
+          ...(metadata.cacheControl !== undefined ? { cacheControl: metadata.cacheControl } : {}),
+        });
       },
     } as unknown as S3Client;
     return { s3, puts };
   }
+
+  const html = (tags: Record<string, string> | undefined) => ({ contentType: 'text/html', tags });
 
   it('tags normally when the role is allowed to', async () => {
     const { s3, puts } = fakeS3(false);
     const logs: string[] = [];
     const upload = createSiteUploader(s3, (l) => logs.push(l));
 
-    await upload('b', 'site/a.html', CONTENT, 'text/html', TAGS);
+    await upload('b', 'site/a.html', CONTENT, html(TAGS));
 
     expect(puts).toEqual([{ key: 'site/a.html', tags: TAGS }]);
     expect(logs).toEqual([]);
@@ -219,8 +231,8 @@ describe('createSiteUploader (issue #7 fail-soft tagging)', () => {
     const logs: string[] = [];
     const upload = createSiteUploader(s3, (l) => logs.push(l));
 
-    await upload('b', 'site/a.html', CONTENT, 'text/html', TAGS);
-    await upload('b', 'site/b.html', CONTENT, 'text/html', TAGS);
+    await upload('b', 'site/a.html', CONTENT, html(TAGS));
+    await upload('b', 'site/b.html', CONTENT, html(TAGS));
 
     // Both files land, untagged; the deploy is not failed by a metadata denial.
     expect(puts).toEqual([
@@ -241,19 +253,26 @@ describe('createSiteUploader (issue #7 fail-soft tagging)', () => {
     } as unknown as S3Client;
     const upload = createSiteUploader(s3, () => undefined);
 
-    await expect(upload('b', 'site/a.html', CONTENT, 'text/html', TAGS)).rejects.toThrow(
-      /AccessDenied/,
-    );
+    await expect(upload('b', 'site/a.html', CONTENT, html(TAGS))).rejects.toThrow(/AccessDenied/);
   });
 
   it('does not attempt a tagged put when there are no tags', async () => {
     const { s3, puts } = fakeS3(true); // would throw on a tagged put
     const upload = createSiteUploader(s3, () => undefined);
 
-    await upload('b', 'site/a.html', CONTENT, 'text/html', undefined);
-    await upload('b', 'site/c.html', CONTENT, 'text/html', {});
+    await upload('b', 'site/a.html', CONTENT, html(undefined));
+    await upload('b', 'site/c.html', CONTENT, html({}));
 
     expect(puts.map((p) => p.key)).toEqual(['site/a.html', 'site/c.html']);
+  });
+
+  it('keeps Cache-Control on the untagged fallback', async () => {
+    const { s3, puts } = fakeS3(true);
+    const upload = createSiteUploader(s3, () => undefined);
+
+    await upload('b', 'site/a.html', CONTENT, { ...html(TAGS), cacheControl: 'no-store' });
+
+    expect(puts).toEqual([{ key: 'site/a.html', tags: undefined, cacheControl: 'no-store' }]);
   });
 });
 
@@ -512,5 +531,142 @@ describe('publishBuild (SSR)', () => {
 
     expect(recording.calls.filter((call) => call.includes('site/'))).toEqual([]);
     expect(recording.calls).toContain('put web/artifacts/h2.zip');
+  });
+});
+
+describe('publishBuild (static) Cache-Control', () => {
+  const RULES = [
+    { match: ['/_astro/**'], value: 'public, max-age=31536000, immutable' },
+    { match: ['**'], value: 'public, max-age=0, must-revalidate' },
+  ];
+
+  interface Put {
+    key: string;
+    cacheControl: string | undefined;
+  }
+
+  /** An S3 double whose listing reports every existing key with `etag`. */
+  function fakeS3(puts: Put[], existing: Array<{ key: string; etag: string }>): S3Client {
+    return {
+      listObjects: async () =>
+        existing.map(({ key, etag }) => ({ key, size: 1, lastModified: undefined, etag })),
+      putObject: async (
+        _bucket: string,
+        key: string,
+        _body: unknown,
+        _type: string,
+        metadata: ObjectMetadata = {},
+      ) => {
+        puts.push({ key, cacheControl: metadata.cacheControl });
+        return undefined;
+      },
+      deleteObject: async () => undefined,
+    } as unknown as S3Client;
+  }
+
+  async function builtSite(): Promise<string> {
+    const dist = join(await mkdtemp(join(tmpdir(), 'cache-control-')), 'dist');
+    await mkdir(join(dist, '_astro'), { recursive: true });
+    await writeFile(join(dist, 'index.html'), '<h1>hi</h1>');
+    await writeFile(join(dist, '_astro', 'app.1a2b.js'), 'export {};');
+    return dist;
+  }
+
+  const md5 = (text: string) => createHash('md5').update(text).digest('hex');
+
+  async function publish(
+    dist: string,
+    opts: {
+      sitePrefix: string;
+      cacheControl?: typeof RULES;
+      refresh?: boolean;
+      existing?: Array<{ key: string; etag: string }>;
+    },
+  ): Promise<Put[]> {
+    const puts: Put[] = [];
+    await publishBuild(
+      fakeS3(puts, opts.existing ?? []),
+      {
+        hash: 'h1',
+        sourceKey: 'build/h1.zip',
+        bucket: 'b',
+        region: 'us-east-1',
+        sitePrefix: opts.sitePrefix,
+        ...(opts.cacheControl ? { cacheControl: opts.cacheControl } : {}),
+        ...(opts.refresh ? { refresh: true } : {}),
+      },
+      dirname(dist),
+      dist,
+      () => undefined,
+    );
+    return puts.sort((a, b) => (a.key < b.key ? -1 : 1));
+  }
+
+  it('writes the first matching rule on each upload, by URL path', async () => {
+    const puts = await publish(await builtSite(), { sitePrefix: 'site/', cacheControl: RULES });
+    expect(puts).toEqual([
+      { key: 'site/_astro/app.1a2b.js', cacheControl: 'public, max-age=31536000, immutable' },
+      { key: 'site/index.html', cacheControl: 'public, max-age=0, must-revalidate' },
+    ]);
+  });
+
+  it('matches a preview the same way, ignoring the previews/<id>/site/ key prefix', async () => {
+    const puts = await publish(await builtSite(), {
+      sitePrefix: 'previews/pr-7/site/',
+      cacheControl: RULES,
+    });
+    expect(puts).toEqual([
+      {
+        key: 'previews/pr-7/site/_astro/app.1a2b.js',
+        cacheControl: 'public, max-age=31536000, immutable',
+      },
+      { key: 'previews/pr-7/site/index.html', cacheControl: 'public, max-age=0, must-revalidate' },
+    ]);
+  });
+
+  it('writes no Cache-Control when the job carries no rules', async () => {
+    const puts = await publish(await builtSite(), { sitePrefix: 'site/' });
+    expect(puts.map((p) => p.cacheControl)).toEqual([undefined, undefined]);
+  });
+
+  it('skips unchanged files normally, and retrofits the header onto them under refresh', async () => {
+    const dist = await builtSite();
+    const existing = [
+      { key: 'site/index.html', etag: md5('<h1>hi</h1>') },
+      { key: 'site/_astro/app.1a2b.js', etag: md5('export {};') },
+    ];
+    expect(await publish(dist, { sitePrefix: 'site/', cacheControl: RULES, existing })).toEqual([]);
+    const refreshed = await publish(dist, {
+      sitePrefix: 'site/',
+      cacheControl: RULES,
+      existing,
+      refresh: true,
+    });
+    expect(refreshed.map((p) => p.cacheControl)).toEqual([
+      'public, max-age=31536000, immutable',
+      'public, max-age=0, must-revalidate',
+    ]);
+  });
+
+  it('fails the build on rules that do not validate, before uploading anything', async () => {
+    const puts: Put[] = [];
+    const dist = await builtSite();
+    await expect(
+      publishBuild(
+        fakeS3(puts, []),
+        {
+          hash: 'h1',
+          sourceKey: 'build/h1.zip',
+          bucket: 'b',
+          region: 'us-east-1',
+          sitePrefix: 'site/',
+          cacheControl: [{ match: ['*.html'], value: 'no-store' }],
+        },
+        dirname(dist),
+        dist,
+        () => undefined,
+      ),
+    ).rejects.toThrow(/can never match/);
+    expect(puts).toEqual([]);
   });
 });

@@ -65,10 +65,24 @@ describe('S3Client tagging', () => {
       return response(200, '');
     };
     await s3With(transport).putObject('b', 'site/index.html', 'x', 'text/html', {
-      environment: 'preview-pr-42',
-      app: 'mason',
+      tags: { environment: 'preview-pr-42', app: 'mason' },
     });
     expect(headers['x-amz-tagging']).toBe('environment=preview-pr-42&app=mason');
+    expect(headers['cache-control']).toBeUndefined();
+  });
+
+  it('putObject sends Cache-Control when one is given, alongside the tags', async () => {
+    let headers: Record<string, string> = {};
+    const transport: Transport = async (req) => {
+      headers = req.headers;
+      return response(200, '');
+    };
+    await s3With(transport).putObject('b', 'site/index.html', 'x', 'text/html', {
+      tags: { app: 'mason' },
+      cacheControl: 'public, max-age=0, must-revalidate',
+    });
+    expect(headers['cache-control']).toBe('public, max-age=0, must-revalidate');
+    expect(headers['x-amz-tagging']).toBe('app=mason');
   });
 
   it('putBucketTagging sends an XML TagSet to ?tagging', async () => {

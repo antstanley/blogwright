@@ -6,10 +6,14 @@ import { dirname, join, relative, sep } from 'node:path';
 
 import {
   AwsError,
+  createCacheControlLookup,
+  parseCacheControlRules,
   REPRODUCIBLE_ZIP_MTIME,
   S3Client,
   SigningClient,
   type AwsCredentials,
+  type CacheControlLookup,
+  type CacheControlRule,
   type CredentialProvider,
   type EntryShim,
 } from 'blogwright-core';
@@ -62,9 +66,14 @@ export interface BuildPayload {
   /** S3 object tags for the synced site files (environment/app; preview deploys carry the PR id). */
   objectTags?: Record<string, string> | undefined;
   /**
+   * The environment's `cacheControl` rules, matched against each file's
+   * site-relative URL path; absent or empty writes no `Cache-Control`.
+   */
+  cacheControl?: readonly CacheControlRule[] | undefined;
+  /**
    * Re-upload every built file even when its content is unchanged. S3 metadata
-   * (content type, object tags) is only written on a PUT, so a metadata fix
-   * never reaches objects the ETag comparison would otherwise skip.
+   * (content type, object tags, Cache-Control) is only written on a PUT, so a
+   * metadata fix never reaches objects the ETag comparison would otherwise skip.
    */
   refresh?: boolean | undefined;
   /** Present only for an SSR environment: package the output as a Web Function revision artifact. */
@@ -81,6 +90,7 @@ export interface PendingJob {
   robots?: string;
   sitemapBaseUrl?: string;
   objectTags?: Record<string, string>;
+  cacheControl?: CacheControlRule[];
   refresh?: boolean;
   webFunction?: WebFunctionJob;
 }
@@ -251,8 +261,8 @@ export const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 /**
  * Whether a built file must be PUT again. Content-identical files are normally
  * skipped (that is what keeps a redeploy cheap and its invalidation narrow),
- * but S3 writes object metadata - content type, tags - only on a PUT, so a
- * metadata fix would never reach them. `refresh` forces the upload.
+ * but S3 writes object metadata - content type, tags, Cache-Control - only on
+ * a PUT, so a metadata fix would never reach them. `refresh` forces the upload.
  */
 export function shouldUpload(
   existingEtag: string | undefined,
@@ -261,6 +271,14 @@ export function shouldUpload(
 ): boolean {
   if (refresh) return true;
   return existingEtag !== md5;
+}
+
+/** What one site file is uploaded with. */
+export interface SiteObjectMetadata {
+  contentType: string;
+  tags?: Record<string, string> | undefined;
+  /** Omitted when no `cacheControl` rule matched the file. */
+  cacheControl?: string | undefined;
 }
 
 /** True for the 403 a role without `s3:PutObjectTagging` gets on a tagged PUT. */
@@ -285,13 +303,13 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
     bucket: string,
     key: string,
     content: Uint8Array,
-    type: string,
-    tags: Record<string, string> | undefined,
+    metadata: SiteObjectMetadata,
   ): Promise<void> {
+    const { contentType: type, tags, cacheControl } = metadata;
     const wantsTags = tags !== undefined && Object.keys(tags).length > 0;
     if (wantsTags && !taggingDenied) {
       try {
-        await s3.putObject(bucket, key, content, type, tags);
+        await s3.putObject(bucket, key, content, type, { tags, cacheControl });
         return;
       } catch (err) {
         // A plain PutObject denial re-throws below, from the untagged retry.
@@ -304,7 +322,7 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
         );
       }
     }
-    await s3.putObject(bucket, key, content, type);
+    await s3.putObject(bucket, key, content, type, { cacheControl });
   };
 }
 
@@ -480,6 +498,7 @@ async function publishFiles(opts: {
   rootDir: string;
   files: string[];
   objectTags?: Record<string, string> | undefined;
+  cacheControlFor: CacheControlLookup;
   refresh?: boolean | undefined;
   deleteStale: boolean;
 }): Promise<{ changedKeys: Set<string>; staleKeys: string[]; count: number }> {
@@ -492,10 +511,13 @@ async function publishFiles(opts: {
   const changedKeys = new Set<string>();
   const unmapped = new Set<string>();
   if (opts.refresh) {
-    log('refresh: re-uploading every file (metadata - content type, tags - may have changed)');
+    log(
+      'refresh: re-uploading every file (metadata - content type, tags, Cache-Control - may have changed)',
+    );
   }
   for (const file of opts.files) {
-    const key = opts.prefix + relative(opts.rootDir, file).split('\\').join('/');
+    const sitePath = relative(opts.rootDir, file).split('\\').join('/');
+    const key = opts.prefix + sitePath;
     uploaded.add(key);
     const content = await readFile(file);
     const md5 = createHash('md5').update(content).digest('hex');
@@ -505,7 +527,12 @@ async function publishFiles(opts: {
     const ext = extensionOf(key);
     if (type === DEFAULT_CONTENT_TYPE && ext !== undefined) unmapped.add(ext);
     if (!shouldUpload(existing.get(key), md5, opts.refresh)) continue;
-    await uploadSiteFile(opts.bucket, key, content, type, opts.objectTags);
+    await uploadSiteFile(opts.bucket, key, content, {
+      contentType: type,
+      tags: opts.objectTags,
+      // Matched on the URL path, not the key, so previews share production's rules.
+      cacheControl: opts.cacheControlFor(`/${sitePath}`),
+    });
     changedKeys.add(key);
   }
   if (unmapped.size > 0) {
@@ -566,6 +593,9 @@ export async function publishBuild(
   log: LogFn,
 ): Promise<{ changedKeys: Set<string>; count: number }> {
   const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
+  const cacheControlFor = createCacheControlLookup(
+    parseCacheControlRules(payload.cacheControl ?? []),
+  );
   const job = payload.webFunction;
   if (!job) {
     const built = await walkFiles(distDir);
@@ -578,6 +608,7 @@ export async function publishBuild(
       rootDir: distDir,
       files: built,
       objectTags: payload.objectTags,
+      cacheControlFor,
       refresh: payload.refresh,
       deleteStale: true,
     });
@@ -614,6 +645,7 @@ export async function publishBuild(
       rootDir: staticDir,
       files: assets,
       objectTags: payload.objectTags,
+      cacheControlFor,
       refresh: payload.refresh,
       deleteStale: false,
     });
