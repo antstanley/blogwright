@@ -1,5 +1,21 @@
 # blogwright-analytics
 
+## 0.5.0
+
+### Minor Changes
+
+- [#45](https://github.com/antstanley/blogwright/pull/45) [`9808142`](https://github.com/antstanley/blogwright/commit/980814232364d305a0027245dfcde3b8944d54b3) Thanks [@antstanley](https://github.com/antstanley)! - Choose AWS credentials with `--profile`, `AWS_PROFILE` or a new `aws.profile` config key (exported environment credentials beat the config's profile, so CI is unaffected), and pin an environment to one account with `aws.accountId`. Every command now checks `sts:GetCallerIdentity` before loading state, prints one identity line, refuses credentials for any other pinned account, and offers `aws sso login` or `aws login` when a sign-in has expired. Adds `blogwright whoami`, and `blogwright init` now asks for a profile and offers to detect and pin the account. The analytics plugin's DuckDB credentials come from the same profile.
+
+### Patch Changes
+
+- [#47](https://github.com/antstanley/blogwright/pull/47) [`be25355`](https://github.com/antstanley/blogwright/commit/be253553ff62e1eb007f0bb541da7bbb281e4fd5) Thanks [@antstanley](https://github.com/antstanley)! - Upgrade runtime dependencies to their latest releases: the AWS SDK credential providers and Smithy signing packages in core, `@atproto/oauth-client-node` 0.5 in the pds plugin, and `@duckdb/node-api` 1.5.6 in the analytics plugin. Each country on the analytics dashboard's world map is now announced with its request count ("Fiji: 1,234 requests, view details"), so its accessible name contains the text of its hover tooltip.
+
+- [#47](https://github.com/antstanley/blogwright/pull/47) [`d49a9d0`](https://github.com/antstanley/blogwright/commit/d49a9d06912338fd4debf058e5b50b13642968f6) Thanks [@antstanley](https://github.com/antstanley)! - The pds and analytics plugins now declare `blogwright-core` as a peer dependency (`^` the release they were built with) instead of installing their own copy, so a site's plugins always share the core the CLI installed. A plugin left on an older release after upgrading the CLI now gets a peer-dependency warning from the package manager instead of silently running against a second core.
+
+- [#47](https://github.com/antstanley/blogwright/pull/47) [`41ba0e3`](https://github.com/antstanley/blogwright/commit/41ba0e3cd9edbfe31729eb32c699d641cd4aa82f) Thanks [@antstanley](https://github.com/antstanley)! - Build the source, build-agent and Lambda zips with Node's own `zlib` instead of the `fflate` package, which takes about 0.8 MB off the CLI and the analytics plugin. The archives stay deterministic, and identical input still produces identical bytes in every timezone. Node.js 22.2 or later is now required (it was 22.0), for `zlib.crc32`.
+- Updated dependencies [[`b2a0b57`](https://github.com/antstanley/blogwright/commit/b2a0b57f12d9ab53000138d511675661a924a6f8), [`9808142`](https://github.com/antstanley/blogwright/commit/980814232364d305a0027245dfcde3b8944d54b3), [`05d00b7`](https://github.com/antstanley/blogwright/commit/05d00b7047dd9473747e61b56431b5d9daf33e4b), [`c2a5fc6`](https://github.com/antstanley/blogwright/commit/c2a5fc61017ac1d8f1a5571f171a99b328e6b227), [`be25355`](https://github.com/antstanley/blogwright/commit/be253553ff62e1eb007f0bb541da7bbb281e4fd5), [`5101001`](https://github.com/antstanley/blogwright/commit/510100193f2a853ff9b10abea1e1ece9652d0402), [`3411566`](https://github.com/antstanley/blogwright/commit/3411566f914f6932024f3a19d84db4f46f2251ff), [`1e0ae1c`](https://github.com/antstanley/blogwright/commit/1e0ae1ceed731acbcc8690667520ce1d6fa3289d), [`41ba0e3`](https://github.com/antstanley/blogwright/commit/41ba0e3cd9edbfe31729eb32c699d641cd4aa82f)]:
+  - blogwright-core@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes
