@@ -82,6 +82,8 @@ Commands:
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
+  verify      <hash> [env]    Check the live site/ byte for byte against the
+                              artifact manifest recorded for a hash
   whoami      [env]           Show the AWS account, identity and profile in
                               use, and whether the account pin accepts them
 
@@ -1629,6 +1631,7 @@ describe('RESERVED_COMMANDS', () => {
         'preview',
         'rollback',
         'status',
+        'verify',
         'whoami',
       ].sort(),
     );
@@ -1718,5 +1721,42 @@ describe('main - --profile reaches every context', () => {
     expect(code).toBe(0);
     expect(requested.map((opts) => opts.profile)).toEqual(['ops']);
     expect(calls[0]?.args).toEqual(['--yes']);
+  });
+});
+
+describe('main - hash-first release commands', () => {
+  it.each(['verify'])('%s takes the hash first, then the environment', async (command) => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext, contexts } = testContextFactory(terminal);
+
+    // The test context rejects every S3 read but scoped state, so the first
+    // read the command makes - the hash's artifact manifest - names the hash.
+    await expect(
+      main(
+        [command, 'abc123', 'staging'],
+        fixedTerminal(terminal),
+        makeContext,
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+        testAwsAccess(),
+      ),
+    ).rejects.toThrow(/build\/artifacts\/abc123\.json/);
+    expect(contexts.map((ctx) => ctx.env)).toEqual(['staging']);
+  });
+
+  it.each(['verify'])('%s refuses to run without a hash', async (command) => {
+    const terminal = createScriptedTerminal({ interactive: false });
+    const { makeContext } = testContextFactory(terminal);
+
+    await expect(
+      main(
+        [command],
+        fixedTerminal(terminal),
+        makeContext,
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+        testAwsAccess(),
+      ),
+    ).rejects.toThrow(`${command} requires a <hash>`);
   });
 });

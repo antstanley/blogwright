@@ -22,6 +22,7 @@ import {
 } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { AwsLogin, PackageManager, Ports } from './ports.js';
+import { verify } from './verify.js';
 import { whoami } from './whoami.js';
 
 const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
@@ -41,6 +42,8 @@ Commands:
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
+  verify      <hash> [env]    Check the live site/ byte for byte against the
+                              artifact manifest recorded for a hash
   whoami      [env]           Show the AWS account, identity and profile in
                               use, and whether the account pin accepts them
 
@@ -236,7 +239,7 @@ async function helpText(ports: Pick<Ports, 'fs' | 'loader'>): Promise<string> {
   return buildHelp(USAGE, discovered);
 }
 
-const HASH_COMMANDS = new Set(['rollback', 'logs']);
+const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify']);
 
 /** Builds the Terminal after flag parsing, so --plain shapes the whole session. */
 export type TerminalFactory = (opts: { plain: boolean }) => Terminal;
@@ -548,9 +551,13 @@ export async function main(
     case 'status':
       await commands.status(ctx);
       break;
+    case 'verify':
+      if (!hash) throw new Error('verify requires a <hash>');
+      await verify(ctx, hash);
+      break;
     default:
       // Unreachable: past the `KNOWN_COMMANDS` membership test above,
-      // `command` is one of the nine names in that set, and the `plugin`
+      // `command` is one of the names in that set, and the `plugin`
       // branch has already claimed the only one without a case here. Kept
       // wired to the same help text as every other USAGE print site - like
       // `runPreview`'s own unreachable default below - so it stays correct

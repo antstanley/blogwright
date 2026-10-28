@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { REPRODUCIBLE_ZIP_MTIME, withRetry } from './util.js';
+import { mapConcurrently, REPRODUCIBLE_ZIP_MTIME, withRetry } from './util.js';
 
 /**
  * Zones chosen for what they do to a UTC-fixed 1980-01-01: `America/New_York`
@@ -120,5 +120,45 @@ describe('withRetry', () => {
     const [, first, second] = await attemptTimes(true);
     expect(first).toBeGreaterThanOrEqual(999);
     expect(second! - first!).toBeGreaterThanOrEqual(1999);
+  });
+});
+
+describe('mapConcurrently', () => {
+  it('resolves results in input order whatever order calls finish in', async () => {
+    const delays = [30, 0, 10, 20];
+    const results = await mapConcurrently(delays, 2, async (ms) => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return ms * 2;
+    });
+    expect(results).toEqual([60, 0, 20, 40]);
+  });
+
+  it('never has more than the limit in flight', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    await mapConcurrently([1, 2, 3, 4, 5, 6, 7], 3, async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight -= 1;
+    });
+    expect(peak).toBe(3);
+  });
+
+  it('maps an empty list to an empty list', async () => {
+    expect(await mapConcurrently([], 4, async () => 1)).toEqual([]);
+  });
+
+  it('rejects with the first failure', async () => {
+    await expect(
+      mapConcurrently([1, 2, 3], 2, async (n) => {
+        if (n === 2) throw new Error('boom 2');
+        return n;
+      }),
+    ).rejects.toThrow('boom 2');
+  });
+
+  it('refuses a limit below one', async () => {
+    await expect(mapConcurrently([1], 0, async (n) => n)).rejects.toThrow(/at least 1, got 0/);
   });
 });

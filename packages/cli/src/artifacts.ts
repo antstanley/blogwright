@@ -23,6 +23,20 @@ export async function readArtifactManifest(
   return parseArtifactManifest(text, `s3://${ctx.names.bucket}/${key}`);
 }
 
+/** A hash's artifact manifest, refusing a hash that has none. */
+export async function requireArtifactManifest(
+  ctx: OpsContext,
+  hash: string,
+): Promise<ArtifactManifest> {
+  const manifest = await readArtifactManifest(ctx, hash);
+  if (manifest) return manifest;
+  throw new Error(
+    `no artifact manifest is recorded for ${hash} at s3://${ctx.names.bucket}/` +
+      `${artifactManifestKey(hash)} - only static builds made since artifact manifests ` +
+      'were introduced have one (see `blogwright history` for hashes)',
+  );
+}
+
 /** One line naming a release: identity, size and aggregate hash. */
 export function describeRelease(manifest: ArtifactManifest): string {
   const kib = (manifest.totalBytes / 1024).toFixed(0);

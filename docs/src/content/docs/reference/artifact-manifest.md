@@ -82,6 +82,10 @@ aws s3 cp "s3://$BUCKET/build/artifacts/$HASH.json" artifact-manifest.json
 
 The builder writes the manifest with its own roles, which need `s3:PutObject` on `build/artifacts/*`. Stacks bootstrapped before artifact manifests existed lack that grant: the build still publishes, and the deploy warns that no manifest was recorded. Run `blogwright bootstrap <env>` once to add it.
 
+## Verifying live objects against it
+
+`blogwright verify <hash>` reads every object under `site/`, hashes it, and compares the result with the manifest recorded for `<hash>`. It reports each missing, changed or unexpected object and exits 1 on any difference - see [`verify`](/reference/cli/#verify).
+
 ## Rollback
 
 `rollback <hash>` re-runs the build from the archived source, so it is a rebuild. It reads the manifest recorded for that hash before the rebuild overwrites it, then prints both release hashes - the recorded one and the rebuilt one - and warns when they differ, because the live site then serves bytes no review covered. See [Roll back](/guides/operations/#roll-back-rollback-hash).

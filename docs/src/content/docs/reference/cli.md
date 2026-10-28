@@ -22,7 +22,7 @@ Most commands take the environment as an optional first positional. Two commands
 | Commands | Layout |
 | --- | --- |
 | `bootstrap`, `deploy`, `delete`, `destroy`, `history`, `status` | `blogwright <command> [env]` |
-| `rollback`, `logs` | `blogwright <command> <hash> [env]` |
+| `rollback`, `logs`, `verify` | `blogwright <command> <hash> [env]` |
 | `preview deploy`, `preview destroy` | `blogwright preview <action> <id>` |
 | `<plugin> <action>` (including multi-word actions) | `blogwright <plugin> <action> [env]` |
 | `plugin add`, `plugin remove` | `blogwright plugin <action> <name> [env]` (env selects removal teardown only) |
@@ -146,6 +146,16 @@ blogwright status [env]
 ```
 
 Shows the planned infrastructure graph against live state: each resource node is read from AWS and reported as present or missing, with its recorded outputs. On a TTY this renders as a drift tree; plain output is one stable line per resource. Read failures are reported per node without aborting the rest. See [operations](/guides/operations/).
+
+### verify
+
+```sh
+blogwright verify <hash> [env]
+```
+
+Checks the live `site/` prefix byte for byte against the [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>`: every object the manifest lists is read and its SHA-256 compared, and every object under `site/` that the manifest does not list is reported too, because CloudFront would serve it. Each difference prints as one stable line - `missing <path>`, `changed <path>: expected … found …`, or `unexpected <path>` - and any difference exits 1 with a `N missing, N changed, N unexpected` summary. A match prints the location, release identity, file count and release hash, and exits 0.
+
+Verification reads every object, so its cost grows with the site. It refuses a hash with no recorded artifact manifest (a build from before artifact manifests, or an SSR deploy) and refuses in an SSR environment, where a revision pins its artifact object version instead.
 
 ### whoami
 
@@ -355,7 +365,7 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--config <path>` | all but `init` | Explicit JSONC config file. When set it is the only file tried - the `config/<env>.jsonc` → `ops.config.jsonc` fallback chain is skipped. |
 | `--endpoint <url>` | all but `init` | AWS endpoint override, e.g. `http://localhost:4566` for the floci emulator. Under an override the account pin is skipped and a configured profile missing from your AWS files is ignored. |
 | `--profile <name>` | all | AWS profile from your shared AWS files (`~/.aws/config`, `~/.aws/credentials`). Beats `AWS_PROFILE`, exported credentials and the config's `aws.profile`; see [AWS credentials](/reference/configuration/#aws). `init` uses it as the default answer to its profile question. |
-| `--hash <hash>` | `rollback`, `logs` | The build hash; wins over the first positional. |
+| `--hash <hash>` | `rollback`, `logs`, `verify` | The build hash; wins over the first positional. |
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |

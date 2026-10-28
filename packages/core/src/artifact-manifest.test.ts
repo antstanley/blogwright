@@ -3,13 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   ARTIFACT_MANIFEST_VERSION,
   artifactManifestKey,
+  compareArtifact,
   computeReleaseHash,
   createArtifactManifest,
+  isExactMatch,
   parseArtifactManifest,
   releaseIdentity,
   serializeArtifactManifest,
   sha256Hex,
   type ArtifactFile,
+  type ObservedFile,
 } from './artifact-manifest.js';
 
 function file(path: string, content: string): ArtifactFile {
@@ -153,5 +156,57 @@ describe('parseArtifactManifest', () => {
     expect(() => parseArtifactManifest(noFiles, 'm.json')).toThrow(/no files\[\] list/);
     const noHash = JSON.stringify({ ...manifest, hash: '' });
     expect(() => parseArtifactManifest(noHash, 'm.json')).toThrow(/no revision hash/);
+  });
+});
+
+describe('compareArtifact', () => {
+  const manifest = createArtifactManifest({ hash: 'abc123', files: FILES });
+  const exact = () =>
+    new Map<string, ObservedFile>(
+      manifest.files.map((f) => [f.path, { bytes: f.bytes, sha256: f.sha256 }]),
+    );
+
+  it('matches objects identical to the manifest', () => {
+    const comparison = compareArtifact(manifest, exact());
+    expect(comparison).toEqual({ matched: 2, missing: [], changed: [], unexpected: [] });
+    expect(isExactMatch(comparison)).toBe(true);
+  });
+
+  it('reports a missing file', () => {
+    const observed = exact();
+    observed.delete('index.html');
+    const comparison = compareArtifact(manifest, observed);
+    expect(comparison.missing).toEqual(['index.html']);
+    expect(isExactMatch(comparison)).toBe(false);
+  });
+
+  it('reports a file whose content differs even when its size matches', () => {
+    const observed = exact();
+    const home = manifest.files[0]!;
+    observed.set(home.path, { bytes: home.bytes, sha256: sha256Hex('<p>HOME</p>') });
+    const comparison = compareArtifact(manifest, observed);
+    expect(comparison.changed).toEqual([
+      {
+        path: home.path,
+        expected: { bytes: home.bytes, sha256: home.sha256 },
+        actual: { bytes: home.bytes, sha256: sha256Hex('<p>HOME</p>') },
+      },
+    ]);
+    expect(comparison.matched).toBe(1);
+  });
+
+  it('reports a size difference without needing the hash', () => {
+    const observed = exact();
+    observed.set('index.html', { bytes: 1 });
+    expect(compareArtifact(manifest, observed).changed.map((c) => c.path)).toEqual(['index.html']);
+  });
+
+  it('reports objects the manifest does not list, sorted', () => {
+    const observed = exact();
+    observed.set('z.txt', { bytes: 1 });
+    observed.set('old/index.html', { bytes: 1 });
+    const comparison = compareArtifact(manifest, observed);
+    expect(comparison.unexpected).toEqual(['old/index.html', 'z.txt']);
+    expect(isExactMatch(comparison)).toBe(false);
   });
 });

@@ -4,8 +4,8 @@
  * SHA-256 - plus one aggregate release hash and a release identity string.
  *
  * It is what lets an operator assert "what is live is what was reviewed": CI
- * can archive it, and the hashes in it can be checked against the objects in
- * S3 or against a local build directory.
+ * can archive it, and `blogwright verify` compares it against the objects
+ * actually stored in S3.
  *
  * The aggregate release hash is defined so it can be recomputed outside
  * blogwright from a build directory: it is the SHA-256 of the `sha256sum`
@@ -50,6 +50,31 @@ export interface ArtifactManifest {
   totalBytes: number;
   /** Every published file, sorted by path in byte order. */
   files: ArtifactFile[];
+}
+
+/** What one object under a prefix holds; the hash is absent when it was not read. */
+export interface ObservedFile {
+  bytes: number;
+  sha256?: string | undefined;
+}
+
+/** A file whose observed size or content differs from the manifest. */
+export interface ChangedFile {
+  path: string;
+  expected: { bytes: number; sha256: string };
+  actual: ObservedFile;
+}
+
+/** The outcome of comparing a manifest with the objects actually stored. */
+export interface ArtifactComparison {
+  /** Files present with the recorded size and hash. */
+  matched: number;
+  /** Manifest paths with no object. */
+  missing: string[];
+  /** Manifest paths whose object differs. */
+  changed: ChangedFile[];
+  /** Objects the manifest does not list - live, they would be served too. */
+  unexpected: string[];
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -180,7 +205,7 @@ export function parseArtifactManifest(text: string, source: string): ArtifactMan
   try {
     raw = JSON.parse(text);
   } catch (err) {
-    throw new Error(`${source} is not valid JSON: ${(err as Error).message}`);
+    throw new Error(`${source} is not valid JSON: ${(err as Error).message}`, { cause: err });
   }
   if (!isRecord(raw)) throw new Error(`${source} must be a JSON object`);
   if (raw.manifestVersion !== ARTIFACT_MANIFEST_VERSION) {
@@ -208,4 +233,41 @@ export function parseArtifactManifest(text: string, source: string): ArtifactMan
     }
   }
   return expected;
+}
+
+/**
+ * Compare a manifest with the objects stored under a prefix, keyed by
+ * site-root-relative path. A path counts as matched only when both its byte
+ * count and its SHA-256 equal the manifest's.
+ */
+export function compareArtifact(
+  manifest: ArtifactManifest,
+  observed: ReadonlyMap<string, ObservedFile>,
+): ArtifactComparison {
+  const listed = new Set(manifest.files.map((file) => file.path));
+  const comparison: ArtifactComparison = { matched: 0, missing: [], changed: [], unexpected: [] };
+  for (const file of manifest.files) {
+    const actual = observed.get(file.path);
+    if (!actual) comparison.missing.push(file.path);
+    else if (actual.bytes !== file.bytes || actual.sha256 !== file.sha256) {
+      comparison.changed.push({
+        path: file.path,
+        expected: { bytes: file.bytes, sha256: file.sha256 },
+        actual,
+      });
+    } else comparison.matched += 1;
+  }
+  comparison.unexpected = [...observed.keys()]
+    .filter((path) => !listed.has(path))
+    .sort(compareUtf8);
+  return comparison;
+}
+
+/** True when the stored objects are exactly the manifest's files, byte for byte. */
+export function isExactMatch(comparison: ArtifactComparison): boolean {
+  return (
+    comparison.missing.length === 0 &&
+    comparison.changed.length === 0 &&
+    comparison.unexpected.length === 0
+  );
 }

@@ -26,10 +26,10 @@
  * other to finish initialising before either can run. This module gives
  * both callers a shared, dependency-free home instead.
  *
- * `KNOWN_COMMANDS` is the eight names `cli.ts`'s `main` dispatches through
- * its `switch`, after the `KNOWN_COMMANDS.has(command)` membership test:
+ * `KNOWN_COMMANDS` is the names `cli.ts`'s `main` dispatches through its
+ * `switch`, after the `KNOWN_COMMANDS.has(command)` membership test:
  * `bootstrap`, `deploy`, `rollback`, `delete`, `destroy`, `history`, `logs`,
- * `status`.
+ * `status`, `verify` - plus `plugin`, which `main` claims before the switch.
  *
  * `RESERVED_COMMANDS` is every name a plugin may never claim as its own -
  * see `discover`'s namespace-collision check in `plugins.ts`. It is
@@ -71,6 +71,7 @@ export const KNOWN_COMMANDS = new Set([
   'history',
   'logs',
   'status',
+  'verify',
   'plugin',
 ]);
 
