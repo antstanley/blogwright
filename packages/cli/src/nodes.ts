@@ -9,6 +9,7 @@ import {
   MICROVM_CPU_ARCHITECTURE,
   pollUntil,
   REPRODUCIBLE_ZIP_MTIME,
+  STAGED_RELEASES_PREFIX,
   createZip,
   textTag,
   WEB_FUNCTION_RUNTIME,
@@ -179,16 +180,24 @@ function webArtifactWriteStatements(ctx: OpsContext): object[] {
  * The agent records each static build's artifact manifest at its own
  * `build/artifacts/<hash>/<buildId>.json`. The grant stops at that depth on
  * purpose: a revision's original record, `build/artifacts/<hash>.json`, is
- * written once by the CLI and is out of the builder's reach. The shared
- * preview stack and SSR environments record none.
+ * written once by the CLI and is out of the builder's reach. `blogwright
+ * stage` has the agent publish a release under `releases/<hash>/` instead of
+ * `site/` - tagged like the site, and re-staging a hash deletes what the new
+ * build no longer contains. The shared preview stack and SSR environments do
+ * neither.
  */
-function artifactManifestWriteStatements(ctx: OpsContext): object[] {
+function releaseWriteStatements(ctx: OpsContext): object[] {
   if (ctx.preview || ctx.config.ssr) return [];
   return [
     {
       Effect: 'Allow',
       Action: ['s3:PutObject'],
       Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*/*`,
+    },
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/${STAGED_RELEASES_PREFIX}*`,
     },
   ];
 }
@@ -218,7 +227,7 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
         Resource: `arn:aws:s3:::${ctx.names.bucket}/build/changed/*`,
       },
       ...webArtifactWriteStatements(ctx),
-      ...artifactManifestWriteStatements(ctx),
+      ...releaseWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
@@ -257,6 +266,16 @@ function buildRoleNode(): ResourceNode {
   };
 }
 
+/**
+ * Recorded on the exec role's outputs whenever its policy is applied - true
+ * when that policy grants release staging - so `stage` can refuse up front on
+ * a stack bootstrapped before it existed rather than fail inside the MicroVM
+ * after a full build. A flag rather than a read of the policy itself: the CI
+ * deploy role that runs `stage` has no IAM read access, and granting it
+ * `iam:GetRolePolicy` to check one statement would widen it for little gain.
+ */
+export const RELEASE_STAGING_OUTPUT = 'releaseStaging';
+
 async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
   await ctx.clients.iam.putRolePolicy(ctx.names.execRole, 'exec', {
     Version: '2012-10-17',
@@ -282,7 +301,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
         ],
       },
       ...webArtifactWriteStatements(ctx),
-      ...artifactManifestWriteStatements(ctx),
+      ...releaseWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['s3:ListBucket'],
@@ -295,6 +314,9 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
       },
     ],
   });
+  // Recorded either way, so a stack whose policy stopped granting staging (it
+  // switched to SSR) stops claiming it.
+  output(ctx, 'iam-exec-role')[RELEASE_STAGING_OUTPUT] = !ctx.preview && !ctx.config.ssr;
 }
 
 /** IAM role the running builder MicroVM assumes to read source + write the site. */
@@ -2006,6 +2028,28 @@ function webFunctionDeployStatements(ctx: OpsContext): object[] {
   ];
 }
 
+/**
+ * `promote` copies a staged release's object tags into site/: reading them
+ * needs s3:GetObjectTagging on the staged copy, and writing them
+ * s3:PutObjectTagging on the live one - nothing wider. Only static, non-preview
+ * environments stage and promote.
+ */
+function promoteTaggingStatements(ctx: OpsContext): object[] {
+  if (ctx.preview || ctx.config.ssr) return [];
+  return [
+    {
+      Effect: 'Allow',
+      Action: ['s3:GetObjectTagging'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/${STAGED_RELEASES_PREFIX}*`,
+    },
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObjectTagging'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/site/*`,
+    },
+  ];
+}
+
 /** The deploy role's inline policy statements (exported for tests). */
 export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
   const statements: object[] = [
@@ -2021,6 +2065,7 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       ],
       Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
     },
+    ...promoteTaggingStatements(ctx),
     { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
     {
       Effect: 'Allow',

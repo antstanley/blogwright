@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  artifactManifestKey,
   AwsError,
   createArtifactManifest,
   createCacheControlLookup,
@@ -34,17 +35,20 @@ import {
   type Plugin,
   type PluginCommand,
   type PluginContext,
+  type CopyObjectOptions,
   type ObjectMetadata,
   type ObjectReadOptions,
   type S3Client,
   type S3Object,
   type Terminal,
+  type RawResponse,
   type Transport,
 } from 'blogwright-core';
 
 import type { AwsHost, ResolvedAwsProfile } from './aws-session.js';
 import type { AwsAccessFactory } from './cli.js';
 import { cliPackageDir, type OpsContext } from './context.js';
+import { ENV_LOCK_KEY } from './lock.js';
 import type { Logger } from './logger.js';
 import type {
   AddPackageOptions,
@@ -83,7 +87,24 @@ export interface TestContextOverrides {
   save?: (() => Promise<void>) | undefined;
 }
 
+/**
+ * How an untouched test context answers the environment lock: free, so the
+ * commands that take it run as they did before it existed. A test about the
+ * lock overrides the S3 methods (or uses `createMemoryS3`).
+ */
+function freeEnvLock(method: string): RawResponse {
+  const reply = (statusCode: number, body: string): RawResponse => ({
+    statusCode,
+    headers: {},
+    body: new TextEncoder().encode(body),
+    text: () => body,
+  });
+  if (method === 'GET') return reply(404, '<Error><Code>NoSuchKey</Code></Error>');
+  return reply(method === 'DELETE' ? 204 : 200, '');
+}
+
 const rejectAllTransport: Transport = async (req) => {
+  if (new URL(req.url).pathname.endsWith(`/${ENV_LOCK_KEY}`)) return freeEnvLock(req.method);
   throw new Error(
     `unexpected AWS request in test: ${req.method} ${req.url} - override the client method on createTestContext`,
   );
@@ -722,8 +743,28 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
       return found ? new TextDecoder().decode(found.body) : undefined;
     },
     objectExists: async (_bucket: string, key: string) => objects.has(key),
+    copyObject: async (
+      _bucket: string,
+      sourceKey: string,
+      destinationKey: string,
+      options: CopyObjectOptions = {},
+    ) => {
+      const source = objects.get(sourceKey);
+      if (!source) throw noSuchKey(sourceKey);
+      objects.set(destinationKey, {
+        body: source.body,
+        contentType: source.contentType,
+        ...((options.tags ?? 'copy') === 'copy' && source.tags ? { tags: source.tags } : {}),
+        ...(source.cacheControl !== undefined ? { cacheControl: source.cacheControl } : {}),
+      });
+    },
     deleteObject: async (_bucket: string, key: string) => {
       objects.delete(key);
+    },
+    deletePrefix: async (_bucket: string, prefix: string) => {
+      const keys = [...objects.keys()].filter((key) => key.startsWith(prefix));
+      for (const key of keys) objects.delete(key);
+      return keys.length;
     },
     listObjects: async (_bucket: string, prefix: string): Promise<S3Object[]> =>
       [...objects.entries()]
@@ -750,8 +791,10 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
 }
 
 /** The pending-job fields the fake builder acts on. */
-interface FakeBuildJob {
+export interface FakeBuildJob {
   hash: string;
+  jobId?: string;
+  changedKey?: string;
   sitePrefix: string;
   objectTags?: Record<string, string>;
   cacheControl?: unknown;
@@ -773,11 +816,21 @@ export function attachFakeBuilder(
     artifactWriteDenied?: boolean;
     /** Act as an agent from before artifact manifests, which drops `artifactManifestKey`. */
     ignoresArtifactManifestKey?: boolean;
+    /**
+     * Fail the build: publish nothing and write no changed-paths manifest; the
+     * job's id goes to `failedJobs` for a test's log fake to report.
+     */
+    fails?: boolean;
+    failedJobs?: FakeBuildJob[];
   } = {},
 ): void {
   s3.onPut((key, body) => {
     if (!key.startsWith('build/pending/')) return;
     const job = JSON.parse(new TextDecoder().decode(body)) as FakeBuildJob;
+    if (opts.fails) {
+      opts.failedJobs?.push(job);
+      return;
+    }
     const built = files();
     const rules = parseCacheControlRules(job.cacheControl ?? []);
     const cacheControlFor = createCacheControlLookup(rules);
@@ -794,7 +847,15 @@ export function attachFakeBuilder(
           : {}),
       });
     }
-    if (job.artifactManifestKey && !opts.artifactWriteDenied && !opts.ignoresArtifactManifestKey) {
+    // The builder's grant stops at per-build keys: a revision's original
+    // record is out of its reach, as IAM keeps it in AWS.
+    const deniedOriginal = job.artifactManifestKey === artifactManifestKey(job.hash);
+    if (
+      job.artifactManifestKey &&
+      !deniedOriginal &&
+      !opts.artifactWriteDenied &&
+      !opts.ignoresArtifactManifestKey
+    ) {
       const manifest = createArtifactManifest({
         hash: job.hash,
         siteVersion: opts.siteVersion,
@@ -810,7 +871,7 @@ export function attachFakeBuilder(
       });
     }
     const paths = Object.keys(built).map((path) => `/${path}`);
-    s3.objects.set(`build/changed/${job.hash}.json`, {
+    s3.objects.set(job.changedKey ?? `build/changed/${job.hash}.json`, {
       // Reports the rules it applied, as the real agent does, so the CLI's
       // Cache-Control record is confirmed.
       body: textEncoder.encode(JSON.stringify({ paths, cacheControl: rules })),
@@ -834,6 +895,8 @@ export async function createBuildContext(opts: {
   logged: string[];
   invalidations?: string[][] | undefined;
   config?: ConfigInput | undefined;
+  /** Builds `attachFakeBuilder` failed; each is reported failed in the build log. */
+  failedJobs?: FakeBuildJob[] | undefined;
 }): Promise<OpsContext> {
   const repoRoot = await findRepoRoot(createNodeFileSystem());
   const fs = createMemoryFileSystem({
@@ -866,7 +929,14 @@ export async function createBuildContext(opts: {
         createAuthToken: async () => 'tok',
         terminateMicrovm: async () => undefined,
       },
-      logs: { filterEvents: async () => [] },
+      logs: {
+        filterEvents: async () =>
+          (opts.failedJobs ?? []).map((job, i) => ({
+            eventId: `failed-${i}`,
+            timestamp: i,
+            message: `##build:failed:${job.hash}@${job.jobId}: the fake build failed`,
+          })),
+      },
       cloudfront: {
         createInvalidation: async (_id: string, paths: string[]) => {
           opts.invalidations?.push(paths);

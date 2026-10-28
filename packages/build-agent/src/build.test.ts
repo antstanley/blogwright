@@ -16,8 +16,13 @@ import { unzipSync } from 'fflate';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  buildMarker,
+  changedPathsKey,
   contentType,
   DEFAULT_CONTENT_TYPE,
+  fetchPendingJobs,
+  jobIdentity,
+  nextPendingJob,
   extensionOf,
   generateSitemap,
   changedPathsManifest,
@@ -25,27 +30,9 @@ import {
   packageWebFunction,
   publishBuild,
   createSiteUploader,
-  invalidationPaths,
   resolveWithin,
   shouldUpload,
 } from './build.js';
-
-describe('invalidationPaths', () => {
-  it('maps a plain asset to its URL path', () => {
-    expect(invalidationPaths('site/_astro/app.css', 'site/')).toEqual(['/_astro/app.css']);
-  });
-
-  it('maps the root index to both /index.html and /', () => {
-    expect(invalidationPaths('site/index.html', 'site/')).toEqual(['/index.html', '/']);
-  });
-
-  it('maps a nested index to the file and its directory URL', () => {
-    expect(invalidationPaths('site/posts/index.html', 'site/')).toEqual([
-      '/posts/index.html',
-      '/posts/',
-    ]);
-  });
-});
 
 describe('contentType', () => {
   it('maps common static extensions', () => {
@@ -710,5 +697,62 @@ describe('changedPathsManifest', () => {
       'site/',
     );
     expect(JSON.parse(JSON.stringify(manifest))).toEqual({ paths: [], cacheControl: [] });
+  });
+});
+
+describe('pending jobs for the same hash on two targets', () => {
+  /** A stage and a deploy of one revision, both queued, read the way the agent reads them. */
+  async function pendingBoth(withIds: boolean) {
+    const jobs: Record<string, object> = {
+      'build/pending/release-abc123.json': {
+        hash: 'abc123',
+        sourceKey: 'build/abc123.zip',
+        sitePrefix: 'releases/abc123/',
+        ...(withIds
+          ? { jobId: 'stage-job', changedKey: 'build/changed/release-abc123/abc123.json' }
+          : {}),
+      },
+      'build/pending/site.json': {
+        hash: 'abc123',
+        sourceKey: 'build/abc123.zip',
+        sitePrefix: 'site/',
+        ...(withIds ? { jobId: 'deploy-job', changedKey: 'build/changed/site/abc123.json' } : {}),
+      },
+    };
+    const s3 = {
+      listObjects: async () => Object.keys(jobs).map((key) => ({ key, size: 1 })),
+      getObjectText: async (_bucket: string, key: string) => JSON.stringify(jobs[key]),
+    } as unknown as S3Client;
+    return fetchPendingJobs(s3, 'b');
+  }
+
+  it('builds both, one after the other, instead of skipping the second as done', async () => {
+    const jobs = await pendingBoth(true);
+    const processed = new Set<string>();
+    const order: string[] = [];
+    for (let next = nextPendingJob(jobs, processed); next; next = nextPendingJob(jobs, processed)) {
+      processed.add(jobIdentity(next));
+      order.push(next.sitePrefix ?? '');
+    }
+    expect(order).toEqual(['releases/abc123/', 'site/']);
+  });
+
+  it('tells jobs an older CLI queued apart by their pending key', async () => {
+    const jobs = await pendingBoth(false);
+    expect(new Set(jobs.map(jobIdentity)).size).toBe(2);
+    expect(jobs.map((job) => job.pendingKey)).toEqual([
+      'build/pending/release-abc123.json',
+      'build/pending/site.json',
+    ]);
+  });
+
+  it("marks completion with the job's id, and writes the job's own changed-paths key", async () => {
+    const [stage, deploy] = await pendingBoth(true);
+    expect(buildMarker('done', stage!)).toBe('##build:done:abc123@stage-job');
+    expect(buildMarker('failed', deploy!)).toBe('##build:failed:abc123@deploy-job');
+    expect(changedPathsKey(stage!)).toBe('build/changed/release-abc123/abc123.json');
+    // A job from an older CLI keeps the markers and key that CLI waits for.
+    expect(buildMarker('done', { hash: 'abc123' })).toBe('##build:done:abc123');
+    expect(changedPathsKey({ hash: 'abc123' })).toBe('build/changed/abc123.json');
   });
 });

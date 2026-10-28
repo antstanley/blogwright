@@ -28,7 +28,7 @@ export function cacheControlRecordKey(target: string): string {
  * rules other than any recorded: a rule-changing build has not finished, or
  * the agent did not report what it wrote.
  */
-type CacheControlRecord =
+export type CacheControlRecord =
   | { status: 'applied'; rules: readonly CacheControlRule[] }
   | { status: 'unconfirmed' };
 
@@ -58,7 +58,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function sameRules(a: readonly CacheControlRule[], b: readonly CacheControlRule[]): boolean {
+/** Whether two rule lists are the same rules in the same order. */
+export function sameCacheControlRules(
+  a: readonly CacheControlRule[],
+  b: readonly CacheControlRule[],
+): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
@@ -109,10 +113,31 @@ export async function cacheControlRefreshReason(
     return 'unreadable';
   }
   if (record.status === 'unconfirmed') return 'unconfirmed';
-  return sameRules(record.rules, ctx.config.cacheControl) ? undefined : 'changed';
+  return sameCacheControlRules(record.rules, ctx.config.cacheControl) ? undefined : 'changed';
 }
 
-async function writeRecord(
+/**
+ * A target's record, or undefined when it has none. A malformed record is
+ * warned about and read as `unconfirmed`, which makes the next build to the
+ * target re-apply the rules.
+ */
+export async function readCacheControlRecord(
+  ctx: OpsContext,
+  target: string,
+): Promise<CacheControlRecord | undefined> {
+  const key = cacheControlRecordKey(target);
+  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, key);
+  if (text === undefined) return undefined;
+  try {
+    return parseRecord(text, key);
+  } catch (err) {
+    ctx.logger.warn(`ignoring malformed ${key}: ${errorMessage(err)}`);
+    return { status: 'unconfirmed' };
+  }
+}
+
+/** Write a target's record as given. */
+export async function writeCacheControlRecord(
   ctx: OpsContext,
   target: string,
   record: CacheControlRecord,
@@ -126,17 +151,18 @@ async function writeRecord(
 }
 
 /**
- * Mark the target's record `unconfirmed` before a build that re-applies the
- * rules, so a build that stops partway is re-applied by the next one. Fatal:
- * nothing has been published yet, and building without the mark could leave
- * mixed headers that no later build notices.
+ * Mark the target's record `unconfirmed` before its files are rewritten with
+ * other rules - by a build that re-applies them, or a promotion copying a
+ * staged release's headers in - so one that stops partway is re-applied by the
+ * next build. Fatal: nothing has been published yet, and going on without the
+ * mark could leave mixed headers that no later build notices.
  */
 export async function markCacheControlUnconfirmed(ctx: OpsContext, target: string): Promise<void> {
   try {
-    await writeRecord(ctx, target, { status: 'unconfirmed' });
+    await writeCacheControlRecord(ctx, target, { status: 'unconfirmed' });
   } catch (err) {
     throw new Error(
-      `could not mark ${cacheControlRecordKey(target)} unconfirmed before the build ` +
+      `could not mark ${cacheControlRecordKey(target)} unconfirmed before rewriting its files ` +
         `(${errorMessage(err)}); nothing was published`,
       { cause: err },
     );
@@ -159,7 +185,8 @@ async function agentConfirmedRules(ctx: OpsContext, reportKey: string): Promise<
   try {
     const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, reportKey);
     const reported = text === undefined ? undefined : reportedRules(text);
-    if (reported !== undefined && sameRules(reported, ctx.config.cacheControl)) return true;
+    if (reported !== undefined && sameCacheControlRules(reported, ctx.config.cacheControl))
+      return true;
     ctx.logger.warn(
       `the builder did not report writing the configured Cache-Control in ${reportKey} ` +
         '(an older builder image, or a missing manifest) - the next build to this target ' +
@@ -189,7 +216,7 @@ export async function recordCacheControl(
     ? { status: 'applied', rules: ctx.config.cacheControl }
     : { status: 'unconfirmed' };
   try {
-    await writeRecord(ctx, target, record);
+    await writeCacheControlRecord(ctx, target, record);
   } catch (err) {
     ctx.logger.warn(
       `could not record the Cache-Control this build wrote in ${cacheControlRecordKey(target)} ` +

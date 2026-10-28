@@ -81,13 +81,18 @@ One bucket per environment holds everything:
 ├── build/
 │   ├── <hash>.zip               # source zips, named by the jj/git revision hash
 │   ├── agent/agent-<hash>.zip   # build-agent bundle the builder image is baked from
-│   ├── manifests/<hash>.json    # one deployment manifest per build (history/rollback)
+│   ├── manifests/<hash>.json    # one deployment manifest per build to site/ (history/rollback)
+│   ├── staged/<hash>.json       # one record per staged build (`stage`), stamped when promoted (history)
 │   ├── artifacts/<hash>.json    # original artifact manifest: published paths, sizes, SHA-256 (write-once)
 │   ├── artifacts/<hash>/<buildId>.json  # each static build's own artifact manifest
-│   ├── pending/<target>.json    # queued build job (present only mid-deploy)
-│   ├── changed/<hash>.json      # changed-paths manifest and applied cacheControl rules
-│   └── cache-control/<target>.json  # cacheControl rules the target's files carry, or "unconfirmed"
+│   ├── releases/<hash>.json     # the artifact manifest a staged release is bound to (`stage` writes, `promote` checks)
+│   ├── pending/<target>.json    # queued build job, with its own job id (present only mid-build)
+│   ├── lock.json                # the environment lock: who is deploying, staging, promoting or deleting (present only mid-command)
+│   ├── live-release.json        # the release the last deploy, promote or rollback published, or "publishing" while one runs
+│   ├── changed/<target>/<hash>.json  # changed-paths manifest and applied cacheControl rules
+│   └── cache-control/<target>.json  # cacheControl rules the target's files carry (site, release-<hash>, preview-<id>), or "unconfirmed"
 ├── site/                        # the live site - CloudFront origin, private via OAC
+├── releases/<hash>/             # staged releases (`stage`), copied into site/ by `promote`; never served
 ├── previews/<id>/site/          # per-PR preview sites (preview stack only)
 ├── web/                         # SSR mode only
 │   ├── artifacts/<hash>.zip     # packaged server, one object version per build of the hash
@@ -105,13 +110,13 @@ In SSR mode the bucket is versioned. A revision pins the exact object version of
 
 Sites are built in a **Lambda MicroVM**, not on your machine. At bootstrap, the `microvm-image` node bakes a stable builder image: the build-agent bundle shipped inside the CLI package is zipped, uploaded to `build/agent/agent-<hash>.zip`, and snapshotted onto the Amazon Linux 2023 MicroVM base image (`arn:aws:lambda:<region>:aws:microvm-image:al2023-1`). The image reconcile also runs before every deploy - a cheap hash compare in the common case - so build-agent fixes in a blogwright upgrade propagate through CI without a separate `bootstrap`.
 
-Each `blogwright deploy`:
+Each `blogwright deploy` takes the [environment lock](/guides/operations/#one-command-at-a-time-the-environment-lock) (`build/lock.json`, a conditional write only one command can win), marks the live-release record `publishing`, and then:
 
 1. Zips the repo (honoring `.gitignore`, plus `sourceInclude`), names the zip by the jj/git revision hash, and uploads it to `build/<hash>.zip`.
 2. Launches a MicroVM from the builder image with the exec role, retrying transient gateway errors - the control plane can briefly 502 right after an image update, and the launch's client token makes retries idempotent.
-3. Writes the job document - including the `cacheControl` rules, and `refresh` when they differ from the rules recorded at `build/cache-control/<target>.json` (the record is then marked unconfirmed first, so an interrupted build is re-applied) - to `build/pending/<target>.json` (`site.json` for a normal deploy). The agent inside the VM polls the `build/pending/` prefix, resolves credentials from IMDS, pulls the zip, and runs `pnpm install && pnpm build` in `paths.app`.
-4. Syncs `paths.dist` to `site/`, comparing each file's MD5 to the live object's S3 ETag so only changed files are uploaded, writing each upload's `Cache-Control` from the first rule that matches its site-relative URL path, records the build's [artifact manifest](/reference/artifact-manifest/) at the per-build key the job names (`build/artifacts/<hash>/<buildId>.json`), and writes the changed-paths manifest to `build/changed/<hash>.json`, reporting the `cacheControl` rules it applied.
-5. Streams the build's CloudWatch logs, watching for hash-scoped markers (`##build:done:<hash>` / `##build:failed:<hash>`) so an orphaned VM from another deploy can never be mistaken for this build's result. The changed-paths manifest doubles as a completion signal if log delivery lags.
+3. Writes the job document - including the `cacheControl` rules, and `refresh` when they differ from the rules recorded at `build/cache-control/<target>.json` (the record is then marked unconfirmed first, so an interrupted build is re-applied) - to `build/pending/<target>.json` (`site.json` for a normal deploy, `release-<hash>.json` for a stage), with a job id of its own and the target's changed-paths key. The agent inside the VM polls the `build/pending/` prefix, resolves credentials from IMDS, pulls the zip, and runs `pnpm install && pnpm build` in `paths.app`.
+4. Syncs `paths.dist` to `site/`, comparing each file's MD5 to the live object's S3 ETag so only changed files are uploaded, writing each upload's `Cache-Control` from the first rule that matches its site-relative URL path, records the build's [artifact manifest](/reference/artifact-manifest/) at the per-build key the job names (`build/artifacts/<hash>/<buildId>.json`), and writes the changed-paths manifest to the job's `build/changed/<target>/<hash>.json`, reporting the `cacheControl` rules it applied. A MicroVM builds every pending job it has not built yet, one at a time, telling jobs apart by their id - so a stage and a deploy of the same hash are both built, never one taken for the other.
+5. Streams the build's CloudWatch logs, watching for job-scoped markers (`##build:done:<hash>@<jobId>` / `##build:failed:<hash>@<jobId>`) so neither an orphaned VM from another deploy nor another target's build of the same hash can be mistaken for this build's result. A bare-hash marker comes from a builder image older than job ids, and fails the build with a request to re-bootstrap rather than being trusted. The target's changed-paths manifest doubles as a completion signal if log delivery lags.
 6. Terminates the VM, clears the pending job, writes the deployment manifest, records the `cacheControl` rules at `build/cache-control/<target>.json` on success if the agent's manifest confirms them (unconfirmed otherwise), and invalidates only the changed CloudFront paths - falling back to `/*` past `invalidationMaxPaths`, and skipping invalidation entirely when nothing changed. It then reads the build's artifact manifest back from its per-build key and, on a deploy, keeps the first one recorded for the revision as its write-once original at `build/artifacts/<hash>.json` (a conditional `If-None-Match: *` write).
 
 In SSR mode step 4 differs: the agent validates the entry file, rejects any symbolic link inside the package (pnpm's default `node_modules` is a symlink tree, and Lambda loads nothing that is not in the archive), enforces the 512 MB unzipped bound, zips the package with a fixed timestamp, uploads it to `web/artifacts/<hash>.zip`, publishes only `ssr.staticDir` to `site/` (upload-only, listing what it did not publish as `staleStaticKeys`), and writes `web/results/<hash>.json` before the changed-paths manifest. The CLI then reads that result, compares the revision fingerprint with what is serving, and either creates a revision (polls it `Active`, probes the endpoint, then deletes stale keys and invalidates `/*`) or skips creation and invalidates just the static paths. Vended log delivery is unchanged. The builder image request states `cpuConfigurations: [{ architecture: 'ARM_64' }]` on every create and update - `ARM_64` is the only value the MicroVM API accepts, and it matches the Web Function runtime, so a native dependency compiled during the build serves correctly.

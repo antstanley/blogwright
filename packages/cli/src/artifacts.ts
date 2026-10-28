@@ -5,6 +5,11 @@
  * first manifest recorded for a revision, write-once, as its original at
  * `build/artifacts/<hash>.json`: no later build of the same revision - a
  * redeploy or a rollback's rebuild - can replace the record a review covered.
+ *
+ * A staged release is bound to the manifest of the build that staged it,
+ * copied by the CLI to `build/releases/<hash>.json`: that, not the original,
+ * is what `promote` checks the staged and the promoted bytes against, so a
+ * revision first deployed with other bytes can still be staged and promoted.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -14,6 +19,7 @@ import {
   artifactManifestKey,
   parseArtifactManifest,
   serializeArtifactManifest,
+  stagedReleaseManifestKey,
   type ArtifactManifest,
 } from 'blogwright-core';
 
@@ -132,7 +138,17 @@ export async function readBuildArtifact(
  * replaced. When one exists, say whether this build reproduced it. Never
  * throws - the site is already live.
  */
-async function recordOriginalArtifact(ctx: OpsContext, manifest: ArtifactManifest): Promise<void> {
+/**
+ * How a build's manifest relates to its revision's original: it became the
+ * original, it matches it, it differs from it, or the original could not be
+ * written or read.
+ */
+type OriginalOutcome = 'created' | 'matches' | 'differs' | 'unknown';
+
+async function recordOriginalArtifact(
+  ctx: OpsContext,
+  manifest: ArtifactManifest,
+): Promise<OriginalOutcome> {
   const key = artifactManifestKey(manifest.hash);
   const location = `s3://${ctx.names.bucket}/${key}`;
   let created: boolean;
@@ -147,23 +163,24 @@ async function recordOriginalArtifact(ctx: OpsContext, manifest: ArtifactManifes
     ctx.logger.warn(
       `could not record the original artifact manifest at ${location}: ${(err as Error).message}`,
     );
-    return;
+    return 'unknown';
   }
   if (created) {
     ctx.logger.info(`  recorded as the original release of ${manifest.hash} at ${location}`);
-    return;
+    return 'created';
   }
   const original = await readOrWarn(ctx, manifest.hash, key, 'original artifact manifest');
-  if (!original) return;
+  if (!original) return 'unknown';
   if (original.releaseHash === manifest.releaseHash) {
     ctx.logger.info(`  matches the original release of ${manifest.hash} recorded at ${location}`);
-    return;
+    return 'matches';
   }
   ctx.logger.warn(
     `this build of ${manifest.hash} is not byte-identical to its original release ` +
       `${original.release} (sha256 ${original.releaseHash}); the original record at ` +
       `${location} is kept unchanged`,
   );
+  return 'differs';
 }
 
 /**
@@ -178,6 +195,66 @@ export async function recordDeployArtifact(
   const manifest = await readBuildArtifact(ctx, hash, key);
   if (manifest) await recordOriginalArtifact(ctx, manifest);
   return manifest;
+}
+
+/**
+ * The manifest a staged release is bound to, or undefined when the hash has
+ * no staged release. A corrupt record, or one for another revision, throws.
+ */
+async function readStagedReleaseManifest(
+  ctx: OpsContext,
+  hash: string,
+): Promise<ArtifactManifest | undefined> {
+  return readArtifactManifestAt(ctx, hash, stagedReleaseManifestKey(hash));
+}
+
+/** The manifest a staged release is bound to, refusing a hash that has no staged release. */
+export async function requireStagedReleaseManifest(
+  ctx: OpsContext,
+  hash: string,
+): Promise<ArtifactManifest> {
+  const manifest = await readStagedReleaseManifest(ctx, hash);
+  if (manifest) return manifest;
+  throw new Error(
+    `${hash} is not staged: there is no staged release record at s3://${ctx.names.bucket}/` +
+      `${stagedReleaseManifestKey(hash)}. Stage it first with \`blogwright stage ${ctx.env}\` ` +
+      `from a checkout of ${hash}.`,
+  );
+}
+
+/** Drop a hash's staged-release binding, before its staged bytes are replaced. */
+export async function forgetStagedRelease(ctx: OpsContext, hash: string): Promise<void> {
+  await ctx.clients.s3.deleteObject(ctx.names.bucket, stagedReleaseManifestKey(hash));
+}
+
+/**
+ * Bind a staged release to the manifest its bytes were checked against, then
+ * keep that manifest as the revision's original when it has none - so the
+ * usual stage, promote, `verify <hash>` sequence checks one record. A
+ * revision whose original is another build keeps that original, and is told
+ * what `verify <hash>` will then report. Throws when the binding cannot be
+ * written: without it there is nothing to promote.
+ */
+export async function recordStagedRelease(
+  ctx: OpsContext,
+  manifest: ArtifactManifest,
+): Promise<void> {
+  const key = stagedReleaseManifestKey(manifest.hash);
+  await ctx.clients.s3.putObject(
+    ctx.names.bucket,
+    key,
+    serializeArtifactManifest(manifest),
+    'application/json',
+  );
+  ctx.logger.info(`  staged release recorded at s3://${ctx.names.bucket}/${key}`);
+  if ((await recordOriginalArtifact(ctx, manifest)) === 'differs') {
+    ctx.logger.warn(
+      `promote publishes and checks this staged release; \`blogwright verify ${manifest.hash}\` ` +
+        "checks site/ against the revision's original release, so after promotion it reports " +
+        'the differences - `blogwright verify ' +
+        `${manifest.hash} --staged\` checks the staged copy`,
+    );
+  }
 }
 
 /**

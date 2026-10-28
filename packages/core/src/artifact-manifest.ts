@@ -5,7 +5,7 @@
  *
  * It is what lets an operator assert "what is live is what was reviewed": CI
  * can archive it, and `blogwright verify` compares it against the objects
- * actually stored in S3.
+ * actually stored in S3 - the live site, or a release staged for promotion.
  *
  * The aggregate release hash is defined so it can be recomputed outside
  * blogwright from a build directory: it is the SHA-256 of the `sha256sum`
@@ -26,6 +26,9 @@ import { createHash } from 'node:crypto';
 
 /** The format version this module writes and the only one it reads. */
 export const ARTIFACT_MANIFEST_VERSION = 1;
+
+/** Where every staged release's bytes live, one prefix per revision hash. */
+export const STAGED_RELEASES_PREFIX = 'releases/';
 
 /** How many hex characters of the release hash the release identity carries. */
 export const RELEASE_HASH_PREFIX_LENGTH = 12;
@@ -91,6 +94,21 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
  */
 export function artifactManifestKey(hash: string): string {
   return `build/artifacts/${hash}.json`;
+}
+
+/** The prefix a staged release's bytes are stored under. */
+export function stagedReleasePrefix(hash: string): string {
+  return `${STAGED_RELEASES_PREFIX}${hash}/`;
+}
+
+/**
+ * The artifact manifest a staged release is bound to: the CLI's copy of the
+ * staged build's own manifest, written once that build's bytes under
+ * {@link stagedReleasePrefix} have been checked against it. It is outside
+ * every builder grant, so no later build can rewrite what a promotion checks.
+ */
+export function stagedReleaseManifestKey(hash: string): string {
+  return `build/releases/${hash}.json`;
 }
 
 /** Where every build of a revision records its own manifest, one object per build. */

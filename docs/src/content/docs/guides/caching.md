@@ -115,3 +115,5 @@ The record only claims what a build proved:
 - **A build that changes the rules marks the record unconfirmed before it starts.** A build that then fails or is cancelled partway may have rewritten only some files. The next build re-applies the rules in full, even if you have reverted the config in the meantime.
 
 A record that is not valid JSON or holds rules that no longer validate is ignored with a warning, and the next build re-applies the rules.
+
+A release built with `stage` is its own target (`release-<hash>.json`), and `promote` carries its headers into `site/` unchanged. It copies every file - and so invalidates every path - when the staged rules are not known to match the ones `site/` was written with: they differ, either record is unconfirmed, the staged record is missing, or `site/` has no record while the staged rules are not empty. It marks `site/`'s record unconfirmed before the first copy, so a promotion that stops partway is re-applied by the next build, and once the copies are done `site/`'s record holds the staged rules - see [Release gating](/guides/deploying/#release-gating-stage-verify-promote).

@@ -100,6 +100,14 @@ The builder writes its per-build manifest with its own roles, which need `s3:Put
 
 A failure to build or write the manifest never fails a build whose site is already published: the builder logs a warning, and the CLI reports that no manifest was recorded.
 
+## Staging and promotion
+
+A staged release is bound to the manifest of the build that staged it, not to the revision's original. [`stage`](/reference/cli/#stage) has the builder record its manifest under its own per-build key, checks the bytes under `releases/<hash>/` against it, and only then copies it to `build/releases/<hash>.json` - the staged release record. That key is outside every builder grant, so no later build can rewrite what a promotion is checked against. [`promote`](/reference/cli/#promote) reads that record once, checks the staged objects against it, copies them into `site/`, and checks the live objects against the same record. Because both checks compare every file's SHA-256 with one manifest, a successful promote means the live release hash equals the staged one.
+
+`stage` also keeps the staged manifest as the revision's original when the revision has none, so in the usual sequence - stage, promote, `verify <hash>` - every step checks the same record. When the revision already has an original from an earlier build with other bytes (it was deployed before, or staged before and the build is not reproducible), the original is kept as it is, as for any build. `promote` still publishes and checks the staged release, but `verify <hash>` checks `site/` against the original and so reports the differences; `stage` warns about this when it happens. `verify <hash> --staged` checks the staged copy against the staged release record.
+
+Re-staging a hash first deletes its staged release record, so a re-stage that stops partway leaves nothing `promote` would accept. See [Release gating](/guides/deploying/#release-gating-stage-verify-promote).
+
 ## Verifying live objects against it
 
 `blogwright verify <hash>` compares the objects under `site/` with the original manifest recorded for `<hash>`: it reads and hashes each object the manifest lists with its recorded size, and reports an object whose size differs, or that the manifest does not list, without reading it. It reports each missing, changed or unexpected object and exits 1 on any difference - see [`verify`](/reference/cli/#verify).

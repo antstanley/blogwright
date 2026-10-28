@@ -124,7 +124,7 @@ S3 writes object metadata - the content type, object tags and `Cache-Control` - 
 blogwright deploy --refresh
 ```
 
-`--refresh` is also accepted by `rollback` and `preview deploy`.
+`--refresh` is also accepted by `rollback`, `preview deploy` and `stage`; on [`promote`](#release-gating-stage-verify-promote) it copies every staged file.
 
 You do not need it for `Cache-Control`: each build records the `cacheControl` rules the builder confirms it applied, and a build whose rules differ from the target's record, or whose last rule change did not finish, refreshes on its own and says so (`an implicit --refresh`). That includes the first deploy after upgrading to a version with `cacheControl`, which retrofits the default headers once. See [Caching and Cache-Control](/guides/caching/#when-the-rules-change).
 
@@ -144,13 +144,58 @@ Everything the build printed - pnpm, the site build, the sync - lands in a Cloud
 blogwright logs <hash>
 ```
 
-The command uses the deployment manifest to window the log query to that build's time span (plus a minute either side). If the manifest is unreadable it falls back to the unfiltered window. See [Troubleshooting](/guides/troubleshooting/) for reading a failed build's output.
+The command uses the hash's newest build record - its deployment manifest, or its staged build's record when that is newer - to window the log query to that build's time span (plus a minute either side). If the manifest is unreadable it falls back to the unfiltered window. See [Troubleshooting](/guides/troubleshooting/) for reading a failed build's output.
 
 ## standard.site sync after deploy
 
 When the config has a `pds` section and publishing has been initialised, every successful **production** deploy also re-reconciles the site's standard.site records on your PDS. The sync is non-fatal by design: if it fails (an expired session, a network blip), the deploy still succeeds with a warning, and the next deploy heals the records. Non-production environments never sync.
 
 Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/plugins/standard-site/).
+
+## Release gating: stage, verify, promote
+
+`deploy` builds and publishes in one step. When a release has to be checked before it goes live - and what goes live has to be exactly what was checked - split it in two:
+
+```sh
+blogwright stage production            # build once; publish to releases/<hash>/, not to site/
+blogwright verify <hash> production --staged   # check the staged bytes against the staged release record
+blogwright promote <hash> production   # copy those bytes into site/ - no rebuild
+```
+
+**`stage`** runs the same build as `deploy` - the same source zip, builder MicroVM, `robots.txt` and `sitemap.xml` for the target environment - but the builder publishes the output to `releases/<hash>/` instead of `site/`, and records its own [artifact manifest](/reference/artifact-manifest/). Nothing serves `releases/`: the distribution's origin is `site/`, and the bucket is private, so a staged release is not reachable from the domain or the CloudFront hostname. Nothing is invalidated. `stage` then reads every staged object back, checks it against that manifest, and only then records the manifest as the staged release (`build/releases/<hash>.json`) - the record `promote` checks against. It prints the release identity, its release hash and the `promote` command to run. `stage --refresh` re-uploads every file into the staged prefix, for a metadata fix on a hash that was already staged.
+
+A staged release is bound to the build that staged it, not to the revision's original manifest. If the revision has no original yet, the staged manifest becomes it, so `verify <hash>` after the promotion checks the same record. If the revision already has an original from another build with other bytes - it was deployed before, or staged before and the build is not reproducible - `stage` and `promote` say so: the promotion is still checked against the staged release, but `verify <hash>` checks the original and reports the differences. See [Staging and promotion](/reference/artifact-manifest/#staging-and-promotion).
+
+**`promote <hash>`** points production at that already-built output:
+
+1. It reads the staged release record and re-verifies the staged objects against it - every object read and its SHA-256 compared - and refuses, copying nothing, if any differs or the hash was never staged.
+2. It converges the response headers policy from the [`headers` config](/reference/configuration/#response-headers-headers), as `deploy` does, so a header change reaches production with the release.
+3. It copies each file whose live ETag differs from the staged one into `site/` with a server-side S3 copy - or every file, in the cases below. A copy moves the staged object's bytes, content type, `Cache-Control` and object tags exactly as they are; nothing is rebuilt, re-encoded or re-uploaded from your machine. A file whose content is unchanged is not copied, so it keeps the content type and tags it already had in `site/`: after an upgrade that fixes a content type, or once tags can be copied, run `promote --refresh` (and `stage --refresh` first, if the staged copy needs the fix too).
+4. It deletes the objects in `site/` that the release does not contain, only after every copy has succeeded.
+5. It invalidates the changed paths under the same rules as a deploy: the copied and deleted paths (each directory index also as its directory URL), or `/*` past `invalidationMaxPaths`. When it copied every file, every path counts as changed. Only when the live site already held the release and nothing had to be copied for its headers is nothing invalidated.
+6. It verifies `site/` against the staged release record: every live object is read and hashed. The command succeeds only when the live release hash equals the staged one - the promoted bytes are the staged bytes.
+7. It records the release as live (`build/live-release.json`) and prints the release it replaced beside the one it published.
+
+The copies run eight at a time, in no particular order, so while they run a visitor whose request misses the cache can get a new page whose new assets are not copied yet, or an old page beside a new asset - the same window a deploy's upload has. Because stale objects are deleted only after every copy, no page that is still live loses an asset it references. If `promote` stops partway, `site/` holds part of each release: the live-release record says a promote of `<hash>` did not finish (naming the last release that did), and running `promote` again finishes the job.
+
+`promote` copies every file, not only the changed ones, when you pass `--refresh`, or when the staged release's `Cache-Control` rules are not known to match the ones `site/` was written with (see below).
+
+The post-deploy plugin steps (the standard.site sync, for one) run after a promote only when the working copy is the promoted revision, because they publish the working copy's content; otherwise the command warns and skips them.
+
+**Cache-Control on promote.** A staged release's files carry the `Cache-Control` the [`cacheControl` rules](/reference/configuration/#cache-control-cachecontrol) gave them when it was staged, recorded at `build/cache-control/release-<hash>.json`. A server-side copy keeps that header, so the headers are promoted along with the bytes, as part of what was reviewed. A file whose content is unchanged would keep the header `site/` already had, so when the staged rules are not known to match the ones `site/` was written with - they differ, `site/`'s record is unconfirmed, the staged record is missing or unconfirmed, or `site/` has no record while the staged rules are not empty - `promote` copies every file instead, after marking `site/`'s record unconfirmed so an interrupted promotion is re-applied. Afterwards `site/`'s record (`build/cache-control/site.json`) holds the staged rules. If the configured rules changed after staging, `promote` warns and still publishes the staged headers - stage again to apply the current rules - and the next `deploy` re-uploads every file with the current rules, as it does after any rules change.
+
+`stage` and `promote` hold the [environment lock](/guides/operations/#one-command-at-a-time-the-environment-lock) while they run, like `deploy`, `rollback` and `delete`, so none of them can interleave its writes with another.
+
+### What it does not cover
+
+- **Reviewing a staged release in a browser.** A staged release is deliberately not served. Review rendered pages through [PR previews](/guides/pr-previews/) or a separate environment; `stage` and `promote` guarantee that what goes live is byte-identical to the staged build, not that a person looked at it.
+- **Promoting between environments.** A release is staged in the environment it will be promoted into, so its `robots.txt` and `sitemap.xml` are that environment's. Staging in `staging` and promoting to `production` is not supported: the two would differ in exactly those files.
+- **SSR environments and the preview stack.** Both commands refuse there. An SSR deploy already pins the exact artifact version a revision serves, and `rollback` reproduces it without a rebuild.
+- **Edge caches.** `verify` and `promote` read S3, not CloudFront. Until an invalidation completes, an edge location may still serve a copy cached from before it.
+
+Staged releases stay under `releases/<hash>/` until you remove them, which is what lets an earlier hash be promoted again. If storage matters, add an S3 lifecycle rule expiring old `releases/` objects, or delete a prefix with `aws s3 rm --recursive s3://<bucket>/releases/<hash>/` (and its record, `build/releases/<hash>.json`).
+
+`stage` needs builder roles that may write `releases/*`; on a stack bootstrapped before staging existed it refuses before building and asks you to run `blogwright bootstrap <env>` once. The same bootstrap grants the CI deploy role `s3:GetObjectTagging` on `releases/*` and `s3:PutObjectTagging` on `site/*`, which `promote` uses to copy object tags. Without them it promotes untagged and warns once; after bootstrapping, `promote <hash> --refresh` copies the tags onto every file.
 
 ## SSR environments
 
@@ -186,7 +231,8 @@ Removing `ssr` and re-bootstrapping does not delete the Web Function, its role, 
 
 ## Related pages
 
-- [Operations](/guides/operations/) - `history`, `rollback`, `status`, and day-two tasks
+- [Operations](/guides/operations/) - `history`, `verify`, `rollback`, `status`, and day-two tasks
+- [Artifact manifest](/reference/artifact-manifest/) - the record `verify` and `promote` check against
 - [PR previews](/guides/pr-previews/) - the same build pipeline targeting `previews/<id>/site/`
 - [CI deploys with GitHub OIDC](/guides/ci-github-oidc/) - running `blogwright deploy` from a workflow
 - [Caching and Cache-Control](/guides/caching/) - the per-path headers, and browser versus edge lifetimes

@@ -16,6 +16,7 @@ import {
   type CacheControlRule,
   type CredentialProvider,
   type EntryShim,
+  invalidationPaths,
 } from 'blogwright-core';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 
@@ -81,13 +82,24 @@ export interface BuildPayload {
   /** Present only for an SSR environment: package the output as a Web Function revision artifact. */
   webFunction?: WebFunctionJob | undefined;
   /**
-   * Where to record the artifact manifest of a static build
-   * (`build/artifacts/<hash>.json`). Absent, none is written.
+   * Where to record the artifact manifest of a static build - the build's own
+   * `build/artifacts/<hash>/<buildId>.json`. Absent, none is written.
    */
   artifactManifestKey?: string | undefined;
+  /**
+   * The job's own id, carried on its completion markers so the CLI that
+   * queued it can tell its build from another target's build of the same hash.
+   * Absent from a job an older CLI queued.
+   */
+  jobId?: string | undefined;
+  /**
+   * Where the changed-paths manifest goes - qualified by the job's target.
+   * Absent (an older CLI), `build/changed/<hash>.json`.
+   */
+  changedKey?: string | undefined;
 }
 
-/** The job document the CLI drops at s3://<bucket>/build/pending.json. */
+/** The job document the CLI drops at s3://<bucket>/build/pending/<target>.json. */
 export interface PendingJob {
   hash: string;
   sourceKey: string;
@@ -101,6 +113,45 @@ export interface PendingJob {
   refresh?: boolean;
   webFunction?: WebFunctionJob;
   artifactManifestKey?: string;
+  jobId?: string;
+  changedKey?: string;
+  /** The key the job was read from; set by {@link fetchPendingJobs}, never by the CLI. */
+  pendingKey?: string;
+}
+
+/**
+ * What makes a job distinct. Two targets can build the same hash at once (a
+ * deploy and a stage of one revision), so the hash alone would let a MicroVM
+ * build one target's job and skip the other's as already done. A job an
+ * older CLI queued has no id, so its pending key - one per target - stands in.
+ */
+export function jobIdentity(job: PendingJob): string {
+  return job.jobId ?? `${job.pendingKey ?? 'build/pending/'}#${job.hash}`;
+}
+
+/** The first pending job this MicroVM has not yet built, if any. */
+export function nextPendingJob(
+  jobs: readonly PendingJob[],
+  processed: ReadonlySet<string>,
+): PendingJob | undefined {
+  return jobs.find((job) => !processed.has(jobIdentity(job)));
+}
+
+/**
+ * The completion marker the CLI tails for: `##build:done:<hash>@<jobId>` (or
+ * `failed`). A job from an older CLI has no id and gets the bare-hash form it
+ * expects.
+ */
+export function buildMarker(
+  state: 'done' | 'failed',
+  job: { hash: string; jobId?: string | undefined },
+): string {
+  return `##build:${state}:${job.hash}${job.jobId ? `@${job.jobId}` : ''}`;
+}
+
+/** Where a job's changed-paths manifest goes: its own key, or the legacy hash-only one. */
+export function changedPathsKey(job: { hash: string; changedKey?: string | undefined }): string {
+  return job.changedKey ?? `build/changed/${job.hash}.json`;
 }
 
 export type LogFn = (line: string) => void;
@@ -214,7 +265,7 @@ export async function fetchPendingJobs(s3: S3Client, bucket: string): Promise<Pe
   for (const obj of objects) {
     if (!obj.key.endsWith('.json')) continue;
     const text = await s3.getObjectText(bucket, obj.key);
-    if (text) jobs.push(JSON.parse(text) as PendingJob);
+    if (text) jobs.push({ ...(JSON.parse(text) as PendingJob), pendingKey: obj.key });
   }
   return jobs;
 }
@@ -600,19 +651,14 @@ async function writeChangedPaths(
   s3: S3Client,
   log: LogFn,
   bucket: string,
-  hash: string,
+  key: string,
   manifest: ChangedPathsManifest,
 ): Promise<void> {
   // If writing the manifest fails (e.g. the runtime role lacks build/changed/* PutObject),
   // the site is already published, so log and continue: the CLI falls back to a wildcard
   // invalidation, and treats the rules as unconfirmed so the next build re-applies them.
   try {
-    await s3.putObject(
-      bucket,
-      `build/changed/${hash}.json`,
-      JSON.stringify(manifest),
-      'application/json',
-    );
+    await s3.putObject(bucket, key, JSON.stringify(manifest), 'application/json');
   } catch (err) {
     log(`warning: could not write changed-paths manifest (${(err as Error).message})`);
   }
@@ -815,21 +861,8 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
     s3,
     log,
     payload.bucket,
-    payload.hash,
+    changedPathsKey(payload),
     changedPathsManifest(published, prefix),
   );
   await rm(workDir, { recursive: true, force: true });
-}
-
-/**
- * Map a changed S3 key to the CloudFront URL path(s) to invalidate. For directory
- * index documents, invalidate both the `index.html` key and the directory URL a viewer
- * would actually request (e.g. `site/posts/index.html` → `/posts/index.html` + `/posts/`).
- */
-export function invalidationPaths(key: string, prefix: string): string[] {
-  const rel = key.startsWith(prefix) ? key.slice(prefix.length) : key;
-  const paths = [`/${rel}`];
-  if (rel === 'index.html') paths.push('/');
-  else if (rel.endsWith('/index.html')) paths.push(`/${rel.slice(0, -'index.html'.length)}`);
-  return paths;
 }

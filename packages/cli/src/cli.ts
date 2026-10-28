@@ -22,6 +22,7 @@ import {
 } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { AwsLogin, PackageManager, Ports } from './ports.js';
+import { promote, stage } from './releases.js';
 import { verify } from './verify.js';
 import { whoami } from './whoami.js';
 
@@ -36,14 +37,19 @@ Commands:
                               (--switch-mode: move a bootstrapped stack
                               between static and SSR serving)
   deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
+  stage       [env]           Build like deploy, but publish to releases/<hash>/
+                              (not served) for a later promote
+  promote     <hash> [env]    Copy a staged release into site/ without
+                              rebuilding, invalidate, and verify it
   rollback    <hash> [env]    Re-deploy an existing build by hash
   delete      [env]           Empty the live site/ prefix
   destroy     [env] --yes     Tear down all infrastructure
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
-  verify      <hash> [env]    Check the live site/ byte for byte against the
-                              artifact manifest recorded for a hash
+  verify      <hash> [env]    Check the live site/ (or, with --staged, the
+                              staged copy) byte for byte against the artifact
+                              manifest recorded for a hash
   whoami      [env]           Show the AWS account, identity and profile in
                               use, and whether the account pin accepts them
 
@@ -71,13 +77,19 @@ Options:
   --plain           Minimal machine-friendly output (no colour, no live status,
                     no prompts) - for CI systems and agents; also automatic when
                     output is piped. NO_COLOR disables colour only.
-  --refresh         Re-upload every file on deploy, even unchanged ones, so
-                    metadata fixes (content types, object tags) reach live
-                    objects the ETag comparison would otherwise skip.
+  --refresh         Re-upload every file on deploy, rollback or stage (copy
+                    every file on promote), even unchanged ones, so metadata
+                    fixes (content types, object tags) reach objects the
+                    ETag comparison would otherwise skip.
+  --force-unlock    Replace the environment lock a deploy, rollback, stage,
+                    promote or delete left behind when it stopped; only once
+                    that command is known to be no longer running
   --switch-mode     Allow bootstrap to change a bootstrapped stack between
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy
                     in the new mode exists.
+  --staged          verify the release staged under releases/<hash>/ instead
+                    of the live site/
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -239,7 +251,7 @@ async function helpText(ports: Pick<Ports, 'fs' | 'loader'>): Promise<string> {
   return buildHelp(USAGE, discovered);
 }
 
-const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify']);
+const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify', 'promote']);
 
 /**
  * The `<hash> [env]` arguments of a hash-first command. Without `--hash` the
@@ -247,6 +259,9 @@ const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify']);
  * hash is taken and the first positional is the environment. A hash given both
  * ways is refused rather than guessed at, and so is a missing one.
  */
+/** What a revision hash may contain: jj and git print short hex ids. */
+const REVISION_HASH = /^[0-9A-Za-z]{1,64}$/;
+
 function hashArguments(
   command: string,
   flagHash: string | undefined,
@@ -262,6 +277,14 @@ function hashArguments(
   }
   const hash = flagHash ?? first;
   if (!hash) throw new Error(`${command} requires a <hash>`);
+  // The hash names S3 keys (build/<hash>.zip, releases/<hash>/), so only the
+  // characters jj and git print are accepted - never a "/" or "..".
+  if (!REVISION_HASH.test(hash)) {
+    throw new Error(
+      `${command} needs a revision hash of letters and digits (as \`blogwright history\` ` +
+        `lists them), got "${hash}"`,
+    );
+  }
   return { hash, envPositional: flagHash === undefined ? second : first };
 }
 
@@ -393,6 +416,8 @@ export async function main(
       // is declared kebab-case and read back the same way, because the camel
       // form would reject the flag the usage text and docs advertise.
       'switch-mode': { type: 'boolean', default: false },
+      'force-unlock': { type: 'boolean', default: false },
+      staged: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -523,7 +548,7 @@ export async function main(
     );
   }
 
-  // Positional layout: rollback/logs/verify take <hash> first, then optional
+  // Positional layout: rollback/logs/verify/promote take <hash> first, then optional
   // env. Their hash is checked here, before any context is built; the other
   // commands never read `hash`.
   let hash = '';
@@ -551,17 +576,31 @@ export async function main(
       // plugin dispatch uses - a deploy that fails never loads a plugin.
       await commands.deploy(ctx, {
         refresh: values.refresh,
+        forceUnlock: values['force-unlock'],
         afterDeploy: (deployed) => runAfterDeployHooks(deployed, makeDiscoveryPorts()),
       });
       break;
+    case 'stage':
+      await stage(ctx, { refresh: values.refresh, forceUnlock: values['force-unlock'] });
+      break;
+    case 'promote':
+      await promote(ctx, hash, {
+        refresh: values.refresh,
+        forceUnlock: values['force-unlock'],
+        afterDeploy: (promoted) => runAfterDeployHooks(promoted, makeDiscoveryPorts()),
+      });
+      break;
     case 'rollback':
-      await commands.rollback(ctx, hash, { refresh: values.refresh });
+      await commands.rollback(ctx, hash, {
+        refresh: values.refresh,
+        forceUnlock: values['force-unlock'],
+      });
       break;
     case 'delete':
-      await commands.deleteSite(ctx);
+      await commands.deleteSite(ctx, { forceUnlock: values['force-unlock'] });
       break;
     case 'destroy':
-      await commands.destroy(ctx, { yes: values.yes });
+      await commands.destroy(ctx, { yes: values.yes, forceUnlock: values['force-unlock'] });
       break;
     case 'history':
       await commands.history(ctx);
@@ -573,7 +612,7 @@ export async function main(
       await commands.status(ctx);
       break;
     case 'verify':
-      await verify(ctx, hash);
+      await verify(ctx, hash, values.staged ? 'staged' : 'live');
       break;
     default:
       // Unreachable: past the `KNOWN_COMMANDS` membership test above,
