@@ -89,6 +89,7 @@ async function poll(): Promise<void> {
       robots: next.robots,
       sitemapBaseUrl: next.sitemapBaseUrl,
       objectTags: next.objectTags,
+      cacheControl: next.cacheControl,
       refresh: next.refresh,
       ...(next.webFunction ? { webFunction: next.webFunction } : {}),
       ...(next.artifactManifestKey ? { artifactManifestKey: next.artifactManifestKey } : {}),

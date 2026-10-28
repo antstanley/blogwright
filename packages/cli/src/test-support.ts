@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import {
   AwsError,
   createArtifactManifest,
+  createCacheControlLookup,
   createClients,
   createMemoryFileSystem,
   createNodeFileSystem,
@@ -20,6 +21,7 @@ import {
   emptyState,
   findRepoRoot,
   mergeConfig,
+  parseCacheControlRules,
   staticCredentials,
   StateStore,
   type AwsClients,
@@ -32,7 +34,8 @@ import {
   type Plugin,
   type PluginCommand,
   type PluginContext,
-  type ObjectTagCopy,
+  type CopyObjectOptions,
+  type ObjectMetadata,
   type S3Client,
   type S3Object,
   type Terminal,
@@ -640,6 +643,7 @@ export interface MemoryObject {
   body: Uint8Array;
   contentType: string;
   tags?: Record<string, string> | undefined;
+  cacheControl?: string | undefined;
 }
 
 /** What {@link createMemoryS3} calls with each PUT, after storing it. */
@@ -670,10 +674,15 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
       key: string,
       body: string | Uint8Array,
       contentType = 'application/octet-stream',
-      tags?: Record<string, string>,
+      metadata: ObjectMetadata = {},
     ) => {
       const bytes = toBytes(body);
-      objects.set(key, { body: bytes, contentType, ...(tags ? { tags } : {}) });
+      objects.set(key, {
+        body: bytes,
+        contentType,
+        ...(metadata.tags ? { tags: metadata.tags } : {}),
+        ...(metadata.cacheControl !== undefined ? { cacheControl: metadata.cacheControl } : {}),
+      });
       for (const listener of listeners) listener(key, bytes);
       return undefined;
     },
@@ -691,14 +700,15 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
       _bucket: string,
       sourceKey: string,
       destinationKey: string,
-      tags: ObjectTagCopy = 'copy',
+      options: CopyObjectOptions = {},
     ) => {
       const source = objects.get(sourceKey);
       if (!source) throw noSuchKey(sourceKey);
       objects.set(destinationKey, {
         body: source.body,
         contentType: source.contentType,
-        ...(tags === 'copy' && source.tags ? { tags: source.tags } : {}),
+        ...((options.tags ?? 'copy') === 'copy' && source.tags ? { tags: source.tags } : {}),
+        ...(source.cacheControl !== undefined ? { cacheControl: source.cacheControl } : {}),
       });
     },
     deleteObject: async (_bucket: string, key: string) => {
@@ -738,6 +748,7 @@ interface FakeBuildJob {
   hash: string;
   sitePrefix: string;
   objectTags?: Record<string, string>;
+  cacheControl?: unknown;
   artifactManifestKey?: string;
 }
 
@@ -757,6 +768,8 @@ export function attachFakeBuilder(
     if (!key.startsWith('build/pending/')) return;
     const job = JSON.parse(new TextDecoder().decode(body)) as FakeBuildJob;
     const built = files();
+    const rules = parseCacheControlRules(job.cacheControl ?? []);
+    const cacheControlFor = createCacheControlLookup(rules);
     for (const existing of s3.objects.keys()) {
       if (existing.startsWith(job.sitePrefix)) s3.objects.delete(existing);
     }
@@ -765,6 +778,9 @@ export function attachFakeBuilder(
         body: textEncoder.encode(content),
         contentType: 'text/html; charset=utf-8',
         ...(job.objectTags ? { tags: job.objectTags } : {}),
+        ...(cacheControlFor(`/${path}`) !== undefined
+          ? { cacheControl: cacheControlFor(`/${path}`) }
+          : {}),
       });
     }
     if (job.artifactManifestKey && !opts.artifactWriteDenied) {
@@ -784,7 +800,9 @@ export function attachFakeBuilder(
     }
     const paths = Object.keys(built).map((path) => `/${path}`);
     s3.objects.set(`build/changed/${job.hash}.json`, {
-      body: textEncoder.encode(JSON.stringify({ paths })),
+      // Reports the rules it applied, as the real agent does, so the CLI's
+      // Cache-Control record is confirmed.
+      body: textEncoder.encode(JSON.stringify({ paths, cacheControl: rules })),
       contentType: 'application/json',
     });
   });
