@@ -51,6 +51,9 @@ import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes } from './nodes.js';
 import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
 
+/** Post-deploy plugin steps that do nothing, for commands expected to succeed. */
+const NO_HOOKS = { afterDeploy: async () => undefined };
+
 /** For a deploy that must fail first: its post-deploy step must never run. */
 const UNREACHABLE_AFTER_DEPLOY: DeployOptions = {
   afterDeploy: async () => {
@@ -1242,7 +1245,9 @@ describe('SSR mode command contract', () => {
     await expect(deploy(ahead.ctx, UNREACHABLE_AFTER_DEPLOY)).rejects.toThrow(
       /configured for ssr serving but its distribution serves static/,
     );
-    await expect(rollback(ahead.ctx, HASH)).rejects.toThrow(/bootstrap production --switch-mode/);
+    await expect(rollback(ahead.ctx, HASH, NO_HOOKS)).rejects.toThrow(
+      /bootstrap production --switch-mode/,
+    );
     expect(ahead.calls).toEqual([]);
 
     // `ssr` dropped, distribution still SSR: a static publish would delete the
@@ -1268,11 +1273,21 @@ describe('SSR mode command contract', () => {
     ).toBe(true);
   });
 
+  it('rollback --rebuild is refused in SSR mode, before anything is read or locked', async () => {
+    const { ctx, calls } = ssrCtx({});
+    await expect(rollback(ctx, HASH, { ...NO_HOOKS, rebuild: true })).rejects.toThrow(
+      /rollback --rebuild applies to static environments/,
+    );
+    expect(calls).toEqual([]);
+  });
+
   it('rollback rebuilds when the manifest has no webFunction block', async () => {
     const { ctx, calls } = ssrCtx({});
     // The manifest carries a predecessor's static-era shape.
     ctx.clients.s3.getObjectText = async () => JSON.stringify({ hash: HASH, status: 'succeeded' });
-    await expect(rollback(ctx, HASH)).rejects.toThrow(/no build artifact at build\/ssr123\.zip/);
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(
+      /no build artifact at build\/ssr123\.zip/,
+    );
     expect(calls).toContain(`s3.objectExists build/${HASH}.zip`);
     expect(calls.some((call) => call.startsWith('lambdaWeb.createRevision'))).toBe(false);
   });
@@ -1283,7 +1298,7 @@ describe('SSR mode command contract', () => {
       key === `build/manifests/${HASH}.json`
         ? JSON.stringify({ hash: HASH, status: 'succeeded', webFunction: RECORDED })
         : undefined;
-    await expect(rollback(ctx, HASH)).rejects.toThrow(/no build artifact/);
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(/no build artifact/);
     expect(calls).toContain(
       `s3.objectVersionExists ${RECORDED.artifactKey} ${RECORDED.artifactVersionId}`,
     );
@@ -1297,7 +1312,7 @@ describe('SSR mode command contract', () => {
       key === `build/manifests/${HASH}.json`
         ? JSON.stringify({ hash: HASH, status: 'succeeded', webFunction: RECORDED })
         : undefined;
-    await expect(rollback(ctx, HASH)).rejects.toThrow(/no build artifact/);
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(/no build artifact/);
     expect(calls.some((call) => call.startsWith('s3.objectVersionExists'))).toBe(false);
   });
 
@@ -1324,7 +1339,7 @@ describe('SSR mode command contract', () => {
         },
       },
     });
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
     expect(calls.some((call) => call.startsWith('s3.objectExists build/'))).toBe(false);
     // No build: the artifact path creates the revision from the manifest.
     expect(calls).not.toContain('microvms.runMicrovm');

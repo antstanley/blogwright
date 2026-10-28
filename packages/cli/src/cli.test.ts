@@ -80,7 +80,9 @@ Commands:
                               (not served) for a later promote
   promote     <hash> [env]    Copy a staged release into site/ without
                               rebuilding, invalidate, and verify it
-  rollback    <hash> [env]    Re-deploy an existing build by hash
+  rollback    <hash> [env]    Republish a staged release (verified, no
+                              rebuild), else rebuild the hash's archived source
+                              (--rebuild: always rebuild)
   delete      [env]           Empty the live site/ prefix
   destroy     [env] --yes     Tear down all infrastructure
   history     [env]           List deployment history
@@ -129,6 +131,8 @@ Options:
                     in the new mode exists.
   --staged          verify the release staged under releases/<hash>/ instead
                     of the live site/
+  --rebuild         rollback: rebuild from the archived source even when the
+                    hash has a staged release
   --yes             Confirm destructive operations
   --help            Show this help
 `;

@@ -150,7 +150,7 @@ The command uses the hash's newest build record - its deployment manifest, or it
 
 When the config has a `pds` section and publishing has been initialised, every successful **production** deploy also re-reconciles the site's standard.site records on your PDS. The sync is non-fatal by design: if it fails (an expired session, a network blip), the deploy still succeeds with a warning, and the next deploy heals the records. Non-production environments never sync.
 
-Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/plugins/standard-site/).
+A `promote` or `rollback` runs the same post-deploy steps only when the working copy is the revision it publishes: the PDS mirrors the working tree's content, which matches the live site only then. With any other checkout the command warns and skips them; check out the published revision and run `blogwright pds sync` to realign the records. See [Publishing to standard.site](/plugins/standard-site/).
 
 ## Release gating: stage, verify, promote
 
@@ -193,7 +193,7 @@ The post-deploy plugin steps (the standard.site sync, for one) run after a promo
 - **SSR environments and the preview stack.** Both commands refuse there. An SSR deploy already pins the exact artifact version a revision serves, and `rollback` reproduces it without a rebuild.
 - **Edge caches.** `verify` and `promote` read S3, not CloudFront. Until an invalidation completes, an edge location may still serve a copy cached from before it.
 
-Staged releases stay under `releases/<hash>/` until you remove them, which is what lets an earlier hash be promoted again. If storage matters, add an S3 lifecycle rule expiring old `releases/` objects, or delete a prefix with `aws s3 rm --recursive s3://<bucket>/releases/<hash>/` (and its record, `build/releases/<hash>.json`).
+Staged releases stay under `releases/<hash>/` until you remove them, which is what lets an earlier hash be promoted again - and what lets [`rollback <hash>`](/guides/operations/#roll-back-rollback-hash) to a staged hash republish its verified bytes instead of rebuilding. If storage matters, add an S3 lifecycle rule expiring old `releases/` objects, or delete a prefix with `aws s3 rm --recursive s3://<bucket>/releases/<hash>/` (and its record, `build/releases/<hash>.json`).
 
 `stage` needs builder roles that may write `releases/*`; on a stack bootstrapped before staging existed it refuses before building and asks you to run `blogwright bootstrap <env>` once. The same bootstrap grants the CI deploy role `s3:GetObjectTagging` on `releases/*` and `s3:PutObjectTagging` on `site/*`, which `promote` uses to copy object tags. Without them it promotes untagged and warns once; after bootstrapping, `promote <hash> --refresh` copies the tags onto every file.
 

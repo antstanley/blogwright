@@ -170,6 +170,22 @@ function mismatchSummary(comparison: ArtifactComparison): string {
 }
 
 /**
+ * A stored copy that does not hold exactly the release it was checked
+ * against. The message names the location, the release and the counts; the
+ * comparison is kept so a caller can say how to recover.
+ */
+export class ReleaseMismatchError extends Error {
+  constructor(
+    readonly location: string,
+    readonly release: string,
+    readonly comparison: ArtifactComparison,
+  ) {
+    super(`${location} does not match release ${release}: ${mismatchSummary(comparison)}`);
+    this.name = 'ReleaseMismatchError';
+  }
+}
+
+/**
  * Check that `prefix` holds exactly the original release recorded for
  * `hash`: logs every difference and throws when there is any, so CI fails the step.
  */
@@ -183,7 +199,7 @@ async function verifyRelease(
 
 /**
  * Check that `prefix` holds exactly the release `manifest` records: logs
- * every difference and throws when there is any.
+ * every difference and throws a {@link ReleaseMismatchError} when there is any.
  */
 export async function verifyStoredRelease(
   ctx: OpsContext,
@@ -197,9 +213,7 @@ export async function verifyStoredRelease(
   const comparison = await compareStoredRelease(ctx, manifest, prefix);
   for (const line of comparisonLines(comparison)) ctx.logger.info(line);
   if (!isExactMatch(comparison)) {
-    throw new Error(
-      `${location} does not match release ${manifest.release}: ${mismatchSummary(comparison)}`,
-    );
+    throw new ReleaseMismatchError(location, manifest.release, comparison);
   }
   ctx.logger.ok(
     `${location} matches release ${manifest.release}: ${manifest.fileCount} files, ` +

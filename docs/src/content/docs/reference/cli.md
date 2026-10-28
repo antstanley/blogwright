@@ -115,19 +115,38 @@ The copies run in parallel, so while they run some pages may already be new and 
 
 Post-deploy plugin steps, such as the standard.site sync, run only when the working copy is `<hash>`; otherwise `promote` warns and skips them. When the caller may not copy object tags (`s3:GetObjectTagging` on `releases/*` and `s3:PutObjectTagging` on `site/*`, granted by `bootstrap`), it promotes untagged and warns once, naming the `promote --refresh` that copies them later. Any other denial fails the promotion.
 
+A staged copy that no longer matches its record is refused with the missing, changed and unexpected counts and the likely cause; stage the hash again. Like a republishing [`rollback`](#rollback), `promote` warns when the hash was staged again since it was last published, and when the staged `robots.txt` or `sitemap.xml` was written for another origin than the environment has now.
+
 ### rollback
 
 ```sh
-blogwright rollback <hash> [env] [--refresh] [--force-unlock]
+blogwright rollback <hash> [env] [--refresh] [--rebuild] [--force-unlock]
 ```
 
-Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history). In a static environment it then prints the release hash of the hash's original [artifact manifest](/reference/artifact-manifest/) and the rebuild's own, and warns when the rebuild is not byte-identical - or recorded no manifest, so it cannot be checked. The original is never replaced by the rebuild.
+Restores an earlier release. Find hashes with [`history`](#history). In a static environment, rollback chooses one of three outcomes, and says which as it starts:
+
+1. **Republish.** The hash has a staged release record (`build/releases/<hash>.json`, written by [`stage`](#stage)). The rollback republishes the bytes stored under `releases/<hash>/`, with no rebuild. It goes through the same code as [`promote`](#promote):
+   - it verifies the staged objects against the record, then converges the response headers policy;
+   - it copies the changed files into `site/`, deletes stale objects and invalidates those paths;
+   - it verifies `site/` against the record.
+
+   It then prints the release that was live (`previous release`) and the one it restored (`restored release`), each with its release hash. `history` shows the staged build as `promoted`, at the rollback's time.
+2. **Refuse.** The hash has a staged release record, but the record is unreadable, or the staged copy no longer matches it. Either an S3 lifecycle rule expired some or all of its objects, or the copy was changed after staging. The rollback refuses before anything is published, because a quiet rebuild would publish bytes no review covered. The error gives the missing, changed and unexpected counts and the likely cause, and names both ways out:
+   - stage the hash again from a checkout of it, then roll back again;
+   - or run `rollback <hash> --rebuild`.
+3. **Rebuild.** The hash has no staged release record, or `--rebuild` was passed. The rollback checks that the source zip `build/<hash>.zip` exists (errors if it does not), re-runs the builder against it and invalidates the changed paths. It then prints the release hash of the hash's original [artifact manifest](/reference/artifact-manifest/) and the rebuild's own. It warns when the rebuild is not byte-identical, when the rebuild recorded no manifest, or when the original could not be read; in each of the last two cases the rebuild cannot be checked. The original is never replaced by the rebuild.
+
+**Rolling back to the live release** republishes it too. That re-checks the staged copy and `site/`, and repairs any difference. The command says the release is already live, and when nothing differed it reports that nothing was copied, deleted or invalidated.
+
+**Warnings before a republish:**
+- **Staged again.** The hash was staged again since its last `promote` or rollback, and the staged bytes now differ from the ones published then. The command names both releases. Every publication is kept in `build/published/<hash>.json`.
+- **Another origin or seo config.** The staged `robots.txt` or `sitemap.xml` was written for another origin or seo config than the environment has now, for example after a domain change. The staged bytes are published as they are; stage the hash again to publish them for the current origin.
+
+`--refresh` re-uploads (when republishing: copies) every file. `--rebuild` is refused in an SSR environment.
 
 In SSR mode, rollback instead reproduces the revision that hash was deployed with, from the artifact version and the `webFunction` settings recorded in its manifest - without a rebuild - and skips creation when that revision's fingerprint is already what serves. It falls back to re-running the build when the manifest has no `webFunction` block, the recorded artifact version is gone, or `ssr.staticDir` is configured (the artifact carries only the server, and the fingerprinted assets its pages reference were removed from `site/` by later deploys). Both paths run the same endpoint preflight, readiness probe and `/*` invalidation a deploy does.
 
-:::caution
-Rollback does not sync the PDS - standard.site records mirror the current repo content, which a rollback does not restore. When production has a `pds` config, the command warns: check out the rolled-back revision and run `blogwright pds sync` if needed.
-:::
+Post-deploy plugin steps run on the same rule as `promote`: only when the working copy is `<hash>`. The standard.site sync is one such step. They publish the working copy's content, which matches the live site only then; otherwise the rollback warns and skips them. To realign plugin content, check out the rolled-back revision and run the plugin's command, for example `blogwright pds sync`.
 
 ### delete
 
@@ -409,9 +428,10 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
 | `--switch-mode` | `bootstrap` | Allow a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses a mode change. |
-| `--refresh` | `deploy`, `rollback`, `preview deploy`, `stage`, `promote` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach objects the ETag comparison would otherwise skip. For `promote`, copy every staged file rather than only the changed ones. |
+| `--refresh` | `deploy`, `rollback`, `preview deploy`, `stage`, `promote` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach objects the ETag comparison would otherwise skip. For `promote`, and a `rollback` that republishes a staged release, copy every staged file rather than only the changed ones. |
 | `--force-unlock` | `deploy`, `rollback`, `stage`, `promote`, `delete`, `destroy` | Replace the [environment lock](/guides/operations/#one-command-at-a-time-the-environment-lock) a command left behind when it stopped. Use it only once that command is known to be no longer running. |
 | `--staged` | `verify` | Verify the release staged under `releases/<hash>/` instead of the live `site/`. |
+| `--rebuild` | `rollback` | Static environments: rebuild from the archived source even when the hash has a staged release - the way out when its staged copy can no longer be republished. |
 | `--yes` | site/plugin destroy, preview teardown, pds secret delete, plugin remove | Required for explicit destruction. For plugin remove it skips the teardown question and keeps resources. |
 | `--help` | all | Print usage and exit 0. |
 

@@ -114,4 +114,14 @@ Re-staging a hash first deletes its staged release record, so a re-stage that st
 
 ## Rollback
 
-`rollback <hash>` re-runs the build from the archived source, so it is a rebuild. It records the rebuild's manifest under its own per-build key, then prints both release hashes - the original's and the rebuild's - and warns when they differ, because the live site then serves bytes no review covered. The original is left as it was, so a later rollback is still checked against the reviewed bytes, not against an earlier rebuild. A rebuild that recorded no manifest (a builder denied the write, or a builder image older than artifact manifests) cannot be checked, and the rollback says so rather than reporting a match. See [Roll back](/guides/operations/#roll-back-rollback-hash).
+`rollback <hash>` decides from the staged release record. When the hash has one and the copy under `releases/<hash>/` still matches it, the rollback republishes those bytes under the same checks as `promote`. It checks the staged copy against the record before copying and `site/` after, then prints the previous and restored release hashes.
+
+When the record is unreadable, or the staged copy no longer matches it (an S3 lifecycle rule expired some of its objects, or it was changed after staging), the rollback refuses with nothing published. It does not quietly rebuild bytes no review covered. The error gives the missing, changed and unexpected counts and names the two ways out: stage the hash again, or `rollback <hash> --rebuild`.
+
+Every `promote` and republishing rollback also appends the release it published to `build/published/<hash>.json`. Re-staging a hash replaces its staged release record, but `stage` never writes this file. So when a hash was staged again with other bytes, a later promote or rollback can warn that the staged release is not the one last published, naming both.
+
+A hash with no staged release record, or any hash with `--rebuild`, is rebuilt from the archived source. The rollback records the rebuild's manifest under its own per-build key, then prints both release hashes - the original's and the rebuild's - and warns when they differ, because the live site then serves bytes no review covered. The original is left as it was, so a later rollback is still checked against the reviewed bytes, not against an earlier rebuild. In two cases the rebuild cannot be checked, and the rollback says so rather than reporting a match:
+- the rebuild recorded no manifest (a builder denied the write, or a builder image older than artifact manifests);
+- the original exists but cannot be read.
+
+See [Roll back](/guides/operations/#roll-back-rollback-hash).

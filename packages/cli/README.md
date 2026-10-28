@@ -58,7 +58,7 @@ No TTY? Create the config by hand - only two fields are required:
 | `whoami [env]` | The AWS account, identity and profile commands would use, and whether the `aws.accountId` pin accepts them |
 | `history [env]` | Deployment history with a `← live` marker |
 | `logs <hash>` | CloudWatch build logs for a deploy |
-| `rollback <hash>` | Re-deploy an earlier build's stored artifact |
+| `rollback <hash>` | Republish a staged release (verified, no rebuild), else rebuild an earlier build from its archived source |
 | `preview …` | PR preview stack: `bootstrap`, `deploy pr-42`, `list`, `destroy pr-42`, `teardown` |
 | `pds …` | standard.site publishing: `keygen`, `login`, `init`, `sync`, `secret status` |
 | `delete` / `destroy --yes` | Empty the live site / tear everything down |

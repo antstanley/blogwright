@@ -199,7 +199,7 @@ describe('a rebuild rollback is checked against the recorded manifest', () => {
     await deploy(ctx, NO_HOOKS);
     const recorded = await readArtifactManifest(ctx, HASH);
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(lines()).toContain(
       `  recorded release sha256 ${recorded!.releaseHash} (${recorded!.release})`,
@@ -217,7 +217,7 @@ describe('a rebuild rollback is checked against the recorded manifest', () => {
     const recorded = await readArtifactManifest(ctx, HASH);
     rebuildWith({ 'index.html': 'home, rebuilt with a newer toolchain' });
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     const rebuildKey = lastBuildKey()!;
     const rebuilt = JSON.parse(s3.text(rebuildKey)!) as { releaseHash: string; release: string };
@@ -237,10 +237,10 @@ describe('a rebuild rollback is checked against the recorded manifest', () => {
     const { ctx, lines, rebuildWith, clearLog } = await setup({ 'index.html': 'home' });
     await deploy(ctx, NO_HOOKS);
     rebuildWith({ 'index.html': 'home, rebuilt with a newer toolchain' });
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
     clearLog();
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(lines().some((line) => line.startsWith('the rebuild is NOT byte-identical'))).toBe(true);
   });
@@ -258,7 +258,7 @@ describe('a rebuild rollback is checked against the recorded manifest', () => {
     rebuildWith({ 'index.html': 'DIFFERENT bytes' });
     clearLog();
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(s3.text('site/index.html')).toBe('DIFFERENT bytes');
     expect(lines()).not.toContain('the rebuild is byte-identical to the recorded artifact');
@@ -282,7 +282,7 @@ describe('a rebuild rollback is checked against the recorded manifest', () => {
     });
     clearLog();
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(lines().some((line) => line.includes('is not valid JSON'))).toBe(true);
     expect(
@@ -297,7 +297,7 @@ describe('a rebuild rollback is checked against the recorded manifest', () => {
     await deploy(ctx, NO_HOOKS);
     s3.objects.delete(artifactManifestKey(HASH));
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(lines()).toContain('  no artifact manifest was recorded before this rebuild');
     expect(s3.objects.has(artifactManifestKey(HASH))).toBe(false);
@@ -330,10 +330,10 @@ describe('readArtifactManifest', () => {
     );
   });
 
-  it('a rollback reads a corrupt record as absent, with a warning', async () => {
+  it('a rollback reads a corrupt record as unreadable - not absent - with a warning', async () => {
     const { s3, ctx, lines } = await setup({});
     await s3.client.putObject('b', artifactManifestKey(HASH), 'not json');
-    expect(await readRecordedBeforeRebuild(ctx, HASH)).toBeUndefined();
+    expect(await readRecordedBeforeRebuild(ctx, HASH)).toBe('unreadable');
     expect(lines().some((line) => line.startsWith('ignoring the recorded artifact manifest'))).toBe(
       true,
     );

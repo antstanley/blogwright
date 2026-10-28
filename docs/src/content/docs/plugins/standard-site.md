@@ -105,7 +105,7 @@ Every successful **production** [deploy](/guides/deploying/) re-runs the sync. N
 
 - **It never fails a deploy.** A PDS outage logs a warning; the next deploy heals it.
 - **Other environments skip it.** `pds sync` publishes canonical production URLs and refuses to run for any other environment.
-- **Rollbacks do not sync.** A rollback restores the site, not your working tree. Check out the rolled-back revision and run `blogwright pds sync` to realign.
+- **Rollbacks and promotions sync only from the published revision.** A rollback or promote restores the site, not your working tree, so it runs the sync only when the working copy is the revision it published; otherwise it warns and skips it. Check out the rolled-back revision and run `blogwright pds sync` to realign.
 - **Deleted posts stay on the PDS.** Records with no matching post are reported as orphans, with their rkeys. Delete them by hand if you meant to.
 - **A lapsed session warns and skips.** Sessions last as long as they refresh within 180 days. If one lapses, run `blogwright pds login` again - the key survives, so no keygen or redeploy.
 

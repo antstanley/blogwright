@@ -70,7 +70,59 @@ Both the CI deploy role and an operator's credentials can create and delete `bui
 
 ## Roll back: `rollback <hash>`
 
-`blogwright rollback <hash>` re-runs the builder MicroVM against the source zip already archived at `build/<hash>.zip` - the same build-and-sync pipeline as a [deploy](/guides/deploying/), but fed from the archive instead of your working tree. Your checkout is untouched. If the artifact is gone, the command fails immediately:
+`blogwright rollback <hash>` restores an earlier release. Your checkout is untouched. In a static environment the hash's staged release record (`build/releases/<hash>.json`, written by [`stage`](/guides/deploying/#release-gating-stage-verify-promote)) decides what happens, and the command says which path it took:
+
+| The hash has | `rollback <hash>` |
+| --- | --- |
+| a staged release record, and a staged copy that matches it | republishes the staged bytes - no rebuild |
+| a staged release record that is unreadable, or a staged copy that no longer matches it | refuses, publishing nothing, and says how to recover |
+| no staged release record | rebuilds from the archived source |
+| anything, with `--rebuild` | rebuilds from the archived source |
+
+### A staged release is republished
+
+When the hash was built with `stage`, its output is still stored under `releases/<hash>/`, and the rollback republishes those bytes instead of rebuilding, through the same code as `promote`:
+1. It verifies the staged objects against the staged release record.
+2. It copies the changed files into `site/` server-side and deletes objects the release does not contain.
+3. It invalidates just those paths.
+4. It verifies `site/` against the same record.
+
+It then prints the release that was live and the one it restored:
+
+```text
+  previous release 1.5.0+7a1c0e9b2d3f.da67c5f160c8 (sha256 da67c5f160c80e0095ae03f4c7ee10efec2fb4c1dcc8b4df3f2cdbcf4e518c78)
+  restored release 1.4.0+4f3a2b1c9d0e.9f86d081884c (sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08)
+```
+
+Because the live objects are checked against the same record the staged bytes were verified with, a republishing rollback restores that release byte for byte. That includes the `Cache-Control` headers it was staged with, under the same rules as a promotion (see [Release gating](/guides/deploying/#release-gating-stage-verify-promote)). `--refresh` copies every file rather than only the changed ones. When no live-release record says what was live before, the `previous release` line says so instead of naming one.
+
+**Rolling back to the release that is already live** is a verified no-op. The command says the release is already live, checks the staged copy and `site/`, and repairs any difference. When nothing differed it reports that nothing was copied, deleted or invalidated.
+
+**A hash staged again since it was last published** may hold other bytes than the ones that were live then: two builds of the same revision are not guaranteed to be identical. Every `promote` and republishing rollback appends the release it published to `build/published/<hash>.json`, which `stage` never touches. When the staged release differs from the last one published, the rollback warns and names both releases. It still publishes what is staged now, which was verified when it was staged.
+
+**A release staged before a domain or seo change** carries the `robots.txt` and `sitemap.xml` written for the origin of that time. Before publishing, the rollback compares them with what a build today would write: the generated `robots.txt`, and the origin of the sitemap's first URL, read from the first few kilobytes. It warns when they differ. The staged bytes are published as they are; stage the hash again to publish them for the current origin.
+
+### When a staged release cannot be republished
+
+The staged copy is the reviewed copy, so the rollback refuses rather than rebuild it quietly when it can no longer be checked. The refusal publishes nothing and leaves the live-release record as it was. This happens in two cases.
+
+**The staged copy no longer matches its record.** An S3 lifecycle rule expiring `releases/` objects may have removed some or all of its files, or the copy was changed after staging. The error gives the counts and the likely cause, after one line per difference:
+
+```text
+  missing     about/index.html
+Error: cannot republish 4f3a2b1c9d0e: s3://production-example-123456789012/releases/4f3a2b1c9d0e/ does not match release 1.4.0+4f3a2b1c9d0e.9f86d081884c: 1 missing, 0 changed, 0 unexpected (objects are missing from the staged copy - an S3 lifecycle rule expiring releases/ objects, or a delete, removes them). Nothing was published. To recover, ...
+```
+
+**The staged release record is unreadable.** The record is corrupt, or names another revision.
+
+Either way there are two ways out:
+
+- **Stage it again.** Check out the hash, run `blogwright stage <env>`, then roll back again. The new staged copy is checked when it is staged, and the rollback warns if its bytes differ from the release last published.
+- **Rebuild it.** Run `blogwright rollback <hash> <env> --rebuild`, described below. Its bytes are compared with the original release, but no review covered them.
+
+### Anything else is rebuilt
+
+A hash with no staged release record, or any hash with `--rebuild`, is rebuilt. A hash that was only deployed has no stored output. The rollback re-runs the builder MicroVM against the source zip archived at `build/<hash>.zip` - the same build-and-sync pipeline as a [deploy](/guides/deploying/), but fed from the archive instead of your working tree. If the archive is gone, the command fails immediately:
 
 ```sh
 bw rollback 4f3a2b1c9d0e
@@ -79,7 +131,7 @@ bw rollback 4f3a2b1c9d0e
 
 As with a deploy, only the CloudFront paths whose content actually changed are invalidated, and `--refresh` is accepted to force every file to re-upload.
 
-A rebuild is not guaranteed to reproduce the original bytes - the builder image, dependency resolution and toolchain may all have moved since. So the rollback checks the rebuild against the hash's original [artifact manifest](/reference/artifact-manifest/) - the one its first deploy recorded - and prints both release hashes:
+A rebuild is not guaranteed to reproduce the original bytes: the builder image, dependency resolution and toolchain may all have moved since. So the rollback checks the rebuild against the hash's original [artifact manifest](/reference/artifact-manifest/) - the first one recorded for it - and prints both release hashes:
 
 ```text
   recorded release sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 (1.4.0+4f3a2b1c9d0e.9f86d081884c)
@@ -87,11 +139,14 @@ A rebuild is not guaranteed to reproduce the original bytes - the builder image,
 ✓ the rebuild is byte-identical to the recorded artifact
 ```
 
-When they differ it warns instead: the site now serves rebuilt bytes that no review covered. The rebuild's manifest is kept under its own key and never replaces the original, so the next rollback is still checked against the reviewed bytes. A rebuild that recorded no manifest of its own cannot be checked, and the rollback says so instead of reporting a match. A hash deployed before artifact manifests existed has nothing to compare against, and the rollback says so too.
+When they differ it warns instead: the site now serves rebuilt bytes that no review covered. The rebuild's manifest is kept under its own key and never replaces the original, so the next rollback is still checked against the reviewed bytes. In some cases the rebuild cannot be checked, and the rollback says so instead of reporting a match:
+- the rebuild recorded no manifest of its own;
+- the original exists but cannot be read (reported once, as a warning);
+- the hash was deployed before artifact manifests existed, so there is nothing to compare against.
 
-:::caution
-A production rollback does **not** sync the PDS. The [standard.site records](/plugins/standard-site/) mirror the current repo content, which a rollback does not restore - so the command only warns about the divergence. To realign the records, check out the rolled-back revision and run `blogwright pds sync`.
-:::
+### Plugin steps after a rollback
+
+A rollback runs the post-deploy plugin steps, such as the [standard.site](/plugins/standard-site/) PDS sync, on the same rule as `promote`. They run only when the working copy is the rolled-back revision. The steps publish the working copy's content, which then matches what is live. With any other checkout the command warns and skips them, whichever plugins are installed. To realign the records, check out the rolled-back revision and run `blogwright pds sync`.
 
 ## Empty the site: `delete`
 
