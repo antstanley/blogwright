@@ -90,7 +90,8 @@ builds its rolldown Lambda bundle and Vite/SvelteKit static app. Root
 [package scripts](../../../package.json), [workspace](../../../pnpm-workspace.yaml)
 and [release group](../../../.changeset/config.json) are authoritative.
 
-Core never imports the CLI or feature packages. Plugins depend on core; feature
+Core never imports the CLI or feature packages. Plugins peer-depend on core
+(`^` the release they were built with), so they share the CLI's copy; feature
 AWS clients remain in their packages. The CLI imports no feature package: PDS's
 post-deploy sync reaches `deploy` through the plugin's `afterDeploy` hook, the
 interface's one lifecycle hook ([plugin architecture](02-plugin-architecture.md)).

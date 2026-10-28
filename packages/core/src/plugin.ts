@@ -1,6 +1,7 @@
 /**
  * The plugin service-provider interface (SPI) vocabulary. A plugin is a
- * package that depends on `blogwright-core` and never on the CLI - it never
+ * package that peer-depends on `blogwright-core` - the host CLI's own copy,
+ * so plugin and CLI share one module instance - and never on the CLI: it never
  * imports from `blogwright` (the CLI package), only from this module and the
  * rest of core. The CLI's own `OpsContext` (`packages/cli/src/context.ts`) is
  * deliberately wider than what a plugin is handed: it carries CLI-private

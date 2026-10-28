@@ -56,9 +56,6 @@ importers:
       '@duckdb/node-api':
         specifier: 1.5.6-r.2
         version: 1.5.6-r.2
-      blogwright-core:
-        specifier: workspace:*
-        version: link:../core
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
@@ -93,6 +90,9 @@ importers:
       bits-ui:
         specifier: ^2.20.2
         version: 2.20.2(@internationalized/date@3.12.4)(@sveltejs/kit@3.1.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.3)(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.1)))(svelte@5.57.3)(typescript@6.0.3)(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.1)))(svelte@5.57.3)
+      blogwright-core:
+        specifier: workspace:*
+        version: link:../core
       d3-geo:
         specifier: ^3.1.1
         version: 3.1.1
@@ -225,13 +225,13 @@ importers:
       '@atproto/oauth-client-node':
         specifier: ^0.5.13
         version: 0.5.13
-      blogwright-core:
-        specifier: workspace:*
-        version: link:../core
     devDependencies:
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
+      blogwright-core:
+        specifier: workspace:*
+        version: link:../core
       oxlint:
         specifier: ^1.90.0
         version: 1.90.0

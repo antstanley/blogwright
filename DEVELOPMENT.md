@@ -124,8 +124,10 @@ Conventions:
   the ports only it uses (the CLI's VCS and builder-ping ports).
 - **Features live in their own packages, and the plugin manifest is the mechanism.**
   A coherent feature with its own domain - the standard.site integration in
-  `blogwright-pds` is the model - is its own workspace package depending on
-  `blogwright-core`. It announces itself by declaring
+  `blogwright-pds` is the model - is its own workspace package with
+  `blogwright-core` as a **peer** dependency (`workspace:^`, plus a
+  `workspace:*` devDependency so the workspace links it), so a site's plugins
+  and its CLI share the one core the CLI installs. It announces itself by declaring
   `"blogwright": { "plugin": "<namespace>" }` in its own `package.json`: that
   manifest field is what CLI discovery scans a dependency tree for, and the
   package's default export is then the `Plugin` declaring its namespace, its

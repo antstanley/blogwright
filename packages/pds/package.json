@@ -26,11 +26,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@atproto/oauth-client-node": "^0.5.13",
-    "blogwright-core": "workspace:*"
+    "@atproto/oauth-client-node": "^0.5.13"
+  },
+  "peerDependencies": {
+    "blogwright-core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "blogwright-core": "workspace:*",
     "oxlint": "^1.90.0",
     "typescript": "^6.0.3",
     "vitest": "^5.0.5"
