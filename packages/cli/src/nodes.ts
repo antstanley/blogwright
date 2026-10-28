@@ -177,19 +177,22 @@ function webArtifactWriteStatements(ctx: OpsContext): object[] {
 }
 
 /**
- * The agent records each static build's artifact manifest at
- * `build/artifacts/<hash>.json`, and `blogwright stage` has it publish a
- * release under `releases/<hash>/` instead of `site/` - tagged like the site,
- * and re-staging a hash deletes what the new build no longer contains. The
- * shared preview stack does neither.
+ * The agent records each static build's artifact manifest at its own
+ * `build/artifacts/<hash>/<buildId>.json`. The grant stops at that depth on
+ * purpose: a revision's original record, `build/artifacts/<hash>.json`, is
+ * written once by the CLI and is out of the builder's reach. `blogwright
+ * stage` has the agent publish a release under `releases/<hash>/` instead of
+ * `site/` - tagged like the site, and re-staging a hash deletes what the new
+ * build no longer contains. The shared preview stack and SSR environments do
+ * neither.
  */
 function releaseWriteStatements(ctx: OpsContext): object[] {
-  if (ctx.preview) return [];
+  if (ctx.preview || ctx.config.ssr) return [];
   return [
     {
       Effect: 'Allow',
       Action: ['s3:PutObject'],
-      Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*`,
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*/*`,
     },
     {
       Effect: 'Allow',

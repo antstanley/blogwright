@@ -11,9 +11,15 @@
  * blogwright from a build directory: it is the SHA-256 of the `sha256sum`
  * listing of every file, sorted by path in byte order -
  *
- *   find . -type f | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum | sha256sum
+ *   find -L . -type f | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum | sha256sum
  *
  * - that is, one `<sha256>  <path>\n` line per file (two spaces).
+ *
+ * Every build of a revision records its own manifest at a key unique to that
+ * build ({@link artifactBuildManifestKey}); the first one a deploy records is
+ * also kept, write-once, as the revision's original ({@link artifactManifestKey}).
+ * A later build of the same revision can therefore never replace the record a
+ * review covered.
  */
 
 import { createHash } from 'node:crypto';
@@ -82,7 +88,10 @@ export interface ArtifactComparison {
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
-/** The artifact manifest key for a revision hash. */
+/**
+ * The original artifact manifest of a revision: the first one a deploy
+ * recorded for it. It is written once and never replaced by a later build.
+ */
 export function artifactManifestKey(hash: string): string {
   return `build/artifacts/${hash}.json`;
 }
@@ -90,6 +99,20 @@ export function artifactManifestKey(hash: string): string {
 /** The prefix a staged release's bytes are stored under. */
 export function stagedReleasePrefix(hash: string): string {
   return `${STAGED_RELEASES_PREFIX}${hash}/`;
+}
+
+/** Where every build of a revision records its own manifest, one object per build. */
+export function artifactBuildManifestPrefix(hash: string): string {
+  return `build/artifacts/${hash}/`;
+}
+
+/**
+ * One build's own manifest. `buildId` is unique per build, so the object's
+ * presence proves that build wrote it - a build that recorded nothing can
+ * never be mistaken for one that reproduced an earlier record.
+ */
+export function artifactBuildManifestKey(hash: string, buildId: string): string {
+  return `${artifactBuildManifestPrefix(hash)}${buildId}.json`;
 }
 
 /** Lowercase hex SHA-256 of some bytes. */
@@ -127,14 +150,20 @@ export function computeReleaseHash(files: readonly ArtifactFile[]): string {
   return sha256Hex(listing);
 }
 
-/** The human-facing release identity string. */
+/**
+ * The human-facing release identity string: `<siteVersion>+<hash>.<prefix>`.
+ * A version that already carries semver build metadata (`1.4.0+exp.1`) has the
+ * revision appended to it (`1.4.0+exp.1.<hash>.<prefix>`), since semver allows
+ * one `+`.
+ */
 export function releaseIdentity(
   hash: string,
   releaseHash: string,
   siteVersion?: string | undefined,
 ): string {
   const build = `${hash}.${releaseHash.slice(0, RELEASE_HASH_PREFIX_LENGTH)}`;
-  return siteVersion ? `${siteVersion}+${build}` : build;
+  if (!siteVersion) return build;
+  return siteVersion.includes('+') ? `${siteVersion}.${build}` : `${siteVersion}+${build}`;
 }
 
 function assertValidFile(file: ArtifactFile, source: string): void {

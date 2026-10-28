@@ -1757,9 +1757,51 @@ describe('main - hash-first release commands', () => {
     },
   );
 
-  it.each(['verify', 'promote'])('%s refuses to run without a hash', async (command) => {
+  it.each(['rollback', 'logs', 'verify', 'promote'])(
+    '%s --hash <hash> <env> takes the positional as the environment',
+    async (command) => {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { makeContext, contexts } = testContextFactory(terminal);
+
+      // The test context rejects the command's first S3 read; only the
+      // environment it was built for matters here.
+      await main(
+        [command, '--hash', 'abc123', 'staging'],
+        fixedTerminal(terminal),
+        makeContext,
+        unreachableDiscoveryPorts,
+        unreachablePackages,
+        testAwsAccess(),
+      ).catch(() => undefined);
+      expect(contexts.map((ctx) => ctx.env)).toEqual(['staging']);
+    },
+  );
+
+  it.each(['rollback', 'logs', 'verify', 'promote'])(
+    '%s refuses a hash given both as --hash and as a positional, before any context',
+    async (command) => {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { makeContext, contexts } = testContextFactory(terminal);
+
+      await expect(
+        main(
+          [command, '--hash', 'abc123', 'def456', 'staging'],
+          fixedTerminal(terminal),
+          makeContext,
+          unreachableDiscoveryPorts,
+          unreachablePackages,
+          testAwsAccess(),
+        ),
+      ).rejects.toThrow(
+        `${command} was given --hash abc123 and two positionals ("def456", "staging")`,
+      );
+      expect(contexts).toEqual([]);
+    },
+  );
+
+  it.each(['rollback', 'logs', 'verify', 'promote'])('%s refuses to run without a hash', async (command) => {
     const terminal = createScriptedTerminal({ interactive: false });
-    const { makeContext } = testContextFactory(terminal);
+    const { makeContext, contexts } = testContextFactory(terminal);
 
     await expect(
       main(
@@ -1771,5 +1813,7 @@ describe('main - hash-first release commands', () => {
         testAwsAccess(),
       ),
     ).rejects.toThrow(`${command} requires a <hash>`);
+    // Refused before the environment's config is loaded or AWS is called.
+    expect(contexts).toEqual([]);
   });
 });

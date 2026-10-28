@@ -17,7 +17,7 @@ The environment defaults to `production`. Configuration is loaded from `config/<
 
 ### Positional layout
 
-Most commands take the environment as an optional first positional. Two commands take a build hash first, and plugin actions consume their declared words before the environment:
+Most commands take the environment as an optional first positional. Three commands take a build hash first, and plugin actions consume their declared words before the environment:
 
 | Commands | Layout |
 | --- | --- |
@@ -29,7 +29,7 @@ Most commands take the environment as an optional first positional. Two commands
 | `pds keygen`, `pds login`, `pds init`, `pds sync` | `blogwright pds <action> [env]` |
 | `pds secret status`, `pds secret delete` | `blogwright pds secret <action> [env]` |
 
-Environment resolution is `--env` flag, then the positional, then `production`. The same precedence applies to `--hash` over the hash positional and `--id` over the preview id positional. Preview commands always run in the fixed `preview` environment - they take no env at all.
+Environment resolution is `--env` flag, then the positional, then `production`. The same precedence applies to `--id` over the preview id positional. A hash command given `--hash` takes its only positional as the environment (`blogwright verify --hash 4f3a2b1c staging`); passing a hash both ways (`--hash` and two positionals) is refused, as is a missing hash - before any config is loaded or AWS is called. Preview commands always run in the fixed `preview` environment - they take no env at all.
 
 Unrecognized flags are an error. `--help` prints usage and exits 0; running with no command prints usage and exits 1.
 
@@ -77,7 +77,7 @@ blogwright deploy [env] [--refresh]
 
 Zips the repo (honoring `.gitignore` plus the `sourceIgnore`/`sourceInclude` config), names the zip by the jj/git revision hash, and uploads it to `build/<hash>.zip`. If the build-agent bundle changed, the builder MicroVM image is rebuilt first (a no-op otherwise). The MicroVM pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to the live `site/` prefix; only files whose content changed are re-uploaded, and only the changed CloudFront paths are invalidated (past the configured `invalidationMaxPaths` cap, everything - `/*` - is invalidated instead). On a TTY the command ends with a summary card: revision, environment, source size, build duration, invalidation, and the site URL.
 
-A static deploy also records the [artifact manifest](/reference/artifact-manifest/) at `build/artifacts/<hash>.json` - every published path, byte count and SHA-256, an aggregate release hash and a release identity - and prints the release; it warns when the builder could not record it (a stack that needs `bootstrap` to grant `build/artifacts/*`).
+A static deploy also records the build's [artifact manifest](/reference/artifact-manifest/) at `build/artifacts/<hash>/<buildId>.json` - every published path, byte count and SHA-256, an aggregate release hash and a release identity - prints the release, and keeps the first manifest recorded for the revision, write-once, at `build/artifacts/<hash>.json`. It warns when the builder could not record one (a stack that needs `bootstrap` to grant `build/artifacts/*/*`), and when a redeploy of the same hash is not byte-identical to the original.
 
 After every successful **production** deploy, standard.site records are re-synced to the PDS when configured - non-fatally, so a PDS outage never fails a good deploy (see [`pds sync`](#pds-sync)).
 
@@ -113,7 +113,7 @@ Publishes a staged release to the live site without rebuilding. It refuses a has
 blogwright rollback <hash> [env] [--refresh]
 ```
 
-Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history). In a static environment it then prints the release hash of the [artifact manifest](/reference/artifact-manifest/) recorded for that hash before the rebuild and the rebuilt one, and warns when the rebuild is not byte-identical.
+Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history). In a static environment it then prints the release hash of the hash's original [artifact manifest](/reference/artifact-manifest/) and the rebuild's own, and warns when the rebuild is not byte-identical - or recorded no manifest, so it cannot be checked. The original is never replaced by the rebuild.
 
 In SSR mode, rollback instead reproduces the revision that hash was deployed with, from the artifact version and the `webFunction` settings recorded in its manifest - without a rebuild - and skips creation when that revision's fingerprint is already what serves. It falls back to re-running the build when the manifest has no `webFunction` block, the recorded artifact version is gone, or `ssr.staticDir` is configured (the artifact carries only the server, and the fingerprinted assets its pages reference were removed from `site/` by later deploys). Both paths run the same endpoint preflight, readiness probe and `/*` invalidation a deploy does.
 
@@ -175,9 +175,18 @@ blogwright verify <hash> [env] [--staged]
 
 With `--staged`, checks the copy [`stage`](#stage) stored under `releases/<hash>/` instead of the live site - the check to run between staging and promoting.
 
-Checks the live `site/` prefix byte for byte against the [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>`: every object the manifest lists is read and its SHA-256 compared, and every object under `site/` that the manifest does not list is reported too, because CloudFront would serve it. Each difference prints as one stable line - `missing <path>`, `changed <path>: expected … found …`, or `unexpected <path>` - and any difference exits 1 with a `N missing, N changed, N unexpected` summary. A match prints the location, release identity, file count and release hash, and exits 0.
+Checks the live `site/` prefix byte for byte against the original [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>` (`build/artifacts/<hash>.json`). Each object under `site/` is classified from the bucket listing first:
 
-Verification reads every object, so its cost grows with the site. It refuses a hash with no recorded artifact manifest (a build from before artifact manifests, or an SSR deploy) and refuses in an SSR environment, where a revision pins its artifact object version instead.
+- An object the manifest lists, with the recorded size, is read and its SHA-256 compared.
+- An object the manifest lists with a different size is reported as changed without being read - its size already differs.
+- An object the manifest does not list is reported as unexpected without being read, because CloudFront would serve it.
+- An empty folder marker (a zero-byte key ending in `/`, as the S3 console creates) is never served, so it is listed as `ignored` and not counted.
+
+Each difference prints as one stable line - `missing <path>`, `changed <path>: expected … found …`, or `unexpected <path>` - and any difference exits 1 with a `N missing, N changed, N unexpected` summary. A match prints the location, release identity, file count and release hash, and exits 0. On a TTY a status line counts the objects as they are checked.
+
+Reads run eight objects at a time, and an object larger than 8 MiB is read in 8 MiB ranges, so memory stays bounded however large the site's files are. Every read of an object is conditional on the ETag the listing reported: an object deleted while verify runs is reported as missing, and one replaced while it runs fails the command with its key, so run verify once nothing is deploying. Any other read failure fails the command naming the object and the release.
+
+It refuses a hash with no original artifact manifest (a build from before artifact manifests, or an SSR deploy), refuses in an SSR environment, where a revision pins its artifact object version instead, and refuses the `preview` stack, whose PR previews record no artifact manifest.
 
 ### whoami
 
@@ -387,7 +396,7 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--config <path>` | all but `init` | Explicit JSONC config file. When set it is the only file tried - the `config/<env>.jsonc` → `ops.config.jsonc` fallback chain is skipped. |
 | `--endpoint <url>` | all but `init` | AWS endpoint override, e.g. `http://localhost:4566` for the floci emulator. Under an override the account pin is skipped and a configured profile missing from your AWS files is ignored. |
 | `--profile <name>` | all | AWS profile from your shared AWS files (`~/.aws/config`, `~/.aws/credentials`). Beats `AWS_PROFILE`, exported credentials and the config's `aws.profile`; see [AWS credentials](/reference/configuration/#aws). `init` uses it as the default answer to its profile question. |
-| `--hash <hash>` | `rollback`, `logs`, `verify`, `promote` | The build hash; wins over the first positional. |
+| `--hash <hash>` | `rollback`, `logs`, `verify`, `promote` | The build hash, in place of the first positional - which then names the environment. |
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |

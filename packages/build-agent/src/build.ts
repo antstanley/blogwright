@@ -20,7 +20,7 @@ import {
 } from 'blogwright-core';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 
-import { buildArtifactManifest, writeArtifactManifest } from './artifact.js';
+import { recordArtifactManifest, sitePathOf } from './artifact.js';
 
 /**
  * The SSR packaging job the CLI puts in the pending document: what to package,
@@ -525,7 +525,7 @@ async function publishFiles(opts: {
     );
   }
   for (const file of opts.files) {
-    const sitePath = relative(opts.rootDir, file).split('\\').join('/');
+    const sitePath = sitePathOf(opts.rootDir, file);
     const key = opts.prefix + sitePath;
     uploaded.add(key);
     const content = await readFile(file);
@@ -802,17 +802,11 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
   const published = await publishBuild(s3, payload, workDir, distDir, log);
   if (payload.artifactManifestKey && !payload.webFunction) {
-    const manifest = await buildArtifactManifest({
-      hash: payload.hash,
-      appDir,
-      rootDir: distDir,
-      files: await walkFiles(distDir),
-    });
-    await writeArtifactManifest(
+    await recordArtifactManifest(
       s3,
       log,
       { bucket: payload.bucket, key: payload.artifactManifestKey },
-      manifest,
+      { hash: payload.hash, appDir, rootDir: distDir, files: await walkFiles(distDir) },
     );
   }
   // The changed-paths manifest is the completion signal the CLI polls and reads.
