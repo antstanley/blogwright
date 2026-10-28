@@ -268,9 +268,10 @@ async function collectCandidates(
   );
 
   const consumerNames = pluginDependencyNames(consumerPkg);
-  const consumerCandidates = consumerNames.map(
-    (packageName): Candidate => ({ packageName, fromDir: repoRoot }),
-  );
+  const consumerCandidates = consumerNames.map((packageName): Candidate => ({
+    packageName,
+    fromDir: repoRoot,
+  }));
 
   // The bundled half is NOT filtered against the consumer's names here. A name
   // in both manifests must still be probed from both directories, because a
@@ -281,9 +282,10 @@ async function collectCandidates(
   // two-source union exists to prevent. `discover` instead skips the bundled
   // probe only once the consumer's has actually resolved, so the consumer still
   // wins wherever both work.
-  const bundledCandidates = pluginDependencyNames(cliPkg).map(
-    (packageName): Candidate => ({ packageName, fromDir: cliPackageDir }),
-  );
+  const bundledCandidates = pluginDependencyNames(cliPkg).map((packageName): Candidate => ({
+    packageName,
+    fromDir: cliPackageDir,
+  }));
 
   return [...consumerCandidates, ...bundledCandidates];
 }

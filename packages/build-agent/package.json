@@ -15,11 +15,11 @@
     "fflate": "^0.8.3"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
-    "oxlint": "^1.72.0",
-    "rolldown": "^1.1.4",
+    "@types/node": "^26.6.5",
+    "oxlint": "^1.90.0",
+    "rolldown": "^1.2.15",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^5.0.5"
   },
   "description": "HTTP build server baked into the blogwright builder MicroVM image (not published; shipped inside the CLI package)",
   "license": "MIT"

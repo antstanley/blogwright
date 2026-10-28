@@ -27,7 +27,7 @@
         "app/src/app.d.ts"
       ],
       "sveltekit": {
-        "config": ["app/svelte.config.js", "app/vite.config.ts"],
+        "config": ["app/vite.config.ts"],
         "entry": ["app/src/routes/**/+{page,layout}{,@*}.{js,ts,svelte}"]
       }
     },

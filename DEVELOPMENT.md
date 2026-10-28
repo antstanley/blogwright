@@ -27,7 +27,7 @@ CI (`.github/workflows/ci.yml`) runs `pnpm build`, `pnpm typecheck`, `TZ=America
 and every pull request. There are no local pre-commit or pre-push hooks; CI is
 the enforcement gate.
 
-Browser acceptance uses Playwright 1.63.0 and `@axe-core/playwright` 4.13.0.
+Browser acceptance uses Playwright 1.64.1 and `@axe-core/playwright` 4.14.0.
 `pnpm test:ui` and `pnpm test:a11y` run against local production builds; no cloud
 credentials are needed. `pnpm test:ui:update` updates reference images for review.
 The browser CI job uses a pinned Linux ARM64 container and retains both suites'

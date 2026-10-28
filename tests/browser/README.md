@@ -14,8 +14,8 @@ The browser clock is fixed and non-loopback requests fail acceptance.
 
 ## Reference images
 
-Screenshots belong to Linux ARM64 in Playwright 1.63.0 on Ubuntu Noble, pinned to
-`mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`.
+Screenshots belong to Linux ARM64 in Playwright 1.64.1 on Ubuntu Noble, pinned to
+`mcr.microsoft.com/playwright@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea`.
 The image supplies browser revisions, OS fonts and rendering libraries. CI uses
 `ubuntu-24.04-arm` with that container. macOS runs report image tests as skipped;
 they do not replace the Linux gate. Clipboard-content assertions use Chromium's

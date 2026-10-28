@@ -18,7 +18,6 @@ export default defineConfig({
       title: 'blogwright',
       components: {
         MarkdownContent: './src/components/MarkdownContent.astro',
-        MobileMenuToggle: './src/components/MobileMenuToggle.astro',
       },
       logo: {
         light: './src/assets/logo-light.svg',
