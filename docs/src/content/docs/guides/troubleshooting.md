@@ -177,7 +177,7 @@ On production with a `pds` section configured, rollback warns: `rollback does no
 
 ### A metadata fix never reached the live site
 
-A deploy only re-uploads files whose content changed (built file MD5 vs. live object ETag). S3 writes object metadata - content type, object tags - on the PUT, so a metadata-only fix (an upgrade that corrects a content type, or newly added tags) never reaches an unchanged object. Pass `--refresh` once to re-upload every file:
+A deploy only re-uploads files whose content changed (built file MD5 vs. live object ETag). S3 writes object metadata - content type, object tags, `Cache-Control` - on the PUT, so a metadata-only fix (an upgrade that corrects a content type, or newly added tags) never reaches an unchanged object. A change to the `cacheControl` rules is the exception: the next deploy re-uploads everything on its own (see [Caching](/guides/caching/#when-the-rules-change)). Pass `--refresh` once to re-upload every file:
 
 ```sh
 blogwright deploy --refresh

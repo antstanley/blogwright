@@ -17,10 +17,10 @@ The environment defaults to `production`; see [Environments](/guides/environment
 
 ## The lifecycle at a glance
 
-1. Find the repo root, resolve the current revision hash, and zip the deployable files.
+1. Find the repo root, resolve the current revision hash, and zip the deployable files. When [`headers`](/reference/configuration/#response-headers-headers) is configured, first bring the response headers policy's headers in step with the config (the policy only, never the distribution). If the policy still needs `bootstrap` - it is not created or attached yet, or `headers` was removed - the deploy warns instead.
 2. Upload the zip to `build/<hash>.zip` in the environment's S3 bucket.
 3. Reconcile the builder MicroVM image if the build-agent bundle changed (no-op otherwise).
-4. Launch a builder MicroVM that pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to `site/`, comparing each file's MD5 to the live object's ETag.
+4. Launch a builder MicroVM that pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to `site/`, comparing each file's MD5 to the live object's ETag and writing each upload's `Cache-Control` from the `cacheControl` rules.
 5. Record the [artifact manifest](/reference/artifact-manifest/) - every published path, byte count and SHA-256 - at `build/artifacts/<hash>.json`.
 6. Invalidate only the CloudFront paths that actually changed.
 7. On a successful production deploy, sync standard.site records to your PDS (when configured).
@@ -61,7 +61,7 @@ Right after an image update, the MicroVM control plane can briefly answer 502 fo
 
 ## Building in the MicroVM
 
-The CLI launches a builder MicroVM from the snapshotted image, then writes a pending-job file to S3 describing the build: the source key, the target site prefix, the build directories (`paths.app` / `paths.dist`), object tags, and the SEO policy. The agent inside the VM (booting in roughly 30 seconds) polls for this job, then:
+The CLI launches a builder MicroVM from the snapshotted image, then writes a pending-job file to S3 describing the build: the source key, the target site prefix, the build directories (`paths.app` / `paths.dist`), object tags, the `cacheControl` rules, and the SEO policy. The agent inside the VM (booting in roughly 30 seconds) polls for this job, then:
 
 1. Downloads and extracts `build/<hash>.zip` into a work directory.
 2. Runs `pnpm install --frozen-lockfile --prod=false` and `pnpm run build` in `paths.app` (the repo root by default). Dev dependencies are installed deliberately - static-site build tooling (astro, vite, tailwind) lives there.
@@ -76,7 +76,7 @@ A successful static build also records an [artifact manifest](/reference/artifac
 
 ## Syncing only what changed
 
-The agent does not blindly upload the build output. For each built file it computes the MD5 and compares it to the live object's S3 ETag under `site/`; only files whose content actually changed are uploaded. New files upload, unchanged files are skipped entirely, and stale objects (files no longer in the build) are deleted - but only after the new files are published, so the live site never has an empty or partial window.
+The agent does not blindly upload the build output. For each built file it computes the MD5 and compares it to the live object's S3 ETag under `site/`; only files whose content actually changed are uploaded. Each upload carries the `Cache-Control` of the first `cacheControl` rule matching the file's URL path - see [Caching and Cache-Control](/guides/caching/). New files upload, unchanged files are skipped entirely, and stale objects (files no longer in the build) are deleted - but only after the new files are published, so the live site never has an empty or partial window.
 
 The set of changed URL paths (each changed key mapped to the path a viewer would request) is written to `build/changed/<hash>.json`, which drives the next step.
 
@@ -118,13 +118,15 @@ The sitemap lists the HTML pages in your build output: directory index documents
 
 ## Metadata fixes: `--refresh`
 
-S3 writes object metadata - the content type and object tags - only on the PUT. Because the sync skips unchanged content, a metadata fix (an upgrade that corrects a content type, or newly added tags) never reaches an object whose bytes did not change. Pass `--refresh` once after such an upgrade to re-upload every file:
+S3 writes object metadata - the content type, object tags and `Cache-Control` - only on the PUT. Because the sync skips unchanged content, a metadata fix (an upgrade that corrects a content type, or newly added tags) never reaches an object whose bytes did not change. Pass `--refresh` once after such an upgrade to re-upload every file:
 
 ```sh
 blogwright deploy --refresh
 ```
 
 `--refresh` is also accepted by `rollback` and `preview deploy`.
+
+You do not need it for `Cache-Control`: each build records the `cacheControl` rules the builder confirms it applied, and a build whose rules differ from the target's record, or whose last rule change did not finish, refreshes on its own and says so (`an implicit --refresh`). That includes the first deploy after upgrading to a version with `cacheControl`, which retrofits the default headers once. See [Caching and Cache-Control](/guides/caching/#when-the-rules-change).
 
 :::note
 `--refresh` re-uploads every file, so every path counts as changed - the invalidation covers the whole site (falling back to `/*` past the cap) instead of the usual minimal set.
@@ -173,6 +175,8 @@ blogwright promote <hash> production   # copy those bytes into site/ - no rebuil
 The post-deploy plugin steps (the standard.site sync, for one) run after a promote only when the working copy is the promoted revision, because they publish the working copy's content; otherwise the command warns and skips them.
 
 `--refresh` makes `promote` copy every file, not only the changed ones - every path then counts as changed for invalidation.
+
+**Cache-Control on promote.** A staged release's files carry the `Cache-Control` the [`cacheControl` rules](/reference/configuration/#cache-control-cachecontrol) gave them when it was staged, recorded at `build/cache-control/release-<hash>.json`. A server-side copy keeps that header, so the headers are promoted along with the bytes, as part of what was reviewed. A file whose content is unchanged would keep the header `site/` already had, so when the staged rules are not known to match the ones `site/` was written with, `promote` copies every file instead, after marking `site/`'s record unconfirmed so an interrupted promotion is re-applied. Afterwards `site/`'s record (`build/cache-control/site.json`) holds the staged rules. If the configured rules changed after staging, `promote` warns and still publishes the staged headers - stage again to apply the current rules - and the next `deploy` re-uploads every file with the current rules, as it does after any rules change.
 
 ### What it does not cover
 
@@ -223,5 +227,6 @@ Removing `ssr` and re-bootstrapping does not delete the Web Function, its role, 
 - [Artifact manifest](/reference/artifact-manifest/) - the record `verify` and `promote` check against
 - [PR previews](/guides/pr-previews/) - the same build pipeline targeting `previews/<id>/site/`
 - [CI deploys with GitHub OIDC](/guides/ci-github-oidc/) - running `blogwright deploy` from a workflow
+- [Caching and Cache-Control](/guides/caching/) - the per-path headers, and browser versus edge lifetimes
 - [Architecture](/reference/architecture/) - the bucket layout and the builder image in depth
 - [CLI reference](/reference/cli/) - every command and flag

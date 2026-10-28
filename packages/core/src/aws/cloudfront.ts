@@ -1,7 +1,18 @@
 import { AwsError } from './errors.js';
 import type { SigningClient } from './signer.js';
 import type { ResourceTags } from '../tags.js';
-import { allTags, encodeEntities, textTag } from './xml.js';
+import {
+  responseHeadersPolicyBody,
+  responseHeadersPolicyMatches,
+  type ResponseHeadersPolicyConfigInput,
+  type ResponseHeadersPolicySummary,
+} from './response-headers-policy.js';
+import { allTags, decodeEntities, encodeEntities, textTag } from './xml.js';
+
+export type {
+  ResponseHeadersPolicyConfigInput,
+  ResponseHeadersPolicySummary,
+} from './response-headers-policy.js';
 
 const API = '/2020-05-31';
 const XMLNS = 'http://cloudfront.amazonaws.com/doc/2020-05-31/';
@@ -90,6 +101,8 @@ export interface DistributionBehaviorInput {
   allowedMethods?: string[] | undefined;
   /** Viewer-request CloudFront Function, when one is attached. */
   functionArn?: string | undefined;
+  /** Response headers policy adding the site's `headers` config, when one is configured. */
+  responseHeadersPolicyId?: string | undefined;
 }
 
 export interface DistributionConfigInput {
@@ -263,6 +276,123 @@ export class CloudFrontClient {
     );
   }
 
+  // --- Response headers policies (the `headers` config) ---
+
+  async createResponseHeadersPolicy(input: ResponseHeadersPolicyConfigInput): Promise<string> {
+    const res = await this.client.send({
+      service: 'cloudfront',
+      method: 'POST',
+      path: `${API}/response-headers-policy`,
+      headers: { 'content-type': 'application/xml' },
+      body: responseHeadersPolicyBody(input),
+    });
+    const id = textTag(res.text(), 'Id');
+    if (!id) throw new Error('CreateResponseHeadersPolicy returned no Id');
+    return id;
+  }
+
+  async getResponseHeadersPolicy(id: string): Promise<ResponseHeadersPolicySummary | undefined> {
+    try {
+      const res = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/response-headers-policy/${id}`,
+      });
+      return { id, config: res.text(), etag: res.headers['etag'] };
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return undefined;
+      throw err;
+    }
+  }
+
+  /** Replace a policy's headers in place; every attached behavior picks the change up. */
+  async updateResponseHeadersPolicy(
+    id: string,
+    input: ResponseHeadersPolicyConfigInput,
+    etag: string | undefined,
+  ): Promise<void> {
+    await this.client.send({
+      service: 'cloudfront',
+      method: 'PUT',
+      path: `${API}/response-headers-policy/${id}`,
+      headers: {
+        'content-type': 'application/xml',
+        ...(etag ? { 'if-match': etag } : {}),
+      },
+      body: responseHeadersPolicyBody(input),
+    });
+  }
+
+  /**
+   * Delete a policy; already gone is success. CloudFront refuses
+   * (`ResponseHeadersPolicyInUse`) while any behavior still references it.
+   */
+  async deleteResponseHeadersPolicy(id: string): Promise<void> {
+    try {
+      const get = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/response-headers-policy/${id}`,
+      });
+      const etag = get.headers['etag'];
+      await this.client.send({
+        service: 'cloudfront',
+        method: 'DELETE',
+        path: `${API}/response-headers-policy/${id}`,
+        ...(etag ? { headers: { 'if-match': etag } } : {}),
+      });
+    } catch (err) {
+      if (err instanceof AwsError && err.isNotFound) return;
+      throw err;
+    }
+  }
+
+  /**
+   * The id of this account's custom response headers policy called `name`, or
+   * undefined. Names are unique per account, so this finds a policy an
+   * interrupted run created but never recorded.
+   */
+  async findResponseHeadersPolicyId(name: string): Promise<string | undefined> {
+    let marker: string | undefined;
+    do {
+      const res = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/response-headers-policy`,
+        query: { Type: 'custom', ...(marker ? { Marker: marker } : {}) },
+      });
+      const xml = res.text();
+      for (const summary of allTags(xml, 'ResponseHeadersPolicySummary')) {
+        if (textTag(summary, 'Name') === name) return textTag(summary, 'Id');
+      }
+      marker = textTag(xml, 'NextMarker') || undefined;
+    } while (marker);
+    return undefined;
+  }
+
+  /** Ids of every distribution with a cache behavior that references the policy. */
+  async listDistributionIdsUsingResponseHeadersPolicy(policyId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let marker: string | undefined;
+    do {
+      const res = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/distributionsByResponseHeadersPolicyId/${policyId}`,
+        ...(marker ? { query: { Marker: marker } } : {}),
+      });
+      const xml = res.text();
+      ids.push(...allTags(xml, 'DistributionId').map((id) => decodeEntities(id.trim())));
+      marker = textTag(xml, 'IsTruncated') === 'true' ? textTag(xml, 'NextMarker') : undefined;
+    } while (marker);
+    return ids;
+  }
+
+  /** True when a live policy document already carries exactly the desired headers. */
+  responseHeadersPolicyMatches(xml: string, input: ResponseHeadersPolicyConfigInput): boolean {
+    return responseHeadersPolicyMatches(xml, input.headers);
+  }
+
   async deleteOriginAccessControl(id: string): Promise<void> {
     try {
       const get = await this.client.send({
@@ -424,6 +554,53 @@ export class CloudFrontClient {
     if (!current) throw new Error(`distribution ${id} not found while reconciling`);
     if (distributionShapeMatches(current.config, input)) return false;
     const next = patchDistributionConfig(current.config, input);
+    await this.client.send({
+      service: 'cloudfront',
+      method: 'PUT',
+      path: `${API}/distribution/${id}/config`,
+      headers: { 'content-type': 'application/xml', 'if-match': current.etag },
+      body: next,
+    });
+    return true;
+  }
+
+  /**
+   * Attach a response headers policy to the default and every ordered cache
+   * behavior, touching nothing else in the live config - the static-stack
+   * path, where the rest of the distribution stays creation-time. Returns true
+   * when a change was pushed.
+   */
+  async attachResponseHeadersPolicy(id: string, policyId: string): Promise<boolean> {
+    return this.rewriteCacheBehaviors(id, (behavior) =>
+      withResponseHeadersPolicy(behavior, policyId),
+    );
+  }
+
+  /**
+   * Remove one response headers policy from every cache behavior that carries
+   * it. A behavior with a different policy keeps it: only Blogwright's own
+   * policy is ever detached. Returns true when a change was pushed.
+   */
+  async detachResponseHeadersPolicy(id: string, policyId: string): Promise<boolean> {
+    return this.rewriteCacheBehaviors(id, (behavior) =>
+      withoutResponseHeadersPolicy(behavior, policyId),
+    );
+  }
+
+  /** PUT the live config back with each cache behavior rewritten, unless nothing changed. */
+  private async rewriteCacheBehaviors(
+    id: string,
+    rewrite: (behavior: string) => string,
+  ): Promise<boolean> {
+    const current = await this.getDistributionConfig(id);
+    if (!current)
+      throw new Error(`distribution ${id} not found while reconciling response headers`);
+    const next = current.config.replace(
+      /(<(DefaultCacheBehavior|CacheBehavior)>)([\s\S]*?)(<\/\2>)/g,
+      (_match, open: string, _tag: string, inner: string, close: string) =>
+        open + rewrite(inner) + close,
+    );
+    if (next === current.config) return false;
     await this.client.send({
       service: 'cloudfront',
       method: 'PUT',
@@ -725,6 +902,9 @@ function behaviorXml(
     (behavior.originRequestPolicyId
       ? `<OriginRequestPolicyId>${encodeEntities(behavior.originRequestPolicyId)}</OriginRequestPolicyId>`
       : '') +
+    (behavior.responseHeadersPolicyId
+      ? responseHeadersPolicyElement(behavior.responseHeadersPolicyId)
+      : '') +
     (complete ? `<GrpcConfig><Enabled>false</Enabled></GrpcConfig>` : '')
   );
 }
@@ -812,6 +992,7 @@ interface ParsedBehavior {
   targetOriginId: string;
   cachePolicyId: string;
   originRequestPolicyId: string | undefined;
+  responseHeadersPolicyId: string | undefined;
   allowedMethods: string[];
   functionArns: string[];
   pathPattern: string | undefined;
@@ -830,6 +1011,8 @@ function parseBehavior(block: string): ParsedBehavior {
     targetOriginId: elementText(block, 'TargetOriginId') ?? '',
     cachePolicyId: elementText(block, 'CachePolicyId') ?? '',
     originRequestPolicyId: elementText(block, 'OriginRequestPolicyId'),
+    // An empty element is how a behavior without a policy may come back.
+    responseHeadersPolicyId: elementText(block, 'ResponseHeadersPolicyId') || undefined,
     allowedMethods: allowed
       ? elementsXml(allowed, 'Method').map((m) => elementText(m, 'Method') ?? '')
       : ['GET', 'HEAD'],
@@ -859,6 +1042,7 @@ function sameBehavior(parsed: ParsedBehavior, desired: DistributionBehaviorInput
     parsed.targetOriginId === desired.targetOriginId &&
     parsed.cachePolicyId === desired.cachePolicyId &&
     parsed.originRequestPolicyId === desired.originRequestPolicyId &&
+    parsed.responseHeadersPolicyId === desired.responseHeadersPolicyId &&
     sameStringSet(parsed.allowedMethods, allowed) &&
     sameStringSet(parsed.functionArns, functions) &&
     parsed.pathPattern === desired.pathPattern
@@ -995,4 +1179,63 @@ function patchDistributionConfig(current: string, input: DistributionConfigInput
     'CacheBehaviors',
   );
   return next;
+}
+
+function responseHeadersPolicyElement(policyId: string): string {
+  return `<ResponseHeadersPolicyId>${encodeEntities(policyId)}</ResponseHeadersPolicyId>`;
+}
+
+/** A behavior's policy element, written either way CloudFront may return it. */
+const RESPONSE_HEADERS_POLICY_ELEMENT =
+  /<ResponseHeadersPolicyId>[^<]*<\/ResponseHeadersPolicyId>|<ResponseHeadersPolicyId\/>/;
+
+/** How an error names one cache behavior: its path pattern, or the default. */
+function describeBehavior(behavior: string): string {
+  const pathPattern = elementText(behavior, 'PathPattern');
+  return pathPattern === undefined
+    ? 'the default cache behavior'
+    : `the cache behavior for ${pathPattern}`;
+}
+
+/**
+ * One cache behavior's inner XML with `policyId` attached: filling an empty
+ * policy element, or inserting one where the schema places it - after the
+ * origin-request policy, or else after the cache policy. A behavior already
+ * carrying a different policy is refused rather than overwritten: a behavior
+ * takes one policy, and replacing a hand-attached one would silently drop
+ * headers someone chose, with nothing left to restore when `headers` goes.
+ */
+function withResponseHeadersPolicy(behavior: string, policyId: string): string {
+  const element = responseHeadersPolicyElement(policyId);
+  const existing = RESPONSE_HEADERS_POLICY_ELEMENT.exec(behavior)?.[0];
+  if (existing !== undefined) {
+    const existingId = elementText(existing, 'ResponseHeadersPolicyId') ?? '';
+    if (existingId !== '' && existingId !== policyId) {
+      throw new Error(
+        `${describeBehavior(behavior)} already carries response headers policy ${existingId}, ` +
+          'which Blogwright did not attach. A cache behavior takes one response headers policy, ' +
+          'so Blogwright will not replace it: move the headers you need from it into ' +
+          'config.headers, detach it in the CloudFront console, then run bootstrap again',
+      );
+    }
+    return behavior.replace(RESPONSE_HEADERS_POLICY_ELEMENT, element);
+  }
+  for (const anchor of ['</OriginRequestPolicyId>', '</CachePolicyId>']) {
+    const at = behavior.indexOf(anchor);
+    if (at >= 0) {
+      const end = at + anchor.length;
+      return behavior.slice(0, end) + element + behavior.slice(end);
+    }
+  }
+  throw new Error(
+    'cannot attach a response headers policy to a cache behavior without a cache policy ' +
+      '(legacy ForwardedValues settings); move the behavior to a cache policy first',
+  );
+}
+
+/** One cache behavior's inner XML without `policyId`; any other policy stays. */
+function withoutResponseHeadersPolicy(behavior: string, policyId: string): string {
+  return behavior.replace(RESPONSE_HEADERS_POLICY_ELEMENT, (element) =>
+    elementText(element, 'ResponseHeadersPolicyId') === policyId ? '' : element,
+  );
 }

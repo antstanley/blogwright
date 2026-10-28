@@ -1,13 +1,8 @@
-import {
-  AwsError,
-  artifactManifestKey,
-  sha256Hex,
-  stripColors,
-  type ObjectTagCopy,
-} from 'blogwright-core';
+import { AwsError, artifactManifestKey, sha256Hex, stripColors } from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { readArtifactManifest } from './artifacts.js';
+import { cacheControlRecordKey } from './cache-control.js';
 import { deleteSite, deploy, history, rollback } from './commands.js';
 import { readManifest } from './deploy.js';
 import { LIVE_RELEASE_KEY, readLiveRelease } from './live-release.js';
@@ -63,7 +58,7 @@ describe('stage', () => {
     await stage(ctx);
 
     expect(pending).toHaveLength(1);
-    expect(pending[0]!.key).toBe('build/pending/stage.json');
+    expect(pending[0]!.key).toBe(`build/pending/release-${HASH}.json`);
     expect(pending[0]!.job).toMatchObject({
       sitePrefix: `releases/${HASH}/`,
       artifactManifestKey: artifactManifestKey(HASH),
@@ -123,7 +118,7 @@ describe('promote', () => {
     );
   });
 
-  it('copies only what differs, deletes stale objects, and invalidates just those paths', async () => {
+  it('copies only what differs (same Cache-Control rules), deletes stale objects, and invalidates just those paths', async () => {
     const { s3, ctx, invalidations, build } = await setup({
       'index.html': 'home',
       'old.html': 'gone soon',
@@ -134,9 +129,9 @@ describe('promote', () => {
     await stage(ctx);
     const copies: string[] = [];
     const copyObject = ctx.clients.s3.copyObject.bind(ctx.clients.s3);
-    ctx.clients.s3.copyObject = async (bucket, source, destination, tags) => {
+    ctx.clients.s3.copyObject = async (bucket, source, destination, options) => {
       copies.push(destination);
-      return copyObject(bucket, source, destination, tags);
+      return copyObject(bucket, source, destination, options);
     };
 
     await promote(ctx, 'def456', NO_HOOKS);
@@ -187,16 +182,11 @@ describe('promote', () => {
     const { s3, ctx, lines } = await setup({ 'a.html': 'a', 'b.html': 'b' });
     await stage(ctx);
     const copyObject = ctx.clients.s3.copyObject.bind(ctx.clients.s3);
-    ctx.clients.s3.copyObject = async (
-      bucket,
-      source,
-      destination,
-      tags: ObjectTagCopy = 'copy',
-    ) => {
-      if (tags === 'copy') {
+    ctx.clients.s3.copyObject = async (bucket, source, destination, options = {}) => {
+      if ((options.tags ?? 'copy') === 'copy') {
         throw new AwsError({ service: 's3', code: 'AccessDenied', message: 'no', statusCode: 403 });
       }
-      return copyObject(bucket, source, destination, tags);
+      return copyObject(bucket, source, destination, options);
     };
 
     await promote(ctx, HASH, NO_HOOKS);
@@ -325,6 +315,27 @@ describe('rollback to a staged release', () => {
     expect(await readLiveRelease(ctx)).toMatchObject({ hash: HASH, via: 'rollback' });
   });
 
+  it('restores the Cache-Control the release was staged with, and its record', async () => {
+    const noStore = [{ match: ['**'], value: 'no-store' }];
+    const { s3, ctx, build } = await setup({ 'index.html': 'first' });
+    Object.assign(ctx.config, { cacheControl: noStore });
+    await stage(ctx);
+    await promote(ctx, HASH, NO_HOOKS);
+    Object.assign(ctx.config, { cacheControl: [{ match: ['**'], value: 'max-age=60' }] });
+    build({ 'index.html': 'second' }, 'def456');
+    await stage(ctx);
+    await promote(ctx, 'def456', NO_HOOKS);
+    expect(s3.objects.get('site/index.html')?.cacheControl).toBe('max-age=60');
+
+    await rollback(ctx, HASH);
+
+    expect(s3.objects.get('site/index.html')?.cacheControl).toBe('no-store');
+    expect(JSON.parse(s3.text(cacheControlRecordKey('site'))!)).toEqual({
+      status: 'applied',
+      rules: noStore,
+    });
+  });
+
   it('refuses to republish staged bytes that no longer match, leaving site/ as it was', async () => {
     const { s3, ctx } = await twoReleases();
     const live = snapshot(s3, 'site/');
@@ -359,5 +370,77 @@ describe('rollback to a staged release', () => {
     expect(lines().some((line) => line.startsWith('ignoring the recorded artifact manifest'))).toBe(
       true,
     );
+  });
+});
+
+describe('promote keeps Cache-Control coherent', () => {
+  const NO_STORE = [{ match: ['**'], value: 'no-store' }];
+
+  /** site/ deployed under the default rules, then `def456` staged with `rules`. */
+  async function stagedWith(rules: typeof NO_STORE) {
+    const env = await setup({ 'index.html': 'home', 'about.html': 'about' });
+    await deploy(env.ctx, NO_HOOKS);
+    Object.assign(env.ctx.config, { cacheControl: rules });
+    env.build({ 'index.html': 'home', 'about.html': 'about, edited' }, 'def456');
+    await stage(env.ctx);
+    return env;
+  }
+
+  it('copies every file when the staged rules differ, so unchanged files get the staged header', async () => {
+    const { s3, ctx, lines } = await stagedWith(NO_STORE);
+    const copies: string[] = [];
+    const copyObject = ctx.clients.s3.copyObject.bind(ctx.clients.s3);
+    ctx.clients.s3.copyObject = async (bucket, source, destination, options) => {
+      copies.push(destination);
+      return copyObject(bucket, source, destination, options);
+    };
+
+    await promote(ctx, 'def456', NO_HOOKS);
+
+    expect(copies.sort()).toEqual(['site/about.html', 'site/index.html']);
+    expect(s3.objects.get('site/index.html')?.cacheControl).toBe('no-store');
+    expect(s3.objects.get('site/about.html')?.cacheControl).toBe('no-store');
+    expect(JSON.parse(s3.text(cacheControlRecordKey('site'))!)).toEqual({
+      status: 'applied',
+      rules: NO_STORE,
+    });
+    expect(
+      lines().some((line) => line.startsWith("the staged release's Cache-Control may differ")),
+    ).toBe(true);
+  });
+
+  it('records the rules the release was staged with, warning when the config has moved on', async () => {
+    const { s3, ctx, lines } = await stagedWith(NO_STORE);
+    Object.assign(ctx.config, { cacheControl: [{ match: ['**'], value: 'max-age=60' }] });
+
+    await promote(ctx, 'def456', NO_HOOKS);
+
+    expect(s3.objects.get('site/index.html')?.cacheControl).toBe('no-store');
+    expect(JSON.parse(s3.text(cacheControlRecordKey('site'))!)).toEqual({
+      status: 'applied',
+      rules: NO_STORE,
+    });
+    expect(
+      lines().some((line) =>
+        line.startsWith(
+          'def456 was staged with cacheControl rules that differ from the current config',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves the record unconfirmed when a promotion stops partway', async () => {
+    const { s3, ctx } = await stagedWith(NO_STORE);
+    ctx.clients.s3.copyObject = async () => {
+      throw new AwsError({
+        service: 's3',
+        code: 'InternalError',
+        message: 'boom',
+        statusCode: 500,
+      });
+    };
+
+    await expect(promote(ctx, 'def456', NO_HOOKS)).rejects.toThrow(/boom/);
+    expect(JSON.parse(s3.text(cacheControlRecordKey('site'))!)).toEqual({ status: 'unconfirmed' });
   });
 });

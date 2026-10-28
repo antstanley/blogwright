@@ -37,6 +37,7 @@ import {
   history,
   previewBootstrap,
   previewDeploy,
+  previewDestroy,
   previewTeardown,
   readNodeStatus,
   rollback,
@@ -759,7 +760,10 @@ describe('deploy runs its afterDeploy step', () => {
   /** What the recording hook below logs, so its position in the run is visible. */
   const HOOK_LINE = 'afterDeploy ran';
 
-  async function runDeploy(afterDeploy: AfterDeploy): Promise<string[]> {
+  async function runDeploy(
+    afterDeploy: AfterDeploy,
+    prepare: (ctx: OpsContext) => void = () => undefined,
+  ): Promise<string[]> {
     const repoRoot = await findRepoRoot(createNodeFileSystem());
     const fs = createMemoryFileSystem({
       [`${repoRoot}/.jj`]: '',
@@ -823,6 +827,7 @@ describe('deploy runs its afterDeploy step', () => {
     };
     ctx.state.resources['iam-build-role'] = { arn: 'arn:build' };
     ctx.state.resources['iam-exec-role'] = { arn: 'arn:role' };
+    prepare(ctx);
 
     await deploy(ctx, {
       afterDeploy: async (deployed) => {
@@ -850,6 +855,49 @@ describe('deploy runs its afterDeploy step', () => {
     expect(logged.findIndex((line) => line.startsWith(`deployed ${HASH} in `))).toBeGreaterThan(
       hookAt,
     );
+  });
+
+  it('converges the response headers policy first, and stops when CloudFront rejects it', async () => {
+    const steps: string[] = [];
+    const deploying = runDeploy(
+      async () => {
+        steps.push('afterDeploy');
+      },
+      (ctx) => {
+        ctx.config.headers = {
+          security: { contentTypeOptions: true, contentSecurityPolicy: "default-src 'self'" },
+          custom: [],
+        };
+        // Attached by an earlier bootstrap, so the deploy converges it.
+        ctx.state.resources['cloudfront-distribution'] = {
+          ...ctx.state.resources['cloudfront-distribution'],
+          id: 'D1',
+        };
+        ctx.state.resources['response-headers-policy'] = { id: 'RHP-1', attachedTo: 'D1' };
+        Object.assign(ctx.clients.cloudfront, {
+          getResponseHeadersPolicy: async (id: string) => ({ id, config: '<x/>', etag: 'E1' }),
+          responseHeadersPolicyMatches: () => false,
+          updateResponseHeadersPolicy: async () => {
+            steps.push('updateResponseHeadersPolicy');
+            throw new AwsError({
+              service: 'cloudfront',
+              code: 'TooLongCSPInResponseHeadersPolicy',
+              message: 'too long',
+              statusCode: 400,
+            });
+          },
+        });
+        const upload = ctx.clients.s3.putObject.bind(ctx.clients.s3);
+        ctx.clients.s3.putObject = async (...args) => {
+          steps.push(`putObject ${args[1]}`);
+          return upload(...args);
+        };
+      },
+    );
+    await expect(deploying).rejects.toThrow(
+      /contentSecurityPolicy is 18 characters, over this account's CloudFront quota/,
+    );
+    expect(steps).toEqual(['updateResponseHeadersPolicy']);
   });
 
   it('does not ship blogwright-pds with the CLI package', async () => {
@@ -1340,5 +1388,37 @@ describe('history', () => {
       'bbbbbbbbbbbb  succeeded   2026-10-13T11:00:00Z  42s       -',
       'aaaaaaaaaaaa  succeeded   2026-10-13T10:00:00Z  42s       3',
     ]);
+  });
+});
+
+describe('previewDestroy', () => {
+  it("removes the preview's objects and its cache-control record", async () => {
+    const calls: string[] = [];
+    const ctx = createTestContext({
+      env: 'preview',
+      clients: {
+        s3: {
+          deletePrefix: async (_b: string, prefix: string) => {
+            calls.push(`deletePrefix ${prefix}`);
+            return 3;
+          },
+          deleteObject: async (_b: string, key: string) => {
+            calls.push(`deleteObject ${key}`);
+          },
+        },
+      },
+    });
+
+    await previewDestroy(ctx, 'pr-42');
+
+    expect(calls).toEqual([
+      'deletePrefix previews/pr-42/',
+      'deleteObject build/cache-control/preview-pr-42.json',
+    ]);
+  });
+
+  it('rejects an id that is not a lowercase slug, before deleting anything', async () => {
+    const ctx = createTestContext({ env: 'preview' });
+    await expect(previewDestroy(ctx, 'PR 42')).rejects.toThrow(/preview id must be lowercase/);
   });
 });

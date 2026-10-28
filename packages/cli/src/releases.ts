@@ -21,9 +21,18 @@ import {
 } from 'blogwright-core';
 
 import { describeRelease, readRecordedBeforeRebuild } from './artifacts.js';
+import {
+  cacheControlRecordKey,
+  markCacheControlUnconfirmed,
+  readCacheControlRecord,
+  sameCacheControlRules,
+  writeCacheControlRecord,
+  type CacheControlRecord,
+} from './cache-control.js';
 import type { OpsContext } from './context.js';
 import {
   invalidatePaths,
+  LIVE_SITE_TARGET,
   readManifest,
   runBuild,
   uploadSource,
@@ -72,6 +81,11 @@ function assertReleaseStagingGranted(ctx: OpsContext): void {
   );
 }
 
+/** The build target a staged release publishes as: its pending-job and Cache-Control record name. */
+function stagedReleaseTarget(hash: string): string {
+  return `release-${hash}`;
+}
+
 /** Build the working copy and publish it to `releases/<hash>/` for a later `promote`. */
 export async function stage(ctx: OpsContext): Promise<void> {
   const startedAt = Date.now();
@@ -88,7 +102,10 @@ export async function stage(ctx: OpsContext): Promise<void> {
     hash,
     sourceKey: source.sourceKey,
     sitePrefix: prefix,
-    target: 'stage',
+    // Each staged release is its own target, so its Cache-Control record
+    // says which rules the files under its prefix were written with - what
+    // a promotion carries into site/.
+    target: stagedReleaseTarget(hash),
     // robots.txt and sitemap.xml are written for the environment the release
     // will be promoted into, so the staged bytes are exactly the live bytes.
     baseUrl: siteBaseUrl(ctx),
@@ -129,7 +146,9 @@ function createReleaseCopier(ctx: OpsContext) {
   return async function copy(sourceKey: string, destinationKey: string): Promise<void> {
     if (tags === 'copy') {
       try {
-        await ctx.clients.s3.copyObject(ctx.names.bucket, sourceKey, destinationKey, 'copy');
+        await ctx.clients.s3.copyObject(ctx.names.bucket, sourceKey, destinationKey, {
+          tags: 'copy',
+        });
         return;
       } catch (err) {
         if (!isAccessDenied(err)) throw err;
@@ -142,8 +161,82 @@ function createReleaseCopier(ctx: OpsContext) {
         }
       }
     }
-    await ctx.clients.s3.copyObject(ctx.names.bucket, sourceKey, destinationKey, 'drop');
+    await ctx.clients.s3.copyObject(ctx.names.bucket, sourceKey, destinationKey, {
+      tags: 'drop',
+    });
   };
+}
+
+/**
+ * How a promotion keeps `Cache-Control` coherent. A copy carries each staged
+ * object's header, which the rules in force when it was staged decided; a
+ * file the promotion skips because its content is unchanged keeps the header
+ * site/ already had. So unless both are known to come from the same rules,
+ * every file is copied - the promotion's equivalent of a deploy's implicit
+ * `--refresh` - and site/'s record is marked unconfirmed first, so a
+ * promotion that stops partway is re-applied by the next build.
+ */
+interface CacheControlPlan {
+  /** The staged release's record: what site/ carries once it is promoted. */
+  staged: CacheControlRecord;
+  copyEveryFile: boolean;
+}
+
+/**
+ * Read both records and decide. No record for site/ means its files were
+ * written before `cacheControl` existed, with no header - the same as empty
+ * rules. A staged release always records its rules, so a missing record there
+ * proves nothing and counts as unconfirmed.
+ */
+async function planCacheControl(ctx: OpsContext, hash: string): Promise<CacheControlPlan> {
+  const staged = (await readCacheControlRecord(ctx, stagedReleaseTarget(hash))) ?? {
+    status: 'unconfirmed',
+  };
+  const live = (await readCacheControlRecord(ctx, LIVE_SITE_TARGET)) ?? {
+    status: 'applied',
+    rules: [],
+  };
+  if (
+    staged.status === 'applied' &&
+    !sameCacheControlRules(staged.rules, ctx.config.cacheControl)
+  ) {
+    ctx.logger.warn(
+      `${hash} was staged with cacheControl rules that differ from the current config - ` +
+        'promoting the Cache-Control it was staged with. Stage it again to apply the current rules.',
+    );
+  }
+  const copyEveryFile = !(
+    staged.status === 'applied' &&
+    live.status === 'applied' &&
+    sameCacheControlRules(staged.rules, live.rules)
+  );
+  if (copyEveryFile) {
+    ctx.logger.step(
+      "the staged release's Cache-Control may differ from what site/ was written with - copying " +
+        'every file, so unchanged ones carry the staged headers too',
+    );
+    await markCacheControlUnconfirmed(ctx, LIVE_SITE_TARGET);
+  }
+  return { staged, copyEveryFile };
+}
+
+/**
+ * site/ now carries the staged release's headers, so it takes the staged
+ * record. Non-fatal like a build's own record: the release is published, and
+ * a record left unconfirmed only makes the next build re-apply the rules.
+ */
+async function recordPromotedCacheControl(
+  ctx: OpsContext,
+  staged: CacheControlRecord,
+): Promise<void> {
+  try {
+    await writeCacheControlRecord(ctx, LIVE_SITE_TARGET, staged);
+  } catch (err) {
+    ctx.logger.warn(
+      `could not record the promoted Cache-Control in ${cacheControlRecordKey(LIVE_SITE_TARGET)} ` +
+        `(${err instanceof Error ? err.message : String(err)}); the next build to site/ re-uploads every file`,
+    );
+  }
 }
 
 /** What publishing a staged release into `site/` changed. */
@@ -176,9 +269,11 @@ async function publishStagedRelease(
     );
   const staged = await etags(prefix);
   const live = await etags(LIVE_SITE_PREFIX);
+  const headers = await planCacheControl(ctx, manifest.hash);
+  const copyAll = opts.refresh === true || headers.copyEveryFile;
   const toCopy = manifest.files
     .map((file) => file.path)
-    .filter((path) => opts.refresh || live.get(path) !== staged.get(path));
+    .filter((path) => copyAll || live.get(path) !== staged.get(path));
   const releasePaths = new Set(manifest.files.map((file) => file.path));
   const toDelete = [...live.keys()].filter((path) => !releasePaths.has(path));
 
@@ -193,6 +288,7 @@ async function publishStagedRelease(
     await ctx.clients.s3.deleteObject(ctx.names.bucket, `${LIVE_SITE_PREFIX}${path}`);
   }
   if (toDelete.length > 0) ctx.logger.step(`deleted ${toDelete.length} stale object(s)`);
+  await recordPromotedCacheControl(ctx, headers.staged);
 
   const changedKeys = [...toCopy, ...toDelete].map((path) => `${LIVE_SITE_PREFIX}${path}`);
   const paths = [

@@ -54,6 +54,8 @@ SSR environments and PR previews record no artifact manifest: an SSR deploy alre
 
 There is one manifest per hash, written by the latest build of that hash. Rebuilding a staged hash - a `deploy` or a rebuilding `rollback` of the same revision - replaces its manifest; if that rebuild is not byte-identical, the staged copy no longer matches the record and `promote` refuses it until the hash is staged again.
 
+The manifest records content only. Object metadata - the content type, object tags and the `Cache-Control` written from the [`cacheControl` rules](/reference/configuration/#cache-control-cachecontrol) - is not part of it, so two builds with the same bytes have the same release hash even if their rules differ.
+
 `fileCount`, `totalBytes`, `releaseHash` and `release` are derived from `files`. When blogwright reads a manifest it recomputes them and refuses one whose recorded values disagree - a truncated or hand-edited manifest is an error, never trusted.
 
 ## The release hash

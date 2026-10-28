@@ -81,7 +81,7 @@ A static deploy also records the [artifact manifest](/reference/artifact-manifes
 
 After every successful **production** deploy, standard.site records are re-synced to the PDS when configured - non-fatally, so a PDS outage never fails a good deploy (see [`pds sync`](#pds-sync)).
 
-`--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change.
+`--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change. A change to the `cacheControl` rules needs no flag: the deploy refreshes on its own, as an implicit `--refresh` (see [Caching](/guides/caching/#when-the-rules-change)).
 
 With an `ssr` block in the config, the build's output is packaged and published as a Lambda Web Function revision instead of synced to `site/`: the deploy preflights the endpoint, creates a revision only when the artifact or a revision-scoped setting changed, probes it until it serves, restores the previous revision if it never does, and invalidates `/*`. See [Deploying](/guides/deploying/#ssr-environments).
 
@@ -105,7 +105,7 @@ blogwright promote <hash> [env] [--refresh]
 
 Publishes a staged release to the live site without rebuilding. It refuses a hash with nothing under `releases/<hash>/`, then verifies the staged objects against the hash's artifact manifest and refuses - copying nothing - if any differs. It server-side copies every file whose live ETag differs from the staged one into `site/` (bytes, content type and tags unchanged), deletes live objects the release does not contain, invalidates the copied and deleted paths under the same rules as a deploy (`/*` past `invalidationMaxPaths`, nothing when nothing changed), and finally verifies `site/` against the manifest, so it succeeds only when the live bytes equal the staged bytes. The summary names the release it replaced and the one it published; `history` shows the hash as `promoted`.
 
-`--refresh` copies every staged file instead of only the changed ones. Post-deploy plugin steps, such as the standard.site sync, run only when the working copy is `<hash>`; otherwise `promote` warns and skips them. When the caller may not copy object tags (`s3:GetObjectTagging`/`s3:PutObjectTagging`, granted by `bootstrap`), it promotes untagged and warns once.
+`--refresh` copies every staged file instead of only the changed ones. Each copy keeps the staged object's `Cache-Control`; when the staged release's `cacheControl` rules are not known to match the ones `site/` was written with, every file is copied so none keeps an older header, and `site/`'s Cache-Control record takes the staged rules (with a warning when the config's rules have changed since staging). Post-deploy plugin steps, such as the standard.site sync, run only when the working copy is `<hash>`; otherwise `promote` warns and skips them. When the caller may not copy object tags (`s3:GetObjectTagging`/`s3:PutObjectTagging`, granted by `bootstrap`), it promotes untagged and warns once.
 
 ### rollback
 

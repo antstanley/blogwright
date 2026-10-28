@@ -43,7 +43,10 @@ describe.skipIf(!RUN)('S3 against floci', () => {
 
   it('copies an object server-side with identical bytes and ETag', async () => {
     await s3.createBucket(bucket);
-    await s3.putObject(bucket, 'releases/h1/a.css', 'body{}', 'text/css', { app: 'floci' });
+    await s3.putObject(bucket, 'releases/h1/a.css', 'body{}', 'text/css', {
+      tags: { app: 'floci' },
+      cacheControl: 'no-store',
+    });
     await s3.copyObject(bucket, 'releases/h1/a.css', 'site/a.css');
     expect(await s3.getObjectText(bucket, 'site/a.css')).toBe('body{}');
     const [source] = await s3.listObjects(bucket, 'releases/h1/');

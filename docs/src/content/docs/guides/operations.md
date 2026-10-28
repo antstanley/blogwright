@@ -67,7 +67,7 @@ When the hash was built with [`stage`](/guides/deploying/#release-gating-stage-v
   restored release 1.4.0+4f3a2b1c9d0e.9f86d081884c (sha256 9f86d081884c…)
 ```
 
-Because the live objects are checked against the same manifest the release was verified with, a republishing rollback restores that release byte for byte. `--refresh` copies every file rather than only the changed ones.
+Because the live objects are checked against the same manifest the release was verified with, a republishing rollback restores that release byte for byte - with the `Cache-Control` headers it was staged with, under the same rules as a promotion (see [Release gating](/guides/deploying/#release-gating-stage-verify-promote)). `--refresh` copies every file rather than only the changed ones.
 
 ### Anything else is rebuilt
 

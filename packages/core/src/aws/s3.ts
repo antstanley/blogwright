@@ -32,6 +32,12 @@ export interface S3ObjectVersion {
 /** Whether {@link S3Client.copyObject} carries the source's tags to the copy. */
 export type ObjectTagCopy = 'copy' | 'drop';
 
+/** How {@link S3Client.copyObject} treats the source's tags. */
+export interface CopyObjectOptions {
+  /** `copy` (the default) keeps the source's tags; `drop` writes the copy with none. */
+  tags?: ObjectTagCopy | undefined;
+}
+
 export interface S3Object {
   key: string;
   size: number;
@@ -51,6 +57,14 @@ function encodeKey(key: string): string {
       ),
     )
     .join('/');
+}
+
+/** Object metadata written with a PUT; S3 records it only then, never for an unchanged object. */
+export interface ObjectMetadata {
+  /** Object tags, sent as `x-amz-tagging` (the role also needs `s3:PutObjectTagging`). */
+  tags?: ResourceTags | undefined;
+  /** Stored as the object's `Cache-Control` and returned with it on every GET. */
+  cacheControl?: string | undefined;
 }
 
 /** Thin S3 client (path-style addressing) built on the shared signing transport. */
@@ -124,8 +138,9 @@ export class S3Client {
     key: string,
     body: string | Uint8Array,
     contentType = 'application/octet-stream',
-    tags?: ResourceTags,
+    metadata: ObjectMetadata = {},
   ): Promise<string | undefined> {
+    const { tags, cacheControl } = metadata;
     const res = await this.client.send({
       service: 's3',
       method: 'PUT',
@@ -133,6 +148,7 @@ export class S3Client {
       headers: {
         'content-type': contentType,
         ...(tags && Object.keys(tags).length > 0 ? { 'x-amz-tagging': encodeTagQuery(tags) } : {}),
+        ...(cacheControl !== undefined ? { 'cache-control': cacheControl } : {}),
       },
       body,
     });
@@ -141,18 +157,21 @@ export class S3Client {
   }
 
   /**
-   * Server-side copy of one object within a bucket. The bytes, content type
-   * and other system metadata are copied as they are (`x-amz-metadata-directive:
-   * COPY`). Object tags are copied too, which needs `s3:GetObjectTagging` on the
-   * source and `s3:PutObjectTagging` on the destination; `tags: 'drop'` writes
-   * the copy with no tags, for a caller that lacks those.
+   * Server-side copy of one object within a bucket. The bytes and the
+   * metadata a PUT writes - content type and `Cache-Control` (see
+   * {@link ObjectMetadata}) - are copied as they are
+   * (`x-amz-metadata-directive: COPY`), so a copy serves exactly what the
+   * source did. Object tags are copied too, which needs `s3:GetObjectTagging`
+   * on the source and `s3:PutObjectTagging` on the destination;
+   * `{ tags: 'drop' }` writes the copy with no tags, for a caller that lacks those.
    */
   async copyObject(
     bucket: string,
     sourceKey: string,
     destinationKey: string,
-    tags: ObjectTagCopy = 'copy',
+    options: CopyObjectOptions = {},
   ): Promise<void> {
+    const tags = options.tags ?? 'copy';
     const res = await this.client.send({
       service: 's3',
       method: 'PUT',

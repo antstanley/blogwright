@@ -17,6 +17,8 @@ What makes it shared is the serving path:
 - **A CloudFront Function** (viewer-request) reads the `Host` header, takes the first DNS label as the preview id, and rewrites the URI to that PR's prefix: `pr-42.preview.example.com/posts/` becomes `/previews/pr-42/site/posts/index.html` in the bucket. It also resolves directory URLs to `index.html`, because the private S3 REST origin does no index-document resolution. Since nothing is cached, the function runs on every request and new content is live immediately.
 - **A wildcard ACM certificate** (`*.<preview-domain>`) and **wildcard Route53 alias records** (`*.<preview-domain>` as A/AAAA aliases pointing at the distribution) make every subdomain resolve and terminate TLS without per-PR DNS work.
 
+[Response headers](/reference/configuration/#response-headers-headers) configured in the preview config apply to the whole preview distribution, and so to every PR: `preview bootstrap` creates, updates or removes the policy, and `preview deploy` leaves it alone.
+
 Each preview deploy publishes to `previews/<id>/site/`; the bucket policy grants CloudFront read on `previews/*`. Destroying a preview deletes its prefix - and because previews are never cached, no CloudFront invalidation is needed and the URL stops serving at once.
 
 ## Requirements
@@ -61,6 +63,8 @@ blogwright preview deploy pr-42
 ```
 
 Re-deploying the same id overwrites that PR's prefix - push, deploy, refresh the same URL. `--refresh` works here too, re-uploading unchanged files so metadata fixes reach live objects.
+
+The `cacheControl` rules match each file's URL path, not its `previews/<id>/site/` key, so a preview gets the same headers production would. The preview distribution does not cache at the edge, so `s-maxage` has no effect there; the browser directives still apply. See [Caching and Cache-Control](/guides/caching/#previews-and-server-rendered-sites).
 
 Every object a preview deploy uploads is tagged `environment: preview-<id>` (e.g. `environment: preview-pr-42`) alongside the usual `app` tag, so per-PR cost and cleanup queries work against the object tags. See [environments](/guides/environments/) for the tagging scheme.
 
