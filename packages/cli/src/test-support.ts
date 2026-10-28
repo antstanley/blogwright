@@ -5,11 +5,15 @@
  * Tests substitute behaviour here - at the ports - never by casting.
  */
 
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  AwsError,
+  createArtifactManifest,
+  createCacheControlLookup,
   createClients,
   createMemoryFileSystem,
   createNodeFileSystem,
@@ -17,6 +21,7 @@ import {
   emptyState,
   findRepoRoot,
   mergeConfig,
+  parseCacheControlRules,
   staticCredentials,
   StateStore,
   type AwsClients,
@@ -29,6 +34,9 @@ import {
   type Plugin,
   type PluginCommand,
   type PluginContext,
+  type ObjectMetadata,
+  type S3Client,
+  type S3Object,
   type Terminal,
   type Transport,
 } from 'blogwright-core';
@@ -627,4 +635,239 @@ export async function withBrokenPlugin(
     load: async (path) => (path === entryPath ? { default: {} } : base.loader.load(path)),
   };
   return { fs: base.fs, loader };
+}
+
+/** One object in {@link createMemoryS3}'s bucket. */
+export interface MemoryObject {
+  body: Uint8Array;
+  contentType: string;
+  tags?: Record<string, string> | undefined;
+  cacheControl?: string | undefined;
+}
+
+/** What {@link createMemoryS3} calls with each PUT, after storing it. */
+export type PutListener = (key: string, body: Uint8Array) => void;
+
+const textEncoder = new TextEncoder();
+
+function toBytes(body: string | Uint8Array): Uint8Array {
+  return typeof body === 'string' ? textEncoder.encode(body) : body;
+}
+
+/**
+ * A single-bucket, in-memory stand-in for the S3 client methods the deploy,
+ * release and verify paths use. ETags are the MD5 of the body, as S3 reports
+ * for a single-part upload, and listings are sorted by key, as S3 returns them.
+ */
+export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
+  const objects = new Map<string, MemoryObject>();
+  for (const [key, body] of Object.entries(seed)) {
+    objects.set(key, { body: toBytes(body), contentType: 'application/octet-stream' });
+  }
+  const listeners: PutListener[] = [];
+  const noSuchKey = (key: string) =>
+    new AwsError({ service: 's3', code: 'NoSuchKey', message: key, statusCode: 404 });
+  const client = {
+    putObject: async (
+      _bucket: string,
+      key: string,
+      body: string | Uint8Array,
+      contentType = 'application/octet-stream',
+      metadata: ObjectMetadata = {},
+    ) => {
+      const bytes = toBytes(body);
+      objects.set(key, {
+        body: bytes,
+        contentType,
+        ...(metadata.tags ? { tags: metadata.tags } : {}),
+        ...(metadata.cacheControl !== undefined ? { cacheControl: metadata.cacheControl } : {}),
+      });
+      for (const listener of listeners) listener(key, bytes);
+      return undefined;
+    },
+    putObjectIfAbsent: async (
+      _bucket: string,
+      key: string,
+      body: string | Uint8Array,
+      contentType = 'application/octet-stream',
+    ) => {
+      if (objects.has(key)) return false;
+      const bytes = toBytes(body);
+      objects.set(key, { body: bytes, contentType });
+      for (const listener of listeners) listener(key, bytes);
+      return true;
+    },
+    getObject: async (_bucket: string, key: string) => {
+      const found = objects.get(key);
+      if (!found) throw noSuchKey(key);
+      return found.body;
+    },
+    getObjectText: async (_bucket: string, key: string) => {
+      const found = objects.get(key);
+      return found ? new TextDecoder().decode(found.body) : undefined;
+    },
+    objectExists: async (_bucket: string, key: string) => objects.has(key),
+    deleteObject: async (_bucket: string, key: string) => {
+      objects.delete(key);
+    },
+    listObjects: async (_bucket: string, prefix: string): Promise<S3Object[]> =>
+      [...objects.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, object]) => ({
+          key,
+          size: object.body.byteLength,
+          lastModified: undefined,
+          etag: createHash('md5').update(object.body).digest('hex'),
+        })),
+  } satisfies Partial<S3Client>;
+  return {
+    objects,
+    client,
+    onPut(listener: PutListener): void {
+      listeners.push(listener);
+    },
+    text(key: string): string | undefined {
+      const found = objects.get(key);
+      return found ? new TextDecoder().decode(found.body) : undefined;
+    },
+  };
+}
+
+/** The pending-job fields the fake builder acts on. */
+interface FakeBuildJob {
+  hash: string;
+  sitePrefix: string;
+  objectTags?: Record<string, string>;
+  cacheControl?: unknown;
+  artifactManifestKey?: string;
+}
+
+/**
+ * Stand in for the builder MicroVM: when the CLI writes a static pending job,
+ * publish `files` under its site prefix (replacing whatever was there), record
+ * the artifact manifest at the job's key when asked, and write the changed-paths manifest that
+ * signals completion. `files` is read at each build, so a test can change the
+ * site between builds.
+ */
+export function attachFakeBuilder(
+  s3: ReturnType<typeof createMemoryS3>,
+  files: () => Record<string, string>,
+  opts: {
+    siteVersion?: string;
+    artifactWriteDenied?: boolean;
+    /** Act as an agent from before artifact manifests, which drops `artifactManifestKey`. */
+    ignoresArtifactManifestKey?: boolean;
+  } = {},
+): void {
+  s3.onPut((key, body) => {
+    if (!key.startsWith('build/pending/')) return;
+    const job = JSON.parse(new TextDecoder().decode(body)) as FakeBuildJob;
+    const built = files();
+    const rules = parseCacheControlRules(job.cacheControl ?? []);
+    const cacheControlFor = createCacheControlLookup(rules);
+    for (const existing of s3.objects.keys()) {
+      if (existing.startsWith(job.sitePrefix)) s3.objects.delete(existing);
+    }
+    for (const [path, content] of Object.entries(built)) {
+      s3.objects.set(`${job.sitePrefix}${path}`, {
+        body: textEncoder.encode(content),
+        contentType: 'text/html; charset=utf-8',
+        ...(job.objectTags ? { tags: job.objectTags } : {}),
+        ...(cacheControlFor(`/${path}`) !== undefined
+          ? { cacheControl: cacheControlFor(`/${path}`) }
+          : {}),
+      });
+    }
+    if (job.artifactManifestKey && !opts.artifactWriteDenied && !opts.ignoresArtifactManifestKey) {
+      const manifest = createArtifactManifest({
+        hash: job.hash,
+        siteVersion: opts.siteVersion,
+        files: Object.entries(built).map(([path, content]) => ({
+          path,
+          bytes: textEncoder.encode(content).byteLength,
+          sha256: createHash('sha256').update(content).digest('hex'),
+        })),
+      });
+      s3.objects.set(job.artifactManifestKey, {
+        body: textEncoder.encode(JSON.stringify(manifest)),
+        contentType: 'application/json',
+      });
+    }
+    const paths = Object.keys(built).map((path) => `/${path}`);
+    s3.objects.set(`build/changed/${job.hash}.json`, {
+      // Reports the rules it applied, as the real agent does, so the CLI's
+      // Cache-Control record is confirmed.
+      body: textEncoder.encode(JSON.stringify({ paths, cacheControl: rules })),
+      contentType: 'application/json',
+    });
+  });
+}
+
+/** Builder-image state a static deploy needs to skip the image rebuild. */
+const FAKE_AGENT_HASH = '0123456789ab';
+
+/**
+ * A production context wired to run the whole static build path against
+ * `s3`: a repo root with one file, a recorded builder image for the test
+ * agent bundle, MicroVM and log clients that always succeed, and a
+ * CloudFront client that records each invalidation's paths in `invalidations`.
+ */
+export async function createBuildContext(opts: {
+  s3: ReturnType<typeof createMemoryS3>;
+  hash: string;
+  logged: string[];
+  invalidations?: string[][] | undefined;
+  config?: ConfigInput | undefined;
+}): Promise<OpsContext> {
+  const repoRoot = await findRepoRoot(createNodeFileSystem());
+  const fs = createMemoryFileSystem({
+    [`${repoRoot}/.jj`]: '',
+    [`${repoRoot}/README.md`]: '# example',
+    [`${TEST_AGENT_DIR}/Dockerfile`]: 'FROM scratch',
+    [`${TEST_AGENT_DIR}/server.js`]: 'export {};',
+    [`${TEST_AGENT_DIR}/agent-manifest.json`]: JSON.stringify({ hash: FAKE_AGENT_HASH }),
+  });
+  const record = (msg: string) => opts.logged.push(msg);
+  const ctx = createTestContext({
+    env: 'production',
+    ...(opts.config ? { config: opts.config } : {}),
+    ports: {
+      fs,
+      terminal: silentTerminal,
+      vcs: { revisionHash: async () => opts.hash, listFiles: async () => ['README.md'] },
+    },
+    clients: {
+      s3: opts.s3.client,
+      microvms: {
+        getImage: async () => ({
+          imageArn: 'arn:img',
+          imageName: 'builder',
+          state: 'CREATED',
+          imageVersion: '1',
+        }),
+        runMicrovm: async () => ({ microvmId: 'vm-1', state: 'PENDING', endpoint: 'http://vm' }),
+        getMicrovm: async () => ({ microvmId: 'vm-1', state: 'RUNNING', endpoint: 'http://vm' }),
+        createAuthToken: async () => 'tok',
+        terminateMicrovm: async () => undefined,
+      },
+      logs: { filterEvents: async () => [] },
+      cloudfront: {
+        createInvalidation: async (_id: string, paths: string[]) => {
+          opts.invalidations?.push(paths);
+          return 'inv';
+        },
+      },
+    },
+    logger: { info: record, step: record, ok: record, warn: record },
+  });
+  ctx.state.resources['microvm-image'] = {
+    arn: 'arn:img',
+    agentHash: FAKE_AGENT_HASH,
+    logGroup: ctx.names.microvmLogGroup,
+  };
+  ctx.state.resources['iam-build-role'] = { arn: 'arn:build' };
+  ctx.state.resources['iam-exec-role'] = { arn: 'arn:role' };
+  ctx.state.resources['cloudfront-distribution'] = { id: 'D1', mode: 'static' };
+  return ctx;
 }

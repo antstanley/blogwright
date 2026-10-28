@@ -175,6 +175,24 @@ function webArtifactWriteStatements(ctx: OpsContext): object[] {
   ];
 }
 
+/**
+ * The agent records each static build's artifact manifest at its own
+ * `build/artifacts/<hash>/<buildId>.json`. The grant stops at that depth on
+ * purpose: a revision's original record, `build/artifacts/<hash>.json`, is
+ * written once by the CLI and is out of the builder's reach. The shared
+ * preview stack and SSR environments record none.
+ */
+function artifactManifestWriteStatements(ctx: OpsContext): object[] {
+  if (ctx.preview || ctx.config.ssr) return [];
+  return [
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObject'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*/*`,
+    },
+  ];
+}
+
 /** Apply the build role's inline policy (idempotent - used by create + update). */
 async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
   // The build role is BOTH the image-build role AND the MicroVM's ambient runtime
@@ -200,6 +218,7 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
         Resource: `arn:aws:s3:::${ctx.names.bucket}/build/changed/*`,
       },
       ...webArtifactWriteStatements(ctx),
+      ...artifactManifestWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
@@ -263,6 +282,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
         ],
       },
       ...webArtifactWriteStatements(ctx),
+      ...artifactManifestWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['s3:ListBucket'],

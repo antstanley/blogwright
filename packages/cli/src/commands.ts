@@ -1,5 +1,19 @@
-import { AwsError, colors, findRepoRoot, type ResourceNode } from 'blogwright-core';
+import {
+  AwsError,
+  colors,
+  findRepoRoot,
+  type ArtifactManifest,
+  type ResourceNode,
+} from 'blogwright-core';
 
+import {
+  describeRelease,
+  logRebuildComparison,
+  newArtifactBuildManifestKey,
+  readBuildArtifact,
+  readRecordedBeforeRebuild,
+  recordDeployArtifact,
+} from './artifacts.js';
 import { cacheControlRecordKey } from './cache-control.js';
 import type { OpsContext } from './context.js';
 import {
@@ -376,16 +390,22 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
   // Rebuild the builder image first if the agent bundle changed, so build-agent fixes
   // ship on the same deploy (no-op when unchanged).
   await reconcileBuilderImage(ctx);
+  // A static build records its manifest at a key of its own; finding it there
+  // afterwards proves this build wrote it.
+  const artifactKey = ctx.config.ssr ? undefined : newArtifactBuildManifestKey(hash);
   const manifest = await runBuild(ctx, {
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
-    ...(ctx.config.ssr ? { webFunction: webFunctionJob(ctx, hash) } : {}),
+    ...(ctx.config.ssr
+      ? { webFunction: webFunctionJob(ctx, hash) }
+      : { artifactManifestKey: artifactKey }),
     ...(opts.refresh ? { refresh: true } : {}),
   });
 
   let invalidation;
   let outcome: PublishOutcome | undefined;
+  let artifact: ArtifactManifest | undefined;
   if (ctx.config.ssr) {
     const source = manifestSource(ctx, hash, startedAt, manifest.microvmId);
     const result = await webBuildResultOrFail(ctx, source);
@@ -393,6 +413,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     invalidation = outcome.invalidation;
   } else {
     invalidation = await invalidateChanged(ctx, hash);
+    if (artifactKey) artifact = await recordDeployArtifact(ctx, hash, artifactKey);
   }
   // The site is live - plugins' post-deploy steps (the pds sync, for one) run now.
   await opts.afterDeploy(ctx);
@@ -408,6 +429,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     { label: 'environment', value: ctx.env },
     { label: 'source', value: `${files.length} files, ${(zip.byteLength / 1024).toFixed(0)} KiB` },
     { label: 'build', value: formatDuration(manifest.durationMs) },
+    ...(artifact ? [{ label: 'release', value: describeRelease(artifact) }] : []),
     { label: 'invalidated', value: describeInvalidation(invalidation) },
     ...(url ? [{ label: 'site', value: colors.cyan(url) }] : []),
   ];
@@ -512,13 +534,20 @@ export async function rollback(
   }
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
   const startedAt = Date.now();
+  // The original record is what the rebuilt bytes are checked against. The
+  // rebuild records its own manifest under a fresh key and never replaces it.
+  const recorded = await readRecordedBeforeRebuild(ctx, hash);
+  const artifactKey = newArtifactBuildManifestKey(hash);
   await runBuild(ctx, {
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
+    artifactManifestKey: artifactKey,
     ...(opts.refresh ? { refresh: true } : {}),
   });
   await invalidateChanged(ctx, hash);
+  const rebuilt = await readBuildArtifact(ctx, hash, artifactKey);
+  logRebuildComparison(ctx, recorded, rebuilt);
   // A rollback changes production content too, but the PDS mirrors the *working tree*
   // content, which a rollback does not restore - so only warn about the divergence.
   if (ctx.env === 'production' && ctx.config.pds) {

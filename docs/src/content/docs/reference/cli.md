@@ -77,6 +77,8 @@ blogwright deploy [env] [--refresh]
 
 Zips the repo (honoring `.gitignore` plus the `sourceIgnore`/`sourceInclude` config), names the zip by the jj/git revision hash, and uploads it to `build/<hash>.zip`. If the build-agent bundle changed, the builder MicroVM image is rebuilt first (a no-op otherwise). The MicroVM pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to the live `site/` prefix; only files whose content changed are re-uploaded, and only the changed CloudFront paths are invalidated (past the configured `invalidationMaxPaths` cap, everything - `/*` - is invalidated instead). On a TTY the command ends with a summary card: revision, environment, source size, build duration, invalidation, and the site URL.
 
+A static deploy also records the build's [artifact manifest](/reference/artifact-manifest/) at `build/artifacts/<hash>/<buildId>.json` - every published path, byte count and SHA-256, an aggregate release hash and a release identity - prints the release, and keeps the first manifest recorded for the revision, write-once, at `build/artifacts/<hash>.json`. It warns when the builder could not record one (a stack that needs `bootstrap` to grant `build/artifacts/*/*`), and when a redeploy of the same hash is not byte-identical to the original.
+
 After every successful **production** deploy, standard.site records are re-synced to the PDS when configured - non-fatally, so a PDS outage never fails a good deploy (see [`pds sync`](#pds-sync)).
 
 `--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change. A change to the `cacheControl` rules needs no flag: the deploy refreshes on its own, as an implicit `--refresh` (see [Caching](/guides/caching/#when-the-rules-change)).
@@ -91,7 +93,7 @@ With an `ssr` block in the config, the build's output is packaged and published 
 blogwright rollback <hash> [env] [--refresh]
 ```
 
-Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history).
+Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history). In a static environment it then prints the release hash of the hash's original [artifact manifest](/reference/artifact-manifest/) and the rebuild's own, and warns when the rebuild is not byte-identical - or recorded no manifest, so it cannot be checked. The original is never replaced by the rebuild.
 
 In SSR mode, rollback instead reproduces the revision that hash was deployed with, from the artifact version and the `webFunction` settings recorded in its manifest - without a rebuild - and skips creation when that revision's fingerprint is already what serves. It falls back to re-running the build when the manifest has no `webFunction` block, the recorded artifact version is gone, or `ssr.staticDir` is configured (the artifact carries only the server, and the fingerprinted assets its pages reference were removed from `site/` by later deploys). Both paths run the same endpoint preflight, readiness probe and `/*` invalidation a deploy does.
 

@@ -293,6 +293,8 @@ export async function runBuild(
      * the deploy outcome.
      */
     webFunction?: WebFunctionJob | undefined;
+    /** Where the agent records the static build's artifact manifest; absent, none is written. */
+    artifactManifestKey?: string | undefined;
   },
 ): Promise<DeployManifest> {
   const sitePrefix = opts.sitePrefix ?? 'site/';
@@ -364,6 +366,7 @@ export async function runBuild(
         cacheControl: ctx.config.cacheControl,
         ...(refresh ? { refresh: true } : {}),
         ...(opts.webFunction ? { webFunction: opts.webFunction } : {}),
+        ...(opts.artifactManifestKey ? { artifactManifestKey: opts.artifactManifestKey } : {}),
         ...seo,
       }),
       'application/json',

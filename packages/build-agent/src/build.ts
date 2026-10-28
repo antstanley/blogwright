@@ -19,6 +19,8 @@ import {
 } from 'blogwright-core';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 
+import { recordArtifactManifest, sitePathOf } from './artifact.js';
+
 /**
  * The SSR packaging job the CLI puts in the pending document: what to package,
  * what to call the artifact, and where the CLI reads the result. Absent, the
@@ -78,6 +80,11 @@ export interface BuildPayload {
   refresh?: boolean | undefined;
   /** Present only for an SSR environment: package the output as a Web Function revision artifact. */
   webFunction?: WebFunctionJob | undefined;
+  /**
+   * Where to record the artifact manifest of a static build
+   * (`build/artifacts/<hash>.json`). Absent, none is written.
+   */
+  artifactManifestKey?: string | undefined;
 }
 
 /** The job document the CLI drops at s3://<bucket>/build/pending.json. */
@@ -93,6 +100,7 @@ export interface PendingJob {
   cacheControl?: CacheControlRule[];
   refresh?: boolean;
   webFunction?: WebFunctionJob;
+  artifactManifestKey?: string;
 }
 
 export type LogFn = (line: string) => void;
@@ -516,7 +524,7 @@ async function publishFiles(opts: {
     );
   }
   for (const file of opts.files) {
-    const sitePath = relative(opts.rootDir, file).split('\\').join('/');
+    const sitePath = sitePathOf(opts.rootDir, file);
     const key = opts.prefix + sitePath;
     uploaded.add(key);
     const content = await readFile(file);
@@ -792,6 +800,14 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
 
   const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
   const published = await publishBuild(s3, payload, workDir, distDir, log);
+  if (payload.artifactManifestKey && !payload.webFunction) {
+    await recordArtifactManifest(
+      s3,
+      log,
+      { bucket: payload.bucket, key: payload.artifactManifestKey },
+      { hash: payload.hash, appDir, rootDir: distDir, files: await walkFiles(distDir) },
+    );
+  }
   // The changed-paths manifest is the completion signal the CLI polls and reads.
   // It goes LAST: in SSR mode the result file the CLI's publish step reads must
   // already be in place when the manifest appears.
