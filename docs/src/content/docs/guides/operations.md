@@ -41,6 +41,17 @@ bw logs 4f3a2b1c9d0e
 
 If the manifest for that hash is unreadable, the command warns and shows the unfiltered log window instead. An empty result prints `no log events for <hash>` - which also happens once [log retention](#log-retention) has expired the events (the `history` listing is unaffected; manifests live in S3, not CloudWatch).
 
+## Check what is live: `verify <hash>`
+
+`blogwright verify <hash>` compares the objects under `site/` with the original [artifact manifest](/reference/artifact-manifest/) recorded for that hash - reading and hashing every object the release lists with its recorded size, and flagging, without reading them, objects whose size differs and objects the release does not contain. It answers "is what is live exactly what was built (and reviewed) for this hash?" after the fact, for instance from CI once a deploy finishes:
+
+```sh
+bw verify 4f3a2b1c9d0e
+# ✓ s3://production-example-123456789012/site/ matches release 1.4.0+4f3a2b1c9d0e.9f86d081884c: 212 files, sha256 9f86d081…
+```
+
+A hand-edited object, a missing file or a stray extra file each print a line and fail the command with exit code 1. Run it once nothing is deploying: an object replaced mid-run fails the command rather than being compared. Edge caches are not part of the check: CloudFront may still serve a copy cached before the last invalidation completed.
+
 ## Roll back: `rollback <hash>`
 
 `blogwright rollback <hash>` re-runs the builder MicroVM against the source zip already archived at `build/<hash>.zip` - the same build-and-sync pipeline as a [deploy](/guides/deploying/), but fed from the archive instead of your working tree. Your checkout is untouched. If the artifact is gone, the command fails immediately:

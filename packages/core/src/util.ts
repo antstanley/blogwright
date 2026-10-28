@@ -77,3 +77,39 @@ export async function pollUntil<T>(
   }
   return value;
 }
+
+/**
+ * Map `items` through `fn` with at most `limit` calls in flight, resolving to
+ * the results in input order. The first rejection rejects the whole map and
+ * stops it: no call starts after it, and the calls already in flight are left
+ * to settle on their own (their results, or further rejections, are dropped).
+ */
+export async function mapConcurrently<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new Error(`mapConcurrently needs a limit of at least 1, got ${limit}`);
+  }
+  const results: R[] = [];
+  // One iterator shared by every worker: each takes the next unclaimed item,
+  // until the items run out or any call has failed.
+  const queue = items.entries();
+  let failed = false;
+  async function worker(): Promise<void> {
+    while (!failed) {
+      const next = queue.next();
+      if (next.done) return;
+      const [index, item] = next.value;
+      try {
+        results[index] = await fn(item);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}

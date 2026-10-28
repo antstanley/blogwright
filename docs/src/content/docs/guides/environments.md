@@ -20,11 +20,13 @@ blogwright deploy --env staging      # flag - wins over the positional
 blogwright status staging            # every environment-scoped command takes [env]
 ```
 
-`rollback` and `logs` take a `<hash>` first, then the optional environment:
+`rollback`, `logs` and `verify` take a `<hash>` first, then the optional environment. With `--hash`, the only positional is the environment:
 
 ```sh
 blogwright rollback 4f3a2b1c staging
 blogwright logs 4f3a2b1c staging
+blogwright verify 4f3a2b1c staging
+blogwright verify --hash 4f3a2b1c staging
 ```
 
 Names must be lowercase letters, digits and dashes (`^[a-z0-9-]+$`). Anything else is rejected before anything in your account is created or changed.

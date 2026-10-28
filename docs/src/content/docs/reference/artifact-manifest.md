@@ -100,6 +100,10 @@ The builder writes its per-build manifest with its own roles, which need `s3:Put
 
 A failure to build or write the manifest never fails a build whose site is already published: the builder logs a warning, and the CLI reports that no manifest was recorded.
 
+## Verifying live objects against it
+
+`blogwright verify <hash>` compares the objects under `site/` with the original manifest recorded for `<hash>`: it reads and hashes each object the manifest lists with its recorded size, and reports an object whose size differs, or that the manifest does not list, without reading it. It reports each missing, changed or unexpected object and exits 1 on any difference - see [`verify`](/reference/cli/#verify).
+
 ## Rollback
 
 `rollback <hash>` re-runs the build from the archived source, so it is a rebuild. It records the rebuild's manifest under its own per-build key, then prints both release hashes - the original's and the rebuild's - and warns when they differ, because the live site then serves bytes no review covered. The original is left as it was, so a later rollback is still checked against the reviewed bytes, not against an earlier rebuild. A rebuild that recorded no manifest (a builder denied the write, or a builder image older than artifact manifests) cannot be checked, and the rollback says so rather than reporting a match. See [Roll back](/guides/operations/#roll-back-rollback-hash).

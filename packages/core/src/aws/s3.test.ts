@@ -325,3 +325,41 @@ describe('S3Client.putObjectIfAbsent', () => {
     await expect(s3With(denied).putObjectIfAbsent('b', 'k', '{}')).rejects.toThrow(/AccessDenied/);
   });
 });
+
+describe('S3Client.getObject', () => {
+  it('sends no Range or If-Match header for a plain read', async () => {
+    const headers: Record<string, string>[] = [];
+    const transport: Transport = async (req) => {
+      headers.push(req.headers);
+      return response(200, 'hello');
+    };
+    const body = await s3With(transport).getObject('b', 'site/a.html');
+    expect(new TextDecoder().decode(body)).toBe('hello');
+    expect(headers[0]!.range).toBeUndefined();
+    expect(headers[0]!['if-match']).toBeUndefined();
+  });
+
+  it('reads a byte range, conditional on the ETag', async () => {
+    const headers: Record<string, string>[] = [];
+    const transport: Transport = async (req) => {
+      headers.push(req.headers);
+      return response(206, 'ell');
+    };
+    const body = await s3With(transport).getObject('b', 'site/a.html', {
+      range: { start: 1, end: 3 },
+      ifMatch: 'abc123',
+    });
+    expect(new TextDecoder().decode(body)).toBe('ell');
+    expect(headers[0]!.range).toBe('bytes=1-3');
+    expect(headers[0]!['if-match']).toBe('"abc123"');
+  });
+
+  it('rejects with 412 PreconditionFailed when the object changed', async () => {
+    const transport: Transport = async () =>
+      response(412, '<Error><Code>PreconditionFailed</Code><Message>changed</Message></Error>');
+    await expect(s3With(transport).getObject('b', 'k', { ifMatch: 'old' })).rejects.toMatchObject({
+      statusCode: 412,
+      code: 'PreconditionFailed',
+    });
+  });
+});

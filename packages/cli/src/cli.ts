@@ -22,6 +22,7 @@ import {
 } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { AwsLogin, PackageManager, Ports } from './ports.js';
+import { verify } from './verify.js';
 import { whoami } from './whoami.js';
 
 const USAGE = `blogwright - full operations for a blog site on AWS (S3 + CloudFront, MicroVM builds)
@@ -41,6 +42,8 @@ Commands:
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
+  verify      <hash> [env]    Check the live site/ byte for byte against the
+                              artifact manifest recorded for a hash
   whoami      [env]           Show the AWS account, identity and profile in
                               use, and whether the account pin accepts them
 
@@ -236,7 +239,31 @@ async function helpText(ports: Pick<Ports, 'fs' | 'loader'>): Promise<string> {
   return buildHelp(USAGE, discovered);
 }
 
-const HASH_COMMANDS = new Set(['rollback', 'logs']);
+const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify']);
+
+/**
+ * The `<hash> [env]` arguments of a hash-first command. Without `--hash` the
+ * first positional is the hash and the second the environment; with it, the
+ * hash is taken and the first positional is the environment. A hash given both
+ * ways is refused rather than guessed at, and so is a missing one.
+ */
+function hashArguments(
+  command: string,
+  flagHash: string | undefined,
+  positionals: readonly string[],
+): { hash: string; envPositional: string | undefined } {
+  const [, first, second] = positionals;
+  if (flagHash !== undefined && second !== undefined) {
+    throw new Error(
+      `${command} was given --hash ${flagHash} and two positionals ("${first}", "${second}"): ` +
+        `with --hash, the only positional is the environment - \`blogwright ${command} ` +
+        `--hash ${flagHash} <env>\``,
+    );
+  }
+  const hash = flagHash ?? first;
+  if (!hash) throw new Error(`${command} requires a <hash>`);
+  return { hash, envPositional: flagHash === undefined ? second : first };
+}
 
 /** Builds the Terminal after flag parsing, so --plain shapes the whole session. */
 export type TerminalFactory = (opts: { plain: boolean }) => Terminal;
@@ -496,14 +523,13 @@ export async function main(
     );
   }
 
-  // Positional layout: rollback/logs take <hash> first, then optional env.
-  let hash: string | undefined;
-  let envPositional: string | undefined;
+  // Positional layout: rollback/logs/verify take <hash> first, then optional
+  // env. Their hash is checked here, before any context is built; the other
+  // commands never read `hash`.
+  let hash = '';
+  let envPositional = positionals[1];
   if (HASH_COMMANDS.has(command)) {
-    hash = values.hash ?? positionals[1];
-    envPositional = positionals[2];
-  } else {
-    envPositional = positionals[1];
+    ({ hash, envPositional } = hashArguments(command, values.hash, positionals));
   }
   const env = values.env ?? envPositional ?? 'production';
 
@@ -529,7 +555,6 @@ export async function main(
       });
       break;
     case 'rollback':
-      if (!hash) throw new Error('rollback requires a <hash>');
       await commands.rollback(ctx, hash, { refresh: values.refresh });
       break;
     case 'delete':
@@ -542,15 +567,17 @@ export async function main(
       await commands.history(ctx);
       break;
     case 'logs':
-      if (!hash) throw new Error('logs requires a <hash>');
       await commands.logs(ctx, hash);
       break;
     case 'status':
       await commands.status(ctx);
       break;
+    case 'verify':
+      await verify(ctx, hash);
+      break;
     default:
       // Unreachable: past the `KNOWN_COMMANDS` membership test above,
-      // `command` is one of the nine names in that set, and the `plugin`
+      // `command` is one of the names in that set, and the `plugin`
       // branch has already claimed the only one without a case here. Kept
       // wired to the same help text as every other USAGE print site - like
       // `runPreview`'s own unreachable default below - so it stays correct
