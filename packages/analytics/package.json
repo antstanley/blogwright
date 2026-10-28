@@ -24,7 +24,7 @@
     "dev:mock": "node scripts/dev-dashboard.mjs"
   },
   "dependencies": {
-    "@duckdb/node-api": "2.0.0-r.1",
+    "@duckdb/node-api": "1.5.6-r.2",
     "blogwright-core": "workspace:*",
     "fflate": "^0.8.3"
   },
