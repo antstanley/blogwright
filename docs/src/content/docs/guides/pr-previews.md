@@ -62,6 +62,8 @@ blogwright preview deploy pr-42
 
 Re-deploying the same id overwrites that PR's prefix - push, deploy, refresh the same URL. `--refresh` works here too, re-uploading unchanged files so metadata fixes reach live objects.
 
+The `cacheControl` rules match each file's URL path, not its `previews/<id>/site/` key, so a preview gets the same headers production would. The preview distribution does not cache at the edge, so `s-maxage` has no effect there; the browser directives still apply. See [Caching and Cache-Control](/guides/caching/#previews-and-server-rendered-sites).
+
 Every object a preview deploy uploads is tagged `environment: preview-<id>` (e.g. `environment: preview-pr-42`) alongside the usual `app` tag, so per-PR cost and cleanup queries work against the object tags. See [environments](/guides/environments/) for the tagging scheme.
 
 :::note

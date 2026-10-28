@@ -82,7 +82,8 @@ One bucket per environment holds everything:
 │   ├── agent/agent-<hash>.zip   # build-agent bundle the builder image is baked from
 │   ├── manifests/<hash>.json    # one deployment manifest per build (history/rollback)
 │   ├── pending/<target>.json    # queued build job (present only mid-deploy)
-│   └── changed/<hash>.json      # changed-paths manifest, consumed for invalidation
+│   ├── changed/<hash>.json      # changed-paths manifest, consumed for invalidation
+│   └── cache-control/<target>.json  # cacheControl rules the target's last build applied
 ├── site/                        # the live site - CloudFront origin, private via OAC
 ├── previews/<id>/site/          # per-PR preview sites (preview stack only)
 ├── web/                         # SSR mode only
@@ -105,10 +106,10 @@ Each `blogwright deploy`:
 
 1. Zips the repo (honoring `.gitignore`, plus `sourceInclude`), names the zip by the jj/git revision hash, and uploads it to `build/<hash>.zip`.
 2. Launches a MicroVM from the builder image with the exec role, retrying transient gateway errors - the control plane can briefly 502 right after an image update, and the launch's client token makes retries idempotent.
-3. Writes the job document to `build/pending/<target>.json` (`site.json` for a normal deploy). The agent inside the VM polls the `build/pending/` prefix, resolves credentials from IMDS, pulls the zip, and runs `pnpm install && pnpm build` in `paths.app`.
-4. Syncs `paths.dist` to `site/`, comparing each file's MD5 to the live object's S3 ETag so only changed files are uploaded, and writes the changed-paths manifest to `build/changed/<hash>.json`.
+3. Writes the job document - including the `cacheControl` rules, and `refresh` when they differ from the rules recorded at `build/cache-control/<target>.json` - to `build/pending/<target>.json` (`site.json` for a normal deploy). The agent inside the VM polls the `build/pending/` prefix, resolves credentials from IMDS, pulls the zip, and runs `pnpm install && pnpm build` in `paths.app`.
+4. Syncs `paths.dist` to `site/`, comparing each file's MD5 to the live object's S3 ETag so only changed files are uploaded, writing each upload's `Cache-Control` from the first rule that matches its site-relative URL path, and writes the changed-paths manifest to `build/changed/<hash>.json`.
 5. Streams the build's CloudWatch logs, watching for hash-scoped markers (`##build:done:<hash>` / `##build:failed:<hash>`) so an orphaned VM from another deploy can never be mistaken for this build's result. The changed-paths manifest doubles as a completion signal if log delivery lags.
-6. Terminates the VM, clears the pending job, writes the deployment manifest, and invalidates only the changed CloudFront paths - falling back to `/*` past `invalidationMaxPaths`, and skipping invalidation entirely when nothing changed.
+6. Terminates the VM, clears the pending job, writes the deployment manifest, records the applied `cacheControl` rules at `build/cache-control/<target>.json` on success, and invalidates only the changed CloudFront paths - falling back to `/*` past `invalidationMaxPaths`, and skipping invalidation entirely when nothing changed.
 
 In SSR mode step 4 differs: the agent validates the entry file, rejects any symbolic link inside the package (pnpm's default `node_modules` is a symlink tree, and Lambda loads nothing that is not in the archive), enforces the 512 MB unzipped bound, zips the package with a fixed timestamp, uploads it to `web/artifacts/<hash>.zip`, publishes only `ssr.staticDir` to `site/` (upload-only, listing what it did not publish as `staleStaticKeys`), and writes `web/results/<hash>.json` before the changed-paths manifest. The CLI then reads that result, compares the revision fingerprint with what is serving, and either creates a revision (polls it `Active`, probes the endpoint, then deletes stale keys and invalidates `/*`) or skips creation and invalidates just the static paths. Vended log delivery is unchanged. The builder image request states `cpuConfigurations: [{ architecture: 'ARM_64' }]` on every create and update - `ARM_64` is the only value the MicroVM API accepts, and it matches the Web Function runtime, so a native dependency compiled during the build serves correctly.
 
