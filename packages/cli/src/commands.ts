@@ -1,5 +1,4 @@
 import {
-  artifactManifestKey,
   AwsError,
   colors,
   findRepoRoot,
@@ -10,9 +9,10 @@ import {
 import {
   describeRelease,
   logRebuildComparison,
-  logRecordedRelease,
-  readArtifactManifest,
+  newArtifactBuildManifestKey,
+  readBuildArtifact,
   readRecordedBeforeRebuild,
+  recordDeployArtifact,
 } from './artifacts.js';
 import { cacheControlRecordKey } from './cache-control.js';
 import type { OpsContext } from './context.js';
@@ -390,13 +390,16 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
   // Rebuild the builder image first if the agent bundle changed, so build-agent fixes
   // ship on the same deploy (no-op when unchanged).
   await reconcileBuilderImage(ctx);
+  // A static build records its manifest at a key of its own; finding it there
+  // afterwards proves this build wrote it.
+  const artifactKey = ctx.config.ssr ? undefined : newArtifactBuildManifestKey(hash);
   const manifest = await runBuild(ctx, {
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
     ...(ctx.config.ssr
       ? { webFunction: webFunctionJob(ctx, hash) }
-      : { artifactManifestKey: artifactManifestKey(hash) }),
+      : { artifactManifestKey: artifactKey }),
     ...(opts.refresh ? { refresh: true } : {}),
   });
 
@@ -410,8 +413,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     invalidation = outcome.invalidation;
   } else {
     invalidation = await invalidateChanged(ctx, hash);
-    artifact = await readArtifactManifest(ctx, hash);
-    logRecordedRelease(ctx, hash, artifact);
+    if (artifactKey) artifact = await recordDeployArtifact(ctx, hash, artifactKey);
   }
   // The site is live - plugins' post-deploy steps (the pds sync, for one) run now.
   await opts.afterDeploy(ctx);
@@ -532,19 +534,19 @@ export async function rollback(
   }
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
   const startedAt = Date.now();
-  // Read before the rebuild overwrites it: the record is what the rebuilt
-  // bytes are checked against.
+  // The original record is what the rebuilt bytes are checked against. The
+  // rebuild records its own manifest under a fresh key and never replaces it.
   const recorded = await readRecordedBeforeRebuild(ctx, hash);
+  const artifactKey = newArtifactBuildManifestKey(hash);
   await runBuild(ctx, {
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
-    artifactManifestKey: artifactManifestKey(hash),
+    artifactManifestKey: artifactKey,
     ...(opts.refresh ? { refresh: true } : {}),
   });
   await invalidateChanged(ctx, hash);
-  const rebuilt = await readArtifactManifest(ctx, hash);
-  logRecordedRelease(ctx, hash, rebuilt);
+  const rebuilt = await readBuildArtifact(ctx, hash, artifactKey);
   logRebuildComparison(ctx, recorded, rebuilt);
   // A rollback changes production content too, but the PDS mirrors the *working tree*
   // content, which a rollback does not restore - so only warn about the divergence.

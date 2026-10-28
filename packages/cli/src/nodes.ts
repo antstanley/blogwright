@@ -176,16 +176,19 @@ function webArtifactWriteStatements(ctx: OpsContext): object[] {
 }
 
 /**
- * The agent records each static build's artifact manifest at
- * `build/artifacts/<hash>.json`. The shared preview stack records none.
+ * The agent records each static build's artifact manifest at its own
+ * `build/artifacts/<hash>/<buildId>.json`. The grant stops at that depth on
+ * purpose: a revision's original record, `build/artifacts/<hash>.json`, is
+ * written once by the CLI and is out of the builder's reach. The shared
+ * preview stack and SSR environments record none.
  */
 function artifactManifestWriteStatements(ctx: OpsContext): object[] {
-  if (ctx.preview) return [];
+  if (ctx.preview || ctx.config.ssr) return [];
   return [
     {
       Effect: 'Allow',
       Action: ['s3:PutObject'],
-      Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*`,
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*/*`,
     },
   ];
 }
