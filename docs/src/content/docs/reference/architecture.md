@@ -84,6 +84,7 @@ One bucket per environment holds everything:
 │   ├── manifests/<hash>.json    # one deployment manifest per build (history/rollback)
 │   ├── artifacts/<hash>.json    # original artifact manifest: published paths, sizes, SHA-256 (write-once)
 │   ├── artifacts/<hash>/<buildId>.json  # each static build's own artifact manifest
+│   ├── releases/<hash>.json     # the artifact manifest a staged release is bound to (`stage` writes, `promote` checks)
 │   ├── pending/<target>.json    # queued build job (present only mid-deploy)
 │   ├── live-release.json        # the release the last deploy, promote or rollback published
 │   ├── changed/<hash>.json      # changed-paths manifest and applied cacheControl rules

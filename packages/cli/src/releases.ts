@@ -14,13 +14,19 @@ import {
   invalidationPaths,
   mapConcurrently,
   RepoRootNotFoundError,
-  artifactManifestKey,
   stagedReleasePrefix,
   type ArtifactManifest,
   type ObjectTagCopy,
 } from 'blogwright-core';
 
-import { describeRelease } from './artifacts.js';
+import {
+  describeRelease,
+  forgetStagedRelease,
+  newArtifactBuildManifestKey,
+  readBuildArtifact,
+  recordStagedRelease,
+  requireStagedReleaseManifest,
+} from './artifacts.js';
 import {
   cacheControlRecordKey,
   markCacheControlUnconfirmed,
@@ -44,7 +50,7 @@ import { describeLiveRelease, readLiveRelease, recordLiveRelease } from './live-
 import { RELEASE_STAGING_OUTPUT, reconcileBuilderImage } from './nodes.js';
 import { describeInvalidation, formatDuration, renderSummary, type SummaryRow } from './render.js';
 import { assertServingModeMatches, siteBaseUrl } from './serving.js';
-import { LIVE_SITE_PREFIX, verifyRelease } from './verify.js';
+import { LIVE_SITE_PREFIX, verifyStoredRelease } from './verify.js';
 
 /** How many objects a promotion copies at once. */
 const PROMOTE_CONCURRENCY = 8;
@@ -90,8 +96,12 @@ export async function stage(ctx: OpsContext): Promise<void> {
   const prefix = stagedReleasePrefix(hash);
   ctx.logger.info(colors.bold(`Staging ${hash} for "${ctx.env}" at ${prefix}`));
 
+  // The staged bytes are about to be replaced, so the record binding them to
+  // a manifest goes first: a stage that stops partway leaves nothing promotable.
+  await forgetStagedRelease(ctx, hash);
   const source = await uploadSource(ctx, cwd, hash);
   await reconcileBuilderImage(ctx);
+  const buildManifestKey = newArtifactBuildManifestKey(hash);
   const build = await runBuild(ctx, {
     hash,
     sourceKey: source.sourceKey,
@@ -103,13 +113,21 @@ export async function stage(ctx: OpsContext): Promise<void> {
     // robots.txt and sitemap.xml are written for the environment the release
     // will be promoted into, so the staged bytes are exactly the live bytes.
     baseUrl: siteBaseUrl(ctx),
-    artifactManifestKey: artifactManifestKey(hash),
+    artifactManifestKey: buildManifestKey,
     kind: 'staged',
   });
   // The builder records changed paths for every build; a staged one serves
   // nothing, so there is nothing to invalidate.
   await ctx.clients.s3.deleteObject(ctx.names.bucket, `build/changed/${hash}.json`);
-  const manifest = await verifyRelease(ctx, hash, prefix);
+  const recorded = await readBuildArtifact(ctx, hash, buildManifestKey);
+  if (!recorded) {
+    throw new Error(
+      `the staged build of ${hash} recorded no artifact manifest, so there is nothing to check ` +
+        'its bytes against - nothing was staged',
+    );
+  }
+  const manifest = await verifyStoredRelease(ctx, recorded, prefix);
+  await recordStagedRelease(ctx, manifest);
 
   const rows: SummaryRow[] = [
     { label: 'revision', value: hash },
@@ -292,17 +310,6 @@ async function publishStagedRelease(
   return { copied: toCopy.length, deleted: toDelete.length, invalidation };
 }
 
-/** Refuse a hash with nothing under its staged prefix, before anything is read in full. */
-async function assertStaged(ctx: OpsContext, hash: string): Promise<void> {
-  const prefix = stagedReleasePrefix(hash);
-  const objects = await ctx.clients.s3.listObjects(ctx.names.bucket, prefix);
-  if (objects.length > 0) return;
-  throw new Error(
-    `${hash} is not staged: s3://${ctx.names.bucket}/${prefix} is empty. Stage it first ` +
-      `with \`blogwright stage ${ctx.env}\` from a checkout of ${hash}.`,
-  );
-}
-
 /** Stamp the promotion on the hash's deployment manifest, so `history` shows it live. */
 async function recordPromotion(ctx: OpsContext, hash: string): Promise<void> {
   const manifest = await readManifest(ctx, hash);
@@ -352,15 +359,17 @@ export interface PromoteOptions {
 export async function promote(ctx: OpsContext, hash: string, opts: PromoteOptions): Promise<void> {
   const startedAt = Date.now();
   assertStaticEnvironment(ctx, 'promote');
-  await assertStaged(ctx, hash);
+  // The release is bound to the manifest it was staged with, read once: both
+  // checks below compare against this same record.
+  const staged = await requireStagedReleaseManifest(ctx, hash);
   const before = await readLiveRelease(ctx);
   ctx.logger.info(colors.bold(`Promoting ${hash} to "${ctx.env}"`));
 
   // The staged bytes must still be the reviewed ones before any is published.
-  const manifest = await verifyRelease(ctx, hash, stagedReleasePrefix(hash));
+  const manifest = await verifyStoredRelease(ctx, staged, stagedReleasePrefix(hash));
   const published = await publishStagedRelease(ctx, manifest, opts);
   // And the live bytes must now be exactly those - promotion's guarantee.
-  await verifyRelease(ctx, hash, LIVE_SITE_PREFIX);
+  await verifyStoredRelease(ctx, manifest, LIVE_SITE_PREFIX);
   await recordLiveRelease(ctx, manifest, 'promote');
   await recordPromotion(ctx, hash);
   await runAfterPromote(ctx, hash, opts.afterDeploy);

@@ -101,6 +101,16 @@ export function stagedReleasePrefix(hash: string): string {
   return `${STAGED_RELEASES_PREFIX}${hash}/`;
 }
 
+/**
+ * The artifact manifest a staged release is bound to: the CLI's copy of the
+ * staged build's own manifest, written once that build's bytes under
+ * {@link stagedReleasePrefix} have been checked against it. It is outside
+ * every builder grant, so no later build can rewrite what a promotion checks.
+ */
+export function stagedReleaseManifestKey(hash: string): string {
+  return `build/releases/${hash}.json`;
+}
+
 /** Where every build of a revision records its own manifest, one object per build. */
 export function artifactBuildManifestPrefix(hash: string): string {
   return `build/artifacts/${hash}/`;

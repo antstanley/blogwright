@@ -102,7 +102,11 @@ A failure to build or write the manifest never fails a build whose site is alrea
 
 ## Staging and promotion
 
-[`stage`](/reference/cli/#stage) builds a release into `releases/<hash>/` and records its manifest; [`promote`](/reference/cli/#promote) checks the staged objects against the manifest, copies them into `site/`, and checks the live objects against it again. Because both checks compare every file's SHA-256 with the same manifest, a successful promote means the live release hash equals the staged one. See [Release gating](/guides/deploying/#release-gating-stage-verify-promote).
+A staged release is bound to the manifest of the build that staged it, not to the revision's original. [`stage`](/reference/cli/#stage) has the builder record its manifest under its own per-build key, checks the bytes under `releases/<hash>/` against it, and only then copies it to `build/releases/<hash>.json` - the staged release record. That key is outside every builder grant, so no later build can rewrite what a promotion is checked against. [`promote`](/reference/cli/#promote) reads that record once, checks the staged objects against it, copies them into `site/`, and checks the live objects against the same record. Because both checks compare every file's SHA-256 with one manifest, a successful promote means the live release hash equals the staged one.
+
+`stage` also keeps the staged manifest as the revision's original when the revision has none, so in the usual sequence - stage, promote, `verify <hash>` - every step checks the same record. When the revision already has an original from an earlier build with other bytes (it was deployed before, or staged before and the build is not reproducible), the original is kept as it is, as for any build. `promote` still publishes and checks the staged release, but `verify <hash>` checks `site/` against the original and so reports the differences; `stage` warns about this when it happens. `verify <hash> --staged` checks the staged copy against the staged release record.
+
+Re-staging a hash first deletes its staged release record, so a re-stage that stops partway leaves nothing `promote` would accept. See [Release gating](/guides/deploying/#release-gating-stage-verify-promote).
 
 ## Verifying live objects against it
 

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  artifactManifestKey,
   AwsError,
   createArtifactManifest,
   createCacheControlLookup,
@@ -815,7 +816,15 @@ export function attachFakeBuilder(
           : {}),
       });
     }
-    if (job.artifactManifestKey && !opts.artifactWriteDenied && !opts.ignoresArtifactManifestKey) {
+    // The builder's grant stops at per-build keys: a revision's original
+    // record is out of its reach, as IAM keeps it in AWS.
+    const deniedOriginal = job.artifactManifestKey === artifactManifestKey(job.hash);
+    if (
+      job.artifactManifestKey &&
+      !deniedOriginal &&
+      !opts.artifactWriteDenied &&
+      !opts.ignoresArtifactManifestKey
+    ) {
       const manifest = createArtifactManifest({
         hash: job.hash,
         siteVersion: opts.siteVersion,

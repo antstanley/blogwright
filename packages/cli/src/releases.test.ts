@@ -1,4 +1,10 @@
-import { AwsError, artifactManifestKey, sha256Hex, stripColors } from 'blogwright-core';
+import {
+  AwsError,
+  artifactManifestKey,
+  sha256Hex,
+  stagedReleaseManifestKey,
+  stripColors,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { readArtifactManifest } from './artifacts.js';
@@ -59,10 +65,12 @@ describe('stage', () => {
 
     expect(pending).toHaveLength(1);
     expect(pending[0]!.key).toBe(`build/pending/release-${HASH}.json`);
-    expect(pending[0]!.job).toMatchObject({
-      sitePrefix: `releases/${HASH}/`,
-      artifactManifestKey: artifactManifestKey(HASH),
-    });
+    expect(pending[0]!.job).toMatchObject({ sitePrefix: `releases/${HASH}/` });
+    // The build records its own manifest; the builder may not write the original.
+    expect(String(pending[0]!.job.artifactManifestKey)).toMatch(
+      new RegExp(`^build/artifacts/${HASH}/\\d{8}T\\d{6}Z-[0-9a-f]{8}\\.json$`),
+    );
+    expect(s3.text(stagedReleaseManifestKey(HASH))).toBeDefined();
     expect(snapshot(s3, `releases/${HASH}/`)).toEqual({ 'index.html': sha256Hex('v1') });
     expect(s3.text('site/index.html')).toBe('live');
     expect(s3.objects.has(`build/changed/${HASH}.json`)).toBe(false);
@@ -160,10 +168,46 @@ describe('promote', () => {
     });
   });
 
+  it('records the staged manifest as the original when the revision has none', async () => {
+    const { s3, ctx } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    expect(s3.text(artifactManifestKey(HASH))).toBe(s3.text(stagedReleaseManifestKey(HASH)));
+    await promote(ctx, HASH, NO_HOOKS);
+    await verify(ctx, HASH);
+  });
+
+  it('promotes a staged build whose bytes differ from the revision original, against its own manifest', async () => {
+    const { s3, ctx, lines, build } = await setup({ 'index.html': 'first build' });
+    await deploy(ctx, NO_HOOKS);
+    const original = s3.text(artifactManifestKey(HASH));
+    build({ 'index.html': 'second build' }, HASH);
+
+    await stage(ctx);
+    expect(s3.text(artifactManifestKey(HASH))).toBe(original);
+    expect(
+      lines().some((line) => line.startsWith('promote publishes and checks this staged release')),
+    ).toBe(true);
+
+    await promote(ctx, HASH, NO_HOOKS);
+    expect(s3.text('site/index.html')).toBe('second build');
+    await verify(ctx, HASH, 'staged');
+    await expect(verify(ctx, HASH)).rejects.toThrow(/does not match release/);
+  });
+
+  it('leaves nothing promotable when a re-stage stops partway', async () => {
+    const { s3, ctx } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    s3.onPut((key) => {
+      if (key.startsWith('build/pending/')) throw new Error('builder unavailable');
+    });
+    await expect(stage(ctx)).rejects.toThrow(/builder unavailable/);
+    await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(/is not staged/);
+  });
+
   it('refuses a hash that was never staged', async () => {
     const { ctx } = await setup({ 'index.html': 'v1' });
     await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(
-      new RegExp(`${HASH} is not staged: s3://.*/releases/${HASH}/ is empty`),
+      new RegExp(`${HASH} is not staged: there is no staged release record at s3://.*/build/releases/${HASH}\\.json`),
     );
   });
 

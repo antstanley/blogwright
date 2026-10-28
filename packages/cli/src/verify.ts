@@ -21,7 +21,7 @@ import {
   type S3Object,
 } from 'blogwright-core';
 
-import { requireArtifactManifest } from './artifacts.js';
+import { requireArtifactManifest, requireStagedReleaseManifest } from './artifacts.js';
 import type { OpsContext } from './context.js';
 
 /**
@@ -170,15 +170,26 @@ function mismatchSummary(comparison: ArtifactComparison): string {
 }
 
 /**
- * Check that `prefix` holds exactly the release recorded for `hash`: logs
- * every difference and throws when there is any, so CI fails the step.
+ * Check that `prefix` holds exactly the original release recorded for
+ * `hash`: logs every difference and throws when there is any, so CI fails the step.
  */
 export async function verifyRelease(
   ctx: OpsContext,
   hash: string,
   prefix: string,
 ): Promise<ArtifactManifest> {
-  const manifest = await requireArtifactManifest(ctx, hash);
+  return verifyStoredRelease(ctx, await requireArtifactManifest(ctx, hash), prefix);
+}
+
+/**
+ * Check that `prefix` holds exactly the release `manifest` records: logs
+ * every difference and throws when there is any.
+ */
+export async function verifyStoredRelease(
+  ctx: OpsContext,
+  manifest: ArtifactManifest,
+  prefix: string,
+): Promise<ArtifactManifest> {
   const location = `s3://${ctx.names.bucket}/${prefix}`;
   ctx.logger.step(
     `verifying ${manifest.release} against ${location} (${manifest.fileCount} files)`,
@@ -220,5 +231,15 @@ export async function verify(
     );
   }
   ctx.logger.info(colors.bold(`Verifying "${ctx.env}" against ${hash}`));
-  await verifyRelease(ctx, hash, target === 'live' ? LIVE_SITE_PREFIX : stagedReleasePrefix(hash));
+  if (target === 'live') {
+    await verifyRelease(ctx, hash, LIVE_SITE_PREFIX);
+    return;
+  }
+  // A staged copy is checked against the manifest it was staged with, which
+  // is what `promote` will check it against too.
+  await verifyStoredRelease(
+    ctx,
+    await requireStagedReleaseManifest(ctx, hash),
+    stagedReleasePrefix(hash),
+  );
 }
