@@ -56,7 +56,22 @@ A hand-edited object, a missing file or a stray extra file each print a line and
 
 ## Roll back: `rollback <hash>`
 
-`blogwright rollback <hash>` re-runs the builder MicroVM against the source zip already archived at `build/<hash>.zip` - the same build-and-sync pipeline as a [deploy](/guides/deploying/), but fed from the archive instead of your working tree. Your checkout is untouched. If the artifact is gone, the command fails immediately:
+`blogwright rollback <hash>` restores an earlier release in one of two ways, and your checkout is untouched by either.
+
+### A staged release is republished
+
+When the hash was built with [`stage`](/guides/deploying/#release-gating-stage-verify-promote), its output is still stored under `releases/<hash>/`, and the rollback republishes those bytes instead of rebuilding - exactly what `promote` does: it verifies the staged objects against the hash's [artifact manifest](/reference/artifact-manifest/) (refusing, with `site/` untouched, if any differs), copies the changed files into `site/` server-side, deletes objects the release does not contain, invalidates just those paths, and verifies `site/` against the manifest. It then prints the release that was live and the one it restored:
+
+```text
+  previous release 1.5.0+7a1c0e9b2d3f.04c1b3e5a7d2 (sha256 04c1b3e5a7d2…)
+  restored release 1.4.0+4f3a2b1c9d0e.9f86d081884c (sha256 9f86d081884c…)
+```
+
+Because the live objects are checked against the same manifest the release was verified with, a republishing rollback restores that release byte for byte. `--refresh` copies every file rather than only the changed ones.
+
+### Anything else is rebuilt
+
+A hash that was deployed rather than staged has no stored output, so the rollback re-runs the builder MicroVM against the source zip archived at `build/<hash>.zip` - the same build-and-sync pipeline as a [deploy](/guides/deploying/), but fed from the archive instead of your working tree. If the archive is gone, the command fails immediately:
 
 ```sh
 bw rollback 4f3a2b1c9d0e

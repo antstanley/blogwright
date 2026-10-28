@@ -8,7 +8,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { readArtifactManifest } from './artifacts.js';
-import { deleteSite, deploy, history } from './commands.js';
+import { deleteSite, deploy, history, rollback } from './commands.js';
 import { readManifest } from './deploy.js';
 import { LIVE_RELEASE_KEY, readLiveRelease } from './live-release.js';
 import { RELEASE_STAGING_OUTPUT } from './nodes.js';
@@ -277,5 +277,87 @@ describe('history of staged releases', () => {
     await promote(ctx, HASH, NO_HOOKS);
     const promotedAt = (await readManifest(ctx, HASH))?.promotedAt;
     expect((await plainRows())[0]).toMatch(new RegExp(`^abc123\\s+promoted\\s+${promotedAt}`));
+  });
+});
+
+describe('rollback to a staged release', () => {
+  /** Stage and promote two releases, leaving the second live. */
+  async function twoReleases() {
+    const env = await setup({ 'index.html': 'first', 'about/index.html': 'about' });
+    await stage(env.ctx);
+    await promote(env.ctx, HASH, NO_HOOKS);
+    env.build({ 'index.html': 'second', 'new.html': 'new' }, 'def456');
+    await stage(env.ctx);
+    await promote(env.ctx, 'def456', NO_HOOKS);
+    env.invalidations.length = 0;
+    return env;
+  }
+
+  const launches = (lines: string[]) =>
+    lines.filter((line) => line.startsWith('running builder MicroVM')).length;
+
+  it('republishes the stored bytes without a build and prints both release hashes', async () => {
+    const { s3, ctx, lines, invalidations } = await twoReleases();
+    const restored = await readArtifactManifest(ctx, HASH);
+    const replaced = await readArtifactManifest(ctx, 'def456');
+    const builds = launches(lines());
+
+    await rollback(ctx, HASH);
+
+    expect(launches(lines())).toBe(builds);
+    expect(snapshot(s3, 'site/')).toEqual(snapshot(s3, `releases/${HASH}/`));
+    expect(lines()).toContain(
+      `  previous release ${replaced!.release} (sha256 ${replaced!.releaseHash})`,
+    );
+    expect(lines()).toContain(
+      `  restored release ${restored!.release} (sha256 ${restored!.releaseHash})`,
+    );
+    expect(
+      lines().some((line) =>
+        line.includes(
+          `site/ matches release ${restored!.release}: 2 files, sha256 ${restored!.releaseHash}`,
+        ),
+      ),
+    ).toBe(true);
+    expect(invalidations).toEqual([
+      ['/about/index.html', '/about/', '/index.html', '/', '/new.html'],
+    ]);
+    expect(await readLiveRelease(ctx)).toMatchObject({ hash: HASH, via: 'rollback' });
+  });
+
+  it('refuses to republish staged bytes that no longer match, leaving site/ as it was', async () => {
+    const { s3, ctx } = await twoReleases();
+    const live = snapshot(s3, 'site/');
+    await s3.client.putObject('b', `releases/${HASH}/index.html`, 'tampered');
+
+    await expect(rollback(ctx, HASH)).rejects.toThrow(/releases\/abc123\/ does not match release/);
+    expect(snapshot(s3, 'site/')).toEqual(live);
+  });
+
+  it('rebuilds from the source zip when the hash was never staged', async () => {
+    const { ctx, lines } = await setup({ 'index.html': 'v1' });
+    await deploy(ctx, NO_HOOKS);
+    const builds = launches(lines());
+
+    await rollback(ctx, HASH);
+
+    expect(launches(lines())).toBe(builds + 1);
+    expect(lines()).toContain(
+      `${HASH} has no staged release to republish - rebuilding from build/${HASH}.zip`,
+    );
+  });
+
+  it('rebuilds, with a warning, when the staged release has an unreadable manifest', async () => {
+    const { s3, ctx, lines } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    await s3.client.putObject('b', artifactManifestKey(HASH), 'not json');
+    const builds = launches(lines());
+
+    await rollback(ctx, HASH);
+
+    expect(launches(lines())).toBe(builds + 1);
+    expect(lines().some((line) => line.startsWith('ignoring the recorded artifact manifest'))).toBe(
+      true,
+    );
   });
 });

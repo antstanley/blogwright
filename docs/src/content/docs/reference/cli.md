@@ -113,7 +113,11 @@ Publishes a staged release to the live site without rebuilding. It refuses a has
 blogwright rollback <hash> [env] [--refresh]
 ```
 
-Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history). In a static environment it then prints the release hash of the [artifact manifest](/reference/artifact-manifest/) recorded for that hash before the rebuild and the rebuilt one, and warns when the rebuild is not byte-identical.
+Restores an earlier release. Find hashes with [`history`](#history).
+
+In a static environment, a hash built with [`stage`](#stage) is republished from its stored output under `releases/<hash>/` - no rebuild - with the same checks as [`promote`](#promote): the staged objects are verified against the hash's [artifact manifest](/reference/artifact-manifest/) before anything is copied (the rollback refuses, leaving `site/` untouched, if any differs), and `site/` is verified against it afterwards. It prints the release hash that was live and the one restored.
+
+Any other hash is re-deployed from its source: the rollback verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. In a static environment it then prints the release hash of the [artifact manifest](/reference/artifact-manifest/) recorded for that hash before the rebuild and the rebuilt one, and warns when the rebuild is not byte-identical.
 
 In SSR mode, rollback instead reproduces the revision that hash was deployed with, from the artifact version and the `webFunction` settings recorded in its manifest - without a rebuild - and skips creation when that revision's fingerprint is already what serves. It falls back to re-running the build when the manifest has no `webFunction` block, the recorded artifact version is gone, or `ssr.staticDir` is configured (the artifact carries only the server, and the fingerprinted assets its pages reference were removed from `site/` by later deploys). Both paths run the same endpoint preflight, readiness probe and `/*` invalidation a deploy does.
 

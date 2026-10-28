@@ -52,6 +52,8 @@ SSR environments and PR previews record no artifact manifest: an SSR deploy alre
 | `siteVersion` | The `version` field of the built app's `package.json` (in `paths.app`), when it declares one. Omitted otherwise. |
 | `release` | The release identity: `<siteVersion>+<hash>.<releaseHash prefix>`, or `<hash>.<releaseHash prefix>` without a site version. The prefix is the first 12 hex characters. |
 
+There is one manifest per hash, written by the latest build of that hash. Rebuilding a staged hash - a `deploy` or a rebuilding `rollback` of the same revision - replaces its manifest; if that rebuild is not byte-identical, the staged copy no longer matches the record and `promote` refuses it until the hash is staged again.
+
 `fileCount`, `totalBytes`, `releaseHash` and `release` are derived from `files`. When blogwright reads a manifest it recomputes them and refuses one whose recorded values disagree - a truncated or hand-edited manifest is an error, never trusted.
 
 ## The release hash
@@ -92,4 +94,4 @@ The builder writes the manifest with its own roles, which need `s3:PutObject` on
 
 ## Rollback
 
-`rollback <hash>` re-runs the build from the archived source, so it is a rebuild. It reads the manifest recorded for that hash before the rebuild overwrites it, then prints both release hashes - the recorded one and the rebuilt one - and warns when they differ, because the live site then serves bytes no review covered. See [Roll back](/guides/operations/#roll-back-rollback-hash).
+`rollback <hash>` to a hash that was staged republishes the stored bytes under the same checks as `promote` and prints the previous and restored release hashes. Any other rollback re-runs the build from the archived source, so it is a rebuild: it reads the manifest recorded for that hash before the rebuild overwrites it, then prints both release hashes - the recorded one and the rebuilt one - and warns when they differ, because the live site then serves bytes no review covered. See [Roll back](/guides/operations/#roll-back-rollback-hash).

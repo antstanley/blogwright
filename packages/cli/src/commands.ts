@@ -44,6 +44,7 @@ import {
   type StatusEntry,
   type SummaryRow,
 } from './render.js';
+import { canRepublish, rollbackByRepublishing } from './releases.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
 import { assertServingModeMatches, configuredMode, recordedMode, siteBaseUrl } from './serving.js';
 import {
@@ -462,19 +463,28 @@ async function rollbackSsr(
     `  revision ${outcome.revisionId} (${outcome.created ? 'created' : 'unchanged'}), ` +
       `${describeInvalidation(outcome.invalidation)}`,
   );
+  warnRollbackLeavesPdsAlone(ctx);
+  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
+}
 
-  // A rollback changes production content too, but the PDS mirrors the *working tree*
-  // content, which a rollback does not restore - so only warn about the divergence.
+/**
+ * A rollback changes production content too, but the PDS mirrors the *working
+ * tree* content, which a rollback does not restore - so only warn about the
+ * divergence.
+ */
+function warnRollbackLeavesPdsAlone(ctx: OpsContext): void {
   if (ctx.env === 'production' && ctx.config.pds) {
     ctx.logger.warn(
       'rollback does not sync the PDS (records mirror the current repo content); ' +
         'check out the rolled-back revision and run `blogwright pds sync` if needed',
     );
   }
-  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
-/** Re-run the builder against an existing source zip for the given hash. */
+/**
+ * Roll back to a hash. A static hash that was staged is republished from its
+ * stored bytes; any other is rebuilt from its archived source zip.
+ */
 export async function rollback(
   ctx: OpsContext,
   hash: string,
@@ -482,12 +492,20 @@ export async function rollback(
 ): Promise<void> {
   assertServingModeMatches(ctx);
   if (ctx.config.ssr) return rollbackSsr(ctx, hash, opts);
+  const startedAt = Date.now();
+  if (await canRepublish(ctx, hash)) {
+    ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
+    await rollbackByRepublishing(ctx, hash, opts);
+    warnRollbackLeavesPdsAlone(ctx);
+    ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
+    return;
+  }
   const sourceKey = `build/${hash}.zip`;
   if (!(await ctx.clients.s3.objectExists(ctx.names.bucket, sourceKey))) {
     throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
   }
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
-  const startedAt = Date.now();
+  ctx.logger.step(`${hash} has no staged release to republish - rebuilding from ${sourceKey}`);
   // Read before the rebuild overwrites it: the record is what the rebuilt
   // bytes are checked against.
   const recorded = await readRecordedBeforeRebuild(ctx, hash);
@@ -503,14 +521,7 @@ export async function rollback(
   logRecordedRelease(ctx, hash, rebuilt);
   logRebuildComparison(ctx, recorded, rebuilt);
   await noteLiveRelease(ctx, rebuilt, 'rollback');
-  // A rollback changes production content too, but the PDS mirrors the *working tree*
-  // content, which a rollback does not restore - so only warn about the divergence.
-  if (ctx.env === 'production' && ctx.config.pds) {
-    ctx.logger.warn(
-      'rollback does not sync the PDS (records mirror the current repo content); ' +
-        'check out the rolled-back revision and run `blogwright pds sync` if needed',
-    );
-  }
+  warnRollbackLeavesPdsAlone(ctx);
   ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 

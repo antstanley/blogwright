@@ -20,7 +20,7 @@ import {
   type ObjectTagCopy,
 } from 'blogwright-core';
 
-import { describeRelease } from './artifacts.js';
+import { describeRelease, readRecordedBeforeRebuild } from './artifacts.js';
 import type { OpsContext } from './context.js';
 import {
   invalidatePaths,
@@ -31,7 +31,13 @@ import {
   type AfterDeploy,
   type InvalidationSummary,
 } from './deploy.js';
-import { describeLiveRelease, readLiveRelease, recordLiveRelease } from './live-release.js';
+import {
+  describeLiveRelease,
+  readLiveRelease,
+  recordLiveRelease,
+  type LiveRelease,
+  type LiveReleaseSource,
+} from './live-release.js';
 import { RELEASE_STAGING_OUTPUT, reconcileBuilderImage } from './nodes.js';
 import { describeInvalidation, formatDuration, renderSummary, type SummaryRow } from './render.js';
 import { assertServingModeMatches, siteBaseUrl } from './serving.js';
@@ -196,11 +202,16 @@ async function publishStagedRelease(
   return { copied: toCopy.length, deleted: toDelete.length, invalidation };
 }
 
+/** Whether anything is stored under a hash's staged prefix. */
+async function isStaged(ctx: OpsContext, hash: string): Promise<boolean> {
+  const objects = await ctx.clients.s3.listObjects(ctx.names.bucket, stagedReleasePrefix(hash));
+  return objects.length > 0;
+}
+
 /** Refuse a hash with nothing under its staged prefix, before anything is read in full. */
 async function assertStaged(ctx: OpsContext, hash: string): Promise<void> {
+  if (await isStaged(ctx, hash)) return;
   const prefix = stagedReleasePrefix(hash);
-  const objects = await ctx.clients.s3.listObjects(ctx.names.bucket, prefix);
-  if (objects.length > 0) return;
   throw new Error(
     `${hash} is not staged: s3://${ctx.names.bucket}/${prefix} is empty. Stage it first ` +
       `with \`blogwright stage ${ctx.env}\` from a checkout of ${hash}.`,
@@ -241,6 +252,32 @@ async function runAfterPromote(
   );
 }
 
+/** A staged release published to `site/`, and the release it replaced. */
+interface Republished {
+  before: LiveRelease | undefined;
+  manifest: ArtifactManifest;
+  published: PublishedRelease;
+}
+
+/**
+ * Publish a staged release to `site/` with byte-for-byte checks on both
+ * sides: the staged objects must still match the recorded manifest before
+ * anything is copied, and the live objects must match it afterwards.
+ */
+async function republishStagedRelease(
+  ctx: OpsContext,
+  hash: string,
+  opts: { refresh?: boolean | undefined; via: LiveReleaseSource },
+): Promise<Republished> {
+  const before = await readLiveRelease(ctx);
+  const manifest = await verifyRelease(ctx, hash, stagedReleasePrefix(hash));
+  const published = await publishStagedRelease(ctx, manifest, opts);
+  await verifyRelease(ctx, hash, LIVE_SITE_PREFIX);
+  await recordLiveRelease(ctx, manifest, opts.via);
+  await recordPromotion(ctx, hash);
+  return { before, manifest, published };
+}
+
 export interface PromoteOptions {
   /** Copy every file, not only those whose content differs from the live object. */
   refresh?: boolean | undefined;
@@ -257,16 +294,11 @@ export async function promote(ctx: OpsContext, hash: string, opts: PromoteOption
   const startedAt = Date.now();
   assertStaticEnvironment(ctx, 'promote');
   await assertStaged(ctx, hash);
-  const before = await readLiveRelease(ctx);
   ctx.logger.info(colors.bold(`Promoting ${hash} to "${ctx.env}"`));
-
-  // The staged bytes must still be the reviewed ones before any is published.
-  const manifest = await verifyRelease(ctx, hash, stagedReleasePrefix(hash));
-  const published = await publishStagedRelease(ctx, manifest, opts);
-  // And the live bytes must now be exactly those - promotion's guarantee.
-  await verifyRelease(ctx, hash, LIVE_SITE_PREFIX);
-  await recordLiveRelease(ctx, manifest, 'promote');
-  await recordPromotion(ctx, hash);
+  const { before, manifest, published } = await republishStagedRelease(ctx, hash, {
+    refresh: opts.refresh,
+    via: 'promote',
+  });
   await runAfterPromote(ctx, hash, opts.afterDeploy);
 
   const url = siteBaseUrl(ctx);
@@ -283,4 +315,37 @@ export async function promote(ctx: OpsContext, hash: string, opts: PromoteOption
     ctx.logger.info(line);
   }
   ctx.logger.ok(`promoted ${hash} in ${formatDuration(Date.now() - startedAt)}`);
+}
+
+/**
+ * Whether `rollback <hash>` can republish a stored release instead of
+ * rebuilding: the hash was staged and its artifact manifest is readable. An
+ * unreadable manifest is reported and sends the rollback down the rebuild path.
+ */
+export async function canRepublish(ctx: OpsContext, hash: string): Promise<boolean> {
+  if (!(await isStaged(ctx, hash))) return false;
+  return (await readRecordedBeforeRebuild(ctx, hash)) !== undefined;
+}
+
+/**
+ * Roll back to a staged release by republishing its stored bytes - the same
+ * checked copy `promote` makes - and print the release hash that was live
+ * beside the one restored.
+ */
+export async function rollbackByRepublishing(
+  ctx: OpsContext,
+  hash: string,
+  opts: { refresh?: boolean | undefined } = {},
+): Promise<void> {
+  ctx.logger.step(`republishing the release staged at ${stagedReleasePrefix(hash)} (no rebuild)`);
+  const { before, manifest, published } = await republishStagedRelease(ctx, hash, {
+    refresh: opts.refresh,
+    via: 'rollback',
+  });
+  ctx.logger.info(`  previous release ${describeLiveRelease(before)}`);
+  ctx.logger.info(`  restored release ${manifest.release} (sha256 ${manifest.releaseHash})`);
+  ctx.logger.info(
+    `  copied ${published.copied} of ${manifest.fileCount} files, deleted ${published.deleted}, ` +
+      `invalidated ${describeInvalidation(published.invalidation)}`,
+  );
 }

@@ -181,7 +181,7 @@ The post-deploy plugin steps (the standard.site sync, for one) run after a promo
 - **SSR environments and the preview stack.** Both commands refuse there. An SSR deploy already pins the exact artifact version a revision serves, and `rollback` reproduces it without a rebuild.
 - **Edge caches.** `verify` and `promote` read S3, not CloudFront. Until an invalidation completes, an edge location may still serve a copy cached from before it.
 
-Staged releases stay under `releases/<hash>/` until you remove them, which is what lets an earlier hash be promoted again. If storage matters, add an S3 lifecycle rule expiring old `releases/` objects, or delete a prefix with `aws s3 rm --recursive s3://<bucket>/releases/<hash>/`.
+Staged releases stay under `releases/<hash>/` until you remove them, which is what lets an earlier hash be promoted again - and what lets [`rollback <hash>`](/guides/operations/#roll-back-rollback-hash) to a staged hash republish its verified bytes instead of rebuilding. If storage matters, add an S3 lifecycle rule expiring old `releases/` objects, or delete a prefix with `aws s3 rm --recursive s3://<bucket>/releases/<hash>/`.
 
 `stage` needs builder roles that may write `releases/*`; on a stack bootstrapped before staging existed it refuses before building and asks you to run `blogwright bootstrap <env>` once. The same bootstrap grants the CI deploy role `s3:GetObjectTagging` and `s3:PutObjectTagging`, which `promote` uses to copy object tags; without them it promotes untagged and warns.
 
