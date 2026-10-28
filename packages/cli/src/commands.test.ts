@@ -37,6 +37,7 @@ import {
   history,
   previewBootstrap,
   previewDeploy,
+  previewDestroy,
   previewTeardown,
   readNodeStatus,
   rollback,
@@ -1340,5 +1341,37 @@ describe('history', () => {
       'bbbbbbbbbbbb  succeeded   2026-10-13T11:00:00Z  42s       -',
       'aaaaaaaaaaaa  succeeded   2026-10-13T10:00:00Z  42s       3',
     ]);
+  });
+});
+
+describe('previewDestroy', () => {
+  it("removes the preview's objects and its cache-control record", async () => {
+    const calls: string[] = [];
+    const ctx = createTestContext({
+      env: 'preview',
+      clients: {
+        s3: {
+          deletePrefix: async (_b: string, prefix: string) => {
+            calls.push(`deletePrefix ${prefix}`);
+            return 3;
+          },
+          deleteObject: async (_b: string, key: string) => {
+            calls.push(`deleteObject ${key}`);
+          },
+        },
+      },
+    });
+
+    await previewDestroy(ctx, 'pr-42');
+
+    expect(calls).toEqual([
+      'deletePrefix previews/pr-42/',
+      'deleteObject build/cache-control/preview-pr-42.json',
+    ]);
+  });
+
+  it('rejects an id that is not a lowercase slug, before deleting anything', async () => {
+    const ctx = createTestContext({ env: 'preview' });
+    await expect(previewDestroy(ctx, 'PR 42')).rejects.toThrow(/preview id must be lowercase/);
   });
 });

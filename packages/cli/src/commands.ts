@@ -1,5 +1,6 @@
 import { AwsError, colors, findRepoRoot, type ResourceNode } from 'blogwright-core';
 
+import { cacheControlRecordKey } from './cache-control.js';
 import type { OpsContext } from './context.js';
 import {
   invalidateChanged,
@@ -526,6 +527,11 @@ export async function rollback(
   ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
+/** The build target one PR's preview publishes as: its pending-job and record name. */
+function previewTarget(id: string): string {
+  return `preview-${id}`;
+}
+
 function assertPreviewId(id: string): void {
   if (!/^[a-z0-9-]+$/.test(id)) {
     throw new Error(`preview id must be lowercase alphanumeric/dashes (e.g. pr-42), got "${id}"`);
@@ -574,7 +580,7 @@ export async function previewDeploy(
     hash,
     sourceKey,
     sitePrefix: `previews/${id}/site/`,
-    target: `preview-${id}`,
+    target: previewTarget(id),
     baseUrl: url,
     // Per-PR objects carry the PR id in the environment tag (preview-pr-42).
     objectTags: { ...ctx.tags, environment: `preview-${id}` },
@@ -588,6 +594,7 @@ export async function previewDeploy(
 export async function previewDestroy(ctx: OpsContext, id: string): Promise<void> {
   assertPreviewId(id);
   const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, `previews/${id}/`);
+  await ctx.clients.s3.deleteObject(ctx.names.bucket, cacheControlRecordKey(previewTarget(id)));
   ctx.logger.ok(`removed preview ${id} (${count} object(s))`);
 }
 

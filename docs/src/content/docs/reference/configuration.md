@@ -29,7 +29,7 @@ The minimal config:
 
 ### How overrides merge
 
-Your file is merged over the defaults. The nested objects `microvm` (including `microvm.idle`), `retention`, `seo`, and `paths` merge key-by-key, so you can override a single nested field and keep the rest of the defaults. Scalars and arrays replace their default outright - setting `sourceIgnore` replaces the default list, it does not extend it.
+Your file is merged over the defaults. The nested objects `microvm` (including `microvm.idle`), `retention`, `seo`, and `paths` merge key-by-key, so you can override a single nested field and keep the rest of the defaults. Scalars and arrays replace their default outright - setting `sourceIgnore` (or `cacheControl`) replaces the default list, it does not extend it.
 
 ## Core identity
 
@@ -213,6 +213,29 @@ The CloudFront distribution's default root object - the object served for reques
 `boolean` · optional · default: `false`
 
 Single-page app mode: CloudFront serves `/index.html` with a `200` for unknown paths (client-side routing) instead of the 404 page. Applies to the main distribution at creation. Previews are unaffected - the shared preview distribution's error responses cannot be host-routed. See [Single-page apps](/guides/single-page-apps/).
+
+## Cache-Control (`cacheControl`)
+
+`{ "match": string | string[], "value": string }[]` · optional · default: the two rules below
+
+The `Cache-Control` header the builder writes on each file it uploads, chosen by the file's site-relative URL path (`/index.html`, `/_astro/app.1a2b.js`), never its S3 key - so one list serves production and previews. Rules are checked in order and **the first match wins**; a file no rule matches is uploaded without `Cache-Control`. Setting the key replaces the defaults outright, so end your list with a `**` catch-all; `[]` writes no header at all.
+
+```jsonc
+{
+  "cacheControl": [
+    // The default rules
+    { "match": ["/_astro/**", "/_app/immutable/**"], "value": "public, max-age=31536000, immutable" },
+    { "match": "**", "value": "public, max-age=0, s-maxage=86400, must-revalidate" },
+  ],
+}
+```
+
+- **`match`** - one pattern or a non-empty list. A pattern starts with `/` (or `**`) and matches a whole path: `*` and `?` stay within one path segment, and `**` - which must be a whole segment - spans any number of them (`**/*.html` matches `/index.html` too). Match a directory URL through its `index.html`.
+- **`value`** - the header value, verbatim: comma-separated directives such as `public, max-age=0, s-maxage=604800, must-revalidate`.
+
+Validation rejects, at load, a malformed rule or value and any pattern that can never match: one that cannot match a built file's path (no leading `/` or `**`, a trailing `/`, an empty segment, a `.` or `..` segment, a percent-encoded character such as `%20`, `**` inside a segment, or the unsupported `[…]`, `{…}` and `\`), and one an earlier rule always matches first - a repeated pattern, anything after `**` or `**/*`, anything under an earlier literal `/<dir>/**` or `/<dir>/**/*`, or a literal path an earlier pattern matches. A pattern that an earlier pattern of the same rule already covers, by the same shapes, is rejected as redundant. Patterns match the decoded path, so write non-ASCII names as themselves (`/blog/café/*.html`).
+
+When the rules change, the next build to each target re-uploads every file (an implicit `--refresh`) so unchanged files carry the new header too. Browser (`max-age`) versus edge (`s-maxage`) lifetimes, the trade-offs of a long `s-maxage`, and how error responses are cached are covered in [Caching and Cache-Control](/guides/caching/).
 
 ## Server rendering (`ssr`)
 
@@ -417,6 +440,8 @@ unrelated built-in commands. Post-deploy PDS sync failures remain warnings:
 | `ssr` + `region` | `region` must be a Web Function launch region |
 | `ssr.env` keys | reserved Lambda names rejected |
 | `ssr.shim` | `port` required, `host` optional; variable names, not reserved, not in `ssr.env`, distinct |
+| `cacheControl` | array of `{ match, value }`; unknown keys rejected; `match` non-empty; `value` a valid `Cache-Control` value |
+| `cacheControl[].match` | starts with `/` or `**`; no trailing `/`, empty segment, `.` or `..` segment, percent-encoded character, partial-segment `**`, `[`, `]`, `{`, `}` or `\`; not already matched by an earlier rule, or by an earlier pattern of the same rule |
 | `seo.robots` | `auto`, `index`, `noindex`, or `off` |
 | `seo.sitemap` | `auto`, `on`, or `off` |
 | `sourceInclude[]` | repo-relative, no leading `/`, no `..` |

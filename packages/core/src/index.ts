@@ -20,6 +20,7 @@ export * from './aws/secretsmanager.js';
 export * from './aws/signer.js';
 export * from './aws/sts.js';
 export * from './aws/xml.js';
+export * from './cache-control.js';
 export * from './clients.js';
 export * from './colors.js';
 export * from './config.js';

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { DEFAULT_CACHE_CONTROL } from './cache-control.js';
 import {
   deriveNames,
   parseConfig,
@@ -208,6 +209,40 @@ describe('deployment shape config', () => {
     expect(() => parseConfig(withSite('{ "paths": { "app": "../up" } }'))).toThrow(/paths.app/);
     expect(() => parseConfig(withSite('{ "paths": { "dist": "/abs" } }'))).toThrow(/paths.dist/);
     expect(() => parseConfig(withSite('{ "sourceInclude": ["a/../b"] }'))).toThrow(/sourceInclude/);
+  });
+});
+
+describe('cacheControl config', () => {
+  it('defaults to the built-in rules when the key is absent', () => {
+    expect(parseConfig(withSite('{}')).cacheControl).toEqual(DEFAULT_CACHE_CONTROL);
+  });
+
+  it('replaces the defaults outright with the rules as written, normalised', () => {
+    const cfg = parseConfig(
+      withSite(`{
+        "cacheControl": [
+          { "match": ["/_app/immutable/**", "/_astro/**"], "value": "public, max-age=31536000, immutable" },
+          { "match": "**", "value": "public, max-age=0, s-maxage=31536000, must-revalidate" },
+        ],
+      }`),
+    );
+    expect(cfg.cacheControl).toEqual([
+      { match: ['/_app/immutable/**', '/_astro/**'], value: 'public, max-age=31536000, immutable' },
+      { match: ['**'], value: 'public, max-age=0, s-maxage=31536000, must-revalidate' },
+    ]);
+  });
+
+  it('keeps an explicit empty list, which writes no Cache-Control at all', () => {
+    expect(parseConfig(withSite('{ "cacheControl": [] }')).cacheControl).toEqual([]);
+  });
+
+  it('rejects a malformed block at load', () => {
+    expect(() => parseConfig(withSite('{ "cacheControl": null }'))).toThrow(
+      /config\.cacheControl must be an array/,
+    );
+    expect(() =>
+      parseConfig(withSite('{ "cacheControl": [{ "match": "*.html", "value": "no-store" }] }')),
+    ).toThrow(/can never match/);
   });
 });
 
