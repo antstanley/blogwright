@@ -1,5 +1,17 @@
 /** Per-environment configuration and deterministic resource naming. */
 
+import {
+  DEFAULT_CACHE_CONTROL,
+  parseCacheControlRules,
+  type CacheControlRule,
+} from './cache-control.js';
+import {
+  HEADER_TOKEN_PATTERN,
+  normalizeResponseHeadersConfig,
+  type ResponseHeadersConfig,
+  type ResponseHeadersInput,
+} from './response-headers.js';
+
 export interface IdlePolicyConfig {
   autoResumeEnabled: boolean;
   maxIdleDurationSeconds: number;
@@ -271,6 +283,12 @@ export interface OpsConfig {
   defaultRootObject: string;
   /** If more than this many paths change in a deploy, invalidate `/*` instead. */
   invalidationMaxPaths: number;
+  /**
+   * `Cache-Control` written on each uploaded file, by site-relative URL path;
+   * the first matching rule wins and an unmatched file gets no header. Absent
+   * means {@link DEFAULT_CACHE_CONTROL}; `[]` writes no header at all.
+   */
+  cacheControl: readonly CacheControlRule[];
   /** GitHub `owner/repo`, used to scope the preview stack's OIDC deploy role. */
   githubRepo?: string | undefined;
   /**
@@ -292,6 +310,11 @@ export interface OpsConfig {
   ssr?: SsrConfig | undefined;
   /** AWS profile and account pin for this environment; see {@link AwsConfig}. */
   aws?: AwsConfig | undefined;
+  /**
+   * Response headers CloudFront adds to every response, through one
+   * Blogwright-owned response headers policy; absent, no policy is attached.
+   */
+  headers?: ResponseHeadersConfig | undefined;
   /** Site-repo layout; the defaults match a stock Astro project. */
   paths: PathsConfig;
 }
@@ -317,6 +340,7 @@ export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
   sourceInclude: [],
   defaultRootObject: 'index.html',
   invalidationMaxPaths: 1000,
+  cacheControl: DEFAULT_CACHE_CONTROL,
   spa: false,
   seo: { robots: 'auto', sitemap: 'auto' },
   paths: {
@@ -454,8 +478,11 @@ export function pluginBlock(raw: Readonly<Record<string, unknown>>, key: string)
  * spelled only as far as the operator wrote it - `normalizeSsrConfig` fills
  * the defaults and enforces every field rule.
  */
-export type ConfigInput = Omit<Partial<OpsConfig>, 'ssr'> & {
+export type ConfigInput = Omit<Partial<OpsConfig>, 'ssr' | 'cacheControl' | 'headers'> & {
   ssr?: Partial<SsrConfig> | undefined;
+  /** Rules as written: `match` may be one pattern or a list; see {@link parseCacheControlRules}. */
+  cacheControl?: unknown;
+  headers?: ResponseHeadersInput | undefined;
 };
 
 export function mergeConfig(raw: ConfigInput): OpsConfig {
@@ -467,7 +494,13 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
   const paths: PathsConfig = { ...DEFAULT_CONFIG.paths, ...raw.paths };
   // `ssr` is pulled out of the spread so its raw, partial block never reaches
   // `OpsConfig` un-normalised.
-  const { ssr: rawSsr, aws: rawAws, ...rest } = raw;
+  const {
+    ssr: rawSsr,
+    aws: rawAws,
+    cacheControl: rawCacheControl,
+    headers: rawHeaders,
+    ...rest
+  } = raw;
   const cfg: OpsConfig = {
     ...DEFAULT_CONFIG,
     ...rest,
@@ -480,6 +513,10 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
     retention: { ...DEFAULT_CONFIG.retention, ...raw.retention },
     seo: { ...DEFAULT_CONFIG.seo, ...raw.seo },
     paths,
+    cacheControl:
+      rawCacheControl === undefined
+        ? DEFAULT_CONFIG.cacheControl
+        : parseCacheControlRules(rawCacheControl),
   };
   // Normalised after `paths`, because `packageDir` defaults to `paths.dist`;
   // assigned rather than spread so a malformed block cannot leak raw fields
@@ -488,6 +525,8 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
   if (ssr) cfg.ssr = ssr;
   const aws = normalizeAwsConfig(rawAws);
   if (aws) cfg.aws = aws;
+  const headers = normalizeResponseHeadersConfig(rawHeaders);
+  if (headers) cfg.headers = headers;
   validateConfig(cfg);
   return cfg;
 }
@@ -529,8 +568,6 @@ function normalizeAwsConfig(raw: unknown): AwsConfig | undefined {
   return aws;
 }
 
-/** RFC 7230 token characters - what an HTTP header name may contain. */
-const HEADER_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 /** Environment variable name shape `ssr.env` accepts. */
 const ENV_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
 
@@ -875,6 +912,8 @@ export interface Names {
   webOac: string;
   /** CloudFront cache policy for the SSR default behavior. */
   ssrCachePolicy: string;
+  /** CloudFront response headers policy carrying the `headers` config. */
+  responseHeadersPolicy: string;
 }
 
 /** Derive deterministic, environment-prefixed resource names. */
@@ -909,5 +948,6 @@ export function deriveNames(env: string, accountId: string, cfg: OpsConfig): Nam
     webLocalLogGroup: `/${cfg.siteName}/${env}/web.local`,
     webOac: `${prefix}-web-oac`,
     ssrCachePolicy: `${prefix}-ssr`,
+    responseHeadersPolicy: `${prefix}-headers`,
   };
 }

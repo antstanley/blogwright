@@ -52,6 +52,8 @@ SSR environments and PR previews record no artifact manifest: an SSR deploy alre
 | `siteVersion` | The `version` field of the built app's `package.json` (in `paths.app`), when it declares one. Omitted otherwise. |
 | `release` | The release identity: `<siteVersion>+<hash>.<releaseHash prefix>`, or `<hash>.<releaseHash prefix>` without a site version. The prefix is the first 12 hex characters. |
 
+The manifest records content only. Object metadata - the content type, object tags and the `Cache-Control` written from the [`cacheControl` rules](/reference/configuration/#cache-control-cachecontrol) - is not part of it, so two builds with the same bytes have the same release hash even if their rules differ.
+
 `fileCount`, `totalBytes`, `releaseHash` and `release` are derived from `files`. When blogwright reads a manifest it recomputes them and refuses one whose recorded values disagree - a truncated or hand-edited manifest is an error, never trusted.
 
 ## The release hash

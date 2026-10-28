@@ -50,6 +50,14 @@ function encodeKey(key: string): string {
     .join('/');
 }
 
+/** Object metadata written with a PUT; S3 records it only then, never for an unchanged object. */
+export interface ObjectMetadata {
+  /** Object tags, sent as `x-amz-tagging` (the role also needs `s3:PutObjectTagging`). */
+  tags?: ResourceTags | undefined;
+  /** Stored as the object's `Cache-Control` and returned with it on every GET. */
+  cacheControl?: string | undefined;
+}
+
 /** Thin S3 client (path-style addressing) built on the shared signing transport. */
 export class S3Client {
   constructor(private readonly client: SigningClient) {}
@@ -121,8 +129,9 @@ export class S3Client {
     key: string,
     body: string | Uint8Array,
     contentType = 'application/octet-stream',
-    tags?: ResourceTags,
+    metadata: ObjectMetadata = {},
   ): Promise<string | undefined> {
+    const { tags, cacheControl } = metadata;
     const res = await this.client.send({
       service: 's3',
       method: 'PUT',
@@ -130,6 +139,7 @@ export class S3Client {
       headers: {
         'content-type': contentType,
         ...(tags && Object.keys(tags).length > 0 ? { 'x-amz-tagging': encodeTagQuery(tags) } : {}),
+        ...(cacheControl !== undefined ? { 'cache-control': cacheControl } : {}),
       },
       body,
     });
