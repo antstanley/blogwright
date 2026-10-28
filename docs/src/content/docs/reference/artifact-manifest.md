@@ -102,7 +102,7 @@ A failure to build or write the manifest never fails a build whose site is alrea
 
 ## Verifying live objects against it
 
-`blogwright verify <hash>` reads every object under `site/`, hashes it, and compares the result with the manifest recorded for `<hash>`. It reports each missing, changed or unexpected object and exits 1 on any difference - see [`verify`](/reference/cli/#verify).
+`blogwright verify <hash>` compares the objects under `site/` with the original manifest recorded for `<hash>`: it reads and hashes each object the manifest lists with its recorded size, and reports an object whose size differs, or that the manifest does not list, without reading it. It reports each missing, changed or unexpected object and exits 1 on any difference - see [`verify`](/reference/cli/#verify).
 
 ## Rollback
 

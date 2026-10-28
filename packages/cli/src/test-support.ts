@@ -35,6 +35,7 @@ import {
   type PluginCommand,
   type PluginContext,
   type ObjectMetadata,
+  type ObjectReadOptions,
   type S3Client,
   type S3Object,
   type Terminal,
@@ -650,6 +651,11 @@ export type PutListener = (key: string, body: Uint8Array) => void;
 
 const textEncoder = new TextEncoder();
 
+/** The ETag S3 reports for a single-part upload: the body's MD5, in hex. */
+function md5Hex(body: Uint8Array): string {
+  return createHash('md5').update(body).digest('hex');
+}
+
 function toBytes(body: string | Uint8Array): Uint8Array {
   return typeof body === 'string' ? textEncoder.encode(body) : body;
 }
@@ -697,10 +703,19 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
       for (const listener of listeners) listener(key, bytes);
       return true;
     },
-    getObject: async (_bucket: string, key: string) => {
+    getObject: async (_bucket: string, key: string, opts: ObjectReadOptions = {}) => {
       const found = objects.get(key);
       if (!found) throw noSuchKey(key);
-      return found.body;
+      if (opts.ifMatch !== undefined && opts.ifMatch !== md5Hex(found.body)) {
+        throw new AwsError({
+          service: 's3',
+          code: 'PreconditionFailed',
+          message: key,
+          statusCode: 412,
+        });
+      }
+      const { range } = opts;
+      return range ? found.body.subarray(range.start, range.end + 1) : found.body;
     },
     getObjectText: async (_bucket: string, key: string) => {
       const found = objects.get(key);
@@ -718,7 +733,7 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
           key,
           size: object.body.byteLength,
           lastModified: undefined,
-          etag: createHash('md5').update(object.body).digest('hex'),
+          etag: md5Hex(object.body),
         })),
   } satisfies Partial<S3Client>;
   return {

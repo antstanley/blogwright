@@ -50,6 +50,14 @@ function encodeKey(key: string): string {
     .join('/');
 }
 
+/** What a {@link S3Client.getObject} reads: a byte range, and the version it must still be. */
+export interface ObjectReadOptions {
+  /** Inclusive byte offsets, sent as `Range: bytes=<start>-<end>`. */
+  range?: { start: number; end: number } | undefined;
+  /** The ETag, without quotes, the object must still have (`If-Match`). */
+  ifMatch?: string | undefined;
+}
+
 /** Object metadata written with a PUT; S3 records it only then, never for an unchanged object. */
 export interface ObjectMetadata {
   /** Object tags, sent as `x-amz-tagging` (the role also needs `s3:PutObjectTagging`). */
@@ -231,11 +239,22 @@ export class S3Client {
     });
   }
 
-  async getObject(bucket: string, key: string): Promise<Uint8Array> {
+  /**
+   * An object's bytes, or the part of them `opts.range` names. `opts.ifMatch`
+   * makes the read conditional on the object still having that ETag: S3
+   * answers 412 `PreconditionFailed` when it has changed, so the ranged reads
+   * of one object are all reads of the same bytes.
+   */
+  async getObject(bucket: string, key: string, opts: ObjectReadOptions = {}): Promise<Uint8Array> {
+    const { range, ifMatch } = opts;
     const res = await this.client.send({
       service: 's3',
       method: 'GET',
       path: this.objectPath(bucket, key),
+      headers: {
+        ...(range ? { range: `bytes=${range.start}-${range.end}` } : {}),
+        ...(ifMatch !== undefined ? { 'if-match': `"${ifMatch}"` } : {}),
+      },
     });
     return res.body;
   }

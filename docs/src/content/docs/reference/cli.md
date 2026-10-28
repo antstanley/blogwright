@@ -17,7 +17,7 @@ The environment defaults to `production`. Configuration is loaded from `config/<
 
 ### Positional layout
 
-Most commands take the environment as an optional first positional. Two commands take a build hash first, and plugin actions consume their declared words before the environment:
+Most commands take the environment as an optional first positional. Three commands take a build hash first, and plugin actions consume their declared words before the environment:
 
 | Commands | Layout |
 | --- | --- |
@@ -29,7 +29,7 @@ Most commands take the environment as an optional first positional. Two commands
 | `pds keygen`, `pds login`, `pds init`, `pds sync` | `blogwright pds <action> [env]` |
 | `pds secret status`, `pds secret delete` | `blogwright pds secret <action> [env]` |
 
-Environment resolution is `--env` flag, then the positional, then `production`. The same precedence applies to `--hash` over the hash positional and `--id` over the preview id positional. Preview commands always run in the fixed `preview` environment - they take no env at all.
+Environment resolution is `--env` flag, then the positional, then `production`. The same precedence applies to `--id` over the preview id positional. A hash command given `--hash` takes its only positional as the environment (`blogwright verify --hash 4f3a2b1c staging`); passing a hash both ways (`--hash` and two positionals) is refused, as is a missing hash - before any config is loaded or AWS is called. Preview commands always run in the fixed `preview` environment - they take no env at all.
 
 Unrecognized flags are an error. `--help` prints usage and exits 0; running with no command prints usage and exits 1.
 
@@ -153,9 +153,18 @@ Shows the planned infrastructure graph against live state: each resource node is
 blogwright verify <hash> [env]
 ```
 
-Checks the live `site/` prefix byte for byte against the [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>`: every object the manifest lists is read and its SHA-256 compared, and every object under `site/` that the manifest does not list is reported too, because CloudFront would serve it. Each difference prints as one stable line - `missing <path>`, `changed <path>: expected … found …`, or `unexpected <path>` - and any difference exits 1 with a `N missing, N changed, N unexpected` summary. A match prints the location, release identity, file count and release hash, and exits 0.
+Checks the live `site/` prefix byte for byte against the original [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>` (`build/artifacts/<hash>.json`). Each object under `site/` is classified from the bucket listing first:
 
-Verification reads every object, so its cost grows with the site. It refuses a hash with no recorded artifact manifest (a build from before artifact manifests, or an SSR deploy) and refuses in an SSR environment, where a revision pins its artifact object version instead.
+- An object the manifest lists, with the recorded size, is read and its SHA-256 compared.
+- An object the manifest lists with a different size is reported as changed without being read - its size already differs.
+- An object the manifest does not list is reported as unexpected without being read, because CloudFront would serve it.
+- An empty folder marker (a zero-byte key ending in `/`, as the S3 console creates) is never served, so it is listed as `ignored` and not counted.
+
+Each difference prints as one stable line - `missing <path>`, `changed <path>: expected … found …`, or `unexpected <path>` - and any difference exits 1 with a `N missing, N changed, N unexpected` summary. A match prints the location, release identity, file count and release hash, and exits 0. On a TTY a status line counts the objects as they are checked.
+
+Reads run eight objects at a time, and an object larger than 8 MiB is read in 8 MiB ranges, so memory stays bounded however large the site's files are. Every read of an object is conditional on the ETag the listing reported: an object deleted while verify runs is reported as missing, and one replaced while it runs fails the command with its key, so run verify once nothing is deploying. Any other read failure fails the command naming the object and the release.
+
+It refuses a hash with no original artifact manifest (a build from before artifact manifests, or an SSR deploy), refuses in an SSR environment, where a revision pins its artifact object version instead, and refuses the `preview` stack, whose PR previews record no artifact manifest.
 
 ### whoami
 
@@ -365,7 +374,7 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--config <path>` | all but `init` | Explicit JSONC config file. When set it is the only file tried - the `config/<env>.jsonc` → `ops.config.jsonc` fallback chain is skipped. |
 | `--endpoint <url>` | all but `init` | AWS endpoint override, e.g. `http://localhost:4566` for the floci emulator. Under an override the account pin is skipped and a configured profile missing from your AWS files is ignored. |
 | `--profile <name>` | all | AWS profile from your shared AWS files (`~/.aws/config`, `~/.aws/credentials`). Beats `AWS_PROFILE`, exported credentials and the config's `aws.profile`; see [AWS credentials](/reference/configuration/#aws). `init` uses it as the default answer to its profile question. |
-| `--hash <hash>` | `rollback`, `logs`, `verify` | The build hash; wins over the first positional. |
+| `--hash <hash>` | `rollback`, `logs`, `verify` | The build hash, in place of the first positional - which then names the environment. |
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
