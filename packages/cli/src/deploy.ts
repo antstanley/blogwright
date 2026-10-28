@@ -12,6 +12,7 @@ import {
   type RunMicrovmInput,
 } from 'blogwright-core';
 
+import { cacheControlNeedsRefresh, recordCacheControl } from './cache-control.js';
 import type { OpsContext } from './context.js';
 import type { WebFunctionManifest } from './web-functions.js';
 import { formatDuration, spinnerFrame } from './render.js';
@@ -268,7 +269,10 @@ export async function runBuild(
     baseUrl?: string | undefined;
     /** S3 object tags for the synced site files; defaults to the stack tags. */
     objectTags?: Record<string, string> | undefined;
-    /** Re-upload every file, so metadata-only fixes (content type, tags) land. */
+    /**
+     * Re-upload every file, so metadata-only fixes (content type, tags,
+     * Cache-Control) land. Implied when the `cacheControl` rules changed.
+     */
     refresh?: boolean | undefined;
     /**
      * Package the output as a Lambda Web Function revision artifact. When set,
@@ -282,7 +286,8 @@ export async function runBuild(
   // robots.txt/sitemap.xml are the application's routes in SSR mode, so no SEO
   // payload is sent (and the agent writes none).
   const seo = opts.webFunction ? {} : resolveSeo(ctx, opts.baseUrl);
-  const pendingKey = `build/pending/${opts.target ?? 'site'}.json`;
+  const target = opts.target ?? 'site';
+  const pendingKey = `build/pending/${target}.json`;
   const imageArn = ctx.state.resources['microvm-image']?.arn;
   const execRoleArn = ctx.state.resources['iam-exec-role']?.arn;
   if (typeof imageArn !== 'string' || typeof execRoleArn !== 'string') {
@@ -297,6 +302,7 @@ export async function runBuild(
     .deleteObject(ctx.names.bucket, `build/changed/${opts.hash}.json`)
     .catch(() => undefined);
 
+  const refresh = opts.refresh === true || (await cacheControlNeedsRefresh(ctx, target));
   const connectors = networkConnectors(ctx.config.region);
   const startedAt = new Date();
   ctx.logger.step(`running builder MicroVM for ${opts.hash}`);
@@ -334,7 +340,8 @@ export async function runBuild(
         appDir: ctx.config.paths.app,
         distDir: ctx.config.paths.dist,
         objectTags: opts.objectTags ?? ctx.tags,
-        ...(opts.refresh ? { refresh: true } : {}),
+        cacheControl: ctx.config.cacheControl,
+        ...(refresh ? { refresh: true } : {}),
         ...(opts.webFunction ? { webFunction: opts.webFunction } : {}),
         ...seo,
       }),
@@ -393,10 +400,13 @@ export async function runBuild(
   }
 
   if (manifest.status === 'failed') {
+    // The record is left as it was, so a rule change this build did not finish applying is retried.
     throw new Error(
       `build failed for ${opts.hash}${manifest.message ? `: ${manifest.message}` : ''}`,
     );
   }
+  // The static files are published even in SSR mode, where the revision is still to come.
+  await recordCacheControl(ctx, target);
   return manifest;
 }
 

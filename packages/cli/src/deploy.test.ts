@@ -1,6 +1,7 @@
 import {
   AwsError,
   createScriptedTerminal,
+  DEFAULT_CACHE_CONTROL,
   type LogEvent,
   type Microvm,
   type ResourceOutputs,
@@ -233,10 +234,34 @@ describe('runMicrovmWithRetry', () => {
 });
 
 describe('runBuild pending job', () => {
-  /** Capture the pending-job document runBuild writes for the agent. */
-  async function pendingJobFor(opts: { refresh?: boolean }): Promise<Record<string, unknown>> {
+  const RECORD_KEY = 'build/cache-control/site.json';
+
+  interface BuildRun {
+    job: Record<string, unknown>;
+    puts: Array<{ key: string; body: string }>;
+    steps: string[];
+    warns: string[];
+  }
+
+  /**
+   * Run a build and capture the pending-job document it writes for the agent.
+   * `recorded` is the cache-control record's body (undefined: no record yet).
+   */
+  async function buildWith(
+    opts: { refresh?: boolean },
+    setup: {
+      recorded?: string | undefined;
+      config?: { cacheControl?: unknown };
+      buildFails?: boolean;
+      recordWriteFails?: boolean;
+    } = {},
+  ): Promise<BuildRun> {
     const puts: Array<{ key: string; body: string }> = [];
+    const steps: string[] = [];
+    const warns: string[] = [];
+    const failed: LogEvent = { eventId: 'f', timestamp: 1, message: `##build:failed:abc123: x` };
     const ctx = createTestContext({
+      ...(setup.config ? { config: setup.config } : {}),
       state: {
         resources: {
           'microvm-image': { arn: 'arn:img' },
@@ -245,11 +270,17 @@ describe('runBuild pending job', () => {
       },
       clients: {
         s3: {
+          getObjectText: async (_b: string, key: string) => {
+            if (key !== RECORD_KEY) throw new Error(`unexpected read of ${key}`);
+            return setup.recorded;
+          },
           putObject: async (_b: string, key: string, body: string | Uint8Array) => {
+            if (key === RECORD_KEY && setup.recordWriteFails) throw new Error('AccessDenied');
             puts.push({ key, body: typeof body === 'string' ? body : '' });
           },
           deleteObject: async () => undefined,
-          objectExists: async () => true, // completion signal → poll returns immediately
+          // completion signal → poll returns immediately
+          objectExists: async () => !setup.buildFails,
         },
         microvms: {
           runMicrovm: async () => ({ microvmId: 'vm-1', state: 'PENDING', endpoint: '' }),
@@ -257,25 +288,95 @@ describe('runBuild pending job', () => {
           createAuthToken: async () => 'tok',
           terminateMicrovm: async () => undefined,
         },
-        logs: { filterEvents: async () => [] },
+        logs: { filterEvents: async () => (setup.buildFails ? [failed] : []) },
+      },
+      logger: {
+        step: (msg: string) => {
+          steps.push(msg);
+        },
+        warn: (msg: string) => {
+          warns.push(msg);
+        },
       },
     });
 
-    await runBuild(ctx, { hash: 'abc123', sourceKey: 'build/abc123.zip', ...opts });
+    const build = runBuild(ctx, { hash: 'abc123', sourceKey: 'build/abc123.zip', ...opts });
+    if (setup.buildFails) await expect(build).rejects.toThrow(/build failed/);
+    else await build;
 
     const pending = puts.find((p) => p.key.startsWith('build/pending/'));
     if (!pending) throw new Error('no pending job written');
-    return JSON.parse(pending.body) as Record<string, unknown>;
+    return { job: JSON.parse(pending.body) as Record<string, unknown>, puts, steps, warns };
   }
 
-  it('omits refresh by default', async () => {
-    const job = await pendingJobFor({});
+  const recordOf = (rules: unknown) => JSON.stringify({ rules });
+
+  it('omits refresh when the rules match the last build', async () => {
+    const { job } = await buildWith({}, { recorded: recordOf(DEFAULT_CACHE_CONTROL) });
     expect(job.refresh).toBeUndefined();
     expect(job.hash).toBe('abc123');
   });
 
   it('passes refresh through so the agent re-uploads unchanged files', async () => {
-    const job = await pendingJobFor({ refresh: true });
+    const { job } = await buildWith({ refresh: true }, { recorded: recordOf([]) });
     expect(job.refresh).toBe(true);
+  });
+
+  it('sends the configured rules to the agent', async () => {
+    const rules = [{ match: '**', value: 'no-cache' }];
+    const { job } = await buildWith(
+      {},
+      {
+        config: { cacheControl: rules },
+        recorded: recordOf([{ match: ['**'], value: 'no-cache' }]),
+      },
+    );
+    expect(job.cacheControl).toEqual([{ match: ['**'], value: 'no-cache' }]);
+    expect(job.refresh).toBeUndefined();
+  });
+
+  it('refreshes implicitly, and says so, when the rules changed since the last build', async () => {
+    const { job, steps } = await buildWith(
+      {},
+      { recorded: recordOf([{ match: ['**'], value: 'no-cache' }]) },
+    );
+    expect(job.refresh).toBe(true);
+    expect(steps.some((line) => line.includes('implicit --refresh'))).toBe(true);
+  });
+
+  it('refreshes once for a target built before rules were recorded, to retrofit the defaults', async () => {
+    const { job } = await buildWith({}, { recorded: undefined });
+    expect(job.refresh).toBe(true);
+  });
+
+  it('does not refresh a target with no record when the rules are empty - nothing to retrofit', async () => {
+    const { job } = await buildWith({}, { recorded: undefined, config: { cacheControl: [] } });
+    expect(job.refresh).toBeUndefined();
+  });
+
+  it('refreshes, with a warning, when the record is malformed', async () => {
+    for (const recorded of ['not json', '{"rules": "x"}']) {
+      const { job, warns } = await buildWith({}, { recorded });
+      expect(job.refresh).toBe(true);
+      expect(warns[0]).toContain('malformed build/cache-control/site.json');
+    }
+  });
+
+  it('records the applied rules once the build succeeds', async () => {
+    const { puts } = await buildWith({}, { recorded: undefined });
+    const record = puts.find((p) => p.key === RECORD_KEY);
+    expect(JSON.parse(record?.body ?? '{}')).toEqual({ rules: DEFAULT_CACHE_CONTROL });
+  });
+
+  it('leaves the record alone when the build fails, so the next build re-applies', async () => {
+    const { puts } = await buildWith({}, { recorded: undefined, buildFails: true });
+    expect(puts.some((p) => p.key === RECORD_KEY)).toBe(false);
+  });
+
+  it('only warns when the record cannot be written - the site is already published', async () => {
+    const { warns } = await buildWith({}, { recorded: undefined, recordWriteFails: true });
+    expect(warns.some((line) => line.includes('could not record the applied cacheControl'))).toBe(
+      true,
+    );
   });
 });
