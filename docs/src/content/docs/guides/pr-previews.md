@@ -17,6 +17,8 @@ What makes it shared is the serving path:
 - **A CloudFront Function** (viewer-request) reads the `Host` header, takes the first DNS label as the preview id, and rewrites the URI to that PR's prefix: `pr-42.preview.example.com/posts/` becomes `/previews/pr-42/site/posts/index.html` in the bucket. It also resolves directory URLs to `index.html`, because the private S3 REST origin does no index-document resolution. Since nothing is cached, the function runs on every request and new content is live immediately.
 - **A wildcard ACM certificate** (`*.<preview-domain>`) and **wildcard Route53 alias records** (`*.<preview-domain>` as A/AAAA aliases pointing at the distribution) make every subdomain resolve and terminate TLS without per-PR DNS work.
 
+[Response headers](/reference/configuration/#response-headers-headers) configured in the preview config apply to the whole preview distribution, and so to every PR: `preview bootstrap` creates, updates or removes the policy, and `preview deploy` leaves it alone.
+
 Each preview deploy publishes to `previews/<id>/site/`; the bucket policy grants CloudFront read on `previews/*`. Destroying a preview deletes its prefix - and because previews are never cached, no CloudFront invalidation is needed and the URL stops serving at once.
 
 ## Requirements

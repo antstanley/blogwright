@@ -8,6 +8,8 @@ import {
   type DistributionConfigInput,
   type PdsConfig,
   type RawResponse,
+  type ResponseHeadersInput,
+  type ResponseHeadersPolicyConfigInput,
 } from 'blogwright-core';
 import { unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
@@ -22,6 +24,7 @@ import {
   oidcSubClaim,
   PLACEHOLDER_ARTIFACT_KEY,
   placeholderPackageZip,
+  reconcileResponseHeadersOnDeploy,
 } from './nodes.js';
 import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
 
@@ -1586,5 +1589,467 @@ describe('SSR bootstrap graph', () => {
     // The name is taken, so a second create is what CloudFront would refuse.
     expect(second.calls).not.toContain('cloudfront.createCachePolicy Authorization');
     expect(second.calls).toContain('cloudfront.updateCachePolicy CP-1 Authorization E1');
+  });
+});
+
+describe('response headers policy', () => {
+  const HEADERS: ResponseHeadersInput = {
+    security: { hsts: true, contentTypeOptions: true, frameOptions: 'deny' },
+    custom: [{ name: 'Cross-Origin-Opener-Policy', value: 'same-origin' }],
+  };
+
+  interface HeadersRun {
+    ops: OpsContext;
+    calls: string[];
+    warnings: string[];
+    oks: string[];
+    created: ResponseHeadersPolicyConfigInput[];
+    distributions: DistributionConfigInput[];
+  }
+
+  function cloudfrontError(code: string, statusCode: number): AwsError {
+    return new AwsError({ service: 'cloudfront', code, message: code, statusCode });
+  }
+
+  /**
+   * A stack with a static distribution recorded (`D1`), optionally a recorded
+   * policy (`RHP-1`) - attached to `D1` or detached with its delete pending -
+   * and a live policy that matches the config unless `drifted`.
+   */
+  function headersCtx(opts: {
+    headers?: ResponseHeadersInput;
+    recorded?: boolean;
+    attached?: boolean;
+    pendingDelete?: boolean;
+    drifted?: boolean;
+    policyGone?: boolean;
+    inUse?: boolean;
+    alsoUsedBy?: string[];
+    createError?: string;
+    leftByEarlierRun?: boolean;
+    preview?: boolean;
+    ssr?: boolean;
+  }): HeadersRun {
+    const calls: string[] = [];
+    const warnings: string[] = [];
+    const oks: string[] = [];
+    const created: ResponseHeadersPolicyConfigInput[] = [];
+    const distributions: DistributionConfigInput[] = [];
+    const record = {
+      id: 'RHP-1',
+      ...(opts.attached ? { attachedTo: 'D1' } : {}),
+      ...(opts.pendingDelete ? { pendingDelete: true } : {}),
+    };
+    const ops = createTestContext({
+      preview: opts.preview,
+      env: opts.preview ? 'preview' : 'production',
+      config: {
+        githubRepo: 'antstanley/example',
+        ...(opts.headers ? { headers: opts.headers } : {}),
+        ...(opts.ssr ? { ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] } } : {}),
+      },
+      logger: {
+        warn: (message: string) => warnings.push(message),
+        ok: (message: string) => oks.push(message),
+      },
+      state: {
+        resources: {
+          'cloudfront-distribution': {
+            id: 'D1',
+            arn: 'arn:aws:cloudfront::123456789012:distribution/D1',
+            domainName: 'd1.cloudfront.net',
+            mode: opts.ssr ? 'ssr' : 'static',
+          },
+          oac: { id: 'OAC-S' },
+          'cloudfront-function': { arn: 'arn:function:router' },
+          'web-function': { endpointDomainName: 'abc.on.aws' },
+          'web-oac': { id: 'OAC-W' },
+          'web-cache-policy': { id: 'CP-SSR' },
+          'iam-exec-role': { arn: 'arn:exec' },
+          'iam-build-role': { arn: 'arn:build' },
+          ...(opts.recorded ? { 'response-headers-policy': record } : {}),
+        },
+      },
+      clients: {
+        cloudfront: {
+          getResponseHeadersPolicy: async (id: string) => {
+            calls.push(`get ${id}`);
+            return opts.policyGone ? undefined : { id, config: '<live/>', etag: 'E1' };
+          },
+          responseHeadersPolicyMatches: () => !opts.drifted,
+          createResponseHeadersPolicy: async (input: ResponseHeadersPolicyConfigInput) => {
+            calls.push(`create ${input.name}`);
+            if (opts.createError) throw cloudfrontError(opts.createError, 400);
+            created.push(input);
+            return 'RHP-NEW';
+          },
+          findResponseHeadersPolicyId: async (name: string) => {
+            calls.push(`find ${name}`);
+            return opts.leftByEarlierRun ? 'RHP-OLD' : undefined;
+          },
+          updateResponseHeadersPolicy: async (id: string, _input, etag: string | undefined) => {
+            calls.push(`update ${id} ${etag ?? ''}`);
+          },
+          deleteResponseHeadersPolicy: async (id: string) => {
+            calls.push(`delete ${id}`);
+            if (opts.inUse) throw cloudfrontError('ResponseHeadersPolicyInUse', 409);
+          },
+          listDistributionIdsUsingResponseHeadersPolicy: async (id: string) => {
+            calls.push(`users ${id}`);
+            return opts.alsoUsedBy ?? [];
+          },
+          attachResponseHeadersPolicy: async (distributionId: string, policyId: string) => {
+            calls.push(`attach ${distributionId} ${policyId}`);
+            return true;
+          },
+          detachResponseHeadersPolicy: async (distributionId: string, policyId: string) => {
+            calls.push(`detach ${distributionId} ${policyId}`);
+            return true;
+          },
+          reconcileDistribution: async (_id: string, input: DistributionConfigInput) => {
+            calls.push('reconcileDistribution');
+            distributions.push(input);
+            return false;
+          },
+          createDistribution: async (input: DistributionConfigInput) => {
+            distributions.push(input);
+            return { id: 'D2', arn: 'a', domainName: 'd', status: 'InProgress', etag: 'E' };
+          },
+          tagResource: async () => undefined,
+        },
+      },
+    });
+    return { ops, calls, warnings, oks, created, distributions };
+  }
+
+  function node(ops: OpsContext, id: string) {
+    const found = buildNodes(ops).find((n) => n.id === id);
+    if (!found) throw new Error(`${id} node not in the graph`);
+    return found;
+  }
+
+  describe('graph membership', () => {
+    it('is absent when headers are neither configured nor recorded', () => {
+      const { ops } = headersCtx({});
+      expect(buildNodes(ops).map((n) => n.id)).not.toContain('response-headers-policy');
+      expect(node(ops, 'cloudfront-distribution').dependsOn).not.toContain(
+        'response-headers-policy',
+      );
+    });
+
+    it('is present, ahead of the distribution, when configured or still recorded', () => {
+      for (const opts of [{ headers: HEADERS }, { recorded: true }]) {
+        const { ops } = headersCtx(opts);
+        expect(node(ops, 'response-headers-policy').dependsOn).toEqual([]);
+        expect(node(ops, 'cloudfront-distribution').dependsOn).toContain('response-headers-policy');
+      }
+    });
+
+    it('joins the preview stack too', () => {
+      const { ops } = headersCtx({ headers: HEADERS, preview: true });
+      expect(buildNodes(ops).map((n) => n.id)).toContain('response-headers-policy');
+    });
+  });
+
+  describe('create', () => {
+    it('creates the policy under the derived name and records its id', async () => {
+      const { ops, created } = headersCtx({ headers: HEADERS });
+      const policy = node(ops, 'response-headers-policy');
+      expect(await policy.read(ops)).toBe(false);
+      await policy.create(ops);
+      expect(created[0]?.name).toBe('production-example-headers');
+      expect(created[0]?.headers.custom).toEqual(HEADERS.custom);
+      expect(ops.state.resources['response-headers-policy']).toEqual({ id: 'RHP-NEW' });
+    });
+
+    it('adopts the policy an interrupted run left under the same name, then converges it', async () => {
+      const { ops, calls, oks } = headersCtx({
+        headers: HEADERS,
+        createError: 'ResponseHeadersPolicyAlreadyExists',
+        leftByEarlierRun: true,
+        drifted: true,
+      });
+      await node(ops, 'response-headers-policy').create(ops);
+      expect(calls).toEqual([
+        'create production-example-headers',
+        'find production-example-headers',
+        'get RHP-OLD',
+        'update RHP-OLD E1',
+      ]);
+      expect(ops.state.resources['response-headers-policy']).toEqual({ id: 'RHP-OLD' });
+      expect(oks).toContain(
+        'adopted response headers policy production-example-headers (RHP-OLD), left by an earlier run',
+      );
+    });
+
+    it('surfaces the conflict when no policy of that name can be found', async () => {
+      const { ops } = headersCtx({
+        headers: HEADERS,
+        createError: 'ResponseHeadersPolicyAlreadyExists',
+      });
+      await expect(node(ops, 'response-headers-policy').create(ops)).rejects.toThrow(
+        /ResponseHeadersPolicyAlreadyExists/,
+      );
+      expect(ops.state.resources['response-headers-policy']).toBeUndefined();
+    });
+
+    it('names the adjustable quota CloudFront enforces instead of config load', async () => {
+      const tooMany = headersCtx({
+        headers: HEADERS,
+        createError: 'TooManyCustomHeadersInResponseHeadersPolicy',
+      });
+      await expect(
+        node(tooMany.ops, 'response-headers-policy').create(tooMany.ops),
+      ).rejects.toThrow(
+        /custom lists 1 headers, more than this account's CloudFront quota .*\(10 by default\).*Service Quotas/,
+      );
+      const longCsp = headersCtx({
+        headers: { security: { contentSecurityPolicy: "default-src 'self'" } },
+        createError: 'TooLongCSPInResponseHeadersPolicy',
+      });
+      await expect(
+        node(longCsp.ops, 'response-headers-policy').create(longCsp.ops),
+      ).rejects.toThrow(
+        /contentSecurityPolicy is 18 characters, over this account's CloudFront quota .*\(1783 by default\)/,
+      );
+    });
+
+    it('creates the distribution with the policy on its default behavior, recording it attached', async () => {
+      const { ops, distributions } = headersCtx({ headers: HEADERS, recorded: true });
+      delete ops.state.resources['cloudfront-distribution'];
+      await node(ops, 'cloudfront-distribution').create(ops);
+      expect(distributions[0]?.defaultBehavior.responseHeadersPolicyId).toBe('RHP-1');
+      expect(ops.state.resources['response-headers-policy']).toEqual({
+        id: 'RHP-1',
+        attachedTo: 'D2',
+      });
+    });
+  });
+
+  describe('reconcile on bootstrap', () => {
+    it('leaves a matching policy alone and attaches it to a static distribution', async () => {
+      const { ops, calls } = headersCtx({ headers: HEADERS, recorded: true });
+      const policy = node(ops, 'response-headers-policy');
+      expect(await policy.read(ops)).toBe(true);
+      await policy.update!(ops);
+      await node(ops, 'cloudfront-distribution').update!(ops);
+      // read() + update()'s comparison read; no update, then the narrow attach.
+      expect(calls).toEqual(['get RHP-1', 'get RHP-1', 'attach D1 RHP-1']);
+      expect(ops.state.resources['response-headers-policy']).toEqual({
+        id: 'RHP-1',
+        attachedTo: 'D1',
+      });
+    });
+
+    it('records nothing attached when the attach fails', async () => {
+      const { ops } = headersCtx({ headers: HEADERS, recorded: true });
+      ops.clients.cloudfront.attachResponseHeadersPolicy = async () => {
+        throw new Error('the default cache behavior already carries response headers policy HAND');
+      };
+      await expect(node(ops, 'cloudfront-distribution').update!(ops)).rejects.toThrow(/HAND/);
+      expect(ops.state.resources['response-headers-policy']).toEqual({ id: 'RHP-1' });
+    });
+
+    it('updates a drifted policy in place, guarded by its ETag', async () => {
+      const { ops, calls } = headersCtx({ headers: HEADERS, recorded: true, drifted: true });
+      await node(ops, 'response-headers-policy').update!(ops);
+      expect(calls).toEqual(['get RHP-1', 'update RHP-1 E1']);
+    });
+
+    it('never touches the distribution of a static stack without a policy of its own', async () => {
+      const { ops, calls } = headersCtx({});
+      await node(ops, 'cloudfront-distribution').update!(ops);
+      // A policy attached by hand survives: there is nothing Blogwright owns to attach.
+      expect(calls).toEqual([]);
+    });
+
+    it('carries the policy on every SSR behavior, the static paths included', async () => {
+      const { ops, distributions } = headersCtx({ headers: HEADERS, recorded: true, ssr: true });
+      await node(ops, 'cloudfront-distribution').update!(ops);
+      expect(distributions[0]?.defaultBehavior.responseHeadersPolicyId).toBe('RHP-1');
+      expect(distributions[0]?.orderedBehaviors?.map((b) => b.responseHeadersPolicyId)).toEqual([
+        'RHP-1',
+      ]);
+      expect(ops.state.resources['response-headers-policy']).toEqual({
+        id: 'RHP-1',
+        attachedTo: 'D1',
+      });
+    });
+
+    it('detaches and deletes the policy once headers are removed, then forgets it', async () => {
+      const { ops, calls } = headersCtx({ recorded: true, attached: true });
+      const policy = node(ops, 'response-headers-policy');
+      expect(await policy.read(ops)).toBe(true);
+      await policy.update!(ops);
+      expect(calls).toEqual(['get RHP-1', 'detach D1 RHP-1', 'delete RHP-1']);
+      expect(ops.state.resources['response-headers-policy']).toBeUndefined();
+      expect(buildNodes(ops).map((n) => n.id)).not.toContain('response-headers-policy');
+    });
+
+    it('records the delete as pending when CloudFront has not released a detached policy', async () => {
+      const { ops, calls, warnings } = headersCtx({ recorded: true, attached: true, inUse: true });
+      await node(ops, 'response-headers-policy').update!(ops);
+      expect(calls).toEqual(['get RHP-1', 'detach D1 RHP-1', 'delete RHP-1', 'users RHP-1']);
+      expect(ops.state.resources['response-headers-policy']).toEqual({
+        id: 'RHP-1',
+        pendingDelete: true,
+      });
+      expect(warnings).toEqual([
+        expect.stringMatching(
+          /RHP-1 is detached from the distribution, but CloudFront has not released it yet.*next bootstrap deletes it/,
+        ),
+      ]);
+    });
+
+    it('says once that another distribution uses the policy, and stops managing it', async () => {
+      const { ops, warnings } = headersCtx({
+        recorded: true,
+        attached: true,
+        inUse: true,
+        alsoUsedBy: ['D1', 'D9'],
+      });
+      await node(ops, 'response-headers-policy').update!(ops);
+      expect(warnings).toEqual([
+        expect.stringMatching(
+          /RHP-1 is detached from this site's distribution but is also attached to D9, so it was not deleted\. Blogwright no longer manages it/,
+        ),
+      ]);
+      // Forgotten: the next bootstrap neither retries nor warns again.
+      expect(ops.state.resources['response-headers-policy']).toBeUndefined();
+      expect(buildNodes(ops).map((n) => n.id)).not.toContain('response-headers-policy');
+    });
+
+    it('clears a stale record without claiming to create anything', async () => {
+      const { ops, calls, oks } = headersCtx({ recorded: true, policyGone: true });
+      const policy = node(ops, 'response-headers-policy');
+      // Unconfigured: present, so the graph runs update, never create.
+      expect(await policy.read(ops)).toBe(true);
+      await policy.update!(ops);
+      expect(calls).toEqual(['get RHP-1']);
+      expect(ops.state.resources['response-headers-policy']).toBeUndefined();
+      expect(oks).toEqual(['response headers policy RHP-1 no longer exists; cleared its record']);
+      await expect(policy.create(ops)).rejects.toThrow(/created only from config\.headers/);
+    });
+
+    it('deletes the recorded policy on destroy', async () => {
+      const { ops, calls } = headersCtx({ headers: HEADERS, recorded: true });
+      await node(ops, 'response-headers-policy').delete(ops);
+      expect(calls).toEqual(['delete RHP-1']);
+    });
+  });
+
+  describe('reconcileResponseHeadersOnDeploy', () => {
+    it('updates a drifted policy in place without touching the distribution', async () => {
+      const { ops, calls, warnings } = headersCtx({
+        headers: HEADERS,
+        recorded: true,
+        attached: true,
+        drifted: true,
+      });
+      await reconcileResponseHeadersOnDeploy(ops);
+      expect(calls).toEqual(['get RHP-1', 'update RHP-1 E1']);
+      expect(warnings).toEqual([]);
+    });
+
+    it('is a read and nothing more when the policy already matches', async () => {
+      const { ops, calls } = headersCtx({ headers: HEADERS, recorded: true, attached: true });
+      await reconcileResponseHeadersOnDeploy(ops);
+      expect(calls).toEqual(['get RHP-1']);
+    });
+
+    it('does nothing at all for a site without headers', async () => {
+      const { ops, calls, warnings } = headersCtx({});
+      await reconcileResponseHeadersOnDeploy(ops);
+      expect(calls).toEqual([]);
+      expect(warnings).toEqual([]);
+    });
+
+    it('warns, with no AWS call, about a policy a bootstrap created but never attached', async () => {
+      const { ops, calls, warnings } = headersCtx({ headers: HEADERS, recorded: true });
+      await reconcileResponseHeadersOnDeploy(ops);
+      expect(calls).toEqual([]);
+      expect(warnings).toEqual([
+        expect.stringMatching(
+          /RHP-1 is not attached to the distribution.*run `blogwright bootstrap production` to attach it/,
+        ),
+      ]);
+      // Attached to a distribution that has since been replaced counts as not attached.
+      const replaced = headersCtx({ headers: HEADERS, recorded: true, attached: true });
+      replaced.ops.state.resources['cloudfront-distribution']!.id = 'D7';
+      await reconcileResponseHeadersOnDeploy(replaced.ops);
+      expect(replaced.warnings).toEqual([expect.stringMatching(/not attached/)]);
+    });
+
+    it('points at bootstrap for what changes the distribution, saying what is left to do', async () => {
+      const added = headersCtx({ headers: HEADERS });
+      await reconcileResponseHeadersOnDeploy(added.ops);
+      expect(added.calls).toEqual([]);
+      expect(added.warnings).toEqual([
+        expect.stringMatching(
+          /no response headers policy exists yet; run `blogwright bootstrap production`/,
+        ),
+      ]);
+
+      const removed = headersCtx({ recorded: true, attached: true });
+      await reconcileResponseHeadersOnDeploy(removed.ops);
+      expect(removed.calls).toEqual([]);
+      expect(removed.warnings).toEqual([
+        expect.stringMatching(
+          /RHP-1 is still attached to the distribution; .* to detach and delete it/,
+        ),
+      ]);
+
+      const pending = headersCtx({ recorded: true, pendingDelete: true });
+      await reconcileResponseHeadersOnDeploy(pending.ops);
+      expect(pending.warnings).toEqual([
+        expect.stringMatching(/RHP-1 is already detached from the distribution; .* to delete it/),
+      ]);
+
+      const neverAttached = headersCtx({ recorded: true });
+      await reconcileResponseHeadersOnDeploy(neverAttached.ops);
+      expect(neverAttached.warnings).toEqual([
+        expect.stringMatching(
+          /run `blogwright bootstrap production` to delete response headers policy RHP-1/,
+        ),
+      ]);
+
+      const gone = headersCtx({
+        headers: HEADERS,
+        recorded: true,
+        attached: true,
+        policyGone: true,
+      });
+      await reconcileResponseHeadersOnDeploy(gone.ops);
+      expect(gone.warnings).toEqual([expect.stringMatching(/RHP-1 no longer exists/)]);
+    });
+  });
+
+  describe('deploy role grant', () => {
+    const GRANT = ['cloudfront:GetResponseHeadersPolicy', 'cloudfront:UpdateResponseHeadersPolicy'];
+
+    it('may read and update exactly the recorded policy', () => {
+      const { ops } = headersCtx({ headers: HEADERS, recorded: true });
+      const statement = oidcRolePolicyStatements(ops).find((s) =>
+        actionsOf([s]).includes('cloudfront:UpdateResponseHeadersPolicy'),
+      );
+      expect(statement).toEqual({
+        Effect: 'Allow',
+        Action: GRANT,
+        Resource: 'arn:aws:cloudfront::123456789012:response-headers-policy/RHP-1',
+      });
+      // Never the distribution itself: attaching stays a bootstrap action, and
+      // whether the policy is attached comes from state, not a distribution read.
+      const actions = actionsOf(oidcRolePolicyStatements(ops));
+      expect(actions).not.toContain('cloudfront:UpdateDistribution');
+      expect(actions).not.toContain('cloudfront:GetDistributionConfig');
+    });
+
+    it('is absent without a recorded policy, and on the preview role', () => {
+      const unrecorded = headersCtx({ headers: HEADERS });
+      const preview = headersCtx({ headers: HEADERS, recorded: true, preview: true });
+      for (const { ops } of [unrecorded, preview]) {
+        expect(actionsOf(oidcRolePolicyStatements(ops))).not.toContain(GRANT[1]);
+      }
+    });
   });
 });

@@ -14,7 +14,7 @@ import {
 } from './deploy.js';
 import { applyGraph, destroyGraph, type GraphContext } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
-import { buildNodes, reconcileBuilderImage } from './nodes.js';
+import { buildNodes, reconcileBuilderImage, reconcileResponseHeadersOnDeploy } from './nodes.js';
 import {
   formatDuration,
   logStatusEntries,
@@ -357,6 +357,9 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     warnAboutSsrSeo(ctx);
     await preflightWebFunction(ctx);
   }
+  // Converge the response headers before anything is uploaded or built, so a
+  // policy CloudFront rejects stops the deploy with nothing published.
+  await reconcileResponseHeadersOnDeploy(ctx);
 
   const files = await listRepoFiles(
     ctx.ports,

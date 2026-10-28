@@ -28,6 +28,7 @@ export * from './entry-shim.js';
 export * from './plugin.js';
 export * from './ports.js';
 export * from './repo-root.js';
+export * from './response-headers.js';
 export * from './state.js';
 export * from './tags.js';
 export * from './util.js';
