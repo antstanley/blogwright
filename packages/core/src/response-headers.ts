@@ -75,16 +75,27 @@ export interface ResponseHeadersInput {
 export const HSTS_DEFAULT_MAX_AGE_SECONDS = 31_536_000;
 /** CloudFront stores `max-age` as a signed 32-bit integer. */
 export const HSTS_MAX_AGE_LIMIT_SECONDS = 2_147_483_647;
-/** CloudFront's default quota for custom headers in one response headers policy. */
-export const CUSTOM_RESPONSE_HEADERS_MAX_COUNT = 10;
-/** CloudFront's maximum length of a custom header name. */
-export const RESPONSE_HEADER_NAME_MAX_LENGTH = 256;
 /**
- * CloudFront's maximum length of one header value, and of the
- * `Content-Security-Policy` value (its default quota).
+ * CloudFront's default quota for custom headers in one response headers
+ * policy. Adjustable per account, so config load does not enforce it: a policy
+ * over the account's quota is refused by CloudFront, and the CLI names this
+ * default when it is.
  */
+export const CUSTOM_RESPONSE_HEADERS_DEFAULT_QUOTA = 10;
+/**
+ * CloudFront's default quota for the length of the `Content-Security-Policy`
+ * value. Adjustable per account, so - like the custom header count - it is
+ * left to CloudFront rather than enforced at config load.
+ */
+export const CONTENT_SECURITY_POLICY_DEFAULT_QUOTA = 1_783;
+/** CloudFront's maximum length of a custom header name (a fixed limit). */
+export const RESPONSE_HEADER_NAME_MAX_LENGTH = 256;
+/** CloudFront's maximum length of one custom header value (a fixed limit). */
 export const RESPONSE_HEADER_VALUE_MAX_LENGTH = 1_783;
-/** CloudFront's maximum length of every custom header name and value combined. */
+/**
+ * CloudFront's maximum length of every custom header name and value combined
+ * (a fixed limit).
+ */
 export const CUSTOM_RESPONSE_HEADERS_MAX_TOTAL_LENGTH = 10_240;
 
 /** RFC 7230 token characters - what an HTTP header name may contain. */
@@ -150,21 +161,36 @@ function booleanField(value: unknown, label: string): boolean {
   return value;
 }
 
-/** A header value: a non-empty string within CloudFront's limit, free of control characters. */
-function headerValue(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`config.${label} must be a non-empty string`);
-  }
+/** A header value as text: a string free of control characters. */
+function headerText(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new Error(`config.${label} must be a string`);
   if (hasControlCharacter(value)) {
     throw new Error(`config.${label} must not contain control characters (line breaks included)`);
   }
-  if (value.length > RESPONSE_HEADER_VALUE_MAX_LENGTH) {
+  return value;
+}
+
+/** The CSP: non-empty, since a policy with no directives says nothing. */
+function contentSecurityPolicy(value: unknown): string {
+  const label = 'headers.security.contentSecurityPolicy';
+  const text = headerText(value, label);
+  if (text === '') throw new Error(`config.${label} must be a non-empty string`);
+  return text;
+}
+
+/**
+ * A custom header value: may be empty (CloudFront then sends the header with
+ * no value), within CloudFront's fixed per-value limit.
+ */
+function customHeaderValue(value: unknown, label: string): string {
+  const text = headerText(value, label);
+  if (text.length > RESPONSE_HEADER_VALUE_MAX_LENGTH) {
     throw new Error(
-      `config.${label} is ${value.length} characters, over CloudFront's ` +
+      `config.${label} is ${text.length} characters, over CloudFront's ` +
         `${RESPONSE_HEADER_VALUE_MAX_LENGTH}-character header-value limit`,
     );
   }
-  return value;
+  return text;
 }
 
 function normalizeHsts(raw: unknown): StrictTransportSecurityConfig | undefined {
@@ -247,10 +273,7 @@ function normalizeSecurityHeaders(raw: unknown): SecurityHeadersConfig {
     security.referrerPolicy = normalizeReferrerPolicy(raw.referrerPolicy);
   }
   if (raw.contentSecurityPolicy !== undefined) {
-    security.contentSecurityPolicy = headerValue(
-      raw.contentSecurityPolicy,
-      'headers.security.contentSecurityPolicy',
-    );
+    security.contentSecurityPolicy = contentSecurityPolicy(raw.contentSecurityPolicy);
   }
   return security;
 }
@@ -278,7 +301,7 @@ function normalizeCustomHeader(raw: unknown, index: number): CustomResponseHeade
         `headers.security.${securityField} instead`,
     );
   }
-  return { name, value: headerValue(raw.value, `${label}.value`) };
+  return { name, value: customHeaderValue(raw.value, `${label}.value`) };
 }
 
 function normalizeCustomHeaders(raw: unknown): CustomResponseHeader[] {
@@ -292,12 +315,6 @@ function normalizeCustomHeaders(raw: unknown): CustomResponseHeader[] {
     const lower = name.toLowerCase();
     if (seen.has(lower)) throw new Error(`config.headers.custom lists "${name}" more than once`);
     seen.add(lower);
-  }
-  if (headers.length > CUSTOM_RESPONSE_HEADERS_MAX_COUNT) {
-    throw new Error(
-      `config.headers.custom accepts at most ${CUSTOM_RESPONSE_HEADERS_MAX_COUNT} headers, ` +
-        `got ${headers.length}`,
-    );
   }
   const totalLength = headers.reduce((sum, h) => sum + h.name.length + h.value.length, 0);
   if (totalLength > CUSTOM_RESPONSE_HEADERS_MAX_TOTAL_LENGTH) {

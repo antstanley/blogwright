@@ -4,6 +4,8 @@ import {
   CACHING_DISABLED,
   CACHING_OPTIMIZED,
   CLOUDFRONT_ALIAS_ZONE_ID,
+  CONTENT_SECURITY_POLICY_DEFAULT_QUOTA,
+  CUSTOM_RESPONSE_HEADERS_DEFAULT_QUOTA,
   MICROVM_CPU_ARCHITECTURE,
   pollUntil,
   REPRODUCIBLE_ZIP_MTIME,
@@ -700,15 +702,95 @@ function responseHeadersPolicyInput(
   };
 }
 
+const RESPONSE_HEADERS_POLICY = 'response-headers-policy';
+
+/**
+ * What state records about the policy: its id, the distribution a bootstrap
+ * last attached it to, and whether it is detached with only its deletion left.
+ */
+interface ResponseHeadersPolicyRecord {
+  id: string;
+  attachedTo: string | undefined;
+  pendingDelete: boolean;
+}
+
 /** Read without `output()`, which would record an empty entry for a policy that never existed. */
+function responseHeadersPolicyRecord(ctx: OpsContext): ResponseHeadersPolicyRecord | undefined {
+  const record = ctx.state.resources[RESPONSE_HEADERS_POLICY];
+  if (typeof record?.id !== 'string') return undefined;
+  return {
+    id: record.id,
+    attachedTo: typeof record.attachedTo === 'string' ? record.attachedTo : undefined,
+    pendingDelete: record.pendingDelete === true,
+  };
+}
+
 function recordedResponseHeadersPolicyId(ctx: OpsContext): string | undefined {
-  const id = ctx.state.resources['response-headers-policy']?.id;
-  return typeof id === 'string' ? id : undefined;
+  return responseHeadersPolicyRecord(ctx)?.id;
+}
+
+/** Replace the record whole, so a new state never inherits an earlier flag. */
+function recordResponseHeadersPolicy(
+  ctx: OpsContext,
+  record: Record<string, string | boolean>,
+): void {
+  ctx.state.resources[RESPONSE_HEADERS_POLICY] = record;
+}
+
+function forgetResponseHeadersPolicy(ctx: OpsContext): void {
+  delete ctx.state.resources[RESPONSE_HEADERS_POLICY];
 }
 
 /** The policy every cache behavior should carry: the configured, created one - or none. */
 function desiredResponseHeadersPolicyId(ctx: OpsContext): string | undefined {
   return ctx.config.headers ? recordedResponseHeadersPolicyId(ctx) : undefined;
+}
+
+/**
+ * Record that the configured policy is on the distribution's behaviors, which
+ * is what lets `deploy` tell an attached policy from one an interrupted
+ * bootstrap created but never attached - without any distribution read.
+ */
+function recordResponseHeadersPolicyAttached(ctx: OpsContext, distributionId: string): void {
+  const policyId = desiredResponseHeadersPolicyId(ctx);
+  if (policyId !== undefined) {
+    recordResponseHeadersPolicy(ctx, { id: policyId, attachedTo: distributionId });
+  }
+}
+
+/**
+ * Send a create or update, translating CloudFront's refusal of an adjustable
+ * quota - which config load leaves alone, since an account may have raised it
+ * - into what to change.
+ */
+async function withResponseHeadersQuotas<T>(
+  headers: ResponseHeadersConfig,
+  send: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await send();
+  } catch (cause) {
+    const code = cause instanceof AwsError ? cause.code : '';
+    if (code === 'TooManyCustomHeadersInResponseHeadersPolicy') {
+      throw new Error(
+        `config.headers.custom lists ${headers.custom.length} headers, more than this account's ` +
+          `CloudFront quota of custom headers per response headers policy ` +
+          `(${CUSTOM_RESPONSE_HEADERS_DEFAULT_QUOTA} by default): list fewer, or request a ` +
+          'higher quota in Service Quotas',
+        { cause },
+      );
+    }
+    if (code === 'TooLongCSPInResponseHeadersPolicy') {
+      const length = headers.security.contentSecurityPolicy?.length ?? 0;
+      throw new Error(
+        `config.headers.security.contentSecurityPolicy is ${length} characters, over this ` +
+          `account's CloudFront quota for its length (${CONTENT_SECURITY_POLICY_DEFAULT_QUOTA} ` +
+          'by default): shorten it, or request a higher quota in Service Quotas',
+        { cause },
+      );
+    }
+    throw cause;
+  }
 }
 
 /**
@@ -728,21 +810,89 @@ async function convergeResponseHeadersPolicy(
     ctx.logger.ok('response headers up to date');
     return 'current';
   }
-  await ctx.clients.cloudfront.updateResponseHeadersPolicy(id, desired, policy.etag);
+  await withResponseHeadersQuotas(headers, () =>
+    ctx.clients.cloudfront.updateResponseHeadersPolicy(id, desired, policy.etag),
+  );
   ctx.logger.ok('updated the response headers policy');
   return 'updated';
 }
 
 /**
+ * Create the policy, or adopt the one an interrupted run created under the
+ * same derived name but never recorded: CloudFront refuses a second policy of
+ * that name, and policy names are unique per account.
+ */
+async function createOrAdoptResponseHeadersPolicy(
+  ctx: OpsContext,
+  headers: ResponseHeadersConfig,
+): Promise<void> {
+  const input = responseHeadersPolicyInput(ctx, headers);
+  let id: string;
+  try {
+    id = await withResponseHeadersQuotas(headers, () =>
+      ctx.clients.cloudfront.createResponseHeadersPolicy(input),
+    );
+  } catch (err) {
+    if (!(err instanceof AwsError && err.code === 'ResponseHeadersPolicyAlreadyExists')) throw err;
+    const existing = await ctx.clients.cloudfront.findResponseHeadersPolicyId(input.name);
+    if (existing === undefined) throw err;
+    recordResponseHeadersPolicy(ctx, { id: existing });
+    ctx.logger.ok(
+      `adopted response headers policy ${input.name} (${existing}), left by an earlier run`,
+    );
+    await convergeResponseHeadersPolicy(ctx, existing, headers);
+    return;
+  }
+  recordResponseHeadersPolicy(ctx, { id });
+}
+
+/**
+ * CloudFront refused to delete a policy just detached from this site's
+ * distribution. Either it has not caught up with the detach - the next
+ * bootstrap deletes it - or another distribution uses the policy, which no
+ * bootstrap of this site can change: that is said once, and the policy is
+ * left to its other user rather than retried forever.
+ */
+async function reportResponseHeadersPolicyInUse(
+  ctx: OpsContext,
+  policyId: string,
+  distributionId: string | undefined,
+): Promise<void> {
+  const others = (
+    await ctx.clients.cloudfront.listDistributionIdsUsingResponseHeadersPolicy(policyId)
+  ).filter((id) => id !== distributionId);
+  if (others.length > 0) {
+    forgetResponseHeadersPolicy(ctx);
+    ctx.logger.warn(
+      `response headers policy ${policyId} is detached from this site's distribution but is ` +
+        `also attached to ${others.join(', ')}, so it was not deleted. Blogwright no longer ` +
+        'manages it: if those distributions do not need it, detach it from them and delete it ' +
+        'in the CloudFront console',
+    );
+    return;
+  }
+  recordResponseHeadersPolicy(ctx, { id: policyId, pendingDelete: true });
+  ctx.logger.warn(
+    `response headers policy ${policyId} is detached from the distribution, but CloudFront has ` +
+      'not released it yet, so it was not deleted; the next bootstrap deletes it',
+  );
+}
+
+/**
  * `headers` was removed: detach the policy from the distribution, then delete
- * it. CloudFront refuses the delete while any behavior still references the
- * policy; that leaves it recorded, so the next bootstrap retries.
+ * it. A policy already gone from AWS only leaves its record to clear.
  */
 async function retireResponseHeadersPolicy(ctx: OpsContext, policyId: string): Promise<void> {
+  if (!(await ctx.clients.cloudfront.getResponseHeadersPolicy(policyId))) {
+    forgetResponseHeadersPolicy(ctx);
+    ctx.logger.ok(`response headers policy ${policyId} no longer exists; cleared its record`);
+    return;
+  }
   const distributionId = ctx.state.resources['cloudfront-distribution']?.id;
-  if (typeof distributionId === 'string') {
+  const ownDistribution = typeof distributionId === 'string' ? distributionId : undefined;
+  if (ownDistribution !== undefined) {
     const detached = await ctx.clients.cloudfront.detachResponseHeadersPolicy(
-      distributionId,
+      ownDistribution,
       policyId,
     );
     if (detached) ctx.logger.ok('detached the response headers policy from the distribution');
@@ -751,15 +901,12 @@ async function retireResponseHeadersPolicy(ctx: OpsContext, policyId: string): P
     await ctx.clients.cloudfront.deleteResponseHeadersPolicy(policyId);
   } catch (err) {
     if (err instanceof AwsError && err.code === 'ResponseHeadersPolicyInUse') {
-      ctx.logger.warn(
-        `response headers policy ${policyId} is still attached to a cache behavior, so it was ` +
-          'not deleted; the next bootstrap retries',
-      );
+      await reportResponseHeadersPolicyInUse(ctx, policyId, ownDistribution);
       return;
     }
     throw err;
   }
-  delete ctx.state.resources['response-headers-policy'];
+  forgetResponseHeadersPolicy(ctx);
   ctx.logger.ok('deleted the response headers policy (config.headers was removed)');
 }
 
@@ -772,12 +919,15 @@ async function retireResponseHeadersPolicy(ctx: OpsContext, policyId: string): P
  */
 function responseHeadersPolicyNode(): ResourceNode {
   return {
-    id: 'response-headers-policy',
+    id: RESPONSE_HEADERS_POLICY,
     dependsOn: [],
     title: 'CloudFront response headers policy',
     async read(ctx) {
       const id = recordedResponseHeadersPolicyId(ctx);
       if (id === undefined) return false;
+      // Unconfigured, there is nothing to create: `update` retires the record,
+      // whether or not the policy is still in AWS.
+      if (!ctx.config.headers) return true;
       // Existence only: changed headers are `update`'s to converge. Reporting
       // the policy absent would send the graph to `create`, which CloudFront
       // refuses for a taken name.
@@ -785,16 +935,11 @@ function responseHeadersPolicyNode(): ResourceNode {
     },
     async create(ctx) {
       const headers = ctx.config.headers;
-      if (!headers) {
-        // A recorded policy that is gone from AWS and no longer configured:
-        // only the stale record remains to clear.
-        delete ctx.state.resources['response-headers-policy'];
-        return;
-      }
-      const id = await ctx.clients.cloudfront.createResponseHeadersPolicy(
-        responseHeadersPolicyInput(ctx, headers),
-      );
-      output(ctx, 'response-headers-policy').id = id;
+      // `read` reports a recorded policy present whenever `headers` is unset,
+      // and the node is only in the graph when one of the two holds.
+      if (!headers)
+        throw new Error('the response headers policy is created only from config.headers');
+      await createOrAdoptResponseHeadersPolicy(ctx, headers);
     },
     async update(ctx) {
       const id = recordedResponseHeadersPolicyId(ctx);
@@ -810,36 +955,57 @@ function responseHeadersPolicyNode(): ResourceNode {
   };
 }
 
+/** What `deploy` says about a policy whose `headers` key was removed. */
+function retiredHeadersWarning(record: ResponseHeadersPolicyRecord, bootstrap: string): string {
+  if (record.pendingDelete) {
+    return (
+      `config.headers was removed and response headers policy ${record.id} is already ` +
+      `detached from the distribution; run \`${bootstrap}\` to delete it`
+    );
+  }
+  if (record.attachedTo !== undefined) {
+    return (
+      `config.headers was removed but response headers policy ${record.id} is still attached ` +
+      `to the distribution; run \`${bootstrap}\` to detach and delete it`
+    );
+  }
+  return `config.headers was removed; run \`${bootstrap}\` to delete response headers policy ${record.id}`;
+}
+
 /**
  * The deploy-time half of the `headers` reconcile: converge the recorded
  * policy's headers in place. Attaching, detaching, creating and deleting the
  * policy change the distribution, which stays a `bootstrap` action (the CI
  * deploy role cannot update the distribution), so those cases warn with the
- * command that applies them instead.
+ * command that applies them instead. Whether the policy is attached comes from
+ * the record bootstrap keeps, so the deploy role needs no distribution read.
  */
 export async function reconcileResponseHeadersOnDeploy(ctx: OpsContext): Promise<void> {
   const headers = ctx.config.headers;
-  const id = recordedResponseHeadersPolicyId(ctx);
+  const record = responseHeadersPolicyRecord(ctx);
   const bootstrap = `blogwright bootstrap ${ctx.env}`;
   if (!headers) {
-    if (id !== undefined) {
-      ctx.logger.warn(
-        `config.headers was removed but its response headers policy is still attached; ` +
-          `run \`${bootstrap}\` to detach and delete it`,
-      );
-    }
+    if (record) ctx.logger.warn(retiredHeadersWarning(record, bootstrap));
     return;
   }
-  if (id === undefined) {
+  if (!record) {
     ctx.logger.warn(
       `config.headers is set but no response headers policy exists yet; ` +
         `run \`${bootstrap}\` to create it and attach it to the distribution`,
     );
     return;
   }
-  if ((await convergeResponseHeadersPolicy(ctx, id, headers)) === 'missing') {
+  const distributionId = ctx.state.resources['cloudfront-distribution']?.id;
+  if (record.attachedTo === undefined || record.attachedTo !== distributionId) {
     ctx.logger.warn(
-      `response headers policy ${id} no longer exists; run \`${bootstrap}\` to recreate it`,
+      `response headers policy ${record.id} is not attached to the distribution, so no ` +
+        `response carries its headers yet; run \`${bootstrap}\` to attach it`,
+    );
+    return;
+  }
+  if ((await convergeResponseHeadersPolicy(ctx, record.id, headers)) === 'missing') {
+    ctx.logger.warn(
+      `response headers policy ${record.id} no longer exists; run \`${bootstrap}\` to recreate it`,
     );
   }
 }
@@ -1336,7 +1502,9 @@ interface DistributionNodeOptions {
 /**
  * Attach the configured response headers policy on a static stack, whose
  * other distribution settings stay creation-time. With no policy to attach
- * the distribution is left alone, so a policy attached by hand survives.
+ * the distribution is left alone, so a policy attached by hand survives; with
+ * one, a behavior carrying a hand-attached policy is refused, not overwritten
+ * (`attachResponseHeadersPolicy` in core says how to resolve it).
  */
 async function attachResponseHeadersPolicy(ctx: OpsContext, distributionId: string): Promise<void> {
   const policyId = desiredResponseHeadersPolicyId(ctx);
@@ -1345,6 +1513,7 @@ async function attachResponseHeadersPolicy(ctx: OpsContext, distributionId: stri
     distributionId,
     policyId,
   );
+  recordResponseHeadersPolicyAttached(ctx, distributionId);
   ctx.logger.ok(
     attached
       ? 'attached the response headers policy to the distribution'
@@ -1416,6 +1585,9 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
       const comment = `${ctx.config.siteName} ${ctx.env}`;
       // What create and adopt agree on: enough identity to record outputs and tag.
       let dist: Pick<DistributionListItem, 'id' | 'arn' | 'domainName'>;
+      // An adopted orphan carries whatever shape its own run gave it, so only a
+      // distribution created here is known to carry the response headers policy.
+      let createdFromShape = true;
       try {
         dist = await ctx.clients.cloudfront.createDistribution(
           distributionShape(ctx, servingMode(ctx), preview),
@@ -1441,7 +1613,9 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
         if (!adopted) throw err;
         ctx.logger.ok(`adopted existing distribution ${adopted.id} (created by an earlier run)`);
         dist = adopted;
+        createdFromShape = false;
       }
+      if (createdFromShape) recordResponseHeadersPolicyAttached(ctx, dist.id);
       const out = output(ctx, 'cloudfront-distribution');
       out.id = dist.id;
       out.arn = dist.arn;
@@ -1474,6 +1648,7 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
           distributionShape(ctx, configured, preview),
         );
         out.mode = configured;
+        recordResponseHeadersPolicyAttached(ctx, id);
         if (changed) {
           ctx.logger.ok(`reconciled the distribution for ${configured} serving`);
           const domainName = out.domainName;

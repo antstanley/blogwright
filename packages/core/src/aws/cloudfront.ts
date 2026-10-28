@@ -7,7 +7,7 @@ import {
   type ResponseHeadersPolicyConfigInput,
   type ResponseHeadersPolicySummary,
 } from './response-headers-policy.js';
-import { allTags, encodeEntities, textTag } from './xml.js';
+import { allTags, decodeEntities, encodeEntities, textTag } from './xml.js';
 
 export type {
   ResponseHeadersPolicyConfigInput,
@@ -345,6 +345,47 @@ export class CloudFrontClient {
       if (err instanceof AwsError && err.isNotFound) return;
       throw err;
     }
+  }
+
+  /**
+   * The id of this account's custom response headers policy called `name`, or
+   * undefined. Names are unique per account, so this finds a policy an
+   * interrupted run created but never recorded.
+   */
+  async findResponseHeadersPolicyId(name: string): Promise<string | undefined> {
+    let marker: string | undefined;
+    do {
+      const res = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/response-headers-policy`,
+        query: { Type: 'custom', ...(marker ? { Marker: marker } : {}) },
+      });
+      const xml = res.text();
+      for (const summary of allTags(xml, 'ResponseHeadersPolicySummary')) {
+        if (textTag(summary, 'Name') === name) return textTag(summary, 'Id');
+      }
+      marker = textTag(xml, 'NextMarker') || undefined;
+    } while (marker);
+    return undefined;
+  }
+
+  /** Ids of every distribution with a cache behavior that references the policy. */
+  async listDistributionIdsUsingResponseHeadersPolicy(policyId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let marker: string | undefined;
+    do {
+      const res = await this.client.send({
+        service: 'cloudfront',
+        method: 'GET',
+        path: `${API}/distributionsByResponseHeadersPolicyId/${policyId}`,
+        ...(marker ? { query: { Marker: marker } } : {}),
+      });
+      const xml = res.text();
+      ids.push(...allTags(xml, 'DistributionId').map((id) => decodeEntities(id.trim())));
+      marker = textTag(xml, 'IsTruncated') === 'true' ? textTag(xml, 'NextMarker') : undefined;
+    } while (marker);
+    return ids;
   }
 
   /** True when a live policy document already carries exactly the desired headers. */
@@ -1148,14 +1189,35 @@ function responseHeadersPolicyElement(policyId: string): string {
 const RESPONSE_HEADERS_POLICY_ELEMENT =
   /<ResponseHeadersPolicyId>[^<]*<\/ResponseHeadersPolicyId>|<ResponseHeadersPolicyId\/>/;
 
+/** How an error names one cache behavior: its path pattern, or the default. */
+function describeBehavior(behavior: string): string {
+  const pathPattern = elementText(behavior, 'PathPattern');
+  return pathPattern === undefined
+    ? 'the default cache behavior'
+    : `the cache behavior for ${pathPattern}`;
+}
+
 /**
- * One cache behavior's inner XML with `policyId` attached: replacing an
- * existing policy element, or inserting one where the schema places it -
- * after the origin-request policy, or else after the cache policy.
+ * One cache behavior's inner XML with `policyId` attached: filling an empty
+ * policy element, or inserting one where the schema places it - after the
+ * origin-request policy, or else after the cache policy. A behavior already
+ * carrying a different policy is refused rather than overwritten: a behavior
+ * takes one policy, and replacing a hand-attached one would silently drop
+ * headers someone chose, with nothing left to restore when `headers` goes.
  */
 function withResponseHeadersPolicy(behavior: string, policyId: string): string {
   const element = responseHeadersPolicyElement(policyId);
-  if (RESPONSE_HEADERS_POLICY_ELEMENT.test(behavior)) {
+  const existing = RESPONSE_HEADERS_POLICY_ELEMENT.exec(behavior)?.[0];
+  if (existing !== undefined) {
+    const existingId = elementText(existing, 'ResponseHeadersPolicyId') ?? '';
+    if (existingId !== '' && existingId !== policyId) {
+      throw new Error(
+        `${describeBehavior(behavior)} already carries response headers policy ${existingId}, ` +
+          'which Blogwright did not attach. A cache behavior takes one response headers policy, ' +
+          'so Blogwright will not replace it: move the headers you need from it into ' +
+          'config.headers, detach it in the CloudFront console, then run bootstrap again',
+      );
+    }
     return behavior.replace(RESPONSE_HEADERS_POLICY_ELEMENT, element);
   }
   for (const anchor of ['</OriginRequestPolicyId>', '</CachePolicyId>']) {

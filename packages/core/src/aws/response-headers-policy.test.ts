@@ -156,6 +156,55 @@ describe('CloudFrontClient response headers policies', () => {
     );
   });
 
+  it('finds a custom policy by name across pages, and nothing for an unknown name', async () => {
+    const queries: string[] = [];
+    const client = cloudfrontWith(async (req) => {
+      const url = new URL(req.url);
+      queries.push(url.search);
+      const summary = (id: string, name: string) =>
+        `<ResponseHeadersPolicySummary><Type>custom</Type><ResponseHeadersPolicy><Id>${id}</Id>` +
+        `<ResponseHeadersPolicyConfig><Name>${name}</Name></ResponseHeadersPolicyConfig>` +
+        `</ResponseHeadersPolicy></ResponseHeadersPolicySummary>`;
+      return url.searchParams.get('Marker') === 'page-2'
+        ? response(
+            200,
+            `<ResponseHeadersPolicyList><Items>${summary('RHP-9', 'production-example-headers')}</Items></ResponseHeadersPolicyList>`,
+          )
+        : response(
+            200,
+            `<ResponseHeadersPolicyList><NextMarker>page-2</NextMarker><Items>${summary('RHP-2', 'other-headers')}</Items></ResponseHeadersPolicyList>`,
+          );
+    });
+    expect(await client.findResponseHeadersPolicyId('production-example-headers')).toBe('RHP-9');
+    expect(queries[0]).toContain('Type=custom');
+    expect(queries[1]).toContain('Marker=page-2');
+    expect(await client.findResponseHeadersPolicyId('missing-headers')).toBeUndefined();
+  });
+
+  it('lists the distributions that use a policy, across pages', async () => {
+    const paths: string[] = [];
+    const client = cloudfrontWith(async (req) => {
+      const url = new URL(req.url);
+      paths.push(url.pathname);
+      return url.searchParams.get('Marker') === 'm2'
+        ? response(
+            200,
+            '<DistributionIdList><IsTruncated>false</IsTruncated><Items><DistributionId>D3</DistributionId></Items></DistributionIdList>',
+          )
+        : response(
+            200,
+            '<DistributionIdList><IsTruncated>true</IsTruncated><NextMarker>m2</NextMarker>' +
+              '<Items><DistributionId>D1</DistributionId><DistributionId>D2</DistributionId></Items></DistributionIdList>',
+          );
+    });
+    expect(await client.listDistributionIdsUsingResponseHeadersPolicy('RHP-1')).toEqual([
+      'D1',
+      'D2',
+      'D3',
+    ]);
+    expect(paths[0]).toBe('/2020-05-31/distributionsByResponseHeadersPolicyId/RHP-1');
+  });
+
   describe('responseHeadersPolicyMatches', () => {
     const client = cloudfrontWith(async () => response(200, ''));
 
@@ -220,6 +269,34 @@ describe('CloudFrontClient response headers policies', () => {
         '<Value>same-origin</Value><Override>false</Override>',
       );
       expect(client.responseHeadersPolicyMatches(notOverriding, POLICY)).toBe(false);
+    });
+
+    it('treats a section CloudFront echoes back empty as unset, not as drift', () => {
+      for (const echoed of [
+        '<RemoveHeadersConfig><Quantity>0</Quantity></RemoveHeadersConfig>',
+        '<RemoveHeadersConfig><Quantity>0</Quantity><Items/></RemoveHeadersConfig>',
+        '<RemoveHeadersConfig/>',
+        '<CorsConfig></CorsConfig>',
+        '<XSSProtection></XSSProtection>',
+      ]) {
+        expect(client.responseHeadersPolicyMatches(livePolicy(HEADERS, echoed), POLICY)).toBe(true);
+      }
+    });
+
+    it('still sees a section that removes a header as drift', () => {
+      const removing =
+        '<RemoveHeadersConfig><Quantity>1</Quantity><Items><ResponseHeadersPolicyRemoveHeader>' +
+        '<Header>X-Powered-By</Header></ResponseHeadersPolicyRemoveHeader></Items></RemoveHeadersConfig>';
+      expect(client.responseHeadersPolicyMatches(livePolicy(HEADERS, removing), POLICY)).toBe(
+        false,
+      );
+      const xss =
+        '<XSSProtection><Override>true</Override><Protection>false</Protection></XSSProtection>';
+      const withXss = livePolicy(HEADERS).replace(
+        '<SecurityHeadersConfig>',
+        `<SecurityHeadersConfig>${xss}`,
+      );
+      expect(client.responseHeadersPolicyMatches(withXss, POLICY)).toBe(false);
     });
   });
 });
@@ -291,18 +368,33 @@ describe('CloudFrontClient response headers policy association', () => {
     expect(state.puts).toBe(1);
   });
 
-  it('replaces another policy, including an empty element', async () => {
+  it('fills an empty policy element, in either form CloudFront may return it', async () => {
     const { state, client } = distributionStore(
       liveDistribution(
-        '<ResponseHeadersPolicyId>HAND-ATTACHED</ResponseHeadersPolicyId>',
+        '<ResponseHeadersPolicyId/>',
         '<ResponseHeadersPolicyId></ResponseHeadersPolicyId>',
       ),
     );
     expect(await client.attachResponseHeadersPolicy('D1', 'RHP-1')).toBe(true);
-    expect(state.live).not.toContain('HAND-ATTACHED');
     expect(
       state.live.match(/<ResponseHeadersPolicyId>RHP-1<\/ResponseHeadersPolicyId>/g),
     ).toHaveLength(2);
+  });
+
+  it('refuses to overwrite a policy attached by hand, naming it and the behavior', async () => {
+    for (const [defaultExtra, orderedExtra, where] of [
+      ['<ResponseHeadersPolicyId>HAND-ATTACHED</ResponseHeadersPolicyId>', '', /default cache/],
+      ['', '<ResponseHeadersPolicyId>HAND-ATTACHED</ResponseHeadersPolicyId>', /for \/_app\/\*/],
+    ] as const) {
+      const { state, client } = distributionStore(liveDistribution(defaultExtra, orderedExtra));
+      const attach = client.attachResponseHeadersPolicy('D1', 'RHP-1');
+      await expect(attach).rejects.toThrow(where);
+      await expect(client.attachResponseHeadersPolicy('D1', 'RHP-1')).rejects.toThrow(
+        /already carries response headers policy HAND-ATTACHED.*detach it in the CloudFront console/,
+      );
+      // Nothing was pushed: neither behavior changed.
+      expect(state.puts).toBe(0);
+    }
   });
 
   it('refuses a legacy behavior with no cache policy to anchor on', async () => {

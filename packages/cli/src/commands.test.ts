@@ -864,8 +864,16 @@ describe('deploy runs its afterDeploy step', () => {
         steps.push('afterDeploy');
       },
       (ctx) => {
-        ctx.config.headers = { security: { contentTypeOptions: true }, custom: [] };
-        ctx.state.resources['response-headers-policy'] = { id: 'RHP-1' };
+        ctx.config.headers = {
+          security: { contentTypeOptions: true, contentSecurityPolicy: "default-src 'self'" },
+          custom: [],
+        };
+        // Attached by an earlier bootstrap, so the deploy converges it.
+        ctx.state.resources['cloudfront-distribution'] = {
+          ...ctx.state.resources['cloudfront-distribution'],
+          id: 'D1',
+        };
+        ctx.state.resources['response-headers-policy'] = { id: 'RHP-1', attachedTo: 'D1' };
         Object.assign(ctx.clients.cloudfront, {
           getResponseHeadersPolicy: async (id: string) => ({ id, config: '<x/>', etag: 'E1' }),
           responseHeadersPolicyMatches: () => false,
@@ -886,7 +894,9 @@ describe('deploy runs its afterDeploy step', () => {
         };
       },
     );
-    await expect(deploying).rejects.toThrow(/TooLongCSPInResponseHeadersPolicy/);
+    await expect(deploying).rejects.toThrow(
+      /contentSecurityPolicy is 18 characters, over this account's CloudFront quota/,
+    );
     expect(steps).toEqual(['updateResponseHeadersPolicy']);
   });
 

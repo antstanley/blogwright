@@ -241,7 +241,7 @@ When the rules change, the next build to each target re-uploads every file (an i
 
 `object` · optional · no default
 
-HTTP response headers CloudFront adds to every response: security headers such as `Content-Security-Policy` and `Strict-Transport-Security`, plus any other header you name. These cannot come from the site itself - `frame-ancestors` is ignored in a `<meta http-equiv>` Content-Security-Policy, and HSTS is only honoured as a real header - so blogwright manages a CloudFront response headers policy named `<env>-<siteName>-headers` and attaches it to every cache behavior of the environment's distribution. Every response carries the headers: pages, directory routes, the 404 page, and hashed assets.
+HTTP response headers CloudFront adds to every response: security headers such as `Content-Security-Policy` and `Strict-Transport-Security`, plus any other header you name. These cannot come from the site itself - `frame-ancestors` is ignored in a `<meta http-equiv>` Content-Security-Policy, and HSTS is only honoured as a real header - so blogwright manages a CloudFront response headers policy named `<env>-<siteName>-headers` and attaches it to every cache behavior of the environment's distribution. Pages, directory routes and hashed assets are all served through those behaviors, so they carry the headers. The 404 page is served as a custom error response of the same default behavior; CloudFront is expected to add the policy's headers to it too, but see [what has not been verified](#what-has-not-been-verified-against-aws).
 
 ```jsonc
 {
@@ -268,16 +268,41 @@ HTTP response headers CloudFront adds to every response: security headers such a
 | `security.contentTypeOptions` | `X-Content-Type-Options: nosniff` | boolean | `false` |
 | `security.frameOptions` | `X-Frame-Options` | `deny` or `sameorigin` | absent |
 | `security.referrerPolicy` | `Referrer-Policy` | `no-referrer`, `no-referrer-when-downgrade`, `origin`, `origin-when-cross-origin`, `same-origin`, `strict-origin`, `strict-origin-when-cross-origin`, or `unsafe-url` | absent |
-| `security.contentSecurityPolicy` | `Content-Security-Policy` | non-empty string, at most 1,783 characters, no control characters | absent |
-| `custom` | any other header | array of `{ "name", "value" }`: names are HTTP header names (RFC 7230 tokens) of at most 256 characters, with no case-insensitive duplicates and none of the five security headers above; values are non-empty, at most 1,783 characters, no control characters; at most 10 entries, names and values together at most 10,240 characters | `[]` |
+| `security.contentSecurityPolicy` | `Content-Security-Policy` | non-empty string, no control characters | absent |
+| `custom` | any other header | array of `{ "name", "value" }`: names are HTTP header names (RFC 7230 tokens) of at most 256 characters, with no case-insensitive duplicates and none of the five security headers above; values are strings of at most 1,783 characters with no control characters, and may be empty (the header is sent with no value); names and values together at most 10,240 characters | `[]` |
 
-Unknown keys are refused at every level. The limits are CloudFront's: the custom-header count and the Content-Security-Policy length are its default quotas.
+Unknown keys are refused at every level, and `"headers": null` is refused like any other non-object block, as for `ssr` and `aws`: to have no headers, leave the key out. The limits checked when the config loads are CloudFront's fixed ones. Two of CloudFront's limits are adjustable quotas, so they are not checked at load, because your account may have raised them: at most 10 custom headers and 1,783 characters of `Content-Security-Policy` by default. A policy over your account's quota fails at `bootstrap` or `deploy` with an error that names the quota; shorten the config, or request a higher quota in Service Quotas.
 
 Every header **overrides** a header of the same name from the origin, so the configured value is the one viewers receive - including over a header an SSR application sets itself.
 
-**How changes apply.** `bootstrap` reconciles the whole policy: it creates the policy and attaches it to the distribution's cache behaviors, updates it in place when the config changes, and - when the `headers` key is removed, or the block adds no header at all - detaches it and deletes it. None of this needs a new distribution, and no invalidation: CloudFront adds the headers as each response leaves the edge, cached responses included. `deploy` keeps an existing policy's headers in step with the config before it builds, so adding, changing or removing a single header takes effect on the next `deploy` or `bootstrap`; it updates the policy only, never the distribution. Attaching the policy the first time and detaching it after the key is removed change the distribution, so those stay with `bootstrap`: a `deploy` that finds either pending warns and names the command to run. Updating the policy needs `cloudfront:GetResponseHeadersPolicy` and `cloudfront:UpdateResponseHeadersPolicy`, which the [GitHub OIDC deploy role](/guides/ci-github-oidc/#what-the-role-can-do) carries for this policy only.
+**How changes apply.** `bootstrap` reconciles the whole policy: it creates the policy and attaches it to the distribution's cache behaviors, updates it in place when the config changes, and - when the `headers` key is removed, or the block adds no header at all - detaches it and deletes it. None of this needs a new distribution, and no invalidation: CloudFront adds the headers as each response leaves the edge, cached responses included. If a run was interrupted after CloudFront created the policy but before blogwright recorded it, the next `bootstrap` finds the policy by its name and adopts it.
 
-On a static site, a policy you attached by hand is left alone while `headers` is unset. In SSR mode blogwright reconciles every cache behavior on each `bootstrap`, so a hand-attached policy is replaced by the configured one, or removed when `headers` is unset - configure the headers here instead.
+`deploy` keeps an attached policy's headers in step with the config before it builds, so adding, changing or removing a header takes effect on the next `deploy` or `bootstrap`, as long as at least one header remains. It updates the policy only, never the distribution. Three changes need `bootstrap`, and a `deploy` that finds one pending warns and names the command to run:
+
+- Adding `headers` for the first time: the policy has to be created and attached.
+- A policy that a bootstrap created but did not attach, for example because the bootstrap stopped with an error. `deploy` knows this from what `bootstrap` recorded in state, so it makes no extra AWS call; a policy detached by hand in the console is not detected.
+- Removing the key, or removing the last header so the block adds nothing: the policy has to be detached and deleted.
+
+Updating the policy needs `cloudfront:GetResponseHeadersPolicy` and `cloudfront:UpdateResponseHeadersPolicy`, which the [GitHub OIDC deploy role](/guides/ci-github-oidc/#what-the-role-can-do) carries for this policy only.
+
+When the key is removed, CloudFront may refuse the delete because the policy is still in use. If that is only because CloudFront has not yet caught up with the detach, blogwright records that the delete is pending and the next `bootstrap` finishes it. If another distribution also uses the policy, blogwright says so once, names the distribution, and stops managing the policy; detach and delete it in the CloudFront console if nothing needs it.
+
+**Policies attached by hand.** A cache behavior takes only one response headers policy.
+
+- On a static site, blogwright leaves a policy you attached by hand alone while `headers` is unset. Once `headers` is set, `bootstrap` refuses to replace it: the error names the policy and the cache behavior. Move the headers you need into `headers`, detach the old policy in the CloudFront console, and run `bootstrap` again. Blogwright refuses rather than replaces because a replaced policy would be lost for good: nothing would restore it if `headers` were removed later.
+- In SSR mode blogwright reconciles every cache behavior on each `bootstrap`, so a hand-attached policy is replaced by the configured one, or removed when `headers` is unset - configure the headers here instead.
+
+**Upgrading an SSR site.** Before this version, a policy attached by hand to an SSR distribution survived a `bootstrap` until some other change rewrote the cache behavior. From this version on, the first `bootstrap` removes it, whether or not `headers` is set. Copy its headers into `headers` before you upgrade.
+
+### What has not been verified against AWS
+
+The `headers` support is covered by unit tests against recorded API shapes; it has not yet been run against a live CloudFront distribution. Until it has, treat these as expectations rather than guarantees:
+
+- That every listed header appears on `/`, on a directory route such as `/about/`, on the 404 page and on a hashed asset, after `bootstrap` and again after a later `deploy`. The 404 page is a custom error response; CloudFront is expected to apply the default behavior's response headers policy to it, but this has not been checked.
+- That a second `bootstrap` or `deploy` finds no drift in the policy CloudFront returns, and so makes no update.
+- That CloudFront accepts the policy document as blogwright writes it, including the order of its elements.
+- That deleting the policy right after detaching it succeeds, rather than waiting for the next `bootstrap`.
+- Whether CloudFront accepts header values with non-ASCII characters. The config check allows them; if CloudFront refuses one, `bootstrap` or `deploy` fails with CloudFront's error.
 
 Headers apply to the [preview stack](/guides/pr-previews/) too, from the preview config, at `preview bootstrap`; `preview deploy` never changes them, because one distribution serves every pull request.
 
@@ -490,8 +515,8 @@ unrelated built-in commands. Post-deploy PDS sync failures remain warnings:
 | `headers.security.hsts` | `true`, `false`, or `{ maxAgeSeconds, includeSubdomains, preload }`; `maxAgeSeconds` an integer `0`-`2147483647` |
 | `headers.security.frameOptions` | `deny` or `sameorigin` |
 | `headers.security.referrerPolicy` | one of CloudFront's eight `Referrer-Policy` values |
-| `headers.security.contentSecurityPolicy` | non-empty, ≤ 1,783 characters, no control characters |
-| `headers.custom[]` | ≤ 10 entries; RFC 7230 names ≤ 256 characters, no case-insensitive duplicates, not a `headers.security` header; values non-empty, ≤ 1,783 characters, no control characters; names and values together ≤ 10,240 characters |
+| `headers.security.contentSecurityPolicy` | non-empty, no control characters; the length quota (1,783 by default) is left to CloudFront |
+| `headers.custom[]` | RFC 7230 names ≤ 256 characters, no case-insensitive duplicates, not a `headers.security` header; values ≤ 1,783 characters (empty allowed), no control characters; names and values together ≤ 10,240 characters; the entry-count quota (10 by default) is left to CloudFront |
 | `seo.robots` | `auto`, `index`, `noindex`, or `off` |
 | `seo.sitemap` | `auto`, `on`, or `off` |
 | `sourceInclude[]` | repo-relative, no leading `/`, no `..` |

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { parseConfig } from './config.js';
 import {
-  CUSTOM_RESPONSE_HEADERS_MAX_COUNT,
+  CONTENT_SECURITY_POLICY_DEFAULT_QUOTA,
+  CUSTOM_RESPONSE_HEADERS_DEFAULT_QUOTA,
   CUSTOM_RESPONSE_HEADERS_MAX_TOTAL_LENGTH,
   HSTS_DEFAULT_MAX_AGE_SECONDS,
   HSTS_MAX_AGE_LIMIT_SECONDS,
@@ -137,26 +138,41 @@ describe('headers config', () => {
     );
   });
 
-  it('bounds the CSP at the CloudFront limit and refuses control characters', () => {
-    const atLimit = 'a'.repeat(RESPONSE_HEADER_VALUE_MAX_LENGTH);
-    expect(headersOf({ security: { contentSecurityPolicy: atLimit } })).toBeDefined();
-    expect(() => headersOf({ security: { contentSecurityPolicy: `${atLimit}a` } })).toThrow(
-      /contentSecurityPolicy is 1784 characters, over CloudFront's 1783-character/,
-    );
+  it('leaves the adjustable CSP length quota to CloudFront and refuses control characters', () => {
+    // An account may have raised the 1,783-character default, so load does not refuse it.
+    const overDefault = 'a'.repeat(CONTENT_SECURITY_POLICY_DEFAULT_QUOTA + 1);
+    expect(
+      headersOf({ security: { contentSecurityPolicy: overDefault } })?.security
+        .contentSecurityPolicy,
+    ).toBe(overDefault);
     expect(() => headersOf({ security: { contentSecurityPolicy: '' } })).toThrow(/non-empty/);
+    expect(() => headersOf({ security: { contentSecurityPolicy: 42 } })).toThrow(
+      /contentSecurityPolicy must be a string/,
+    );
     expect(() =>
       headersOf({ security: { contentSecurityPolicy: "default-src 'self'\r\nX-Evil: 1" } }),
     ).toThrow(/must not contain control characters/);
   });
 
   describe('custom headers', () => {
-    it('accepts the quota and rejects one more', () => {
-      expect(
-        headersOf({ custom: customHeaders(CUSTOM_RESPONSE_HEADERS_MAX_COUNT) })?.custom,
-      ).toHaveLength(CUSTOM_RESPONSE_HEADERS_MAX_COUNT);
-      expect(() =>
-        headersOf({ custom: customHeaders(CUSTOM_RESPONSE_HEADERS_MAX_COUNT + 1) }),
-      ).toThrow(/accepts at most 10 headers, got 11/);
+    it('leaves the adjustable header-count quota to CloudFront', () => {
+      // An account may have raised the default of 10, so load does not refuse more.
+      const overDefault = CUSTOM_RESPONSE_HEADERS_DEFAULT_QUOTA + 1;
+      expect(headersOf({ custom: customHeaders(overDefault) })?.custom).toHaveLength(overDefault);
+    });
+
+    it('bounds a value at the fixed 1,783-character limit, and accepts an empty one', () => {
+      const atLimit = 'v'.repeat(RESPONSE_HEADER_VALUE_MAX_LENGTH);
+      expect(headersOf({ custom: [{ name: 'X-A', value: atLimit }] })?.custom[0]?.value).toBe(
+        atLimit,
+      );
+      expect(() => headersOf({ custom: [{ name: 'X-A', value: `${atLimit}v` }] })).toThrow(
+        /value is 1784 characters, over CloudFront's 1783-character/,
+      );
+      // CloudFront sends a custom header with no value; so does Blogwright.
+      expect(headersOf({ custom: [{ name: 'X-Empty', value: '' }] })?.custom).toEqual([
+        { name: 'X-Empty', value: '' },
+      ]);
     });
 
     it('bounds the name at 256 characters', () => {
@@ -177,7 +193,7 @@ describe('headers config', () => {
       expect(() => headersOf({ custom: over })).toThrow(/total 10241 characters, over/);
     });
 
-    it('rejects a malformed name, a duplicate, an empty value and a header-splitting value', () => {
+    it('rejects a malformed name, a duplicate, a missing value and a header-splitting value', () => {
       expect(() => headersOf({ custom: [{ name: 'Bad Name', value: 'v' }] })).toThrow(
         /custom\[0\]\.name must be an HTTP header name/,
       );
@@ -189,8 +205,8 @@ describe('headers config', () => {
           ],
         }),
       ).toThrow(/lists "permissions-policy" more than once/);
-      expect(() => headersOf({ custom: [{ name: 'X-A', value: '' }] })).toThrow(
-        /custom\[0\]\.value must be a non-empty string/,
+      expect(() => headersOf({ custom: [{ name: 'X-A' }] })).toThrow(
+        /custom\[0\]\.value must be a string/,
       );
       expect(() => headersOf({ custom: [{ name: 'X-A', value: 'a\nSet-Cookie: x' }] })).toThrow(
         /control characters/,

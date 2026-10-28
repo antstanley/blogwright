@@ -33,8 +33,36 @@ export interface ResponseHeadersPolicySummary {
 /** `<Override>true</Override>`: the policy's value replaces one the origin sends. */
 const OVERRIDE = '<Override>true</Override>';
 
-/** Sections a Blogwright policy never writes; any of them in a live policy is drift. */
+/**
+ * Sections a Blogwright policy never writes. One that configures anything in a
+ * live policy is drift; one CloudFront echoes back empty is not (see
+ * {@link isEmptySection}).
+ */
 const UNOWNED_SECTIONS = ['CorsConfig', 'XSSProtection', 'RemoveHeadersConfig'];
+
+/**
+ * True when a section element sets nothing: no content at all, or a list
+ * section with `<Quantity>0</Quantity>` and no items - the shape an unset
+ * `RemoveHeadersConfig` may come back in. `CorsConfig` has no top-level
+ * `Quantity` (its required members are origin, header and method lists plus
+ * two flags), so only an empty element counts as unset for it.
+ */
+function isEmptySection(block: string, tag: string): boolean {
+  const content = block
+    .replace(new RegExp(`^<${tag}(?:\\s[^>]*)?>`), '')
+    .replace(new RegExp(`</${tag}>$`), '')
+    .replace(/<Quantity>0<\/Quantity>/, '')
+    .replace(/<Items\s*\/>|<Items><\/Items>/, '');
+  return content.trim() === '';
+}
+
+/** True when a live policy configures a section Blogwright never writes. */
+function configuresUnownedSection(xml: string): boolean {
+  return UNOWNED_SECTIONS.some((section) => {
+    const block = element(xml, section);
+    return block !== undefined && !isEmptySection(block, section);
+  });
+}
 
 function strictTransportSecurityXml(hsts: StrictTransportSecurityConfig): string {
   return (
@@ -179,7 +207,7 @@ function sameCustomHeaders(live: CustomResponseHeader[], desired: CustomResponse
 
 /** True when a live `GetResponseHeadersPolicy` document already carries exactly `headers`. */
 export function responseHeadersPolicyMatches(xml: string, headers: ResponseHeadersConfig): boolean {
-  if (UNOWNED_SECTIONS.some((section) => element(xml, section) !== undefined)) return false;
+  if (configuresUnownedSection(xml)) return false;
   if (leafText(element(xml, 'ServerTimingHeadersConfig') ?? '', 'Enabled') === 'true') return false;
   if (/<Override>false<\/Override>/.test(xml)) return false;
   const live = parseLiveHeaders(xml);
