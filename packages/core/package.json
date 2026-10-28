@@ -20,7 +20,12 @@
   },
   "dependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",
-    "@aws-sdk/credential-providers": "^3.1157.0",
+    "@aws-sdk/credential-provider-env": "^3.972.77",
+    "@aws-sdk/credential-provider-http": "^3.972.79",
+    "@aws-sdk/credential-provider-ini": "^3.973.22",
+    "@aws-sdk/credential-provider-node": "^3.972.89",
+    "@aws-sdk/credential-provider-web-identity": "^3.972.83",
+    "@smithy/credential-provider-imds": "^4.5.2",
     "@smithy/protocol-http": "^5.6.2",
     "@smithy/signature-v4": "^5.7.4"
   },
