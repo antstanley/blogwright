@@ -35,6 +35,7 @@
       "project": "src/**/*.ts",
       "ignoreDependencies": ["blogwright-build-agent"]
     },
-    "packages/build-agent": { "project": "src/**/*.ts" }
+    "packages/build-agent": { "project": "src/**/*.ts" },
+    "packages/size-budget": { "project": "src/**/*.ts", "entry": ["src/bin.ts"] }
   }
 }

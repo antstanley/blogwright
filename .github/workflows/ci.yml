@@ -19,6 +19,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Fails when a published package's install size (own files plus production
+      # dependencies) is above its approved maximum in package-sizes.json. An
+      # intended increase is approved by committing `pnpm size:update`'s output.
+      - run: pnpm size:check
       - run: pnpm typecheck
       # Deliberately NOT UTC. A zip's DOS timestamp is local time, so a mtime
       # fixed in UTC fell below fflate's 1980 floor everywhere west of

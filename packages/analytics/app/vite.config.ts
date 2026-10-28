@@ -33,15 +33,36 @@
  * on today. Read this comment before adding a second route.
  */
 
+import { relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
+import manifest from '../package.json' with { type: 'json' };
+
+const APP_DIR = fileURLToPath(new URL('.', import.meta.url));
+
 export default defineConfig({
   plugins: [
     sveltekit({
       preprocess: vitePreprocess(),
+      compilerOptions: {
+        // Svelte's default scoped-class hash is of the component's absolute path,
+        // so the built CSS and JS change byte-for-byte with the checkout location.
+        // Hashing the path relative to this directory makes the build reproducible,
+        // which the package size budget (package-sizes.json) depends on: CI and a
+        // laptop must measure the same bytes. Still filename-based, as HMR needs.
+        cssHash: ({ hash, filename }) =>
+          `svelte-${hash(relative(APP_DIR, filename).split(sep).join('/'))}`,
+      },
+      // SvelteKit's default version is the build's timestamp, which lands in the
+      // output (version.json, and a global named from its hash in index.html), so
+      // two builds of the same source differ. The package version is reproducible;
+      // the dashboard never polls for a new deployment, which is all it is used for.
+      version: { name: manifest.version },
       adapter: adapter({
         pages: '../dist/app',
         assets: '../dist/app',

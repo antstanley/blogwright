@@ -79,7 +79,9 @@
         "packages/cli/src/context.ts",
         "packages/cli/src/test-support.ts",
         "packages/pds/src/test-support.ts",
-        "packages/build-agent/**"
+        "packages/build-agent/**",
+        "packages/size-budget/src/adapters/**",
+        "packages/size-budget/src/bin.ts"
       ],
       "rules": { "no-restricted-imports": "off" }
     }
