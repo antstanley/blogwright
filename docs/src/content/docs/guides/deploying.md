@@ -17,7 +17,7 @@ The environment defaults to `production`; see [Environments](/guides/environment
 
 ## The lifecycle at a glance
 
-1. Find the repo root, resolve the current revision hash, and zip the deployable files.
+1. Find the repo root, resolve the current revision hash, and zip the deployable files. When [`headers`](/reference/configuration/#response-headers-headers) is configured, first bring the response headers policy's headers in step with the config (the policy only, never the distribution).
 2. Upload the zip to `build/<hash>.zip` in the environment's S3 bucket.
 3. Reconcile the builder MicroVM image if the build-agent bundle changed (no-op otherwise).
 4. Launch a builder MicroVM that pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to `site/`, comparing each file's MD5 to the live object's ETag and writing each upload's `Cache-Control` from the `cacheControl` rules.

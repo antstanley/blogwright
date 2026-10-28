@@ -760,7 +760,10 @@ describe('deploy runs its afterDeploy step', () => {
   /** What the recording hook below logs, so its position in the run is visible. */
   const HOOK_LINE = 'afterDeploy ran';
 
-  async function runDeploy(afterDeploy: AfterDeploy): Promise<string[]> {
+  async function runDeploy(
+    afterDeploy: AfterDeploy,
+    prepare: (ctx: OpsContext) => void = () => undefined,
+  ): Promise<string[]> {
     const repoRoot = await findRepoRoot(createNodeFileSystem());
     const fs = createMemoryFileSystem({
       [`${repoRoot}/.jj`]: '',
@@ -824,6 +827,7 @@ describe('deploy runs its afterDeploy step', () => {
     };
     ctx.state.resources['iam-build-role'] = { arn: 'arn:build' };
     ctx.state.resources['iam-exec-role'] = { arn: 'arn:role' };
+    prepare(ctx);
 
     await deploy(ctx, {
       afterDeploy: async (deployed) => {
@@ -851,6 +855,39 @@ describe('deploy runs its afterDeploy step', () => {
     expect(logged.findIndex((line) => line.startsWith(`deployed ${HASH} in `))).toBeGreaterThan(
       hookAt,
     );
+  });
+
+  it('converges the response headers policy first, and stops when CloudFront rejects it', async () => {
+    const steps: string[] = [];
+    const deploying = runDeploy(
+      async () => {
+        steps.push('afterDeploy');
+      },
+      (ctx) => {
+        ctx.config.headers = { security: { contentTypeOptions: true }, custom: [] };
+        ctx.state.resources['response-headers-policy'] = { id: 'RHP-1' };
+        Object.assign(ctx.clients.cloudfront, {
+          getResponseHeadersPolicy: async (id: string) => ({ id, config: '<x/>', etag: 'E1' }),
+          responseHeadersPolicyMatches: () => false,
+          updateResponseHeadersPolicy: async () => {
+            steps.push('updateResponseHeadersPolicy');
+            throw new AwsError({
+              service: 'cloudfront',
+              code: 'TooLongCSPInResponseHeadersPolicy',
+              message: 'too long',
+              statusCode: 400,
+            });
+          },
+        });
+        const upload = ctx.clients.s3.putObject.bind(ctx.clients.s3);
+        ctx.clients.s3.putObject = async (...args) => {
+          steps.push(`putObject ${args[1]}`);
+          return upload(...args);
+        };
+      },
+    );
+    await expect(deploying).rejects.toThrow(/TooLongCSPInResponseHeadersPolicy/);
+    expect(steps).toEqual(['updateResponseHeadersPolicy']);
   });
 
   it('does not ship blogwright-pds with the CLI package', async () => {
