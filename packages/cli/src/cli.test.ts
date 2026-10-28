@@ -76,14 +76,19 @@ Commands:
                               (--switch-mode: move a bootstrapped stack
                               between static and SSR serving)
   deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
+  stage       [env]           Build like deploy, but publish to releases/<hash>/
+                              (not served) for a later promote
+  promote     <hash> [env]    Copy a staged release into site/ without
+                              rebuilding, invalidate, and verify it
   rollback    <hash> [env]    Re-deploy an existing build by hash
   delete      [env]           Empty the live site/ prefix
   destroy     [env] --yes     Tear down all infrastructure
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
-  verify      <hash> [env]    Check the live site/ byte for byte against the
-                              artifact manifest recorded for a hash
+  verify      <hash> [env]    Check the live site/ (or, with --staged, the
+                              staged copy) byte for byte against the artifact
+                              manifest recorded for a hash
   whoami      [env]           Show the AWS account, identity and profile in
                               use, and whether the account pin accepts them
 
@@ -118,6 +123,8 @@ Options:
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy
                     in the new mode exists.
+  --staged          verify the release staged under releases/<hash>/ instead
+                    of the live site/
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -1629,7 +1636,9 @@ describe('RESERVED_COMMANDS', () => {
         'logs',
         'plugin',
         'preview',
+        'promote',
         'rollback',
+        'stage',
         'status',
         'verify',
         'whoami',
@@ -1725,26 +1734,30 @@ describe('main - --profile reaches every context', () => {
 });
 
 describe('main - hash-first release commands', () => {
-  it.each(['verify'])('%s takes the hash first, then the environment', async (command) => {
-    const terminal = createScriptedTerminal({ interactive: false });
-    const { makeContext, contexts } = testContextFactory(terminal);
+  it.each(['verify', 'promote'])(
+    '%s takes the hash first, then the environment',
+    async (command) => {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { makeContext, contexts } = testContextFactory(terminal);
 
-    // The test context rejects every S3 read but scoped state, so the first
-    // read the command makes - the hash's artifact manifest - names the hash.
-    await expect(
-      main(
-        [command, 'abc123', 'staging'],
-        fixedTerminal(terminal),
-        makeContext,
-        unreachableDiscoveryPorts,
-        unreachablePackages,
-        testAwsAccess(),
-      ),
-    ).rejects.toThrow(/build\/artifacts\/abc123\.json/);
-    expect(contexts.map((ctx) => ctx.env)).toEqual(['staging']);
-  });
+      // The test context rejects every S3 read but scoped state, so the first
+      // read the command makes - of the hash's manifest or staged prefix -
+      // names the hash.
+      await expect(
+        main(
+          [command, 'abc123', 'staging'],
+          fixedTerminal(terminal),
+          makeContext,
+          unreachableDiscoveryPorts,
+          unreachablePackages,
+          testAwsAccess(),
+        ),
+      ).rejects.toThrow(/abc123/);
+      expect(contexts.map((ctx) => ctx.env)).toEqual(['staging']);
+    },
+  );
 
-  it.each(['verify'])('%s refuses to run without a hash', async (command) => {
+  it.each(['verify', 'promote'])('%s refuses to run without a hash', async (command) => {
     const terminal = createScriptedTerminal({ interactive: false });
     const { makeContext } = testContextFactory(terminal);
 

@@ -19,6 +19,7 @@ import {
   builderImageAction,
   reconcileBuilderImage,
   oidcRolePolicyStatements,
+  RELEASE_STAGING_OUTPUT,
   oidcSubClaim,
   PLACEHOLDER_ARTIFACT_KEY,
   placeholderPackageZip,
@@ -483,6 +484,12 @@ describe('oidcRolePolicyStatements', () => {
     expect(resourcesFor('lambda:CreateWebFunctionRevision')).toEqual([fn, `${fn}/*`]);
     expect(resourcesFor('lambda:ListWebFunction*')).toEqual([fn, `${fn}/*`]);
     expect(resourcesFor('lambda:InvokeWebFunctionEndpoint')).toEqual([`${fn}/endpoint/site`]);
+  });
+
+  it('lets promote copy staged objects with their tags', () => {
+    const actions = actionsOf(oidcRolePolicyStatements(ctx({ preview: false })));
+    expect(actions).toContain('s3:GetObjectTagging');
+    expect(actions).toContain('s3:PutObjectTagging');
   });
 
   it('grants production invalidation on the distribution ARN', () => {
@@ -985,12 +992,40 @@ describe('site-write roles can tag objects (#7)', () => {
   );
 
   it.each(['iam-build-role', 'iam-exec-role'] as const)(
+    '%s may publish, tag and prune staged releases under releases/*',
+    async (roleId) => {
+      const policy = await policyFor(roleId);
+      const releases = policy.Statement.find((s) => String(s.Resource).endsWith('/releases/*'));
+      expect(releases?.Action).toEqual(['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject']);
+    },
+  );
+
+  it('records on the exec role that it grants release staging', async () => {
+    const ctx = createTestContext({
+      clients: {
+        iam: {
+          ensureRole: async () => 'arn:aws:iam::1:role/r',
+          putRolePolicy: async () => undefined,
+        },
+      },
+    });
+    await buildNodes(ctx)
+      .find((n) => n.id === 'iam-exec-role')!
+      .create(ctx);
+    expect(ctx.state.resources['iam-exec-role']?.[RELEASE_STAGING_OUTPUT]).toBe(true);
+  });
+
+  it.each(['iam-build-role', 'iam-exec-role'] as const)(
     '%s on the preview stack records no artifact manifests',
     async (roleId) => {
       const policy = await policyFor(roleId, { preview: true });
-      expect(policy.Statement.some((s) => String(s.Resource).includes('build/artifacts'))).toBe(
-        false,
-      );
+      expect(
+        policy.Statement.some(
+          (s) =>
+            String(s.Resource).includes('build/artifacts') ||
+            String(s.Resource).includes('releases/'),
+        ),
+      ).toBe(false);
     },
   );
 });

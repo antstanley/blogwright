@@ -29,6 +29,9 @@ export interface S3ObjectVersion {
   size: number;
 }
 
+/** Whether {@link S3Client.copyObject} carries the source's tags to the copy. */
+export type ObjectTagCopy = 'copy' | 'drop';
+
 export interface S3Object {
   key: string;
   size: number;
@@ -135,6 +138,43 @@ export class S3Client {
     });
     // Present only on a versioned bucket; the Web Function artifact pin.
     return res.headers['x-amz-version-id'];
+  }
+
+  /**
+   * Server-side copy of one object within a bucket. The bytes, content type
+   * and other system metadata are copied as they are (`x-amz-metadata-directive:
+   * COPY`). Object tags are copied too, which needs `s3:GetObjectTagging` on the
+   * source and `s3:PutObjectTagging` on the destination; `tags: 'drop'` writes
+   * the copy with no tags, for a caller that lacks those.
+   */
+  async copyObject(
+    bucket: string,
+    sourceKey: string,
+    destinationKey: string,
+    tags: ObjectTagCopy = 'copy',
+  ): Promise<void> {
+    const res = await this.client.send({
+      service: 's3',
+      method: 'PUT',
+      path: this.objectPath(bucket, destinationKey),
+      headers: {
+        'x-amz-copy-source': this.objectPath(bucket, sourceKey),
+        'x-amz-metadata-directive': 'COPY',
+        'x-amz-tagging-directive': tags === 'copy' ? 'COPY' : 'REPLACE',
+      },
+    });
+    // S3 can fail a copy after it has already answered 200, putting the
+    // error in the body instead.
+    const body = res.text();
+    if (body.includes('<Error>')) {
+      throw new AwsError({
+        service: 's3',
+        code: textTag(body, 'Code') ?? 'InternalError',
+        message: `copying ${sourceKey} to ${destinationKey}: ${textTag(body, 'Message') ?? 'failed'}`,
+        statusCode: res.statusCode,
+        requestId: textTag(body, 'RequestId'),
+      });
+    }
   }
 
   /** Enable or suspend bucket versioning. Never suspended once enabled (see the SSR contract). */

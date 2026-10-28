@@ -32,6 +32,7 @@ import {
   type Plugin,
   type PluginCommand,
   type PluginContext,
+  type ObjectTagCopy,
   type S3Client,
   type S3Object,
   type Terminal,
@@ -686,8 +687,27 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
       return found ? new TextDecoder().decode(found.body) : undefined;
     },
     objectExists: async (_bucket: string, key: string) => objects.has(key),
+    copyObject: async (
+      _bucket: string,
+      sourceKey: string,
+      destinationKey: string,
+      tags: ObjectTagCopy = 'copy',
+    ) => {
+      const source = objects.get(sourceKey);
+      if (!source) throw noSuchKey(sourceKey);
+      objects.set(destinationKey, {
+        body: source.body,
+        contentType: source.contentType,
+        ...(tags === 'copy' && source.tags ? { tags: source.tags } : {}),
+      });
+    },
     deleteObject: async (_bucket: string, key: string) => {
       objects.delete(key);
+    },
+    deletePrefix: async (_bucket: string, prefix: string) => {
+      const keys = [...objects.keys()].filter((key) => key.startsWith(prefix));
+      for (const key of keys) objects.delete(key);
+      return keys.length;
     },
     listObjects: async (_bucket: string, prefix: string): Promise<S3Object[]> =>
       [...objects.entries()]

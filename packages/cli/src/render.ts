@@ -124,7 +124,39 @@ export interface HistoryEntry {
   durationMs: number;
   /** The Web Function revision recorded for the hash (SSR mode only). */
   webFunction?: { revisionId: string } | undefined;
+  /** `staged` for a build published to `releases/<hash>/` rather than `site/`. */
+  kind?: 'staged' | undefined;
+  /** When the hash's staged release was last promoted to `site/`. */
+  promotedAt?: string | undefined;
 }
+
+/** What `history` reports a hash as. */
+export type HistoryStatus = 'succeeded' | 'failed' | 'staged' | 'promoted';
+
+/** A staged build is only live once promoted; every other build reports its outcome. */
+export function historyStatus(entry: HistoryEntry): HistoryStatus {
+  if (entry.status === 'failed') return 'failed';
+  if (entry.kind !== 'staged') return 'succeeded';
+  return entry.promotedAt ? 'promoted' : 'staged';
+}
+
+/** When an entry last changed the site: its promotion, else its build finishing. */
+export function historyTime(entry: HistoryEntry): string {
+  return entry.promotedAt ?? entry.finishedAt;
+}
+
+/** Whether an entry's content was published to the live site. */
+function servedLive(entry: HistoryEntry): boolean {
+  const status = historyStatus(entry);
+  return status === 'succeeded' || status === 'promoted';
+}
+
+const HISTORY_MARKS: Record<HistoryStatus, string> = {
+  succeeded: colors.green('✓'),
+  promoted: colors.green('✓'),
+  staged: colors.yellow('◇'),
+  failed: colors.red('✗'),
+};
 
 /**
  * Printed in the revision column for a hash with no recorded revision - never
@@ -139,18 +171,19 @@ export function historyHasRevisions(entries: readonly HistoryEntry[]): boolean {
 
 /**
  * The pretty deployment table for `history`: relative times, a live marker on
- * the newest success, and - in SSR mode - the revision each hash recorded.
+ * the newest build that reached `site/` (a deploy, or a promoted stage), a
+ * `◇` for a staged build not yet promoted, and - in SSR mode - the revision
+ * each hash recorded.
  * Entries arrive newest-first (the caller sorts).
  */
 export function renderHistoryTable(entries: HistoryEntry[], now: number): string[] {
   const revisions = historyHasRevisions(entries);
-  const liveIndex = entries.findIndex((e) => e.status === 'succeeded');
+  const liveIndex = entries.findIndex(servedLive);
   const rows = entries.map((e, i) => {
-    const mark = e.status === 'succeeded' ? colors.green('✓') : colors.red('✗');
     const cells = [
       e.hash.padEnd(13),
-      mark,
-      formatAgo(now - Date.parse(e.finishedAt)).padEnd(9),
+      HISTORY_MARKS[historyStatus(e)],
+      formatAgo(now - Date.parse(historyTime(e))).padEnd(9),
       formatDuration(e.durationMs).padEnd(revisions ? 8 : 7),
       ...(revisions ? [e.webFunction?.revisionId ?? NO_REVISION] : []),
     ].join(' ');
@@ -253,4 +286,14 @@ export function renderPluginList(listing: PluginListing, pretty: boolean): strin
     lines.push(...listing.failures.map((failure) => `${failure.packageName}: ${failure.reason}`));
   }
   return lines;
+}
+
+/** One line per invalidation outcome, shared by the summary card and logs. */
+export function describeInvalidation(inv: {
+  mode: 'none' | 'paths' | 'all';
+  count: number;
+}): string {
+  if (inv.mode === 'none') return 'nothing changed - skipped';
+  if (inv.mode === 'paths') return `${inv.count} changed path${inv.count === 1 ? '' : 's'}`;
+  return inv.count > 0 ? `everything (/*) - ${inv.count} paths over cap` : 'everything (/*)';
 }

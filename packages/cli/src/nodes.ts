@@ -7,6 +7,7 @@ import {
   MICROVM_CPU_ARCHITECTURE,
   pollUntil,
   REPRODUCIBLE_ZIP_MTIME,
+  STAGED_RELEASES_PREFIX,
   createZip,
   textTag,
   WEB_FUNCTION_RUNTIME,
@@ -173,15 +174,23 @@ function webArtifactWriteStatements(ctx: OpsContext): object[] {
 
 /**
  * The agent records each static build's artifact manifest at
- * `build/artifacts/<hash>.json`. The shared preview stack records none.
+ * `build/artifacts/<hash>.json`, and `blogwright stage` has it publish a
+ * release under `releases/<hash>/` instead of `site/` - tagged like the site,
+ * and re-staging a hash deletes what the new build no longer contains. The
+ * shared preview stack does neither.
  */
-function artifactManifestWriteStatements(ctx: OpsContext): object[] {
+function releaseWriteStatements(ctx: OpsContext): object[] {
   if (ctx.preview) return [];
   return [
     {
       Effect: 'Allow',
       Action: ['s3:PutObject'],
       Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*`,
+    },
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObject', 's3:PutObjectTagging', 's3:DeleteObject'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/${STAGED_RELEASES_PREFIX}*`,
     },
   ];
 }
@@ -211,7 +220,7 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
         Resource: `arn:aws:s3:::${ctx.names.bucket}/build/changed/*`,
       },
       ...webArtifactWriteStatements(ctx),
-      ...artifactManifestWriteStatements(ctx),
+      ...releaseWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
@@ -250,6 +259,13 @@ function buildRoleNode(): ResourceNode {
   };
 }
 
+/**
+ * Recorded on the exec role's outputs once its policy grants release staging,
+ * so `stage` can refuse up front on a stack bootstrapped before it existed
+ * rather than fail inside the MicroVM after a full build.
+ */
+export const RELEASE_STAGING_OUTPUT = 'releaseStaging';
+
 async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
   await ctx.clients.iam.putRolePolicy(ctx.names.execRole, 'exec', {
     Version: '2012-10-17',
@@ -275,7 +291,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
         ],
       },
       ...webArtifactWriteStatements(ctx),
-      ...artifactManifestWriteStatements(ctx),
+      ...releaseWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['s3:ListBucket'],
@@ -288,6 +304,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
       },
     ],
   });
+  if (!ctx.preview) output(ctx, 'iam-exec-role')[RELEASE_STAGING_OUTPUT] = true;
 }
 
 /** IAM role the running builder MicroVM assumes to read source + write the site. */
@@ -1622,10 +1639,14 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
     {
       Effect: 'Allow',
       // s3:GetObjectVersion is what reads an artifact a revision is pinned to.
+      // The tagging pair lets `promote` copy a staged release's object tags
+      // to site/ along with its bytes.
       Action: [
         's3:GetObject',
         's3:PutObject',
         's3:DeleteObject',
+        's3:GetObjectTagging',
+        's3:PutObjectTagging',
         ...(ctx.config.ssr ? ['s3:GetObjectVersion'] : []),
       ],
       Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,

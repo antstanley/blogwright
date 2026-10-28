@@ -12,6 +12,7 @@ import {
   type AwsCredentials,
   type CredentialProvider,
   type EntryShim,
+  invalidationPaths,
 } from 'blogwright-core';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 
@@ -758,17 +759,4 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   // already be in place when the manifest appears.
   await writeChangedPaths(s3, log, payload.bucket, payload.hash, published.changedKeys, prefix);
   await rm(workDir, { recursive: true, force: true });
-}
-
-/**
- * Map a changed S3 key to the CloudFront URL path(s) to invalidate. For directory
- * index documents, invalidate both the `index.html` key and the directory URL a viewer
- * would actually request (e.g. `site/posts/index.html` → `/posts/index.html` + `/posts/`).
- */
-export function invalidationPaths(key: string, prefix: string): string[] {
-  const rel = key.startsWith(prefix) ? key.slice(prefix.length) : key;
-  const paths = [`/${rel}`];
-  if (rel === 'index.html') paths.push('/');
-  else if (rel.endsWith('/index.html')) paths.push(`/${rel.slice(0, -'index.html'.length)}`);
-  return paths;
 }

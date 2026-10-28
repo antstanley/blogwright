@@ -22,6 +22,7 @@ import {
 } from './plugin-commands.js';
 import { discover, type DiscoveryResult } from './plugins.js';
 import type { AwsLogin, PackageManager, Ports } from './ports.js';
+import { promote, stage } from './releases.js';
 import { verify } from './verify.js';
 import { whoami } from './whoami.js';
 
@@ -36,14 +37,19 @@ Commands:
                               (--switch-mode: move a bootstrapped stack
                               between static and SSR serving)
   deploy      [env]           Zip the repo, build in a MicroVM, publish to site/
+  stage       [env]           Build like deploy, but publish to releases/<hash>/
+                              (not served) for a later promote
+  promote     <hash> [env]    Copy a staged release into site/ without
+                              rebuilding, invalidate, and verify it
   rollback    <hash> [env]    Re-deploy an existing build by hash
   delete      [env]           Empty the live site/ prefix
   destroy     [env] --yes     Tear down all infrastructure
   history     [env]           List deployment history
   logs        <hash> [env]    Show CloudWatch build logs for a hash
   status      [env]           Show planned graph vs. live state
-  verify      <hash> [env]    Check the live site/ byte for byte against the
-                              artifact manifest recorded for a hash
+  verify      <hash> [env]    Check the live site/ (or, with --staged, the
+                              staged copy) byte for byte against the artifact
+                              manifest recorded for a hash
   whoami      [env]           Show the AWS account, identity and profile in
                               use, and whether the account pin accepts them
 
@@ -78,6 +84,8 @@ Options:
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy
                     in the new mode exists.
+  --staged          verify the release staged under releases/<hash>/ instead
+                    of the live site/
   --yes             Confirm destructive operations
   --help            Show this help
 `;
@@ -239,7 +247,7 @@ async function helpText(ports: Pick<Ports, 'fs' | 'loader'>): Promise<string> {
   return buildHelp(USAGE, discovered);
 }
 
-const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify']);
+const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify', 'promote']);
 
 /** Builds the Terminal after flag parsing, so --plain shapes the whole session. */
 export type TerminalFactory = (opts: { plain: boolean }) => Terminal;
@@ -369,6 +377,7 @@ export async function main(
       // is declared kebab-case and read back the same way, because the camel
       // form would reject the flag the usage text and docs advertise.
       'switch-mode': { type: 'boolean', default: false },
+      staged: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
@@ -531,6 +540,16 @@ export async function main(
         afterDeploy: (deployed) => runAfterDeployHooks(deployed, makeDiscoveryPorts()),
       });
       break;
+    case 'stage':
+      await stage(ctx);
+      break;
+    case 'promote':
+      if (!hash) throw new Error('promote requires a <hash>');
+      await promote(ctx, hash, {
+        refresh: values.refresh,
+        afterDeploy: (promoted) => runAfterDeployHooks(promoted, makeDiscoveryPorts()),
+      });
+      break;
     case 'rollback':
       if (!hash) throw new Error('rollback requires a <hash>');
       await commands.rollback(ctx, hash, { refresh: values.refresh });
@@ -553,7 +572,7 @@ export async function main(
       break;
     case 'verify':
       if (!hash) throw new Error('verify requires a <hash>');
-      await verify(ctx, hash);
+      await verify(ctx, hash, values.staged ? 'staged' : 'live');
       break;
     default:
       // Unreachable: past the `KNOWN_COMMANDS` membership test above,

@@ -83,8 +83,10 @@ One bucket per environment holds everything:
 │   ├── manifests/<hash>.json    # one deployment manifest per build (history/rollback)
 │   ├── artifacts/<hash>.json    # artifact manifest: published paths, sizes, SHA-256 (static builds)
 │   ├── pending/<target>.json    # queued build job (present only mid-deploy)
+│   ├── live-release.json        # the release the last deploy, promote or rollback published
 │   └── changed/<hash>.json      # changed-paths manifest, consumed for invalidation
 ├── site/                        # the live site - CloudFront origin, private via OAC
+├── releases/<hash>/             # staged releases (`stage`), copied into site/ by `promote`; never served
 ├── previews/<id>/site/          # per-PR preview sites (preview stack only)
 ├── web/                         # SSR mode only
 │   ├── artifacts/<hash>.zip     # packaged server, one object version per build of the hash

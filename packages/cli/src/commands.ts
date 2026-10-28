@@ -22,16 +22,22 @@ import {
   microvmLogGroup,
   readManifest,
   runBuild,
+  uploadSource,
   webFunctionJob,
+  type AfterDeploy,
   type DeployManifest,
 } from './deploy.js';
 import { applyGraph, destroyGraph, type GraphContext } from './graph.js';
+import { forgetLiveRelease, recordLiveRelease, type LiveReleaseSource } from './live-release.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage } from './nodes.js';
 import {
+  describeInvalidation,
   formatDuration,
   logStatusEntries,
   historyHasRevisions,
+  historyStatus,
+  historyTime,
   NO_REVISION,
   renderHistoryTable,
   renderSummary,
@@ -39,6 +45,7 @@ import {
   type SummaryRow,
 } from './render.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
+import { assertServingModeMatches, configuredMode, recordedMode, siteBaseUrl } from './serving.js';
 import {
   assertNotSsrForPreviews,
   preflightWebFunction,
@@ -52,57 +59,6 @@ import {
   type PublishOutcome,
   type WebFunctionBuildResult,
 } from './web-functions.js';
-
-/** One line per invalidation outcome, shared by the summary card and logs. */
-function describeInvalidation(inv: { mode: 'none' | 'paths' | 'all'; count: number }): string {
-  if (inv.mode === 'none') return 'nothing changed - skipped';
-  if (inv.mode === 'paths') return `${inv.count} changed path${inv.count === 1 ? '' : 's'}`;
-  return inv.count > 0 ? `everything (/*) - ${inv.count} paths over cap` : 'everything (/*)';
-}
-
-/**
- * Canonical origin the live site is served from: the custom domain if configured,
- * else the distribution's CloudFront domain. Used for robots.txt / sitemap.xml URLs.
- */
-function siteBaseUrl(ctx: OpsContext): string | undefined {
-  if (ctx.domain) return `https://${ctx.domain}`;
-  const cf = ctx.state.resources['cloudfront-distribution']?.domainName;
-  return typeof cf === 'string' ? `https://${cf}` : undefined;
-}
-
-/** The serving mode the config asks for. */
-function configuredMode(ctx: OpsContext): 'static' | 'ssr' {
-  return ctx.config.ssr ? 'ssr' : 'static';
-}
-
-/**
- * The serving mode the live distribution was left in, or undefined before the
- * first bootstrap. A distribution recorded without a mode was created before
- * SSR existed, so it is static - reading that as "unknown" would let the very
- * stacks the switch guard exists for through it.
- */
-function recordedMode(ctx: OpsContext): 'static' | 'ssr' | undefined {
-  const distribution = ctx.state.resources['cloudfront-distribution'];
-  if (typeof distribution?.id !== 'string') return undefined;
-  return distribution.mode === 'ssr' ? 'ssr' : 'static';
-}
-
-/**
- * Refuse to publish in a mode the distribution is not serving. The config and
- * the stack disagree only between editing `ssr` and re-bootstrapping, and a
- * deploy in that gap publishes where nothing serves from - or, static over
- * SSR, deletes the `site/` assets the live revision still references.
- */
-function assertServingModeMatches(ctx: OpsContext): void {
-  const recorded = recordedMode(ctx);
-  const configured = configuredMode(ctx);
-  if (recorded === undefined || recorded === configured) return;
-  throw new Error(
-    `"${ctx.env}" is configured for ${configured} serving but its distribution serves ` +
-      `${recorded}. Run \`blogwright bootstrap ${ctx.env} --switch-mode\` first; nothing was ` +
-      'built or published.',
-  );
-}
 
 /** What a mode switch does to the live site while the next deploy has not run. */
 function servingWindow(mode: 'static' | 'ssr'): string {
@@ -340,8 +296,7 @@ async function webBuildResultOrFail(
   }
 }
 
-/** What `deploy` runs once the site is live - see {@link DeployOptions.afterDeploy}. */
-export type AfterDeploy = (ctx: OpsContext) => Promise<void>;
+export type { AfterDeploy } from './deploy.js';
 
 export interface DeployOptions {
   refresh?: boolean;
@@ -354,6 +309,20 @@ export interface DeployOptions {
    * for a plugin's sake - the deploy has already succeeded.
    */
   afterDeploy: AfterDeploy;
+}
+
+/**
+ * Keep the live-release record in step with `site/` after a build published
+ * there: the build's release when it recorded one, otherwise no record at all
+ * rather than a stale one.
+ */
+async function noteLiveRelease(
+  ctx: OpsContext,
+  artifact: ArtifactManifest | undefined,
+  via: LiveReleaseSource,
+): Promise<void> {
+  if (artifact) await recordLiveRelease(ctx, artifact, via);
+  else await forgetLiveRelease(ctx);
 }
 
 /** Zip the repo, upload it, run the builder MicroVM, and invalidate the cache. */
@@ -371,17 +340,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     await preflightWebFunction(ctx);
   }
 
-  const files = await listRepoFiles(
-    ctx.ports,
-    cwd,
-    ctx.config.sourceIgnore,
-    ctx.config.sourceInclude,
-  );
-  ctx.logger.step(`zipping ${files.length} files`);
-  const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
-  const sourceKey = `build/${hash}.zip`;
-  await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
-  ctx.logger.ok(`uploaded ${sourceKey} (${(zip.byteLength / 1024).toFixed(0)} KiB)`);
+  const { sourceKey, fileCount, zipBytes } = await uploadSource(ctx, cwd, hash);
 
   // Rebuild the builder image first if the agent bundle changed, so build-agent fixes
   // ship on the same deploy (no-op when unchanged).
@@ -408,6 +367,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     invalidation = await invalidateChanged(ctx, hash);
     artifact = await readArtifactManifest(ctx, hash);
     logRecordedRelease(ctx, hash, artifact);
+    await noteLiveRelease(ctx, artifact, 'deploy');
   }
   // The site is live - plugins' post-deploy steps (the pds sync, for one) run now.
   await opts.afterDeploy(ctx);
@@ -421,7 +381,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
         : hash,
     },
     { label: 'environment', value: ctx.env },
-    { label: 'source', value: `${files.length} files, ${(zip.byteLength / 1024).toFixed(0)} KiB` },
+    { label: 'source', value: `${fileCount} files, ${(zipBytes / 1024).toFixed(0)} KiB` },
     { label: 'build', value: formatDuration(manifest.durationMs) },
     ...(artifact ? [{ label: 'release', value: describeRelease(artifact) }] : []),
     { label: 'invalidated', value: describeInvalidation(invalidation) },
@@ -542,6 +502,7 @@ export async function rollback(
   const rebuilt = await readArtifactManifest(ctx, hash);
   logRecordedRelease(ctx, hash, rebuilt);
   logRebuildComparison(ctx, recorded, rebuilt);
+  await noteLiveRelease(ctx, rebuilt, 'rollback');
   // A rollback changes production content too, but the PDS mirrors the *working tree*
   // content, which a rollback does not restore - so only warn about the divergence.
   if (ctx.env === 'production' && ctx.config.pds) {
@@ -659,6 +620,7 @@ export async function deleteSite(ctx: OpsContext): Promise<void> {
     );
   }
   const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, 'site/');
+  await forgetLiveRelease(ctx);
   ctx.logger.ok(`deleted ${count} object(s) under site/`);
   await invalidateCloudFront(ctx);
 }
@@ -683,8 +645,9 @@ export async function history(ctx: OpsContext): Promise<void> {
   }
   // Newest first. Codepoint sort, not localeCompare: collation must not depend on host locale/ICU
   // (finishedAt is ISO-8601, which orders correctly by codepoint).
+  // A promotion is what puts a staged build live, so it orders by that time.
   manifests.sort((a, b) =>
-    a.finishedAt > b.finishedAt ? -1 : a.finishedAt < b.finishedAt ? 1 : 0,
+    historyTime(a) > historyTime(b) ? -1 : historyTime(a) < historyTime(b) ? 1 : 0,
   );
   if (ctx.ports.terminal.isInteractive) {
     for (const line of renderHistoryTable(manifests, Date.now())) ctx.logger.info(line);
@@ -699,15 +662,15 @@ export async function history(ctx: OpsContext): Promise<void> {
     ),
   );
   for (const m of manifests) {
-    const cell =
-      m.status === 'succeeded'
-        ? colors.green(m.status.padEnd(10))
-        : colors.red(m.status.padEnd(10));
+    const shown = historyStatus(m);
+    const paint =
+      shown === 'failed' ? colors.red : shown === 'staged' ? colors.yellow : colors.green;
+    const cell = paint(shown.padEnd(10));
     const duration = `${(m.durationMs / 1000).toFixed(0)}s`;
     const revision = revisions
       ? `  ${duration.padEnd(8)}  ${m.webFunction?.revisionId ?? NO_REVISION}`
       : `  ${duration}`;
-    ctx.logger.info(`${m.hash.padEnd(13)} ${cell}  ${m.finishedAt}${revision}`);
+    ctx.logger.info(`${m.hash.padEnd(13)} ${cell}  ${historyTime(m)}${revision}`);
   }
 }
 

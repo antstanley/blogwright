@@ -82,6 +82,10 @@ aws s3 cp "s3://$BUCKET/build/artifacts/$HASH.json" artifact-manifest.json
 
 The builder writes the manifest with its own roles, which need `s3:PutObject` on `build/artifacts/*`. Stacks bootstrapped before artifact manifests existed lack that grant: the build still publishes, and the deploy warns that no manifest was recorded. Run `blogwright bootstrap <env>` once to add it.
 
+## Staging and promotion
+
+[`stage`](/reference/cli/#stage) builds a release into `releases/<hash>/` and records its manifest; [`promote`](/reference/cli/#promote) checks the staged objects against the manifest, copies them into `site/`, and checks the live objects against it again. Because both checks compare every file's SHA-256 with the same manifest, a successful promote means the live release hash equals the staged one. See [Release gating](/guides/deploying/#release-gating-stage-verify-promote).
+
 ## Verifying live objects against it
 
 `blogwright verify <hash>` reads every object under `site/`, hashes it, and compares the result with the manifest recorded for `<hash>`. It reports each missing, changed or unexpected object and exits 1 on any difference - see [`verify`](/reference/cli/#verify).

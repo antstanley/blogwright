@@ -15,6 +15,7 @@ import {
 import type { OpsContext } from './context.js';
 import type { WebFunctionManifest } from './web-functions.js';
 import { formatDuration, spinnerFrame } from './render.js';
+import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
 import { resolveSeo } from './seo.js';
 
 export interface DeployManifest {
@@ -27,6 +28,13 @@ export interface DeployManifest {
   microvmId: string;
   message?: string;
   /**
+   * `staged` when the build published to `releases/<hash>/` for a later
+   * `promote` rather than to the live `site/`. Absent for a deploy.
+   */
+  kind?: 'staged' | undefined;
+  /** When this hash's staged release was last promoted to the live site. */
+  promotedAt?: string | undefined;
+  /**
    * The last revision verified for this hash (or found already serving).
    * Rollback reads it to reproduce the revision a hash is pinned to. A
    * `failed` manifest carries it only when an earlier outcome for the same
@@ -34,6 +42,9 @@ export interface DeployManifest {
    */
   webFunction?: WebFunctionManifest;
 }
+
+/** What `deploy` (and `promote`) run once the site is live - see `DeployOptions.afterDeploy`. */
+export type AfterDeploy = (ctx: OpsContext) => Promise<void>;
 
 /** Read one hash's deployment manifest, or undefined when there is none. */
 export async function readManifest(
@@ -73,6 +84,36 @@ export async function writeManifest(
     'application/json',
   );
   return record;
+}
+
+/** A source zip uploaded for a build. */
+export interface UploadedSource {
+  sourceKey: string;
+  fileCount: number;
+  zipBytes: number;
+}
+
+/**
+ * Zip the deployable files of the repo at `cwd` (with the revision hash
+ * injected as `.commit-hash`) and upload it to `build/<hash>.zip`.
+ */
+export async function uploadSource(
+  ctx: OpsContext,
+  cwd: string,
+  hash: string,
+): Promise<UploadedSource> {
+  const files = await listRepoFiles(
+    ctx.ports,
+    cwd,
+    ctx.config.sourceIgnore,
+    ctx.config.sourceInclude,
+  );
+  ctx.logger.step(`zipping ${files.length} files`);
+  const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
+  const sourceKey = `build/${hash}.zip`;
+  await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
+  ctx.logger.ok(`uploaded ${sourceKey} (${(zip.byteLength / 1024).toFixed(0)} KiB)`);
+  return { sourceKey, fileCount: files.length, zipBytes: zip.byteLength };
 }
 
 /** Artifact and result keys for one deploy hash. */
@@ -278,6 +319,8 @@ export async function runBuild(
     webFunction?: WebFunctionJob | undefined;
     /** Where the agent records the static build's artifact manifest; absent, none is written. */
     artifactManifestKey?: string | undefined;
+    /** Recorded on the deployment manifest; see {@link DeployManifest.kind}. */
+    kind?: 'staged' | undefined;
   },
 ): Promise<DeployManifest> {
   const sitePrefix = opts.sitePrefix ?? 'site/';
@@ -387,6 +430,7 @@ export async function runBuild(
     durationMs: finishedAt.getTime() - startedAt.getTime(),
     microvmId: run.microvmId,
     ...(result.message ? { message: result.message } : {}),
+    ...(opts.kind ? { kind: opts.kind } : {}),
   };
   // In SSR mode a successful build is NOT yet a successful deploy: the publish
   // step writes the manifest once the revision outcome is known. A failed build
@@ -421,6 +465,27 @@ export interface InvalidationSummary {
 }
 
 /**
+ * Invalidate a set of changed URL paths: nothing when it is empty, `/*` past
+ * the configured cap, otherwise exactly those paths.
+ */
+export async function invalidatePaths(
+  ctx: OpsContext,
+  paths: readonly string[],
+): Promise<InvalidationSummary> {
+  if (paths.length === 0) {
+    ctx.logger.ok('no content changed - skipping CloudFront invalidation');
+    return { mode: 'none', count: 0 };
+  }
+  if (paths.length > ctx.config.invalidationMaxPaths) {
+    ctx.logger.step(`${paths.length} paths changed (> cap) - invalidating everything (/*)`);
+    await invalidateCloudFront(ctx, ['/*']);
+    return { mode: 'all', count: paths.length };
+  }
+  await invalidateCloudFront(ctx, [...paths]);
+  return { mode: 'paths', count: paths.length };
+}
+
+/**
  * Invalidate only the URL paths that changed in this build (from the agent's manifest),
  * so unchanged pages stay cached. Falls back to `/*` when the manifest is missing or the
  * changed set is larger than the configured cap.
@@ -445,18 +510,7 @@ export async function invalidateChanged(
     await invalidateCloudFront(ctx, ['/*']);
     return { mode: 'all', count: 0 };
   }
-  let summary: InvalidationSummary;
-  if (paths.length === 0) {
-    ctx.logger.ok('no content changed - skipping CloudFront invalidation');
-    summary = { mode: 'none', count: 0 };
-  } else if (paths.length > ctx.config.invalidationMaxPaths) {
-    ctx.logger.step(`${paths.length} paths changed (> cap) - invalidating everything (/*)`);
-    await invalidateCloudFront(ctx, ['/*']);
-    summary = { mode: 'all', count: paths.length };
-  } else {
-    await invalidateCloudFront(ctx, paths);
-    summary = { mode: 'paths', count: paths.length };
-  }
+  const summary = await invalidatePaths(ctx, paths);
   await ctx.clients.s3
     .deleteObject(ctx.names.bucket, `build/changed/${hash}.json`)
     .catch(() => undefined);

@@ -1,6 +1,7 @@
 /**
- * `blogwright verify`: compare the objects stored under a prefix with the
- * artifact manifest recorded for a hash, byte for byte - every listed object
+ * `blogwright verify`: compare the objects stored under a prefix - the live
+ * `site/`, or a release staged under `releases/<hash>/` - with the artifact
+ * manifest recorded for a hash, byte for byte - every listed object
  * is read and hashed, so a pass means the bytes are exactly the recorded ones.
  */
 
@@ -10,6 +11,7 @@ import {
   isExactMatch,
   mapConcurrently,
   sha256Hex,
+  stagedReleasePrefix,
   type ArtifactComparison,
   type ArtifactManifest,
   type ObservedFile,
@@ -22,7 +24,7 @@ import type { OpsContext } from './context.js';
 const VERIFY_CONCURRENCY = 8;
 
 /** The prefix CloudFront serves the live site from. */
-const LIVE_SITE_PREFIX = 'site/';
+export const LIVE_SITE_PREFIX = 'site/';
 
 /**
  * What is stored under `prefix`, keyed by site-root-relative path. Objects the
@@ -85,7 +87,7 @@ function mismatchSummary(comparison: ArtifactComparison): string {
  * Check that `prefix` holds exactly the release recorded for `hash`: logs
  * every difference and throws when there is any, so CI fails the step.
  */
-async function verifyRelease(
+export async function verifyRelease(
   ctx: OpsContext,
   hash: string,
   prefix: string,
@@ -109,8 +111,15 @@ async function verifyRelease(
   return manifest;
 }
 
-/** `blogwright verify <hash>`: the live site against a hash's recorded release. */
-export async function verify(ctx: OpsContext, hash: string): Promise<void> {
+/** Which copy of a release `verify` checks: what is served, or what `stage` stored. */
+export type VerifyTarget = 'live' | 'staged';
+
+/** `blogwright verify <hash>`: the live site (or the staged copy) against a hash's recorded release. */
+export async function verify(
+  ctx: OpsContext,
+  hash: string,
+  target: VerifyTarget = 'live',
+): Promise<void> {
   if (ctx.config.ssr) {
     throw new Error(
       `verify compares a static site with its artifact manifest, and "${ctx.env}" is an SSR ` +
@@ -119,5 +128,5 @@ export async function verify(ctx: OpsContext, hash: string): Promise<void> {
     );
   }
   ctx.logger.info(colors.bold(`Verifying "${ctx.env}" against ${hash}`));
-  await verifyRelease(ctx, hash, LIVE_SITE_PREFIX);
+  await verifyRelease(ctx, hash, target === 'live' ? LIVE_SITE_PREFIX : stagedReleasePrefix(hash));
 }

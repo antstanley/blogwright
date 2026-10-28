@@ -21,8 +21,8 @@ Most commands take the environment as an optional first positional. Two commands
 
 | Commands | Layout |
 | --- | --- |
-| `bootstrap`, `deploy`, `delete`, `destroy`, `history`, `status` | `blogwright <command> [env]` |
-| `rollback`, `logs`, `verify` | `blogwright <command> <hash> [env]` |
+| `bootstrap`, `deploy`, `stage`, `delete`, `destroy`, `history`, `status` | `blogwright <command> [env]` |
+| `rollback`, `logs`, `verify`, `promote` | `blogwright <command> <hash> [env]` |
 | `preview deploy`, `preview destroy` | `blogwright preview <action> <id>` |
 | `<plugin> <action>` (including multi-word actions) | `blogwright <plugin> <action> [env]` |
 | `plugin add`, `plugin remove` | `blogwright plugin <action> <name> [env]` (env selects removal teardown only) |
@@ -87,6 +87,26 @@ With an `ssr` block in the config, the build's output is packaged and published 
 
 `deploy` refuses, before anything is built, when the configured serving mode (static or SSR) is not the one the stack's distribution serves - the state between adding or removing the `ssr` block and running [`bootstrap --switch-mode`](#bootstrap). `rollback` refuses in the same state.
 
+### stage
+
+```sh
+blogwright stage [env]
+```
+
+Builds the working copy exactly as [`deploy`](#deploy) does - same source zip, builder MicroVM, and `robots.txt`/`sitemap.xml` for this environment - but publishes the output to `releases/<hash>/` instead of `site/`. Nothing serves that prefix and nothing is invalidated. The build records its [artifact manifest](/reference/artifact-manifest/), `stage` verifies every staged object against it, and the summary prints the release identity, the release hash, and the `promote` command to run next. The build appears in [`history`](#history) as `staged`.
+
+Static environments only: refuses in an SSR environment and on the preview stack. Refuses before building on a stack bootstrapped before staging existed - run `bootstrap` once to grant the builder `releases/*`. See [Release gating](/guides/deploying/#release-gating-stage-verify-promote).
+
+### promote
+
+```sh
+blogwright promote <hash> [env] [--refresh]
+```
+
+Publishes a staged release to the live site without rebuilding. It refuses a hash with nothing under `releases/<hash>/`, then verifies the staged objects against the hash's artifact manifest and refuses - copying nothing - if any differs. It server-side copies every file whose live ETag differs from the staged one into `site/` (bytes, content type and tags unchanged), deletes live objects the release does not contain, invalidates the copied and deleted paths under the same rules as a deploy (`/*` past `invalidationMaxPaths`, nothing when nothing changed), and finally verifies `site/` against the manifest, so it succeeds only when the live bytes equal the staged bytes. The summary names the release it replaced and the one it published; `history` shows the hash as `promoted`.
+
+`--refresh` copies every staged file instead of only the changed ones. Post-deploy plugin steps, such as the standard.site sync, run only when the working copy is `<hash>`; otherwise `promote` warns and skips them. When the caller may not copy object tags (`s3:GetObjectTagging`/`s3:PutObjectTagging`, granted by `bootstrap`), it promotes untagged and warns once.
+
 ### rollback
 
 ```sh
@@ -129,7 +149,7 @@ failures abort, while a confirmed missing bucket permits interrupted cleanup.
 blogwright history [env]
 ```
 
-Lists deployment history from the stored build manifests, newest first. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. Once any manifest records a Web Function revision (SSR mode), both forms append a `revision` column: the revision id a hash was verified with, or `-` for a hash with none. A hash with a revision is one `rollback` can reproduce without a rebuild. A corrupt manifest is skipped with a warning rather than failing the listing.
+Lists deployment history from the stored build manifests, newest first. A staged build shows status `staged` until it is promoted, then `promoted`, ordered by its promotion time; the live marker goes to the newest deploy or promotion. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. Once any manifest records a Web Function revision (SSR mode), both forms append a `revision` column: the revision id a hash was verified with, or `-` for a hash with none. A hash with a revision is one `rollback` can reproduce without a rebuild. A corrupt manifest is skipped with a warning rather than failing the listing.
 
 ### logs
 
@@ -150,8 +170,10 @@ Shows the planned infrastructure graph against live state: each resource node is
 ### verify
 
 ```sh
-blogwright verify <hash> [env]
+blogwright verify <hash> [env] [--staged]
 ```
+
+With `--staged`, checks the copy [`stage`](#stage) stored under `releases/<hash>/` instead of the live site - the check to run between staging and promoting.
 
 Checks the live `site/` prefix byte for byte against the [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>`: every object the manifest lists is read and its SHA-256 compared, and every object under `site/` that the manifest does not list is reported too, because CloudFront would serve it. Each difference prints as one stable line - `missing <path>`, `changed <path>: expected … found …`, or `unexpected <path>` - and any difference exits 1 with a `N missing, N changed, N unexpected` summary. A match prints the location, release identity, file count and release hash, and exits 0.
 
@@ -365,12 +387,13 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--config <path>` | all but `init` | Explicit JSONC config file. When set it is the only file tried - the `config/<env>.jsonc` → `ops.config.jsonc` fallback chain is skipped. |
 | `--endpoint <url>` | all but `init` | AWS endpoint override, e.g. `http://localhost:4566` for the floci emulator. Under an override the account pin is skipped and a configured profile missing from your AWS files is ignored. |
 | `--profile <name>` | all | AWS profile from your shared AWS files (`~/.aws/config`, `~/.aws/credentials`). Beats `AWS_PROFILE`, exported credentials and the config's `aws.profile`; see [AWS credentials](/reference/configuration/#aws). `init` uses it as the default answer to its profile question. |
-| `--hash <hash>` | `rollback`, `logs`, `verify` | The build hash; wins over the first positional. |
+| `--hash <hash>` | `rollback`, `logs`, `verify`, `promote` | The build hash; wins over the first positional. |
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
 | `--switch-mode` | `bootstrap` | Allow a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses a mode change. |
-| `--refresh` | `deploy`, `rollback`, `preview deploy` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. |
+| `--refresh` | `deploy`, `rollback`, `preview deploy`, `promote` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. For `promote`, copy every staged file rather than only the changed ones. |
+| `--staged` | `verify` | Verify the release staged under `releases/<hash>/` instead of the live `site/`. |
 | `--yes` | site/plugin destroy, preview teardown, pds secret delete, plugin remove | Required for explicit destruction. For plugin remove it skips the teardown question and keeps resources. |
 | `--help` | all | Print usage and exit 0. |
 

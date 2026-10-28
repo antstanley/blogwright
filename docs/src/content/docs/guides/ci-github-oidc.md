@@ -54,7 +54,7 @@ Scoping production to a GitHub environment rather than a branch lets you gate de
 
 The role is scoped to one environment's resources, not the account:
 
-- Read, write, and delete objects in the environment's S3 bucket (source zips, the built site, state).
+- Read, write, and delete objects in the environment's S3 bucket (source zips, the built site, staged releases, state), and copy object tags - which `promote` needs to carry a staged release's tags into `site/`.
 - Run and manage builder MicroVMs, and rebuild the builder image when the agent bundle changed - so build-agent updates ship through CI without a separate `bootstrap`.
 - Read the MicroVM build logs, and pass the environment's build and exec roles.
 - Create CloudFront invalidations on the environment's distribution (previews are never cached, so the preview role omits this).
@@ -147,6 +147,8 @@ jobs:
           aws-region: us-east-1
       - run: pnpm exec blogwright deploy
 ```
+
+To gate the release instead - build when the release is drafted, promote the reviewed bytes when it is published - run `blogwright stage` in one job and `blogwright promote <hash>` in a later one (both in the `production` environment); see [Release gating](/guides/deploying/#release-gating-stage-verify-promote). `promote` checks the staged bytes against their artifact manifest before it copies anything.
 
 :::tip
 CI output is automatically plain and line-oriented - the plain formats are a compatibility contract for machines and agents, so log lines are safe to grep in workflow steps. See [deploying](/guides/deploying/).

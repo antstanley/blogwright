@@ -150,6 +150,41 @@ When the config has a `pds` section and publishing has been initialised, every s
 
 Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/plugins/standard-site/).
 
+## Release gating: stage, verify, promote
+
+`deploy` builds and publishes in one step. When a release has to be checked before it goes live - and what goes live has to be exactly what was checked - split it in two:
+
+```sh
+blogwright stage production            # build once; publish to releases/<hash>/, not to site/
+blogwright verify <hash> production --staged   # check the staged bytes against the artifact manifest
+blogwright promote <hash> production   # copy those bytes into site/ - no rebuild
+```
+
+**`stage`** runs the same build as `deploy` - the same source zip, builder MicroVM, `robots.txt` and `sitemap.xml` for the target environment - but the builder publishes the output to `releases/<hash>/` instead of `site/`, and records the [artifact manifest](/reference/artifact-manifest/). Nothing serves `releases/`: the distribution's origin is `site/`, and the bucket is private, so a staged release is not reachable from the domain or the CloudFront hostname. Nothing is invalidated. `stage` then reads every staged object back and checks it against the manifest, and prints the release identity, its release hash and the `promote` command to run.
+
+**`promote <hash>`** points production at that already-built output:
+
+1. It re-verifies the staged objects against the manifest - every object read and its SHA-256 compared - and refuses, copying nothing, if any differs.
+2. It copies each file whose live ETag differs from the staged one into `site/` with a server-side S3 copy. A copy moves the stored bytes, content type and object tags exactly as they are; nothing is rebuilt, re-encoded or re-uploaded from your machine. Objects in `site/` that the release does not contain are deleted after the copies, so the site never has a partial window.
+3. It invalidates the changed paths under the same rules as a deploy: only the copied and deleted paths (each directory index also as its directory URL), `/*` past `invalidationMaxPaths`, and nothing at all when the live site already held the release.
+4. It verifies `site/` against the manifest: every live object is read and hashed. The command succeeds only when the live release hash equals the staged one - the promoted bytes are the staged bytes.
+5. It records the release as live (`build/live-release.json`) and prints the release it replaced beside the one it published.
+
+The post-deploy plugin steps (the standard.site sync, for one) run after a promote only when the working copy is the promoted revision, because they publish the working copy's content; otherwise the command warns and skips them.
+
+`--refresh` makes `promote` copy every file, not only the changed ones - every path then counts as changed for invalidation.
+
+### What it does not cover
+
+- **Reviewing a staged release in a browser.** A staged release is deliberately not served. Review rendered pages through [PR previews](/guides/pr-previews/) or a separate environment; `stage` and `promote` guarantee that what goes live is byte-identical to the staged build, not that a person looked at it.
+- **Promoting between environments.** A release is staged in the environment it will be promoted into, so its `robots.txt` and `sitemap.xml` are that environment's. Staging in `staging` and promoting to `production` is not supported: the two would differ in exactly those files.
+- **SSR environments and the preview stack.** Both commands refuse there. An SSR deploy already pins the exact artifact version a revision serves, and `rollback` reproduces it without a rebuild.
+- **Edge caches.** `verify` and `promote` read S3, not CloudFront. Until an invalidation completes, an edge location may still serve a copy cached from before it.
+
+Staged releases stay under `releases/<hash>/` until you remove them, which is what lets an earlier hash be promoted again. If storage matters, add an S3 lifecycle rule expiring old `releases/` objects, or delete a prefix with `aws s3 rm --recursive s3://<bucket>/releases/<hash>/`.
+
+`stage` needs builder roles that may write `releases/*`; on a stack bootstrapped before staging existed it refuses before building and asks you to run `blogwright bootstrap <env>` once. The same bootstrap grants the CI deploy role `s3:GetObjectTagging` and `s3:PutObjectTagging`, which `promote` uses to copy object tags; without them it promotes untagged and warns.
+
 ## SSR environments
 
 When the config carries an `ssr` block, the same pipeline publishes a Lambda Web Function revision instead of a static site. The differences:
@@ -184,7 +219,8 @@ Removing `ssr` and re-bootstrapping does not delete the Web Function, its role, 
 
 ## Related pages
 
-- [Operations](/guides/operations/) - `history`, `rollback`, `status`, and day-two tasks
+- [Operations](/guides/operations/) - `history`, `verify`, `rollback`, `status`, and day-two tasks
+- [Artifact manifest](/reference/artifact-manifest/) - the record `verify` and `promote` check against
 - [PR previews](/guides/pr-previews/) - the same build pipeline targeting `previews/<id>/site/`
 - [CI deploys with GitHub OIDC](/guides/ci-github-oidc/) - running `blogwright deploy` from a workflow
 - [Architecture](/reference/architecture/) - the bucket layout and the builder image in depth

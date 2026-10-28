@@ -279,3 +279,50 @@ describe('S3Client versioning and version-aware deletion', () => {
     expect(await gone.objectVersionExists('b', 'web/artifacts/a.zip', 'v-9')).toBe(false);
   });
 });
+
+describe('S3Client.copyObject', () => {
+  it('PUTs to the destination with the encoded source, copying metadata and tags', async () => {
+    let url = '';
+    let headers: Record<string, string> = {};
+    const transport: Transport = async (req) => {
+      url = req.url;
+      headers = req.headers;
+      return response(200, '<CopyObjectResult><ETag>"abc"</ETag></CopyObjectResult>');
+    };
+    await s3With(transport).copyObject('b', 'releases/h1/a b.html', 'site/a b.html');
+    expect(url).toContain('/b/site/a%20b.html');
+    expect(headers['x-amz-copy-source']).toBe('/b/releases/h1/a%20b.html');
+    expect(headers['x-amz-metadata-directive']).toBe('COPY');
+    expect(headers['x-amz-tagging-directive']).toBe('COPY');
+  });
+
+  it('replaces the tag set with none when told to drop tags', async () => {
+    let headers: Record<string, string> = {};
+    const transport: Transport = async (req) => {
+      headers = req.headers;
+      return response(200, '<CopyObjectResult/>');
+    };
+    await s3With(transport).copyObject('b', 'releases/h1/x', 'site/x', 'drop');
+    expect(headers['x-amz-tagging-directive']).toBe('REPLACE');
+    expect(headers['x-amz-tagging']).toBeUndefined();
+  });
+
+  it('throws the error S3 returns in a 200 body', async () => {
+    const transport: Transport = async () =>
+      response(
+        200,
+        '<Error><Code>InternalError</Code><Message>We encountered an internal error</Message></Error>',
+      );
+    await expect(s3With(transport).copyObject('b', 'releases/h1/x', 'site/x')).rejects.toThrow(
+      /InternalError - copying releases\/h1\/x to site\/x: We encountered an internal error/,
+    );
+  });
+
+  it('surfaces a denied copy as an AwsError', async () => {
+    const transport: Transport = async () =>
+      response(403, '<Error><Code>AccessDenied</Code><Message>denied</Message></Error>');
+    await expect(
+      s3With(transport).copyObject('b', 'releases/h1/x', 'site/x'),
+    ).rejects.toMatchObject({ code: 'AccessDenied', statusCode: 403 });
+  });
+});

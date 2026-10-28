@@ -27,6 +27,8 @@ Every build the builder MicroVM runs - deploy or rollback, success or failure - 
 bw history
 ```
 
+A build made by [`stage`](/guides/deploying/#release-gating-stage-verify-promote) is listed as `staged` (`◇` on a TTY) until it is promoted, then as `promoted`, at the time of its promotion. The manifest records the latest operation on a hash, so staging a hash that is already live shows it as `staged` until it is promoted again.
+
 On a TTY the table shows a status mark, a relative finish time (`3h ago`), the build duration, and a `← live` marker on the newest success. The plain form prints fixed columns - `hash status finished duration` - with ISO timestamps. In an [SSR environment](/guides/server-rendered-sites/) both forms add a `revision` column: the Web Function revision a hash was verified with, or `-` when it has none. Pick a hash with a revision to roll back without a rebuild.
 
 One corrupt manifest never takes down the whole listing: it's skipped with a `skipping unreadable manifest` warning and the rest still render. An environment with no builds yet prints `no deployments yet`.
@@ -85,7 +87,7 @@ A production rollback does **not** sync the PDS. The [standard.site records](/pl
 bw delete staging
 ```
 
-Infrastructure, state, source zips, and build manifests all stay intact, so recovery is just `bw deploy` or `bw rollback <hash>`.
+Infrastructure, state, source zips, build manifests and staged releases all stay intact, so recovery is just `bw deploy`, `bw rollback <hash>`, or `bw promote <hash>` for a staged release.
 
 ## Tear everything down: `destroy --yes`
 
