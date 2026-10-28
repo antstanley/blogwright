@@ -91,6 +91,7 @@ async function poll(): Promise<void> {
       objectTags: next.objectTags,
       refresh: next.refresh,
       ...(next.webFunction ? { webFunction: next.webFunction } : {}),
+      ...(next.artifactManifestKey ? { artifactManifestKey: next.artifactManifestKey } : {}),
     });
   } finally {
     polling = false;

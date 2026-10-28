@@ -21,9 +21,10 @@ The environment defaults to `production`; see [Environments](/guides/environment
 2. Upload the zip to `build/<hash>.zip` in the environment's S3 bucket.
 3. Reconcile the builder MicroVM image if the build-agent bundle changed (no-op otherwise).
 4. Launch a builder MicroVM that pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to `site/`, comparing each file's MD5 to the live object's ETag.
-5. Invalidate only the CloudFront paths that actually changed.
-6. On a successful production deploy, sync standard.site records to your PDS (when configured).
-7. Print a deploy summary card.
+5. Record the [artifact manifest](/reference/artifact-manifest/) - every published path, byte count and SHA-256 - at `build/artifacts/<hash>.json`.
+6. Invalidate only the CloudFront paths that actually changed.
+7. On a successful production deploy, sync standard.site records to your PDS (when configured).
+8. Print a deploy summary card.
 
 ## Packaging the source
 
@@ -70,6 +71,8 @@ The CLI launches a builder MicroVM from the snapshotted image, then writes a pen
 Build output streams live to your terminal as it lands in CloudWatch. The CLI decides the outcome from hash-scoped markers in the log stream, so output from an unrelated build can never be mistaken for yours. The build is bounded by `microvm.maxDurationSeconds` (default 1800); the VM is terminated when the build finishes and self-terminates at that limit regardless.
 
 Every build - success or failure - records a manifest at `build/manifests/<hash>.json` with the status, timestamps, duration, and MicroVM id. `blogwright history` reads these; see [Operations](/guides/operations/).
+
+A successful static build also records an [artifact manifest](/reference/artifact-manifest/) at `build/artifacts/<hash>.json`: every file it published, with its byte count and lowercase SHA-256, one aggregate release hash over all of them, and a release identity string (`<version>+<hash>.<releaseHash prefix>`, the version taken from your app's `package.json`). The deploy prints the release and the manifest's location so CI can archive it. A stack bootstrapped before artifact manifests existed cannot write it yet - the deploy warns until `blogwright bootstrap <env>` grants the builder `build/artifacts/*`.
 
 ## Syncing only what changed
 
@@ -129,7 +132,7 @@ blogwright deploy --refresh
 
 ## The deploy summary
 
-On a TTY, a successful deploy ends with a summary card: the revision, environment, source size (file count and KiB), build duration, what was invalidated ("nothing changed - skipped", "12 changed paths", or "everything (/*)"), and the site URL. Piped output and CI get the same information as stable line-oriented text.
+On a TTY, a successful deploy ends with a summary card: the revision, environment, source size (file count and KiB), build duration, the release identity and hash from the artifact manifest (static environments), what was invalidated ("nothing changed - skipped", "12 changed paths", or "everything (/*)"), and the site URL. Piped output and CI get the same information as stable line-oriented text.
 
 ## Build logs
 

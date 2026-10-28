@@ -52,6 +52,16 @@ bw rollback 4f3a2b1c9d0e
 
 As with a deploy, only the CloudFront paths whose content actually changed are invalidated, and `--refresh` is accepted to force every file to re-upload.
 
+A rebuild is not guaranteed to reproduce the original bytes - the builder image, dependency resolution and toolchain may all have moved since. So the rollback reads the [artifact manifest](/reference/artifact-manifest/) recorded for the hash before the rebuild replaces it, and prints both release hashes:
+
+```text
+  recorded release sha256 9f86d081884c7d65… (1.4.0+4f3a2b1c9d0e.9f86d081884c)
+  rebuilt  release sha256 9f86d081884c7d65… (1.4.0+4f3a2b1c9d0e.9f86d081884c)
+✓ the rebuild is byte-identical to the recorded artifact
+```
+
+When they differ it warns instead: the site now serves rebuilt bytes that no review covered. A hash deployed before artifact manifests existed has nothing to compare against, and the rollback says so.
+
 :::caution
 A production rollback does **not** sync the PDS. The [standard.site records](/plugins/standard-site/) mirror the current repo content, which a rollback does not restore - so the command only warns about the divergence. To realign the records, check out the rolled-back revision and run `blogwright pds sync`.
 :::

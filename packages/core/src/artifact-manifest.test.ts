@@ -1,0 +1,157 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  ARTIFACT_MANIFEST_VERSION,
+  artifactManifestKey,
+  computeReleaseHash,
+  createArtifactManifest,
+  parseArtifactManifest,
+  releaseIdentity,
+  serializeArtifactManifest,
+  sha256Hex,
+  type ArtifactFile,
+} from './artifact-manifest.js';
+
+function file(path: string, content: string): ArtifactFile {
+  return { path, bytes: new TextEncoder().encode(content).byteLength, sha256: sha256Hex(content) };
+}
+
+const FILES = [file('posts/index.html', '<p>posts</p>'), file('index.html', '<p>home</p>')];
+
+describe('sha256Hex', () => {
+  it('is the lowercase hex digest', () => {
+    expect(sha256Hex('abc')).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
+  });
+});
+
+describe('computeReleaseHash', () => {
+  it('is the SHA-256 of the sorted sha256sum listing (a pinned vector)', () => {
+    const listing =
+      `${sha256Hex('<p>home</p>')}  index.html\n` +
+      `${sha256Hex('<p>posts</p>')}  posts/index.html\n`;
+    expect(computeReleaseHash(FILES)).toBe(sha256Hex(listing));
+  });
+
+  it('does not depend on the order files arrive in', () => {
+    expect(computeReleaseHash([...FILES].reverse())).toBe(computeReleaseHash(FILES));
+  });
+
+  it('changes when any byte of any file changes', () => {
+    const edited = [file('posts/index.html', '<p>posts!</p>'), file('index.html', '<p>home</p>')];
+    expect(computeReleaseHash(edited)).not.toBe(computeReleaseHash(FILES));
+  });
+
+  it('sorts by UTF-8 byte order, as LC_ALL=C sort does', () => {
+    // U+FF5E (BMP, 0xEF 0xBD 0x9E) sorts before U+1F600 (0xF0 ...) in bytes,
+    // but after it in UTF-16 code units (0xFF5E > 0xD83D).
+    const astral = file('\u{1F600}.txt', 'a');
+    const bmp = file('～.txt', 'b');
+    const listing = `${bmp.sha256}  ${bmp.path}\n${astral.sha256}  ${astral.path}\n`;
+    expect(computeReleaseHash([astral, bmp])).toBe(sha256Hex(listing));
+  });
+});
+
+describe('releaseIdentity', () => {
+  it('joins the site version, revision and release hash prefix', () => {
+    expect(releaseIdentity('abc123', 'f'.repeat(64), '1.4.0')).toBe('1.4.0+abc123.ffffffffffff');
+  });
+
+  it('omits the version when the site declares none', () => {
+    expect(releaseIdentity('abc123', 'f'.repeat(64))).toBe('abc123.ffffffffffff');
+  });
+});
+
+describe('createArtifactManifest', () => {
+  it('sorts files and derives the aggregate fields', () => {
+    const manifest = createArtifactManifest({ hash: 'abc123', siteVersion: '2.0.0', files: FILES });
+    expect(manifest.manifestVersion).toBe(ARTIFACT_MANIFEST_VERSION);
+    expect(manifest.files.map((f) => f.path)).toEqual(['index.html', 'posts/index.html']);
+    expect(manifest.fileCount).toBe(2);
+    expect(manifest.totalBytes).toBe(FILES[0]!.bytes + FILES[1]!.bytes);
+    expect(manifest.releaseHash).toBe(computeReleaseHash(FILES));
+    expect(manifest.release).toBe(`2.0.0+abc123.${manifest.releaseHash.slice(0, 12)}`);
+  });
+
+  it('records an empty build as zero files', () => {
+    const manifest = createArtifactManifest({ hash: 'abc123', files: [] });
+    expect(manifest).toMatchObject({ fileCount: 0, totalBytes: 0, files: [] });
+    expect(manifest.siteVersion).toBeUndefined();
+  });
+
+  it('rejects a duplicated path', () => {
+    expect(() =>
+      createArtifactManifest({ hash: 'h', files: [FILES[0]!, { ...FILES[0]! }] }),
+    ).toThrow(/listed twice/);
+  });
+
+  it('rejects an absolute or escaping path', () => {
+    expect(() => createArtifactManifest({ hash: 'h', files: [file('/index.html', 'x')] })).toThrow(
+      /relative to the site root/,
+    );
+    expect(() => createArtifactManifest({ hash: 'h', files: [file('a/../b', 'x')] })).toThrow(
+      /relative to the site root/,
+    );
+  });
+
+  it('rejects an uppercase or short sha256', () => {
+    const upper = { ...FILES[0]!, sha256: FILES[0]!.sha256.toUpperCase() };
+    expect(() => createArtifactManifest({ hash: 'h', files: [upper] })).toThrow(/lowercase hex/);
+    const short = { ...FILES[0]!, sha256: 'abc' };
+    expect(() => createArtifactManifest({ hash: 'h', files: [short] })).toThrow(/lowercase hex/);
+  });
+
+  it('rejects a negative or fractional byte count', () => {
+    expect(() =>
+      createArtifactManifest({ hash: 'h', files: [{ ...FILES[0]!, bytes: -1 }] }),
+    ).toThrow(/invalid byte count/);
+    expect(() =>
+      createArtifactManifest({ hash: 'h', files: [{ ...FILES[0]!, bytes: 1.5 }] }),
+    ).toThrow(/invalid byte count/);
+  });
+});
+
+describe('artifactManifestKey', () => {
+  it('sits beside the deployment manifests', () => {
+    expect(artifactManifestKey('abc123')).toBe('build/artifacts/abc123.json');
+  });
+});
+
+describe('parseArtifactManifest', () => {
+  const manifest = createArtifactManifest({ hash: 'abc123', siteVersion: '1.0.0', files: FILES });
+  const text = serializeArtifactManifest(manifest);
+
+  it('round-trips a serialized manifest', () => {
+    expect(parseArtifactManifest(text, 'm.json')).toEqual(manifest);
+  });
+
+  it('refuses invalid JSON, naming the source', () => {
+    expect(() => parseArtifactManifest('{', 'm.json')).toThrow(/m\.json is not valid JSON/);
+  });
+
+  it('refuses a version it does not read', () => {
+    const future = JSON.stringify({ ...manifest, manifestVersion: 2 });
+    expect(() => parseArtifactManifest(future, 'm.json')).toThrow(/manifestVersion 2.*upgrade/);
+  });
+
+  it('refuses a manifest whose recorded release hash disagrees with its files', () => {
+    const edited = JSON.stringify({ ...manifest, releaseHash: '0'.repeat(64) });
+    expect(() => parseArtifactManifest(edited, 'm.json')).toThrow(
+      /releaseHash.*corrupt or was edited/,
+    );
+  });
+
+  it('refuses a manifest whose file list was edited', () => {
+    const files = manifest.files.map((f, i) => (i === 0 ? { ...f, bytes: f.bytes + 1 } : f));
+    const edited = JSON.stringify({ ...manifest, files });
+    expect(() => parseArtifactManifest(edited, 'm.json')).toThrow(/totalBytes/);
+  });
+
+  it('refuses a manifest with no file list or hash', () => {
+    const noFiles = JSON.stringify({ ...manifest, files: undefined });
+    expect(() => parseArtifactManifest(noFiles, 'm.json')).toThrow(/no files\[\] list/);
+    const noHash = JSON.stringify({ ...manifest, hash: '' });
+    expect(() => parseArtifactManifest(noHash, 'm.json')).toThrow(/no revision hash/);
+  });
+});

@@ -171,6 +171,21 @@ function webArtifactWriteStatements(ctx: OpsContext): object[] {
   ];
 }
 
+/**
+ * The agent records each static build's artifact manifest at
+ * `build/artifacts/<hash>.json`. The shared preview stack records none.
+ */
+function artifactManifestWriteStatements(ctx: OpsContext): object[] {
+  if (ctx.preview) return [];
+  return [
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObject'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/build/artifacts/*`,
+    },
+  ];
+}
+
 /** Apply the build role's inline policy (idempotent - used by create + update). */
 async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
   // The build role is BOTH the image-build role AND the MicroVM's ambient runtime
@@ -196,6 +211,7 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
         Resource: `arn:aws:s3:::${ctx.names.bucket}/build/changed/*`,
       },
       ...webArtifactWriteStatements(ctx),
+      ...artifactManifestWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents'],
@@ -259,6 +275,7 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
         ],
       },
       ...webArtifactWriteStatements(ctx),
+      ...artifactManifestWriteStatements(ctx),
       {
         Effect: 'Allow',
         Action: ['s3:ListBucket'],

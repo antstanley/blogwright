@@ -936,9 +936,13 @@ describe('site-write roles can tag objects (#7)', () => {
     Statement: Array<{ Action: string[]; Resource: string | string[] }>;
   }
 
-  async function policyFor(roleId: 'iam-build-role' | 'iam-exec-role'): Promise<PolicyDoc> {
+  async function policyFor(
+    roleId: 'iam-build-role' | 'iam-exec-role',
+    opts: { preview?: boolean } = {},
+  ): Promise<PolicyDoc> {
     let policy: PolicyDoc | undefined;
     const ctx = createTestContext({
+      ...(opts.preview ? { env: 'preview', preview: true, domain: 'preview.example.com' } : {}),
       clients: {
         iam: {
           ensureRole: async () => 'arn:aws:iam::1:role/r',
@@ -966,6 +970,27 @@ describe('site-write roles can tag objects (#7)', () => {
       expect(siteWrite).toBeDefined();
       expect(siteWrite!.Action).toContain('s3:PutObjectTagging');
       expect(String(siteWrite!.Resource)).toContain('/site/*');
+    },
+  );
+
+  it.each(['iam-build-role', 'iam-exec-role'] as const)(
+    '%s may write artifact manifests to build/artifacts/*',
+    async (roleId) => {
+      const policy = await policyFor(roleId);
+      const artifacts = policy.Statement.find((s) =>
+        String(s.Resource).endsWith('/build/artifacts/*'),
+      );
+      expect(artifacts?.Action).toEqual(['s3:PutObject']);
+    },
+  );
+
+  it.each(['iam-build-role', 'iam-exec-role'] as const)(
+    '%s on the preview stack records no artifact manifests',
+    async (roleId) => {
+      const policy = await policyFor(roleId, { preview: true });
+      expect(policy.Statement.some((s) => String(s.Resource).includes('build/artifacts'))).toBe(
+        false,
+      );
     },
   );
 });

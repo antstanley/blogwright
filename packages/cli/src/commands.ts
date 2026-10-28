@@ -1,5 +1,19 @@
-import { AwsError, colors, findRepoRoot, type ResourceNode } from 'blogwright-core';
+import {
+  artifactManifestKey,
+  AwsError,
+  colors,
+  findRepoRoot,
+  type ArtifactManifest,
+  type ResourceNode,
+} from 'blogwright-core';
 
+import {
+  describeRelease,
+  logRebuildComparison,
+  logRecordedRelease,
+  readArtifactManifest,
+  readRecordedBeforeRebuild,
+} from './artifacts.js';
 import type { OpsContext } from './context.js';
 import {
   invalidateChanged,
@@ -376,12 +390,15 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
-    ...(ctx.config.ssr ? { webFunction: webFunctionJob(ctx, hash) } : {}),
+    ...(ctx.config.ssr
+      ? { webFunction: webFunctionJob(ctx, hash) }
+      : { artifactManifestKey: artifactManifestKey(hash) }),
     ...(opts.refresh ? { refresh: true } : {}),
   });
 
   let invalidation;
   let outcome: PublishOutcome | undefined;
+  let artifact: ArtifactManifest | undefined;
   if (ctx.config.ssr) {
     const source = manifestSource(ctx, hash, startedAt, manifest.microvmId);
     const result = await webBuildResultOrFail(ctx, source);
@@ -389,6 +406,8 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     invalidation = outcome.invalidation;
   } else {
     invalidation = await invalidateChanged(ctx, hash);
+    artifact = await readArtifactManifest(ctx, hash);
+    logRecordedRelease(ctx, hash, artifact);
   }
   // The site is live - plugins' post-deploy steps (the pds sync, for one) run now.
   await opts.afterDeploy(ctx);
@@ -404,6 +423,7 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     { label: 'environment', value: ctx.env },
     { label: 'source', value: `${files.length} files, ${(zip.byteLength / 1024).toFixed(0)} KiB` },
     { label: 'build', value: formatDuration(manifest.durationMs) },
+    ...(artifact ? [{ label: 'release', value: describeRelease(artifact) }] : []),
     { label: 'invalidated', value: describeInvalidation(invalidation) },
     ...(url ? [{ label: 'site', value: colors.cyan(url) }] : []),
   ];
@@ -508,13 +528,20 @@ export async function rollback(
   }
   ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
   const startedAt = Date.now();
+  // Read before the rebuild overwrites it: the record is what the rebuilt
+  // bytes are checked against.
+  const recorded = await readRecordedBeforeRebuild(ctx, hash);
   await runBuild(ctx, {
     hash,
     sourceKey,
     baseUrl: siteBaseUrl(ctx),
+    artifactManifestKey: artifactManifestKey(hash),
     ...(opts.refresh ? { refresh: true } : {}),
   });
   await invalidateChanged(ctx, hash);
+  const rebuilt = await readArtifactManifest(ctx, hash);
+  logRecordedRelease(ctx, hash, rebuilt);
+  logRebuildComparison(ctx, recorded, rebuilt);
   // A rollback changes production content too, but the PDS mirrors the *working tree*
   // content, which a rollback does not restore - so only warn about the divergence.
   if (ctx.env === 'production' && ctx.config.pds) {

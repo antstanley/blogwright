@@ -81,6 +81,7 @@ One bucket per environment holds everything:
 │   ├── <hash>.zip               # source zips, named by the jj/git revision hash
 │   ├── agent/agent-<hash>.zip   # build-agent bundle the builder image is baked from
 │   ├── manifests/<hash>.json    # one deployment manifest per build (history/rollback)
+│   ├── artifacts/<hash>.json    # artifact manifest: published paths, sizes, SHA-256 (static builds)
 │   ├── pending/<target>.json    # queued build job (present only mid-deploy)
 │   └── changed/<hash>.json      # changed-paths manifest, consumed for invalidation
 ├── site/                        # the live site - CloudFront origin, private via OAC
@@ -106,7 +107,7 @@ Each `blogwright deploy`:
 1. Zips the repo (honoring `.gitignore`, plus `sourceInclude`), names the zip by the jj/git revision hash, and uploads it to `build/<hash>.zip`.
 2. Launches a MicroVM from the builder image with the exec role, retrying transient gateway errors - the control plane can briefly 502 right after an image update, and the launch's client token makes retries idempotent.
 3. Writes the job document to `build/pending/<target>.json` (`site.json` for a normal deploy). The agent inside the VM polls the `build/pending/` prefix, resolves credentials from IMDS, pulls the zip, and runs `pnpm install && pnpm build` in `paths.app`.
-4. Syncs `paths.dist` to `site/`, comparing each file's MD5 to the live object's S3 ETag so only changed files are uploaded, and writes the changed-paths manifest to `build/changed/<hash>.json`.
+4. Syncs `paths.dist` to `site/`, comparing each file's MD5 to the live object's S3 ETag so only changed files are uploaded, records the [artifact manifest](/reference/artifact-manifest/) at `build/artifacts/<hash>.json`, and writes the changed-paths manifest to `build/changed/<hash>.json`.
 5. Streams the build's CloudWatch logs, watching for hash-scoped markers (`##build:done:<hash>` / `##build:failed:<hash>`) so an orphaned VM from another deploy can never be mistaken for this build's result. The changed-paths manifest doubles as a completion signal if log delivery lags.
 6. Terminates the VM, clears the pending job, writes the deployment manifest, and invalidates only the changed CloudFront paths - falling back to `/*` past `invalidationMaxPaths`, and skipping invalidation entirely when nothing changed.
 
