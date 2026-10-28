@@ -51,6 +51,6 @@
     "url": "git+https://github.com/antstanley/blogwright.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2"
   }
 }

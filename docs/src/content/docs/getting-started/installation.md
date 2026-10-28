@@ -9,7 +9,7 @@ blogwright ships as a single dev dependency with no infrastructure tooling to se
 
 ## Prerequisites
 
-- **Node.js ≥ 22.** The package declares `"engines": { "node": ">=22" }`.
+- **Node.js ≥ 22.2.** The package declares `"engines": { "node": ">=22.2" }`.
 - **pnpm.** Sites are built inside the builder MicroVM with `pnpm install && pnpm build`, so your site must build via `pnpm build`.
 - **An AWS account** with credentials available in the ambient provider chain - see below.
 

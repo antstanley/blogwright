@@ -24,8 +24,7 @@
     "dev:mock": "node scripts/dev-dashboard.mjs"
   },
   "dependencies": {
-    "@duckdb/node-api": "1.5.6-r.2",
-    "fflate": "^0.8.3"
+    "@duckdb/node-api": "1.5.6-r.2"
   },
   "peerDependencies": {
     "blogwright-core": "workspace:^"
@@ -66,6 +65,6 @@
     "url": "git+https://github.com/antstanley/blogwright.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2"
   }
 }

@@ -185,7 +185,7 @@ What it adds over `aws logs tail`:
 - **Readable JSON.** Structured log lines are syntax-coloured and expandable.
 - **A local archive.** Streamed events are kept in a DuckDB file, so you can reopen them later, even offline.
 
-It needs Node.js 22 or later, which Blogwright already requires. Press Ctrl+C to stop it.
+It needs Node.js 22 or later; Blogwright itself requires 22.2 or later. Press Ctrl+C to stop it.
 
 ## Recipes
 

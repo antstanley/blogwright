@@ -56,9 +56,6 @@ importers:
       '@duckdb/node-api':
         specifier: 1.5.6-r.2
         version: 1.5.6-r.2
-      fflate:
-        specifier: ^0.8.3
-        version: 0.8.3
     devDependencies:
       '@internationalized/date':
         specifier: ^3.12.4
@@ -154,9 +151,6 @@ importers:
       blogwright-core:
         specifier: workspace:*
         version: link:../core
-      fflate:
-        specifier: ^0.8.3
-        version: 0.8.3
     devDependencies:
       '@types/node':
         specifier: ^26.6.5
@@ -167,6 +161,9 @@ importers:
       blogwright-pds:
         specifier: workspace:*
         version: link:../pds
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       oxlint:
         specifier: ^1.90.0
         version: 1.90.0
@@ -210,6 +207,9 @@ importers:
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       oxlint:
         specifier: ^1.90.0
         version: 1.90.0

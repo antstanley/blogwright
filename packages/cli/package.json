@@ -24,13 +24,13 @@
     "start": "node ./dist/bin.js"
   },
   "dependencies": {
-    "blogwright-core": "workspace:*",
-    "fflate": "^0.8.3"
+    "blogwright-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
     "blogwright-build-agent": "workspace:*",
     "blogwright-pds": "workspace:*",
+    "fflate": "^0.8.3",
     "oxlint": "^1.90.0",
     "typescript": "^6.0.3",
     "vitest": "^5.0.5"
@@ -52,7 +52,7 @@
     "url": "git+https://github.com/antstanley/blogwright.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2"
   },
   "homepage": "https://github.com/antstanley/blogwright#readme",
   "bugs": "https://github.com/antstanley/blogwright/issues"

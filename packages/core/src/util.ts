@@ -5,13 +5,13 @@ import { isRetryable } from './aws/errors.js';
  * with, so identical input bytes always produce identical archive bytes.
  *
  * **Constructed from local parts on purpose, and the obvious `Date.UTC` form is
- * a bug.** A zip's DOS timestamp is *local* time, and `fflate` reads it with
- * `getFullYear()`/`getMonth()`/`getDate()`, so a `Date` fixed in UTC lands on a
- * different local date in every zone. Two things follow, and this repo shipped
- * both:
+ * a bug.** A zip's DOS timestamp is *local* time, and the zip writer
+ * (`createZip`, `zip.ts`) reads it with `getFullYear()`/`getMonth()`/`getDate()`,
+ * so a `Date` fixed in UTC lands on a different local date in every zone. Two
+ * things follow, and this repo shipped both (under fflate, the writer then):
  *
  * - `new Date('1980-01-01T00:00:00Z')` is 1979-12-31 local anywhere west of
- *   Greenwich, and `fflate` throws `date not in range 1980-2099` outright -
+ *   Greenwich, below the 1980 floor DOS time holds, and the writer refuses it -
  *   so `blogwright bootstrap`, `deploy` and `analytics bootstrap` all failed
  *   for most of the Americas while passing in CI, which runs `TZ=UTC`.
  * - Even where it did not throw, the encoded timestamp differed by zone, so

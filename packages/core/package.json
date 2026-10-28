@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "fflate": "^0.8.3",
     "oxlint": "^1.90.0",
     "typescript": "^6.0.3",
     "vitest": "^5.0.5"
@@ -46,6 +47,6 @@
     "url": "git+https://github.com/antstanley/blogwright.git"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.2"
   }
 }
