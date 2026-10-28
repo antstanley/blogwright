@@ -77,9 +77,13 @@ Options:
   --plain           Minimal machine-friendly output (no colour, no live status,
                     no prompts) - for CI systems and agents; also automatic when
                     output is piped. NO_COLOR disables colour only.
-  --refresh         Re-upload every file on deploy, even unchanged ones, so
-                    metadata fixes (content types, object tags) reach live
-                    objects the ETag comparison would otherwise skip.
+  --refresh         Re-upload every file on deploy, rollback or stage (copy
+                    every file on promote), even unchanged ones, so metadata
+                    fixes (content types, object tags) reach objects the
+                    ETag comparison would otherwise skip.
+  --force-unlock    Replace the environment lock a deploy, rollback, stage,
+                    promote or delete left behind when it stopped; only once
+                    that command is known to be no longer running
   --switch-mode     Allow bootstrap to change a bootstrapped stack between
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy
@@ -255,6 +259,9 @@ const HASH_COMMANDS = new Set(['rollback', 'logs', 'verify', 'promote']);
  * hash is taken and the first positional is the environment. A hash given both
  * ways is refused rather than guessed at, and so is a missing one.
  */
+/** What a revision hash may contain: jj and git print short hex ids. */
+const REVISION_HASH = /^[0-9A-Za-z]{1,64}$/;
+
 function hashArguments(
   command: string,
   flagHash: string | undefined,
@@ -270,6 +277,14 @@ function hashArguments(
   }
   const hash = flagHash ?? first;
   if (!hash) throw new Error(`${command} requires a <hash>`);
+  // The hash names S3 keys (build/<hash>.zip, releases/<hash>/), so only the
+  // characters jj and git print are accepted - never a "/" or "..".
+  if (!REVISION_HASH.test(hash)) {
+    throw new Error(
+      `${command} needs a revision hash of letters and digits (as \`blogwright history\` ` +
+        `lists them), got "${hash}"`,
+    );
+  }
   return { hash, envPositional: flagHash === undefined ? second : first };
 }
 
@@ -401,6 +416,7 @@ export async function main(
       // is declared kebab-case and read back the same way, because the camel
       // form would reject the flag the usage text and docs advertise.
       'switch-mode': { type: 'boolean', default: false },
+      'force-unlock': { type: 'boolean', default: false },
       staged: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
@@ -560,26 +576,31 @@ export async function main(
       // plugin dispatch uses - a deploy that fails never loads a plugin.
       await commands.deploy(ctx, {
         refresh: values.refresh,
+        forceUnlock: values['force-unlock'],
         afterDeploy: (deployed) => runAfterDeployHooks(deployed, makeDiscoveryPorts()),
       });
       break;
     case 'stage':
-      await stage(ctx);
+      await stage(ctx, { refresh: values.refresh, forceUnlock: values['force-unlock'] });
       break;
     case 'promote':
       await promote(ctx, hash, {
         refresh: values.refresh,
+        forceUnlock: values['force-unlock'],
         afterDeploy: (promoted) => runAfterDeployHooks(promoted, makeDiscoveryPorts()),
       });
       break;
     case 'rollback':
-      await commands.rollback(ctx, hash, { refresh: values.refresh });
+      await commands.rollback(ctx, hash, {
+        refresh: values.refresh,
+        forceUnlock: values['force-unlock'],
+      });
       break;
     case 'delete':
-      await commands.deleteSite(ctx);
+      await commands.deleteSite(ctx, { forceUnlock: values['force-unlock'] });
       break;
     case 'destroy':
-      await commands.destroy(ctx, { yes: values.yes });
+      await commands.destroy(ctx, { yes: values.yes, forceUnlock: values['force-unlock'] });
       break;
     case 'history':
       await commands.history(ctx);

@@ -35,7 +35,10 @@ export interface DeployManifest {
   message?: string;
   /**
    * `staged` when the build published to `releases/<hash>/` for a later
-   * `promote` rather than to the live `site/`. Absent for a deploy.
+   * `promote` rather than to the live `site/`. Absent for a deploy. A staged
+   * build's record is kept apart from the hash's deployment manifest (see
+   * {@link manifestKey}), so staging a revision that is live never changes
+   * what `history` says about its deploy.
    */
   kind?: 'staged' | undefined;
   /** When this hash's staged release was last promoted to the live site. */
@@ -58,12 +61,19 @@ export type AfterDeploy = (ctx: OpsContext) => Promise<void>;
  */
 export const LIVE_SITE_TARGET = 'site';
 
-/** Read one hash's deployment manifest, or undefined when there is none. */
+/** Which record of a hash: its deployment manifest, or its staged build's record. */
+export type ManifestKind = 'deploy' | 'staged';
+
+/**
+ * Read one hash's deployment manifest (or, for `staged`, its staged build's
+ * record), or undefined when there is none.
+ */
 export async function readManifest(
   ctx: OpsContext,
   hash: string,
+  kind: ManifestKind = 'deploy',
 ): Promise<DeployManifest | undefined> {
-  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, manifestKey(hash));
+  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, manifestKey(hash, kind));
   if (!text) return undefined;
   try {
     return JSON.parse(text) as DeployManifest;
@@ -91,7 +101,7 @@ export async function writeManifest(
   }
   await ctx.clients.s3.putObject(
     ctx.names.bucket,
-    manifestKey(manifest.hash),
+    manifestKey(manifest.hash, manifest.kind === 'staged' ? 'staged' : 'deploy'),
     JSON.stringify(record, null, 2),
     'application/json',
   );
@@ -169,16 +179,62 @@ export interface AgentStatus {
   message?: string | undefined;
 }
 
-function manifestKey(hash: string): string {
-  return `build/manifests/${hash}.json`;
+/** Where history lists deployment manifests from. */
+export const DEPLOY_MANIFESTS_PREFIX = 'build/manifests/';
+/** Where history lists staged builds' records from. */
+export const STAGED_BUILDS_PREFIX = 'build/staged/';
+
+/**
+ * A hash's deployment manifest, or its staged build's record. They are
+ * separate objects: a stage - failed or not - of a revision that is already
+ * live must not overwrite the record of the deploy that put it there.
+ */
+function manifestKey(hash: string, kind: ManifestKind = 'deploy'): string {
+  return `${kind === 'staged' ? STAGED_BUILDS_PREFIX : DEPLOY_MANIFESTS_PREFIX}${hash}.json`;
 }
 
 /**
  * The agent's changed-paths manifest: the paths to invalidate, the rules it
- * wrote, and (by appearing) the build's completion signal.
+ * wrote, and (by appearing) the build's completion signal. Qualified by the
+ * build target as well as the hash, so a stage and a deploy of one revision
+ * never read each other's.
  */
-function changedManifestKey(hash: string): string {
-  return `build/changed/${hash}.json`;
+export function changedManifestKey(target: string, hash: string): string {
+  return `build/changed/${target}/${hash}.json`;
+}
+
+/**
+ * One queued build, as `pollBuild` waits for it: the agent marks its
+ * completion `##build:done:<hash>@<jobId>` and writes `changedKey` last.
+ */
+export interface BuildJobRef {
+  hash: string;
+  jobId: string;
+  changedKey: string;
+}
+
+/** What one log line says about `job`: its outcome, or nothing. */
+export function jobOutcome(message: string, job: BuildJobRef): AgentStatus | undefined {
+  const marker = (state: string) => `##build:${state}:${job.hash}@${job.jobId}`;
+  if (message.includes(marker('done'))) return { state: 'done' };
+  const failed = message.split(`${marker('failed')}:`)[1];
+  if (message.includes(marker('failed'))) return { state: 'failed', message: failed?.trim() };
+  // A bare-hash marker comes from an agent older than job ids, which could have
+  // built another target's job for this hash: stop rather than take it as ours.
+  if (new RegExp(`##build:(done|failed):${escapeRegExp(job.hash)}(?=$|[:\\s])`).test(message)) {
+    return {
+      state: 'failed',
+      message:
+        'the builder image predates per-job build markers, so this build cannot be told ' +
+        "apart from another target's build of the same revision - run `blogwright " +
+        'bootstrap` to rebuild the builder image',
+    };
+  }
+  return undefined;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -258,7 +314,7 @@ export function microvmLogGroup(ctx: OpsContext): string {
  */
 export async function pollBuild(
   ctx: OpsContext,
-  hash: string,
+  job: BuildJobRef,
   startTime: number,
   endpoint: string,
   token: string,
@@ -274,7 +330,7 @@ export async function pollBuild(
   try {
     for (;;) {
       terminal.status(
-        `${spinnerFrame(tick++)} building ${hash} in MicroVM … ${formatDuration(Date.now() - startTime)}`,
+        `${spinnerFrame(tick++)} building ${job.hash} in MicroVM … ${formatDuration(Date.now() - startTime)}`,
       );
       await nudge(ctx, endpoint, token);
       const events = await ctx.clients.logs
@@ -287,23 +343,19 @@ export async function pollBuild(
         if (seen.has(e.eventId)) continue;
         seen.add(e.eventId);
         ctx.logger.info(`  ${e.message.trimEnd()}`);
-        // Hash-scoped structured markers so unrelated log lines (raw pnpm/astro output, or
-        // an orphaned VM from a different deploy) can't be mistaken for this build's result.
-        if (e.message.includes(`##build:done:${hash}`)) result = { state: 'done' };
-        else if (e.message.includes(`##build:failed:${hash}`)) {
-          result = {
-            state: 'failed',
-            message: e.message.split(`##build:failed:${hash}:`)[1]?.trim(),
-          };
-        }
+        // Job-scoped structured markers, so unrelated log lines (raw pnpm/astro output, an
+        // orphaned VM, or another target's build of the same hash - the log group is shared)
+        // can't be mistaken for this build's result.
+        result ??= jobOutcome(e.message, job);
       }
       if (result) return result;
       // Log delivery can lag or drop (e.g. the VM logging to a group the deploy isn't tailing).
-      // The agent writes build/changed/<hash>.json as its final step, so treat that artifact as
-      // an authoritative completion signal too - a successful build then can't hang until the
-      // deadline just because its logs never reached CloudWatch. runBuild clears any stale copy
-      // before launch, so its presence means *this* build finished.
-      if (await ctx.clients.s3.objectExists(ctx.names.bucket, changedManifestKey(hash))) {
+      // The agent writes the job's changed-paths manifest as its final step, so treat that
+      // artifact as an authoritative completion signal too - a successful build then can't hang
+      // until the deadline just because its logs never reached CloudWatch. runBuild clears any
+      // stale copy before launch, and the key is the target's own, so its presence means *this*
+      // build finished.
+      if (await ctx.clients.s3.objectExists(ctx.names.bucket, job.changedKey)) {
         return { state: 'done' };
       }
       if (Date.now() >= deadline) return { state: 'failed', message: 'build timed out' };
@@ -360,11 +412,16 @@ export async function runBuild(
     );
   }
 
-  // Clear any stale completion manifest from a prior aborted build of this same hash, so its
-  // reappearance is an unambiguous "this build finished" signal for pollBuild's S3 fallback.
-  await ctx.clients.s3
-    .deleteObject(ctx.names.bucket, changedManifestKey(opts.hash))
-    .catch(() => undefined);
+  // One id per queued job: the agent tags its completion markers with it, so neither another
+  // target's build of this hash nor an earlier build of it can be taken for this one.
+  const job: BuildJobRef = {
+    hash: opts.hash,
+    jobId: randomUUID(),
+    changedKey: changedManifestKey(target, opts.hash),
+  };
+  // Clear any stale completion manifest from a prior aborted build of this target and hash, so
+  // its reappearance is an unambiguous "this build finished" signal for pollBuild's S3 fallback.
+  await ctx.clients.s3.deleteObject(ctx.names.bucket, job.changedKey).catch(() => undefined);
 
   // Checked even under an explicit --refresh: a build that changes the rules
   // must mark the record first, whatever asked for the re-upload.
@@ -405,6 +462,8 @@ export async function runBuild(
       pendingKey,
       JSON.stringify({
         hash: opts.hash,
+        jobId: job.jobId,
+        changedKey: job.changedKey,
         sourceKey: opts.sourceKey,
         sitePrefix,
         // Repo-relative build cwd and output dir (config paths.app/paths.dist);
@@ -437,7 +496,7 @@ export async function runBuild(
     const token = await ctx.clients.microvms
       .createAuthToken(run.microvmId, tokenMinutes)
       .catch(() => '');
-    result = await pollBuild(ctx, opts.hash, startedAt.getTime(), endpoint, token);
+    result = await pollBuild(ctx, job, startedAt.getTime(), endpoint, token);
   } finally {
     // The pending-job cleanup must survive a terminate failure: a leaked
     // pending.json is the poison-the-next-image-bake hazard the launch
@@ -481,7 +540,7 @@ export async function runBuild(
     );
   }
   // The static files are published even in SSR mode, where the revision is still to come.
-  await recordCacheControl(ctx, target, changedManifestKey(opts.hash));
+  await recordCacheControl(ctx, target, job.changedKey);
   return manifest;
 }
 
@@ -531,10 +590,10 @@ export async function invalidatePaths(
 export async function invalidateChanged(
   ctx: OpsContext,
   hash: string,
+  target: string = LIVE_SITE_TARGET,
 ): Promise<InvalidationSummary> {
-  const text = await ctx.clients.s3
-    .getObjectText(ctx.names.bucket, changedManifestKey(hash))
-    .catch(() => undefined);
+  const key = changedManifestKey(target, hash);
+  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, key).catch(() => undefined);
   let paths: string[] | undefined;
   if (text) {
     try {
@@ -549,9 +608,7 @@ export async function invalidateChanged(
     return { mode: 'all', count: 0 };
   }
   const summary = await invalidatePaths(ctx, paths);
-  await ctx.clients.s3
-    .deleteObject(ctx.names.bucket, changedManifestKey(hash))
-    .catch(() => undefined);
+  await ctx.clients.s3.deleteObject(ctx.names.bucket, key).catch(() => undefined);
   return summary;
 }
 

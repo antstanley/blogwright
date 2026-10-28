@@ -189,7 +189,7 @@ export function renderHistoryTable(entries: HistoryEntry[], now: number): string
     ].join(' ');
     return i === liveIndex ? `${cells} ${colors.cyan('← live')}` : cells;
   });
-  const header = `${'hash'.padEnd(13)} ${' '} ${'finished'.padEnd(9)} duration${revisions ? ' revision' : ''}`;
+  const header = `${'hash'.padEnd(13)} ${' '} ${'time'.padEnd(9)} duration${revisions ? ' revision' : ''}`;
   return [colors.bold(header), ...rows];
 }
 

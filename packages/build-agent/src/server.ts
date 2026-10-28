@@ -1,8 +1,11 @@
 import { createServer, type ServerResponse } from 'node:http';
 
 import {
+  buildMarker,
   createAgentS3,
   fetchPendingJobs,
+  jobIdentity,
+  nextPendingJob,
   runBuild,
   type BuildPayload,
   type PendingJob,
@@ -15,7 +18,8 @@ const REGION = process.env.BUILD_REGION ?? 'us-east-1';
 type BuildState = 'idle' | 'building' | 'done' | 'failed';
 const status: { state: BuildState; hash: string | undefined } = { state: 'idle', hash: undefined };
 const s3 = BUCKET ? createAgentS3(REGION) : undefined;
-// Hashes already built by this MicroVM, so the queue drains without rebuilding a job.
+// Jobs already built by this MicroVM (see `jobIdentity`), so the queue drains
+// without rebuilding a job - and without skipping another target's job for the same hash.
 const processed = new Set<string>();
 // Counter (not a one-shot flag) so diagnostics still fire at RUNTIME after the snapshot.
 let pollCount = 0;
@@ -38,9 +42,11 @@ function startBuild(payload: BuildPayload): void {
   status.hash = payload.hash;
   record(`build started for ${payload.hash}`);
   runBuild(s3, payload, record)
-    .then(() => record(`##build:done:${payload.hash}`))
+    .then(() => record(buildMarker('done', payload)))
     .catch((err: unknown) =>
-      record(`##build:failed:${payload.hash}: ${err instanceof Error ? err.message : String(err)}`),
+      record(
+        `${buildMarker('failed', payload)}: ${err instanceof Error ? err.message : String(err)}`,
+      ),
     )
     .finally(() => {
       // Return to idle so a completed build can't disable the agent. This matters if a
@@ -75,9 +81,9 @@ async function poll(): Promise<void> {
       if (diag) record(`[poll] error: ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
-    const next = jobs.find((j) => !processed.has(j.hash));
+    const next = nextPendingJob(jobs, processed);
     if (!next || status.state !== 'idle') return;
-    processed.add(next.hash);
+    processed.add(jobIdentity(next));
     startBuild({
       hash: next.hash,
       sourceKey: next.sourceKey,
@@ -93,6 +99,8 @@ async function poll(): Promise<void> {
       refresh: next.refresh,
       ...(next.webFunction ? { webFunction: next.webFunction } : {}),
       ...(next.artifactManifestKey ? { artifactManifestKey: next.artifactManifestKey } : {}),
+      ...(next.jobId ? { jobId: next.jobId } : {}),
+      ...(next.changedKey ? { changedKey: next.changedKey } : {}),
     });
   } finally {
     polling = false;

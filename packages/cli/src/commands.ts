@@ -19,7 +19,9 @@ import type { OpsContext } from './context.js';
 import {
   invalidateChanged,
   invalidateCloudFront,
+  DEPLOY_MANIFESTS_PREFIX,
   manifestKey,
+  STAGED_BUILDS_PREFIX,
   microvmLogGroup,
   readManifest,
   runBuild,
@@ -29,7 +31,13 @@ import {
   type DeployManifest,
 } from './deploy.js';
 import { applyGraph, destroyGraph, type GraphContext } from './graph.js';
-import { forgetLiveRelease, recordLiveRelease, type LiveReleaseSource } from './live-release.js';
+import {
+  forgetLiveRelease,
+  markLiveReleasePublishing,
+  recordLiveRelease,
+  type LiveReleaseSource,
+} from './live-release.js';
+import { assertEnvUnlocked, withEnvLock, type LockOptions } from './lock.js';
 import { clearRunningMicrovms } from './microvms.js';
 import { buildNodes, reconcileBuilderImage, reconcileResponseHeadersOnDeploy } from './nodes.js';
 import {
@@ -250,11 +258,17 @@ export async function assertNoScopedState(ctx: OpsContext): Promise<void> {
 }
 
 /** Destroy the full infrastructure graph. */
-export async function destroy(ctx: OpsContext, opts: { yes: boolean }): Promise<void> {
+export async function destroy(
+  ctx: OpsContext,
+  opts: { yes: boolean } & LockOptions,
+): Promise<void> {
   if (!opts.yes) {
     throw new Error(`refusing to destroy "${ctx.env}" without --yes`);
   }
   await assertNoScopedState(ctx);
+  // Destroy removes the lock along with the bucket, so it does not take it -
+  // it refuses while another command holds it.
+  await assertEnvUnlocked(ctx, 'destroy', opts);
   ctx.logger.info(colors.bold(`Destroying "${ctx.env}"`));
   // Running builder MicroVMs pin the image and make its deletion fail; clear them first
   // (or let the operator cancel and wait for in-flight builds to finish).
@@ -299,7 +313,7 @@ async function webBuildResultOrFail(
 
 export type { AfterDeploy } from './deploy.js';
 
-export interface DeployOptions {
+export interface DeployOptions extends LockOptions {
   refresh?: boolean;
   /**
    * Runs once the site is published and the cache invalidated: `cli.ts`
@@ -333,13 +347,23 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
   const hash = await ctx.ports.vcs.revisionHash(cwd);
   ctx.logger.info(colors.bold(`Deploying ${hash} to "${ctx.env}"`));
   assertServingModeMatches(ctx);
-
   // In SSR mode the endpoint probe is mandatory and comes first: a caller that
   // cannot invoke the endpoint is stopped before anything is built or published.
   if (ctx.config.ssr) {
     warnAboutSsrSeo(ctx);
     await preflightWebFunction(ctx);
   }
+  await withEnvLock(ctx, 'deploy', hash, opts, () =>
+    deployLocked(ctx, opts, { cwd, hash, startedAt }),
+  );
+}
+
+/** The deploy itself, run holding the environment lock. */
+async function deployLocked(
+  ctx: OpsContext,
+  opts: DeployOptions,
+  { cwd, hash, startedAt }: { cwd: string; hash: string; startedAt: number },
+): Promise<void> {
   // Converge the response headers before anything is uploaded or built, so a
   // policy CloudFront rejects stops the deploy with nothing published.
   await reconcileResponseHeadersOnDeploy(ctx);
@@ -352,6 +376,9 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
   // A static build records its manifest at a key of its own; finding it there
   // afterwards proves this build wrote it.
   const artifactKey = ctx.config.ssr ? undefined : newArtifactBuildManifestKey(hash);
+  // The build is about to change site/: until it finishes, the record must
+  // not keep naming the release it replaces.
+  if (!ctx.config.ssr) await markLiveReleasePublishing(ctx, hash, 'deploy');
   const manifest = await runBuild(ctx, {
     hash,
     sourceKey,
@@ -484,10 +511,20 @@ async function rollbackSsr(
 export async function rollback(
   ctx: OpsContext,
   hash: string,
-  opts: { refresh?: boolean } = {},
+  opts: { refresh?: boolean } & LockOptions = {},
 ): Promise<void> {
   assertServingModeMatches(ctx);
-  if (ctx.config.ssr) return rollbackSsr(ctx, hash, opts);
+  await withEnvLock(ctx, 'rollback', hash, opts, () =>
+    ctx.config.ssr ? rollbackSsr(ctx, hash, opts) : rollbackStatic(ctx, hash, opts),
+  );
+}
+
+/** Static rollback: rebuild the hash's archived source into site/. */
+async function rollbackStatic(
+  ctx: OpsContext,
+  hash: string,
+  opts: { refresh?: boolean },
+): Promise<void> {
   const sourceKey = `build/${hash}.zip`;
   if (!(await ctx.clients.s3.objectExists(ctx.names.bucket, sourceKey))) {
     throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
@@ -498,6 +535,7 @@ export async function rollback(
   // rebuild records its own manifest under a fresh key and never replaces it.
   const recorded = await readRecordedBeforeRebuild(ctx, hash);
   const artifactKey = newArtifactBuildManifestKey(hash);
+  await markLiveReleasePublishing(ctx, hash, 'rollback');
   await runBuild(ctx, {
     hash,
     sourceKey,
@@ -619,7 +657,7 @@ export async function previewTeardown(ctx: OpsContext, opts: { yes: boolean }): 
 }
 
 /** Empty the live site/ prefix (leaves infra and build history intact). */
-export async function deleteSite(ctx: OpsContext): Promise<void> {
+export async function deleteSite(ctx: OpsContext, opts: LockOptions = {}): Promise<void> {
   if (ctx.config.ssr) {
     // Emptying site/ cannot unpublish a revision: the app renders every page
     // the revision serves, and its routes would keep answering from a server
@@ -631,15 +669,23 @@ export async function deleteSite(ctx: OpsContext): Promise<void> {
         '--switch-mode` and deploy before deleting.',
     );
   }
-  const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, 'site/');
-  await forgetLiveRelease(ctx);
-  ctx.logger.ok(`deleted ${count} object(s) under site/`);
-  await invalidateCloudFront(ctx);
+  await withEnvLock(ctx, 'delete', undefined, opts, async () => {
+    await markLiveReleasePublishing(ctx, undefined, 'delete');
+    const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, 'site/');
+    await forgetLiveRelease(ctx);
+    ctx.logger.ok(`deleted ${count} object(s) under site/`);
+    await invalidateCloudFront(ctx);
+  });
 }
 
 /** List deployment history from build manifests. */
 export async function history(ctx: OpsContext): Promise<void> {
-  const objects = await ctx.clients.s3.listObjects(ctx.names.bucket, 'build/manifests/');
+  // Deploys and staged builds are recorded apart, so a revision that was both
+  // deployed and staged shows a row for each.
+  const objects = [
+    ...(await ctx.clients.s3.listObjects(ctx.names.bucket, DEPLOY_MANIFESTS_PREFIX)),
+    ...(await ctx.clients.s3.listObjects(ctx.names.bucket, STAGED_BUILDS_PREFIX)),
+  ];
   if (objects.length === 0) {
     ctx.logger.info('no deployments yet');
     return;
@@ -667,10 +713,12 @@ export async function history(ctx: OpsContext): Promise<void> {
   }
   // The plain form is the stable contract for CI logs and agents. The revision
   // column is appended only once a hash recorded one, so static output is unchanged.
+  // The time column is when the row last changed the site: a build's finish, or
+  // for a promoted stage its promotion.
   const revisions = historyHasRevisions(manifests);
   ctx.logger.info(
     colors.bold(
-      `hash          status      finished                 duration${revisions ? '  revision' : ''}`,
+      `hash          status      time                     duration${revisions ? '  revision' : ''}`,
     ),
   );
   for (const m of manifests) {
@@ -688,12 +736,17 @@ export async function history(ctx: OpsContext): Promise<void> {
 
 /** Show CloudWatch build logs for a given hash. */
 export async function logs(ctx: OpsContext, hash: string): Promise<void> {
-  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, manifestKey(hash));
+  // The newest build of the hash: its deploy, or a stage made after it.
   let manifest: DeployManifest | undefined;
-  try {
-    manifest = text ? (JSON.parse(text) as DeployManifest) : undefined;
-  } catch {
-    ctx.logger.warn(`manifest for ${hash} is unreadable - showing the unfiltered log window`);
+  for (const kind of ['deploy', 'staged'] as const) {
+    const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, manifestKey(hash, kind));
+    let read: DeployManifest | undefined;
+    try {
+      read = text ? (JSON.parse(text) as DeployManifest) : undefined;
+    } catch {
+      ctx.logger.warn(`manifest for ${hash} is unreadable - showing the unfiltered log window`);
+    }
+    if (read && (!manifest || read.finishedAt > manifest.finishedAt)) manifest = read;
   }
   // Filter to the build's time window (± a minute) from the manifest.
   const startTime = manifest ? Date.parse(manifest.startedAt) - 60_000 : undefined;

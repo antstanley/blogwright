@@ -29,7 +29,7 @@ Most commands take the environment as an optional first positional. Three comman
 | `pds keygen`, `pds login`, `pds init`, `pds sync` | `blogwright pds <action> [env]` |
 | `pds secret status`, `pds secret delete` | `blogwright pds secret <action> [env]` |
 
-Environment resolution is `--env` flag, then the positional, then `production`. The same precedence applies to `--id` over the preview id positional. A hash command given `--hash` takes its only positional as the environment (`blogwright verify --hash 4f3a2b1c staging`); passing a hash both ways (`--hash` and two positionals) is refused, as is a missing hash - before any config is loaded or AWS is called. Preview commands always run in the fixed `preview` environment - they take no env at all.
+Environment resolution is `--env` flag, then the positional, then `production`. The same precedence applies to `--id` over the preview id positional. A hash command given `--hash` takes its only positional as the environment (`blogwright verify --hash 4f3a2b1c staging`); passing a hash both ways (`--hash` and two positionals) is refused, as are a missing hash and one that is not letters and digits (a hash names S3 keys, so `/`, `..` and spaces are never accepted) - before any config is loaded or AWS is called. Preview commands always run in the fixed `preview` environment - they take no env at all.
 
 Unrecognized flags are an error. `--help` prints usage and exits 0; running with no command prints usage and exits 1.
 
@@ -72,7 +72,7 @@ The site command performs no plugin discovery and reconciles no plugin resources
 ### deploy
 
 ```sh
-blogwright deploy [env] [--refresh]
+blogwright deploy [env] [--refresh] [--force-unlock]
 ```
 
 Zips the repo (honoring `.gitignore` plus the `sourceIgnore`/`sourceInclude` config), names the zip by the jj/git revision hash, and uploads it to `build/<hash>.zip`. If the build-agent bundle changed, the builder MicroVM image is rebuilt first (a no-op otherwise). The MicroVM pulls the zip, runs `pnpm install && pnpm build`, and syncs the output to the live `site/` prefix; only files whose content changed are re-uploaded, and only the changed CloudFront paths are invalidated (past the configured `invalidationMaxPaths` cap, everything - `/*` - is invalidated instead). On a TTY the command ends with a summary card: revision, environment, source size, build duration, invalidation, and the site URL.
@@ -87,30 +87,38 @@ With an `ssr` block in the config, the build's output is packaged and published 
 
 `deploy` refuses, before anything is built, when the configured serving mode (static or SSR) is not the one the stack's distribution serves - the state between adding or removing the `ssr` block and running [`bootstrap --switch-mode`](#bootstrap). `rollback` refuses in the same state.
 
+`deploy`, `rollback`, `stage`, `promote` and `delete` each hold the environment lock (`build/lock.json`) while they run, so only one of them changes an environment at a time. Another one started meanwhile refuses, changing nothing, and names the holder - its command, hash, AWS identity and start time. `--force-unlock` replaces a lock left by a command that is no longer running. See [the environment lock](/guides/operations/#one-command-at-a-time-the-environment-lock).
+
 ### stage
 
 ```sh
-blogwright stage [env]
+blogwright stage [env] [--refresh] [--force-unlock]
 ```
 
-Builds the working copy exactly as [`deploy`](#deploy) does - same source zip, builder MicroVM, and `robots.txt`/`sitemap.xml` for this environment - but publishes the output to `releases/<hash>/` instead of `site/`. Nothing serves that prefix and nothing is invalidated. The build records its [artifact manifest](/reference/artifact-manifest/), `stage` verifies every staged object against it, and the summary prints the release identity, the release hash, and the `promote` command to run next. The build appears in [`history`](#history) as `staged`.
+Builds the working copy exactly as [`deploy`](#deploy) does - same source zip, builder MicroVM, and `robots.txt`/`sitemap.xml` for this environment - but publishes the output to `releases/<hash>/` instead of `site/`. Nothing serves that prefix and nothing is invalidated. The build records its own [artifact manifest](/reference/artifact-manifest/); `stage` verifies every staged object against it and then records it as the staged release, `build/releases/<hash>.json`, which `promote` checks against. When the revision has no original artifact manifest yet, the staged one becomes it; when it has one from a build with other bytes, the original is kept and `stage` warns that `verify <hash>` will check it. The summary prints the release identity, the release hash, and the `promote` command to run next. The build appears in [`history`](#history) as `staged`, in a row of its own: a stage never changes the record of a deploy of the same hash.
+
+`--refresh` re-uploads every file into the staged prefix, even content an earlier stage of the hash already wrote, so a metadata fix reaches the staged copy.
 
 Static environments only: refuses in an SSR environment and on the preview stack. Refuses before building on a stack bootstrapped before staging existed - run `bootstrap` once to grant the builder `releases/*`. See [Release gating](/guides/deploying/#release-gating-stage-verify-promote).
 
 ### promote
 
 ```sh
-blogwright promote <hash> [env] [--refresh]
+blogwright promote <hash> [env] [--refresh] [--force-unlock]
 ```
 
-Publishes a staged release to the live site without rebuilding. It refuses a hash with nothing under `releases/<hash>/`, then verifies the staged objects against the hash's artifact manifest and refuses - copying nothing - if any differs. It server-side copies every file whose live ETag differs from the staged one into `site/` (bytes, content type and tags unchanged), deletes live objects the release does not contain, invalidates the copied and deleted paths under the same rules as a deploy (`/*` past `invalidationMaxPaths`, nothing when nothing changed), and finally verifies `site/` against the manifest, so it succeeds only when the live bytes equal the staged bytes. The summary names the release it replaced and the one it published; `history` shows the hash as `promoted`.
+Publishes a staged release to the live site without rebuilding. It refuses a hash with no staged release record, then verifies the staged objects against that record and refuses - copying nothing - if any differs. It converges the response headers policy as `deploy` does, then server-side copies every file whose live ETag differs from the staged one into `site/` (bytes, content type, `Cache-Control` and tags as staged), deletes live objects the release does not contain once every copy has succeeded, invalidates the copied and deleted paths under the same rules as a deploy (`/*` past `invalidationMaxPaths`), and finally verifies `site/` against the staged release record, so it succeeds only when the live bytes equal the staged bytes. The summary names the release it replaced and the one it published; `history` shows the staged build as `promoted`.
 
-`--refresh` copies every staged file instead of only the changed ones. Each copy keeps the staged object's `Cache-Control`; when the staged release's `cacheControl` rules are not known to match the ones `site/` was written with, every file is copied so none keeps an older header, and `site/`'s Cache-Control record takes the staged rules (with a warning when the config's rules have changed since staging). Post-deploy plugin steps, such as the standard.site sync, run only when the working copy is `<hash>`; otherwise `promote` warns and skips them. When the caller may not copy object tags (`s3:GetObjectTagging`/`s3:PutObjectTagging`, granted by `bootstrap`), it promotes untagged and warns once.
+The copies run in parallel, so while they run some pages may already be new and others still old. If the command stops partway, the live-release record says so rather than naming the release it was replacing; run it again to finish.
+
+`--refresh` copies every staged file instead of only the changed ones. Without it, a file whose content is unchanged keeps the content type and tags it already had in `site/`, so pass it after a content-type fix or once tags can be copied. Each copy keeps the staged object's `Cache-Control`; when the staged release's `cacheControl` rules are not known to match the ones `site/` was written with, every file is copied so none keeps an older header, and `site/`'s Cache-Control record takes the staged rules (with a warning when the config's rules have changed since staging). Every path then counts as changed for invalidation; nothing is invalidated only when nothing was copied or deleted.
+
+Post-deploy plugin steps, such as the standard.site sync, run only when the working copy is `<hash>`; otherwise `promote` warns and skips them. When the caller may not copy object tags (`s3:GetObjectTagging` on `releases/*` and `s3:PutObjectTagging` on `site/*`, granted by `bootstrap`), it promotes untagged and warns once, naming the `promote --refresh` that copies them later. Any other denial fails the promotion.
 
 ### rollback
 
 ```sh
-blogwright rollback <hash> [env] [--refresh]
+blogwright rollback <hash> [env] [--refresh] [--force-unlock]
 ```
 
 Re-deploys an existing build: verifies the source zip `build/<hash>.zip` still exists (errors if it does not), re-runs the builder against it, and invalidates the changed paths. Find hashes with [`history`](#history). In a static environment it then prints the release hash of the hash's original [artifact manifest](/reference/artifact-manifest/) and the rebuild's own, and warns when the rebuild is not byte-identical - or recorded no manifest, so it cannot be checked. The original is never replaced by the rebuild.
@@ -124,7 +132,7 @@ Rollback does not sync the PDS - standard.site records mirror the current repo c
 ### delete
 
 ```sh
-blogwright delete [env]
+blogwright delete [env] [--force-unlock]
 ```
 
 Empties the live `site/` prefix and invalidates CloudFront. Infrastructure, build artifacts, and deployment history stay intact - a later `deploy` or `rollback` restores the site. Note it takes effect immediately, without a confirmation prompt. Refuses in SSR mode: emptying `site/` cannot unpublish a Web Function revision, whose routes would keep answering from a server whose static assets are gone. Switch the stack back to static serving and deploy, or `destroy` it.
@@ -132,10 +140,10 @@ Empties the live `site/` prefix and invalidates CloudFront. Infrastructure, buil
 ### destroy
 
 ```sh
-blogwright destroy [env] --yes
+blogwright destroy [env] --yes [--force-unlock]
 ```
 
-Tears down the site infrastructure for the environment and deletes its state. Refuses to run without `--yes`. Running builder MicroVMs pin the builder image, so destroy lists them and asks to terminate them first (default yes; on a non-interactive terminal the default applies) - answer no to cancel and let in-flight builds finish.
+Tears down the site infrastructure for the environment and deletes its state. Refuses to run without `--yes`, and while another command holds the environment lock (`--force-unlock` overrides). Running builder MicroVMs pin the builder image, so destroy lists them and asks to terminate them first (default yes; on a non-interactive terminal the default applies) - answer no to cancel and let in-flight builds finish.
 
 Before teardown mutations, any `state/<env>.<plugin>.json` in the site bucket
 blocks destruction, even an empty-state object or an uninstalled plugin's record.
@@ -149,7 +157,7 @@ failures abort, while a confirmed missing bucket permits interrupted cleanup.
 blogwright history [env]
 ```
 
-Lists deployment history from the stored build manifests, newest first. A staged build shows status `staged` until it is promoted, then `promoted`, ordered by its promotion time; the live marker goes to the newest deploy or promotion. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `finished`, `duration` - for CI logs and agents. Once any manifest records a Web Function revision (SSR mode), both forms append a `revision` column: the revision id a hash was verified with, or `-` for a hash with none. A hash with a revision is one `rollback` can reproduce without a rebuild. A corrupt manifest is skipped with a warning rather than failing the listing.
+Lists deployment history from the stored build manifests (`build/manifests/`) and staged build records (`build/staged/`), newest first. A staged build shows status `staged` until it is promoted, then `promoted`, ordered by its promotion time, or `failed` when its build failed; a revision both deployed and staged has a row for each. The live marker goes to the newest successful deploy or rollback, or promotion. On a TTY it renders a table; piped or `--plain` output is stable columns - `hash`, `status`, `time`, `duration` - for CI logs and agents. `time` is when the row last changed the site: the build's finish, or a promoted stage's promotion. Once any manifest records a Web Function revision (SSR mode), both forms append a `revision` column: the revision id a hash was verified with, or `-` for a hash with none. A hash with a revision is one `rollback` can reproduce without a rebuild. A corrupt manifest is skipped with a warning rather than failing the listing.
 
 ### logs
 
@@ -157,7 +165,7 @@ Lists deployment history from the stored build manifests, newest first. A staged
 blogwright logs <hash> [env]
 ```
 
-Shows the CloudWatch build logs for a deployed hash, filtered to that build's time window (plus a minute either side) from its manifest. If the manifest is unreadable, the command warns and shows the unfiltered log window. Each line is prefixed with its ISO timestamp.
+Shows the CloudWatch build logs for a hash's newest build - its deploy, or a stage made after it - filtered to that build's time window (plus a minute either side) from its record. If the manifest is unreadable, the command warns and shows the unfiltered log window. Each line is prefixed with its ISO timestamp.
 
 ### status
 
@@ -173,7 +181,7 @@ Shows the planned infrastructure graph against live state: each resource node is
 blogwright verify <hash> [env] [--staged]
 ```
 
-With `--staged`, checks the copy [`stage`](#stage) stored under `releases/<hash>/` instead of the live site - the check to run between staging and promoting.
+With `--staged`, checks the copy [`stage`](#stage) stored under `releases/<hash>/` against the staged release record (`build/releases/<hash>.json`) instead of the live site against the original - the check to run between staging and promoting. After a promotion of a staged build whose bytes differ from the revision's original, `verify <hash>` reports those differences; `promote` has already checked `site/` against the staged release.
 
 Checks the live `site/` prefix byte for byte against the original [artifact manifest](/reference/artifact-manifest/) recorded for `<hash>` (`build/artifacts/<hash>.json`). Each object under `site/` is classified from the bucket listing first:
 
@@ -401,7 +409,8 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
 | `--switch-mode` | `bootstrap` | Allow a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses a mode change. |
-| `--refresh` | `deploy`, `rollback`, `preview deploy`, `promote` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. For `promote`, copy every staged file rather than only the changed ones. |
+| `--refresh` | `deploy`, `rollback`, `preview deploy`, `stage`, `promote` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach objects the ETag comparison would otherwise skip. For `promote`, copy every staged file rather than only the changed ones. |
+| `--force-unlock` | `deploy`, `rollback`, `stage`, `promote`, `delete`, `destroy` | Replace the [environment lock](/guides/operations/#one-command-at-a-time-the-environment-lock) a command left behind when it stopped. Use it only once that command is known to be no longer running. |
 | `--staged` | `verify` | Verify the release staged under `releases/<hash>/` instead of the live `site/`. |
 | `--yes` | site/plugin destroy, preview teardown, pds secret delete, plugin remove | Required for explicit destruction. For plugin remove it skips the teardown question and keeps resources. |
 | `--help` | all | Print usage and exit 0. |

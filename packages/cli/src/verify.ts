@@ -173,7 +173,7 @@ function mismatchSummary(comparison: ArtifactComparison): string {
  * Check that `prefix` holds exactly the original release recorded for
  * `hash`: logs every difference and throws when there is any, so CI fails the step.
  */
-export async function verifyRelease(
+async function verifyRelease(
   ctx: OpsContext,
   hash: string,
   prefix: string,

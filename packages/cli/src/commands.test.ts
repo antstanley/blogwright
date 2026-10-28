@@ -1352,13 +1352,16 @@ describe('history', () => {
       logger: { info: (msg) => lines.push(stripColors(msg)) },
       clients: {
         s3: {
-          listObjects: async () =>
-            manifests.map((m) => ({
-              key: `build/manifests/${m.hash}.json`,
-              size: 1,
-              lastModified: undefined,
-              etag: undefined,
-            })),
+          // Deploys and staged builds are listed from their own prefixes.
+          listObjects: async (_bucket, prefix) =>
+            manifests
+              .filter((m) => (prefix === 'build/staged/') === ('kind' in m && m.kind === 'staged'))
+              .map((m) => ({
+                key: `${prefix}${m.hash}.json`,
+                size: 1,
+                lastModified: undefined,
+                etag: undefined,
+              })),
           getObjectText: async (_bucket, key) =>
             JSON.stringify(manifests.find((m) => key.endsWith(`${m.hash}.json`))),
         },
@@ -1372,7 +1375,7 @@ describe('history', () => {
     const lines = await plainHistory([manifest('aaaaaaaaaaaa', '2026-10-13T10:00:00Z')]);
 
     expect(lines).toEqual([
-      'hash          status      finished                 duration',
+      'hash          status      time                     duration',
       'aaaaaaaaaaaa  succeeded   2026-10-13T10:00:00Z  42s',
     ]);
   });
@@ -1384,7 +1387,7 @@ describe('history', () => {
     ]);
 
     expect(lines).toEqual([
-      'hash          status      finished                 duration  revision',
+      'hash          status      time                     duration  revision',
       'bbbbbbbbbbbb  succeeded   2026-10-13T11:00:00Z  42s       -',
       'aaaaaaaaaaaa  succeeded   2026-10-13T10:00:00Z  42s       3',
     ]);

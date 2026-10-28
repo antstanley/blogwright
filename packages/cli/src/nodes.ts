@@ -267,9 +267,12 @@ function buildRoleNode(): ResourceNode {
 }
 
 /**
- * Recorded on the exec role's outputs once its policy grants release staging,
- * so `stage` can refuse up front on a stack bootstrapped before it existed
- * rather than fail inside the MicroVM after a full build.
+ * Recorded on the exec role's outputs whenever its policy is applied - true
+ * when that policy grants release staging - so `stage` can refuse up front on
+ * a stack bootstrapped before it existed rather than fail inside the MicroVM
+ * after a full build. A flag rather than a read of the policy itself: the CI
+ * deploy role that runs `stage` has no IAM read access, and granting it
+ * `iam:GetRolePolicy` to check one statement would widen it for little gain.
  */
 export const RELEASE_STAGING_OUTPUT = 'releaseStaging';
 
@@ -311,7 +314,9 @@ async function applyExecRolePolicy(ctx: OpsContext): Promise<void> {
       },
     ],
   });
-  if (!ctx.preview) output(ctx, 'iam-exec-role')[RELEASE_STAGING_OUTPUT] = true;
+  // Recorded either way, so a stack whose policy stopped granting staging (it
+  // switched to SSR) stops claiming it.
+  output(ctx, 'iam-exec-role')[RELEASE_STAGING_OUTPUT] = !ctx.preview && !ctx.config.ssr;
 }
 
 /** IAM role the running builder MicroVM assumes to read source + write the site. */
@@ -2023,6 +2028,28 @@ function webFunctionDeployStatements(ctx: OpsContext): object[] {
   ];
 }
 
+/**
+ * `promote` copies a staged release's object tags into site/: reading them
+ * needs s3:GetObjectTagging on the staged copy, and writing them
+ * s3:PutObjectTagging on the live one - nothing wider. Only static, non-preview
+ * environments stage and promote.
+ */
+function promoteTaggingStatements(ctx: OpsContext): object[] {
+  if (ctx.preview || ctx.config.ssr) return [];
+  return [
+    {
+      Effect: 'Allow',
+      Action: ['s3:GetObjectTagging'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/${STAGED_RELEASES_PREFIX}*`,
+    },
+    {
+      Effect: 'Allow',
+      Action: ['s3:PutObjectTagging'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}/site/*`,
+    },
+  ];
+}
+
 /** The deploy role's inline policy statements (exported for tests). */
 export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
   const statements: object[] = [
@@ -2030,18 +2057,15 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
     {
       Effect: 'Allow',
       // s3:GetObjectVersion is what reads an artifact a revision is pinned to.
-      // The tagging pair lets `promote` copy a staged release's object tags
-      // to site/ along with its bytes.
       Action: [
         's3:GetObject',
         's3:PutObject',
         's3:DeleteObject',
-        's3:GetObjectTagging',
-        's3:PutObjectTagging',
         ...(ctx.config.ssr ? ['s3:GetObjectVersion'] : []),
       ],
       Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
     },
+    ...promoteTaggingStatements(ctx),
     { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
     {
       Effect: 'Allow',

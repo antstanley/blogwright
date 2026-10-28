@@ -116,9 +116,13 @@ Options:
   --plain           Minimal machine-friendly output (no colour, no live status,
                     no prompts) - for CI systems and agents; also automatic when
                     output is piped. NO_COLOR disables colour only.
-  --refresh         Re-upload every file on deploy, even unchanged ones, so
-                    metadata fixes (content types, object tags) reach live
-                    objects the ETag comparison would otherwise skip.
+  --refresh         Re-upload every file on deploy, rollback or stage (copy
+                    every file on promote), even unchanged ones, so metadata
+                    fixes (content types, object tags) reach objects the
+                    ETag comparison would otherwise skip.
+  --force-unlock    Replace the environment lock a deploy, rollback, stage,
+                    promote or delete left behind when it stopped; only once
+                    that command is known to be no longer running
   --switch-mode     Allow bootstrap to change a bootstrapped stack between
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy
@@ -1740,9 +1744,9 @@ describe('main - hash-first release commands', () => {
       const terminal = createScriptedTerminal({ interactive: false });
       const { makeContext, contexts } = testContextFactory(terminal);
 
-      // The test context rejects every S3 read but scoped state, so the first
-      // read the command makes - of the hash's manifest or staged prefix -
-      // names the hash.
+      // The test context rejects every S3 read but scoped state (and finds the
+      // environment lock free), so the first read the command makes - of the
+      // hash's manifest or staged release record - names the hash.
       await expect(
         main(
           [command, 'abc123', 'staging'],
@@ -1754,6 +1758,27 @@ describe('main - hash-first release commands', () => {
         ),
       ).rejects.toThrow(/abc123/);
       expect(contexts.map((ctx) => ctx.env)).toEqual(['staging']);
+    },
+  );
+
+  it.each(['rollback', 'logs', 'verify', 'promote'])(
+    '%s refuses a hash that is not letters and digits, before any context',
+    async (command) => {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { makeContext, contexts } = testContextFactory(terminal);
+      for (const bad of ['../site', 'abc/123', 'abc 123']) {
+        await expect(
+          main(
+            [command, bad, 'staging'],
+            fixedTerminal(terminal),
+            makeContext,
+            unreachableDiscoveryPorts,
+            unreachablePackages,
+            testAwsAccess(),
+          ),
+        ).rejects.toThrow(`${command} needs a revision hash of letters and digits`);
+      }
+      expect(contexts).toEqual([]);
     },
   );
 
@@ -1799,21 +1824,24 @@ describe('main - hash-first release commands', () => {
     },
   );
 
-  it.each(['rollback', 'logs', 'verify', 'promote'])('%s refuses to run without a hash', async (command) => {
-    const terminal = createScriptedTerminal({ interactive: false });
-    const { makeContext, contexts } = testContextFactory(terminal);
+  it.each(['rollback', 'logs', 'verify', 'promote'])(
+    '%s refuses to run without a hash',
+    async (command) => {
+      const terminal = createScriptedTerminal({ interactive: false });
+      const { makeContext, contexts } = testContextFactory(terminal);
 
-    await expect(
-      main(
-        [command],
-        fixedTerminal(terminal),
-        makeContext,
-        unreachableDiscoveryPorts,
-        unreachablePackages,
-        testAwsAccess(),
-      ),
-    ).rejects.toThrow(`${command} requires a <hash>`);
-    // Refused before the environment's config is loaded or AWS is called.
-    expect(contexts).toEqual([]);
-  });
+      await expect(
+        main(
+          [command],
+          fixedTerminal(terminal),
+          makeContext,
+          unreachableDiscoveryPorts,
+          unreachablePackages,
+          testAwsAccess(),
+        ),
+      ).rejects.toThrow(`${command} requires a <hash>`);
+      // Refused before the environment's config is loaded or AWS is called.
+      expect(contexts).toEqual([]);
+    },
+  );
 });

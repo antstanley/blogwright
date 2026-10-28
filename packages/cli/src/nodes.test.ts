@@ -489,10 +489,24 @@ describe('oidcRolePolicyStatements', () => {
     expect(resourcesFor('lambda:InvokeWebFunctionEndpoint')).toEqual([`${fn}/endpoint/site`]);
   });
 
-  it('lets promote copy staged objects with their tags', () => {
-    const actions = actionsOf(oidcRolePolicyStatements(ctx({ preview: false })));
-    expect(actions).toContain('s3:GetObjectTagging');
-    expect(actions).toContain('s3:PutObjectTagging');
+  it('lets promote read tags only from staged releases and write them only to site/', () => {
+    const statements = oidcRolePolicyStatements(ctx({ preview: false }));
+    const resourcesFor = (action: string) =>
+      statements
+        .filter((s) => actionsOf([s]).includes(action))
+        .map((s) => (s as { Resource: string }).Resource);
+    expect(resourcesFor('s3:GetObjectTagging')).toEqual([
+      'arn:aws:s3:::production-example-123456789012/releases/*',
+    ]);
+    expect(resourcesFor('s3:PutObjectTagging')).toEqual([
+      'arn:aws:s3:::production-example-123456789012/site/*',
+    ]);
+  });
+
+  it('grants the preview role no tagging, since previews are never promoted', () => {
+    const actions = actionsOf(oidcRolePolicyStatements(ctx({ preview: true })));
+    expect(actions).not.toContain('s3:GetObjectTagging');
+    expect(actions).not.toContain('s3:PutObjectTagging');
   });
 
   it('grants production invalidation on the distribution ARN', () => {
@@ -1019,6 +1033,23 @@ describe('site-write roles can tag objects (#7)', () => {
       .find((n) => n.id === 'iam-exec-role')!
       .create(ctx);
     expect(ctx.state.resources['iam-exec-role']?.[RELEASE_STAGING_OUTPUT]).toBe(true);
+  });
+
+  it('records that an SSR exec role does not grant release staging', async () => {
+    const ctx = createTestContext({
+      config: { ssr: { entryPoint: 'index.js' } },
+      clients: {
+        iam: {
+          ensureRole: async () => 'arn:aws:iam::1:role/r',
+          putRolePolicy: async () => undefined,
+        },
+      },
+    });
+    ctx.state.resources['iam-exec-role'] = { [RELEASE_STAGING_OUTPUT]: true };
+    await buildNodes(ctx)
+      .find((n) => n.id === 'iam-exec-role')!
+      .create(ctx);
+    expect(ctx.state.resources['iam-exec-role']?.[RELEASE_STAGING_OUTPUT]).toBe(false);
   });
 
   it.each(['iam-build-role', 'iam-exec-role'] as const)(

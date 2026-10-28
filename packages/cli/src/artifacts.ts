@@ -201,7 +201,7 @@ export async function recordDeployArtifact(
  * The manifest a staged release is bound to, or undefined when the hash has
  * no staged release. A corrupt record, or one for another revision, throws.
  */
-export async function readStagedReleaseManifest(
+async function readStagedReleaseManifest(
   ctx: OpsContext,
   hash: string,
 ): Promise<ArtifactManifest | undefined> {
