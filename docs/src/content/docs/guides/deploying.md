@@ -150,7 +150,7 @@ The command uses the hash's newest build record - its deployment manifest, or it
 
 When the config has a `pds` section and publishing has been initialised, every successful **production** deploy also re-reconciles the site's standard.site records on your PDS. The sync is non-fatal by design: if it fails (an expired session, a network blip), the deploy still succeeds with a warning, and the next deploy heals the records. Non-production environments never sync.
 
-Rollbacks are the exception - a rollback restores the deployed site but not your working tree, and the PDS mirrors repo content, so `blogwright rollback` only warns about the divergence instead of syncing. See [Publishing to standard.site](/plugins/standard-site/).
+A `promote` or `rollback` runs the same post-deploy steps only when the working copy is the revision it publishes: the PDS mirrors the working tree's content, which matches the live site only then. With any other checkout the command warns and skips them; check out the published revision and run `blogwright pds sync` to realign the records. See [Publishing to standard.site](/plugins/standard-site/).
 
 ## Release gating: stage, verify, promote
 

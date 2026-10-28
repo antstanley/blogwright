@@ -172,7 +172,7 @@ blogwright rollback <hash>
 ```
 
 :::note
-On production with a `pds` section configured, rollback warns: `rollback does not sync the PDS (records mirror the current repo content)`. The PDS mirrors your working tree, which a rollback does not restore - check out the rolled-back revision and run `blogwright pds sync` if the records should match.
+A rollback runs the post-deploy plugin steps (the standard.site PDS sync, for one) only when the working copy is the rolled-back revision. Otherwise it warns: `skipping the post-deploy plugin steps: they publish the working copy's content, and the working copy is <rev>, not <hash>`. The PDS mirrors your working tree, which a rollback does not restore - check out the rolled-back revision and run `blogwright pds sync` if the records should match.
 :::
 
 ### A metadata fix never reached the live site

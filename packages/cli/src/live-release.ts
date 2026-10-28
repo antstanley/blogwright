@@ -67,7 +67,7 @@ function isPublishing(value: unknown): value is PublishingLiveRelease {
 }
 
 /** Whether a record names a release a command finished publishing. */
-function isSettledLiveRelease(record: LiveReleaseRecord | undefined): record is LiveRelease {
+export function isSettledLiveRelease(record: LiveReleaseRecord | undefined): record is LiveRelease {
   return record !== undefined && !('status' in record);
 }
 
@@ -144,11 +144,109 @@ export async function forgetLiveRelease(ctx: OpsContext): Promise<void> {
 
 /** One line naming the live release, for a before/after report. */
 export function describeLiveRelease(live: LiveReleaseRecord | undefined): string {
-  if (live === undefined) return 'unknown (no release recorded)';
+  if (live === undefined) {
+    return (
+      'unknown - no live-release record: site/ was last published before blogwright ' +
+      'recorded releases, by a build that recorded no artifact manifest, or not at all'
+    );
+  }
   if (isSettledLiveRelease(live)) return `${live.release} (sha256 ${live.releaseHash})`;
   const what = live.hash ? `a ${live.via} of ${live.hash}` : `a ${live.via}`;
   const before = live.previous
     ? `; the last completed release was ${live.previous.release} (sha256 ${live.previous.releaseHash})`
     : '';
   return `unknown (${what} started ${live.startedAt} did not finish${before})`;
+}
+
+/**
+ * Every staged release a `promote` or a republishing `rollback` published for
+ * a revision (`build/published/<hash>.json`), oldest first. `stage` never
+ * writes it, so it outlives a re-stage of the same revision: the record of
+ * what was actually live is kept even after the staged bytes are replaced.
+ */
+const PUBLISHED_RELEASES_PREFIX = 'build/published/';
+
+/** How many publications a revision's record keeps - the newest ones. */
+export const PUBLISHED_RELEASES_KEPT = 50;
+
+/** One publication of a staged release into `site/`. */
+export interface ReleasePublication {
+  release: string;
+  releaseHash: string;
+  via: Extract<LiveReleaseSource, 'promote' | 'rollback'>;
+  publishedAt: string;
+}
+
+interface PublishedReleases {
+  hash: string;
+  publications: ReleasePublication[];
+}
+
+export function publishedReleasesKey(hash: string): string {
+  return `${PUBLISHED_RELEASES_PREFIX}${hash}.json`;
+}
+
+function isPublication(value: unknown): value is ReleasePublication {
+  return (
+    isRecordObject(value) &&
+    ['release', 'releaseHash', 'via', 'publishedAt'].every(
+      (field) => typeof value[field] === 'string',
+    )
+  );
+}
+
+function isPublishedReleases(value: unknown): value is PublishedReleases {
+  return (
+    isRecordObject(value) &&
+    typeof value.hash === 'string' &&
+    Array.isArray(value.publications) &&
+    value.publications.every(isPublication)
+  );
+}
+
+/**
+ * A revision's publications, oldest first; empty when none is recorded. Like
+ * the live-release record it is informational, so an unreadable one is
+ * reported and read as empty.
+ */
+export async function readPublications(
+  ctx: OpsContext,
+  hash: string,
+): Promise<ReleasePublication[]> {
+  const key = publishedReleasesKey(hash);
+  const text = await ctx.clients.s3.getObjectText(ctx.names.bucket, key);
+  if (text === undefined) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  if (isPublishedReleases(parsed) && parsed.hash === hash) return parsed.publications;
+  ctx.logger.warn(`ignoring unreadable publication record s3://${ctx.names.bucket}/${key}`);
+  return [];
+}
+
+/** Append a publication of `manifest`'s release to its revision's record. */
+export async function recordPublication(
+  ctx: OpsContext,
+  manifest: ArtifactManifest,
+  via: ReleasePublication['via'],
+): Promise<void> {
+  const publications = [
+    ...(await readPublications(ctx, manifest.hash)),
+    {
+      release: manifest.release,
+      releaseHash: manifest.releaseHash,
+      via,
+      publishedAt: new Date().toISOString(),
+    },
+  ].slice(-PUBLISHED_RELEASES_KEPT);
+  const record: PublishedReleases = { hash: manifest.hash, publications };
+  await ctx.clients.s3.putObject(
+    ctx.names.bucket,
+    publishedReleasesKey(manifest.hash),
+    JSON.stringify(record, null, 2),
+    'application/json',
+  );
 }

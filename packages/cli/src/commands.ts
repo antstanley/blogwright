@@ -2,6 +2,7 @@ import {
   AwsError,
   colors,
   findRepoRoot,
+  stagedReleaseManifestKey,
   type ArtifactManifest,
   type ResourceNode,
 } from 'blogwright-core';
@@ -53,7 +54,7 @@ import {
   type StatusEntry,
   type SummaryRow,
 } from './render.js';
-import { canRepublish, rollbackByRepublishing } from './releases.js';
+import { rollbackToStagedRelease, runAfterPublish } from './releases.js';
 import { buildRepoZip, COMMIT_FILE, listRepoFiles } from './repo.js';
 import { assertServingModeMatches, configuredMode, recordedMode, siteBaseUrl } from './serving.js';
 import {
@@ -436,7 +437,7 @@ async function deployLocked(
 async function rollbackSsr(
   ctx: OpsContext,
   hash: string,
-  opts: { refresh?: boolean } = {},
+  opts: { refresh?: boolean | undefined } = {},
 ): Promise<void> {
   const startedAt = Date.now();
   warnAboutSsrSeo(ctx);
@@ -496,63 +497,71 @@ async function rollbackSsr(
     `  revision ${outcome.revisionId} (${outcome.created ? 'created' : 'unchanged'}), ` +
       `${describeInvalidation(outcome.invalidation)}`,
   );
+}
 
-  warnRollbackLeavesPdsAlone(ctx);
-  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
+export interface RollbackOptions extends LockOptions {
+  /** Re-upload (or, republishing, copy) every file, even unchanged ones. */
+  refresh?: boolean | undefined;
+  /**
+   * Static environments: rebuild from the archived source even when the hash
+   * has a staged release - the way out when its staged copy can no longer be
+   * republished.
+   */
+  rebuild?: boolean | undefined;
+  /**
+   * The post-deploy plugin steps, run only when the working copy is the
+   * rolled-back revision - the same rule as `promote`; see
+   * {@link runAfterPublish}.
+   */
+  afterDeploy: AfterDeploy;
 }
 
 /**
- * A rollback changes production content too, but the PDS mirrors the *working
- * tree* content, which a rollback does not restore - so only warn about the
- * divergence.
- */
-function warnRollbackLeavesPdsAlone(ctx: OpsContext): void {
-  if (ctx.env === 'production' && ctx.config.pds) {
-    ctx.logger.warn(
-      'rollback does not sync the PDS (records mirror the current repo content); ' +
-        'check out the rolled-back revision and run `blogwright pds sync` if needed',
-    );
-  }
-}
-
-/**
- * Roll back to a hash. A static hash that was staged is republished from its
- * stored bytes; any other is rebuilt from its archived source zip.
+ * Roll back to a hash. In a static environment a hash with a staged release
+ * is republished from its stored bytes, and any other - or any, with
+ * `--rebuild` - is rebuilt from its archived source zip; an SSR environment
+ * reproduces the recorded revision.
  */
 export async function rollback(
   ctx: OpsContext,
   hash: string,
-  opts: { refresh?: boolean } & LockOptions = {},
+  opts: RollbackOptions,
 ): Promise<void> {
   assertServingModeMatches(ctx);
-  await withEnvLock(ctx, 'rollback', hash, opts, () =>
-    ctx.config.ssr ? rollbackSsr(ctx, hash, opts) : rollbackStatic(ctx, hash, opts),
-  );
+  if (opts.rebuild && ctx.config.ssr) {
+    throw new Error(
+      'rollback --rebuild applies to static environments: an SSR rollback reproduces the ' +
+        'recorded revision, and rebuilds by itself when that revision cannot be reproduced',
+    );
+  }
+  const startedAt = Date.now();
+  await withEnvLock(ctx, 'rollback', hash, opts, async () => {
+    if (ctx.config.ssr) await rollbackSsr(ctx, hash, opts);
+    else await rollbackStatic(ctx, hash, opts);
+    await runAfterPublish(ctx, hash, opts.afterDeploy);
+  });
+  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
 /**
- * Static rollback: republish a staged release's stored bytes, or rebuild the
- * hash's archived source into site/.
+ * Static rollback, holding the environment lock. A hash with a staged release
+ * is republished from its stored bytes - or refused, when they can no longer
+ * be checked. Any other hash, or any with `--rebuild`, is rebuilt from its
+ * archived source zip into site/.
  */
-async function rollbackStatic(
-  ctx: OpsContext,
-  hash: string,
-  opts: { refresh?: boolean },
-): Promise<void> {
-  const startedAt = Date.now();
-  if (await canRepublish(ctx, hash)) {
-    ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
-    await rollbackByRepublishing(ctx, hash, opts);
-    warnRollbackLeavesPdsAlone(ctx);
-    ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
-    return;
-  }
+async function rollbackStatic(ctx: OpsContext, hash: string, opts: RollbackOptions): Promise<void> {
+  ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
+  if (!opts.rebuild && (await rollbackToStagedRelease(ctx, hash, opts)) === 'republished') return;
   const sourceKey = `build/${hash}.zip`;
   if (!(await ctx.clients.s3.objectExists(ctx.names.bucket, sourceKey))) {
     throw new Error(`no build artifact at ${sourceKey}; cannot roll back to ${hash}`);
   }
-  ctx.logger.info(colors.bold(`Rolling back "${ctx.env}" to ${hash}`));
-  ctx.logger.step(`${hash} has no staged release to republish - rebuilding from ${sourceKey}`);
+  ctx.logger.step(
+    opts.rebuild
+      ? `rebuilding ${hash} from ${sourceKey}, as --rebuild asks - any staged release of it is not used`
+      : `${hash} has no staged release (no record at ${stagedReleaseManifestKey(hash)}) - ` +
+          `rebuilding from ${sourceKey}`,
+  );
   // The original record is what the rebuilt bytes are checked against. The
   // rebuild records its own manifest under a fresh key and never replaces it.
   const recorded = await readRecordedBeforeRebuild(ctx, hash);
@@ -569,8 +578,6 @@ async function rollbackStatic(
   const rebuilt = await readBuildArtifact(ctx, hash, artifactKey);
   logRebuildComparison(ctx, recorded, rebuilt);
   await noteLiveRelease(ctx, rebuilt, 'rollback');
-  warnRollbackLeavesPdsAlone(ctx);
-  ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
 /** The build target one PR's preview publishes as: its pending-job and record name. */

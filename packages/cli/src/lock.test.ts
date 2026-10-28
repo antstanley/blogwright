@@ -57,7 +57,7 @@ describe('the environment lock', () => {
     ['deploy', (ctx: Parameters<typeof deploy>[0]) => deploy(ctx, NO_HOOKS)],
     ['stage', (ctx: Parameters<typeof deploy>[0]) => stage(ctx)],
     ['promote', (ctx: Parameters<typeof deploy>[0]) => promote(ctx, HASH, NO_HOOKS)],
-    ['rollback', (ctx: Parameters<typeof deploy>[0]) => rollback(ctx, HASH)],
+    ['rollback', (ctx: Parameters<typeof deploy>[0]) => rollback(ctx, HASH, NO_HOOKS)],
     ['delete', (ctx: Parameters<typeof deploy>[0]) => deleteSite(ctx)],
   ])(
     '%s refuses while another command holds it, naming the holder, and changes nothing',

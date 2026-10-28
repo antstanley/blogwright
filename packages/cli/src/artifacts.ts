@@ -258,15 +258,21 @@ export async function recordStagedRelease(
 }
 
 /**
- * The original manifest recorded for a hash, read before a rebuild. A
- * rollback is a recovery path, so an unreadable record is reported and
- * treated as absent rather than blocking it.
+ * The original manifest recorded for a hash, read before a rebuild:
+ * `unreadable` when one exists but cannot be read. A rollback is a recovery
+ * path, so an unreadable record is reported once, here, and does not block
+ * it - but it is never reported as absent.
  */
 export async function readRecordedBeforeRebuild(
   ctx: OpsContext,
   hash: string,
-): Promise<ArtifactManifest | undefined> {
-  return readOrWarn(ctx, hash, artifactManifestKey(hash), 'recorded artifact manifest');
+): Promise<ArtifactManifest | 'unreadable' | undefined> {
+  try {
+    return await readArtifactManifest(ctx, hash);
+  } catch (err) {
+    ctx.logger.warn(`ignoring the recorded artifact manifest: ${(err as Error).message}`);
+    return 'unreadable';
+  }
 }
 
 /**
@@ -278,9 +284,16 @@ export async function readRecordedBeforeRebuild(
  */
 export function logRebuildComparison(
   ctx: OpsContext,
-  recorded: ArtifactManifest | undefined,
+  recorded: ArtifactManifest | 'unreadable' | undefined,
   rebuilt: ArtifactManifest | undefined,
 ): void {
+  if (recorded === 'unreadable') {
+    ctx.logger.warn(
+      'the original artifact manifest could not be read (see above), so the rebuild cannot be ' +
+        'checked against it - treat the live site as unverified',
+    );
+    return;
+  }
   if (!recorded) {
     ctx.logger.info(`  no artifact manifest was recorded before this rebuild`);
     return;

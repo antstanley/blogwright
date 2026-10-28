@@ -11,7 +11,14 @@ import { readArtifactManifest } from './artifacts.js';
 import { cacheControlRecordKey } from './cache-control.js';
 import { deleteSite, deploy, history, rollback } from './commands.js';
 import { readManifest, writeManifest } from './deploy.js';
-import { LIVE_RELEASE_KEY, readLiveRelease } from './live-release.js';
+import {
+  LIVE_RELEASE_KEY,
+  PUBLISHED_RELEASES_KEPT,
+  publishedReleasesKey,
+  readLiveRelease,
+  readPublications,
+  recordPublication,
+} from './live-release.js';
 import { historyTime, renderHistoryTable } from './render.js';
 import { RELEASE_STAGING_OUTPUT } from './nodes.js';
 import { promote, stage } from './releases.js';
@@ -21,6 +28,8 @@ import {
   createMemoryS3,
   type FakeBuildJob,
 } from './test-support.js';
+import { resolveSeo } from './seo.js';
+import { siteBaseUrl } from './serving.js';
 import { verify } from './verify.js';
 
 const HASH = 'abc123';
@@ -230,7 +239,7 @@ describe('promote', () => {
     await s3.client.putObject('b', `releases/${HASH}/index.html`, 'v2');
 
     await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(
-      /releases\/abc123\/ does not match release .*0 missing, 1 changed, 0 unexpected/,
+      /cannot promote abc123: .*releases\/abc123\/ does not match release .*0 missing, 1 changed, 0 unexpected.*Stage it again with `blogwright stage production` from a checkout of abc123, then promote it\./,
     );
     expect(snapshot(s3, 'site/')).toEqual({});
   });
@@ -328,7 +337,7 @@ describe('history of staged releases', () => {
 });
 
 describe('rollback to a staged release', () => {
-  /** Stage and promote two releases, leaving the second live. */
+  /** Stage and promote two releases, leaving the second live and checked out. */
   async function twoReleases() {
     const env = await setup({ 'index.html': 'first', 'about/index.html': 'about' });
     await stage(env.ctx);
@@ -349,7 +358,7 @@ describe('rollback to a staged release', () => {
     const replaced = await readArtifactManifest(ctx, 'def456');
     const builds = launches(lines());
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(launches(lines())).toBe(builds);
     expect(snapshot(s3, 'site/')).toEqual(snapshot(s3, `releases/${HASH}/`));
@@ -370,11 +379,38 @@ describe('rollback to a staged release', () => {
       ['/about/index.html', '/about/', '/index.html', '/', '/new.html'],
     ]);
     expect(await readLiveRelease(ctx)).toMatchObject({ hash: HASH, via: 'rollback' });
+    expect(await readPublications(ctx, HASH)).toMatchObject([
+      { releaseHash: restored!.releaseHash, via: 'promote' },
+      { releaseHash: restored!.releaseHash, via: 'rollback' },
+    ]);
+    expect(lines().some((line) => line.includes('staged again'))).toBe(false);
+    expect(lines().some((line) => line.includes('another origin'))).toBe(false);
+  });
+
+  it('reads the staged release record once and lists the staged prefix only to verify and copy', async () => {
+    const { ctx } = await twoReleases();
+    const reads: string[] = [];
+    const getObjectText = ctx.clients.s3.getObjectText.bind(ctx.clients.s3);
+    ctx.clients.s3.getObjectText = async (bucket, key) => {
+      reads.push(key);
+      return getObjectText(bucket, key);
+    };
+    const lists: string[] = [];
+    const listObjects = ctx.clients.s3.listObjects.bind(ctx.clients.s3);
+    ctx.clients.s3.listObjects = async (bucket, prefix) => {
+      lists.push(prefix);
+      return listObjects(bucket, prefix);
+    };
+
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    expect(reads.filter((key) => key === stagedReleaseManifestKey(HASH))).toHaveLength(1);
+    expect(lists.filter((prefix) => prefix === `releases/${HASH}/`)).toHaveLength(2);
   });
 
   it('restores the Cache-Control the release was staged with, and its record', async () => {
     const noStore = [{ match: ['**'], value: 'no-store' }];
-    const { s3, ctx, build } = await setup({ 'index.html': 'first' });
+    const { s3, ctx, build, lines } = await setup({ 'index.html': 'first' });
     Object.assign(ctx.config, { cacheControl: noStore });
     await stage(ctx);
     await promote(ctx, HASH, NO_HOOKS);
@@ -384,48 +420,279 @@ describe('rollback to a staged release', () => {
     await promote(ctx, 'def456', NO_HOOKS);
     expect(s3.objects.get('site/index.html')?.cacheControl).toBe('max-age=60');
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(s3.objects.get('site/index.html')?.cacheControl).toBe('no-store');
     expect(JSON.parse(s3.text(cacheControlRecordKey('site'))!)).toEqual({
       status: 'applied',
       rules: noStore,
     });
+    // The shared messages name the command that is running.
+    expect(lines()).toContainEqual(
+      expect.stringContaining('republishing the Cache-Control it was staged with'),
+    );
   });
 
-  it('refuses to republish staged bytes that no longer match, leaving site/ as it was', async () => {
+  it('names the rollback, not a promotion, when it republishes untagged', async () => {
+    const { ctx, lines } = await twoReleases();
+    const copyObject = ctx.clients.s3.copyObject.bind(ctx.clients.s3);
+    ctx.clients.s3.copyObject = async (bucket, source, destination, options = {}) => {
+      if ((options.tags ?? 'copy') === 'copy') {
+        throw new AwsError({ service: 's3', code: 'AccessDenied', message: 'no', statusCode: 403 });
+      }
+      return copyObject(bucket, source, destination, options);
+    };
+
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    expect(lines()).toContainEqual(expect.stringContaining('republishing untagged'));
+    expect(lines()).toContainEqual(
+      expect.stringContaining(`then \`blogwright rollback ${HASH} production --refresh\``),
+    );
+  });
+
+  it('refuses a staged copy that was changed, naming the counts and the way out', async () => {
     const { s3, ctx } = await twoReleases();
     const live = snapshot(s3, 'site/');
+    const record = s3.text(LIVE_RELEASE_KEY);
     await s3.client.putObject('b', `releases/${HASH}/index.html`, 'tampered');
 
-    await expect(rollback(ctx, HASH)).rejects.toThrow(/releases\/abc123\/ does not match release/);
+    const refused = rollback(ctx, HASH, NO_HOOKS);
+
+    await expect(refused).rejects.toThrow(
+      /cannot republish abc123: .*releases\/abc123\/ does not match release .*: 0 missing, 1 changed, 0 unexpected \(the staged copy was modified after it was staged and checked\)\. Nothing was published\./,
+    );
+    await expect(refused).rejects.toThrow(
+      /`blogwright stage production` from a checkout of abc123.*`blogwright rollback abc123 production --rebuild`/,
+    );
+    expect(snapshot(s3, 'site/')).toEqual(live);
+    expect(s3.text(LIVE_RELEASE_KEY)).toBe(record);
+  });
+
+  it('refuses a staged copy a lifecycle rule partly expired, then --rebuild rolls back from source', async () => {
+    const { s3, ctx, lines, build } = await twoReleases();
+    const live = snapshot(s3, 'site/');
+    s3.objects.delete(`releases/${HASH}/about/index.html`);
+    const builds = launches(lines());
+
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(
+      /does not match release .*: 1 missing, 0 changed, 0 unexpected \(objects are missing from the staged copy - an S3 lifecycle rule expiring releases\/ objects, or a delete, removes them\)/,
+    );
+    expect(snapshot(s3, 'site/')).toEqual(live);
+    expect(launches(lines())).toBe(builds);
+
+    // The escape hatch: rebuild the archived source, compared with the original.
+    build({ 'index.html': 'first', 'about/index.html': 'about' }, 'def456');
+    await rollback(ctx, HASH, { ...NO_HOOKS, rebuild: true });
+
+    expect(launches(lines())).toBe(builds + 1);
+    expect(lines()).toContain(
+      `rebuilding ${HASH} from build/${HASH}.zip, as --rebuild asks - any staged release of it is not used`,
+    );
+    expect(lines()).toContain('the rebuild is byte-identical to the recorded artifact');
+    expect(s3.text('site/index.html')).toBe('first');
+    expect(await readLiveRelease(ctx)).toMatchObject({ hash: HASH, via: 'rollback' });
+  });
+
+  it('refuses a staged copy that expired entirely, rather than rebuilding unreviewed bytes', async () => {
+    const { s3, ctx, lines } = await twoReleases();
+    for (const key of s3.objects.keys()) {
+      if (key.startsWith(`releases/${HASH}/`)) s3.objects.delete(key);
+    }
+    const builds = launches(lines());
+
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(
+      /2 missing, 0 changed, 0 unexpected \(objects are missing from the staged copy/,
+    );
+    expect(launches(lines())).toBe(builds);
+  });
+
+  it('republishes again once the hash is staged again', async () => {
+    const { s3, ctx, build } = await twoReleases();
+    await s3.client.putObject('b', `releases/${HASH}/index.html`, 'tampered');
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(/cannot republish/);
+
+    build({ 'index.html': 'first', 'about/index.html': 'about' }, HASH);
+    await stage(ctx);
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    expect(s3.text('site/index.html')).toBe('first');
+  });
+
+  it('refuses, rather than rebuilding, when the staged release record is unreadable', async () => {
+    const { s3, ctx, lines } = await twoReleases();
+    const live = snapshot(s3, 'site/');
+    await s3.client.putObject('b', stagedReleaseManifestKey(HASH), 'not json');
+    const builds = launches(lines());
+
+    await expect(rollback(ctx, HASH, NO_HOOKS)).rejects.toThrow(
+      /cannot republish abc123: its staged release record at s3:\/\/.*\/build\/releases\/abc123\.json is unreadable \(.*\), so its staged bytes cannot be checked\. Nothing was published\. To recover, stage it again .*--rebuild/,
+    );
+    expect(launches(lines())).toBe(builds);
     expect(snapshot(s3, 'site/')).toEqual(live);
   });
 
-  it('rebuilds from the source zip when the hash was never staged', async () => {
+  it('rebuilds from the source zip when the hash has no staged release, saying why', async () => {
     const { ctx, lines } = await setup({ 'index.html': 'v1' });
     await deploy(ctx, NO_HOOKS);
     const builds = launches(lines());
 
-    await rollback(ctx, HASH);
+    await rollback(ctx, HASH, NO_HOOKS);
 
     expect(launches(lines())).toBe(builds + 1);
     expect(lines()).toContain(
-      `${HASH} has no staged release to republish - rebuilding from build/${HASH}.zip`,
+      `${HASH} has no staged release (no record at build/releases/${HASH}.json) - ` +
+        `rebuilding from build/${HASH}.zip`,
+    );
+    expect(lines().some((line) => line.includes('republishing'))).toBe(false);
+  });
+
+  it('warns once, and never claims no record, when the original manifest is unreadable', async () => {
+    const { s3, ctx, lines, build } = await setup({ 'index.html': 'v1' });
+    await deploy(ctx, NO_HOOKS);
+    await s3.client.putObject('b', artifactManifestKey(HASH), 'not json');
+    build({ 'index.html': 'v2' }, 'def456');
+    await deploy(ctx, NO_HOOKS);
+    const from = lines().length;
+
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    const rolled = lines().slice(from);
+    expect(
+      rolled.filter((line) => line.startsWith('ignoring the recorded artifact manifest')),
+    ).toHaveLength(1);
+    expect(rolled).not.toContain('  no artifact manifest was recorded before this rebuild');
+    expect(rolled).toContainEqual(
+      expect.stringContaining('the original artifact manifest could not be read'),
     );
   });
 
-  it('rebuilds, with a warning, when the staged release has an unreadable record', async () => {
+  it('says so, and changes nothing, when the hash is already live', async () => {
+    const { s3, ctx, lines, invalidations } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    await promote(ctx, HASH, NO_HOOKS);
+    invalidations.length = 0;
+    const live = snapshot(s3, 'site/');
+    const release = (await readArtifactManifest(ctx, HASH))!.release;
+
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    expect(lines()).toContain(
+      `${release} is already the live release - this rollback only checks site/ against it ` +
+        'and repairs any difference',
+    );
+    expect(lines()).toContain(
+      `site/ already held ${release}: nothing was copied, deleted or invalidated`,
+    );
+    expect(invalidations).toEqual([]);
+    expect(snapshot(s3, 'site/')).toEqual(live);
+  });
+
+  it('warns when the hash was staged again since it was last published', async () => {
+    const { ctx, lines, build } = await setup({ 'index.html': 'reviewed' });
+    await stage(ctx);
+    await promote(ctx, HASH, NO_HOOKS);
+    const promoted = (await readPublications(ctx, HASH))[0]!;
+    build({ 'index.html': 'restaged' }, HASH);
+    await stage(ctx);
+    build({ 'index.html': 'other' }, 'def456');
+    await stage(ctx);
+    await promote(ctx, 'def456', NO_HOOKS);
+
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    expect(lines()).toContainEqual(
+      expect.stringContaining(
+        `${HASH} was staged again since its last promote on ${promoted.publishedAt}, which ` +
+          `published ${promoted.release} (sha256 ${promoted.releaseHash})`,
+      ),
+    );
+    expect((await readPublications(ctx, HASH)).map((p) => p.via)).toEqual(['promote', 'rollback']);
+  });
+
+  it("warns when the release's robots.txt and sitemap were staged for another origin", async () => {
+    const env = await setup({});
+    Object.assign(env.ctx, { domain: 'example.com' });
+    const current = resolveSeo(env.ctx, siteBaseUrl(env.ctx));
+    const sitemap = (origin: string) =>
+      `<?xml version="1.0"?><urlset><url><loc>${origin}/</loc></url></urlset>`;
+    env.build(
+      {
+        'index.html': 'v1',
+        'robots.txt': current.robots!,
+        'sitemap.xml': sitemap(current.sitemapBaseUrl!),
+      },
+      HASH,
+    );
+    await stage(env.ctx);
+    env.build(
+      {
+        'index.html': 'v2',
+        'robots.txt': 'User-agent: *\nAllow: /\n\nSitemap: https://old.example.com/sitemap.xml\n',
+        'sitemap.xml': sitemap('https://old.example.com'),
+      },
+      'def456',
+    );
+    await stage(env.ctx);
+    await promote(env.ctx, HASH, NO_HOOKS);
+    expect(env.lines().some((line) => line.includes('another origin'))).toBe(false);
+
+    await rollback(env.ctx, 'def456', NO_HOOKS);
+
+    expect(env.lines()).toContainEqual(
+      expect.stringContaining(
+        'def456 was staged for another origin or seo config than "production" has now - ' +
+          'robots.txt and sitemap.xml (its URLs are on https://old.example.com) differ from ' +
+          'what a build for https://example.com would publish today. The staged bytes are ' +
+          'restored as they are',
+      ),
+    );
+  });
+
+  it('runs the post-deploy plugin steps only when the working copy is the rolled-back revision', async () => {
+    const { ctx, lines, build } = await twoReleases();
+    let ran = 0;
+    const hooks = { afterDeploy: async () => void (ran += 1) };
+
+    await rollback(ctx, HASH, hooks);
+    expect(ran).toBe(0);
+    expect(lines()).toContainEqual(
+      expect.stringContaining('skipping the post-deploy plugin steps'),
+    );
+
+    build({ 'index.html': 'second', 'new.html': 'new' }, 'def456');
+    await rollback(ctx, 'def456', hooks);
+    expect(ran).toBe(1);
+  });
+
+  it('names what is unknown when no live-release record exists', async () => {
+    const { ctx, lines } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+
+    await rollback(ctx, HASH, NO_HOOKS);
+
+    expect(lines()).toContainEqual(
+      expect.stringMatching(/^ {2}previous release unknown - no live-release record: site\/ was/),
+    );
+  });
+});
+
+describe('the publication record', () => {
+  it('keeps the newest publications of a revision, and reads an unreadable record as empty', async () => {
     const { s3, ctx, lines } = await setup({ 'index.html': 'v1' });
     await stage(ctx);
-    await s3.client.putObject('b', stagedReleaseManifestKey(HASH), 'not json');
-    const builds = launches(lines());
+    const manifest = (await readArtifactManifest(ctx, HASH))!;
+    for (let i = 0; i <= PUBLISHED_RELEASES_KEPT; i += 1) {
+      await recordPublication(ctx, manifest, i % 2 === 0 ? 'promote' : 'rollback');
+    }
+    const kept = await readPublications(ctx, HASH);
+    expect(kept).toHaveLength(PUBLISHED_RELEASES_KEPT);
+    expect(kept.at(-1)?.via).toBe('promote');
 
-    await rollback(ctx, HASH);
-
-    expect(launches(lines())).toBe(builds + 1);
-    expect(lines().some((line) => line.startsWith('ignoring the staged release record'))).toBe(
-      true,
+    await s3.client.putObject('b', publishedReleasesKey(HASH), 'not json');
+    expect(await readPublications(ctx, HASH)).toEqual([]);
+    expect(lines()).toContainEqual(
+      expect.stringContaining('ignoring unreadable publication record'),
     );
   });
 });
