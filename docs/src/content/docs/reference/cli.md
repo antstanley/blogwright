@@ -81,7 +81,7 @@ A static deploy also records the [artifact manifest](/reference/artifact-manifes
 
 After every successful **production** deploy, standard.site records are re-synced to the PDS when configured - non-fatally, so a PDS outage never fails a good deploy (see [`pds sync`](#pds-sync)).
 
-`--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change.
+`--refresh` re-uploads every file even if unchanged, so metadata fixes (content types, object tags) reach live objects the ETag comparison would otherwise skip. Pass it once after upgrading blogwright across a metadata change. A change to the `cacheControl` rules needs no flag: the deploy refreshes on its own, as an implicit `--refresh` (see [Caching](/guides/caching/#when-the-rules-change)).
 
 With an `ssr` block in the config, the build's output is packaged and published as a Lambda Web Function revision instead of synced to `site/`: the deploy preflights the endpoint, creates a revision only when the artifact or a revision-scoped setting changed, probes it until it serves, restores the previous revision if it never does, and invalidates `/*`. See [Deploying](/guides/deploying/#ssr-environments).
 

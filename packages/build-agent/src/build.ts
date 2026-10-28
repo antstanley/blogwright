@@ -6,10 +6,14 @@ import { dirname, join, relative, sep } from 'node:path';
 
 import {
   AwsError,
+  createCacheControlLookup,
+  parseCacheControlRules,
   REPRODUCIBLE_ZIP_MTIME,
   S3Client,
   SigningClient,
   type AwsCredentials,
+  type CacheControlLookup,
+  type CacheControlRule,
   type CredentialProvider,
   type EntryShim,
 } from 'blogwright-core';
@@ -64,9 +68,14 @@ export interface BuildPayload {
   /** S3 object tags for the synced site files (environment/app; preview deploys carry the PR id). */
   objectTags?: Record<string, string> | undefined;
   /**
+   * The environment's `cacheControl` rules, matched against each file's
+   * site-relative URL path; absent or empty writes no `Cache-Control`.
+   */
+  cacheControl?: readonly CacheControlRule[] | undefined;
+  /**
    * Re-upload every built file even when its content is unchanged. S3 metadata
-   * (content type, object tags) is only written on a PUT, so a metadata fix
-   * never reaches objects the ETag comparison would otherwise skip.
+   * (content type, object tags, Cache-Control) is only written on a PUT, so a
+   * metadata fix never reaches objects the ETag comparison would otherwise skip.
    */
   refresh?: boolean | undefined;
   /** Present only for an SSR environment: package the output as a Web Function revision artifact. */
@@ -88,6 +97,7 @@ export interface PendingJob {
   robots?: string;
   sitemapBaseUrl?: string;
   objectTags?: Record<string, string>;
+  cacheControl?: CacheControlRule[];
   refresh?: boolean;
   webFunction?: WebFunctionJob;
   artifactManifestKey?: string;
@@ -259,8 +269,8 @@ export const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 /**
  * Whether a built file must be PUT again. Content-identical files are normally
  * skipped (that is what keeps a redeploy cheap and its invalidation narrow),
- * but S3 writes object metadata - content type, tags - only on a PUT, so a
- * metadata fix would never reach them. `refresh` forces the upload.
+ * but S3 writes object metadata - content type, tags, Cache-Control - only on
+ * a PUT, so a metadata fix would never reach them. `refresh` forces the upload.
  */
 export function shouldUpload(
   existingEtag: string | undefined,
@@ -269,6 +279,14 @@ export function shouldUpload(
 ): boolean {
   if (refresh) return true;
   return existingEtag !== md5;
+}
+
+/** What one site file is uploaded with. */
+export interface SiteObjectMetadata {
+  contentType: string;
+  tags?: Record<string, string> | undefined;
+  /** Omitted when no `cacheControl` rule matched the file. */
+  cacheControl?: string | undefined;
 }
 
 /** True for the 403 a role without `s3:PutObjectTagging` gets on a tagged PUT. */
@@ -293,13 +311,13 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
     bucket: string,
     key: string,
     content: Uint8Array,
-    type: string,
-    tags: Record<string, string> | undefined,
+    metadata: SiteObjectMetadata,
   ): Promise<void> {
+    const { contentType: type, tags, cacheControl } = metadata;
     const wantsTags = tags !== undefined && Object.keys(tags).length > 0;
     if (wantsTags && !taggingDenied) {
       try {
-        await s3.putObject(bucket, key, content, type, tags);
+        await s3.putObject(bucket, key, content, type, { tags, cacheControl });
         return;
       } catch (err) {
         // A plain PutObject denial re-throws below, from the untagged retry.
@@ -312,7 +330,7 @@ export function createSiteUploader(s3: S3Client, log: LogFn) {
         );
       }
     }
-    await s3.putObject(bucket, key, content, type);
+    await s3.putObject(bucket, key, content, type, { cacheControl });
   };
 }
 
@@ -488,6 +506,7 @@ async function publishFiles(opts: {
   rootDir: string;
   files: string[];
   objectTags?: Record<string, string> | undefined;
+  cacheControlFor: CacheControlLookup;
   refresh?: boolean | undefined;
   deleteStale: boolean;
 }): Promise<{ changedKeys: Set<string>; staleKeys: string[]; count: number }> {
@@ -500,10 +519,13 @@ async function publishFiles(opts: {
   const changedKeys = new Set<string>();
   const unmapped = new Set<string>();
   if (opts.refresh) {
-    log('refresh: re-uploading every file (metadata - content type, tags - may have changed)');
+    log(
+      'refresh: re-uploading every file (metadata - content type, tags, Cache-Control - may have changed)',
+    );
   }
   for (const file of opts.files) {
-    const key = opts.prefix + relative(opts.rootDir, file).split('\\').join('/');
+    const sitePath = relative(opts.rootDir, file).split('\\').join('/');
+    const key = opts.prefix + sitePath;
     uploaded.add(key);
     const content = await readFile(file);
     const md5 = createHash('md5').update(content).digest('hex');
@@ -513,7 +535,12 @@ async function publishFiles(opts: {
     const ext = extensionOf(key);
     if (type === DEFAULT_CONTENT_TYPE && ext !== undefined) unmapped.add(ext);
     if (!shouldUpload(existing.get(key), md5, opts.refresh)) continue;
-    await uploadSiteFile(opts.bucket, key, content, type, opts.objectTags);
+    await uploadSiteFile(opts.bucket, key, content, {
+      contentType: type,
+      tags: opts.objectTags,
+      // Matched on the URL path, not the key, so previews share production's rules.
+      cacheControl: opts.cacheControlFor(`/${sitePath}`),
+    });
     changedKeys.add(key);
   }
   if (unmapped.size > 0) {
@@ -536,24 +563,54 @@ async function publishFiles(opts: {
   return { changedKeys, staleKeys, count: opts.files.length };
 }
 
-/** Write the changed-paths manifest the CLI reads for a targeted invalidation. */
+/** What a publish left behind for the CLI. */
+export interface PublishResult {
+  /** Keys this build uploaded, for the targeted invalidation. */
+  changedKeys: Set<string>;
+  count: number;
+  /** The `cacheControl` rules every uploaded file was written with, as the agent parsed them. */
+  cacheControl: CacheControlRule[];
+}
+
+/**
+ * The changed-paths manifest the CLI reads for a targeted invalidation. It
+ * also reports the `cacheControl` rules this agent applied: the CLI records a
+ * target's rules only on that evidence, because an agent older than
+ * `cacheControl` drops the rules and still finishes the build.
+ */
+export interface ChangedPathsManifest {
+  /** URL paths to invalidate. */
+  paths: string[];
+  cacheControl: CacheControlRule[];
+}
+
+/** Build the {@link ChangedPathsManifest} for a publish to `prefix`. */
+export function changedPathsManifest(
+  published: PublishResult,
+  prefix: string,
+): ChangedPathsManifest {
+  const paths = [
+    ...new Set([...published.changedKeys].flatMap((k) => invalidationPaths(k, prefix))),
+  ];
+  return { paths, cacheControl: published.cacheControl };
+}
+
+/** Write the {@link ChangedPathsManifest}, the build's last step. */
 async function writeChangedPaths(
   s3: S3Client,
   log: LogFn,
   bucket: string,
   hash: string,
-  changedKeys: Set<string>,
-  prefix: string,
+  manifest: ChangedPathsManifest,
 ): Promise<void> {
-  const changedPaths = [...new Set([...changedKeys].flatMap((k) => invalidationPaths(k, prefix)))];
-  // The changed-paths manifest is only an invalidation optimization: if writing it fails
-  // (e.g. the runtime role lacks build/changed/* PutObject), the site is already published,
-  // so log and continue - the CLI falls back to a wildcard invalidation.
+  // If writing the manifest fails (e.g. the runtime role lacks build/changed/* PutObject),
+  // the site is already published, so log and continue: the CLI falls back to a wildcard
+  // invalidation, and treats the rules as unconfirmed so the next build re-applies them.
   try {
     await s3.putObject(
       bucket,
       `build/changed/${hash}.json`,
-      JSON.stringify({ paths: changedPaths }),
+      JSON.stringify(manifest),
       'application/json',
     );
   } catch (err) {
@@ -572,8 +629,10 @@ export async function publishBuild(
   workDir: string,
   distDir: string,
   log: LogFn,
-): Promise<{ changedKeys: Set<string>; count: number }> {
+): Promise<PublishResult> {
   const prefix = payload.sitePrefix.endsWith('/') ? payload.sitePrefix : `${payload.sitePrefix}/`;
+  const cacheControl = parseCacheControlRules(payload.cacheControl ?? []);
+  const cacheControlFor = createCacheControlLookup(cacheControl);
   const job = payload.webFunction;
   if (!job) {
     const built = await walkFiles(distDir);
@@ -586,13 +645,14 @@ export async function publishBuild(
       rootDir: distDir,
       files: built,
       objectTags: payload.objectTags,
+      cacheControlFor,
       refresh: payload.refresh,
       deleteStale: true,
     });
     log(
       `published ${built.length} files (${published.changedKeys.size} changed) to s3://${payload.bucket}/${prefix}`,
     );
-    return published;
+    return { changedKeys: published.changedKeys, count: published.count, cacheControl };
   }
 
   // SSR: package the server output first, then publish only `staticDir` (when
@@ -622,6 +682,7 @@ export async function publishBuild(
       rootDir: staticDir,
       files: assets,
       objectTags: payload.objectTags,
+      cacheControlFor,
       refresh: payload.refresh,
       deleteStale: false,
     });
@@ -650,7 +711,7 @@ export async function publishBuild(
     'application/json',
   );
   log(`wrote ${job.resultKey} (${staleKeys.length} stale site key(s) left for the CLI)`);
-  return { changedKeys, count: 0 };
+  return { changedKeys, count: 0, cacheControl };
 }
 
 function escapeXml(s: string): string {
@@ -756,7 +817,13 @@ export async function runBuild(s3: S3Client, payload: BuildPayload, log: LogFn):
   // The changed-paths manifest is the completion signal the CLI polls and reads.
   // It goes LAST: in SSR mode the result file the CLI's publish step reads must
   // already be in place when the manifest appears.
-  await writeChangedPaths(s3, log, payload.bucket, payload.hash, published.changedKeys, prefix);
+  await writeChangedPaths(
+    s3,
+    log,
+    payload.bucket,
+    payload.hash,
+    changedPathsManifest(published, prefix),
+  );
   await rm(workDir, { recursive: true, force: true });
 }
 

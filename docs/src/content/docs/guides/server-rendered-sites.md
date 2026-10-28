@@ -306,6 +306,8 @@ The SSR behavior uses a Blogwright-managed cache policy: minimum TTL 0, default 
 
 The managed `CachingOptimized` policy is not applied to the SSR behavior: it ignores query strings, cannot key on the viewer `Authorization` header, and would apply an 86,400-second default TTL to responses the application did not mark cacheable. Static paths kept on S3 use `CachingOptimized` as usual.
 
+Security headers such as `Content-Security-Policy` or `Strict-Transport-Security` can be set at the edge with [`headers`](/reference/configuration/#response-headers-headers): the policy is attached to the SSR behavior and to every static path, and its values override a header of the same name the application sends. Each `bootstrap` reconciles every cache behavior, so a response headers policy attached by hand in the console is replaced or removed. That also holds after upgrading from a version without `headers`; see [Policies attached by hand](/reference/configuration/#response-headers-headers).
+
 Fingerprint your static asset names (Astro's `/_astro/`, SvelteKit's `/_app/`, Nuxt's `/_nuxt/`, Next's `/_next/` all do by default). A file that keeps its name across builds is overwritten at upload time, before the new revision serves, so only fingerprinted names switch together with the server.
 
 ## Inert settings in SSR mode

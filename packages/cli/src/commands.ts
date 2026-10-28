@@ -14,6 +14,7 @@ import {
   readArtifactManifest,
   readRecordedBeforeRebuild,
 } from './artifacts.js';
+import { cacheControlRecordKey } from './cache-control.js';
 import type { OpsContext } from './context.js';
 import {
   invalidateChanged,
@@ -27,7 +28,7 @@ import {
 } from './deploy.js';
 import { applyGraph, destroyGraph, type GraphContext } from './graph.js';
 import { clearRunningMicrovms } from './microvms.js';
-import { buildNodes, reconcileBuilderImage } from './nodes.js';
+import { buildNodes, reconcileBuilderImage, reconcileResponseHeadersOnDeploy } from './nodes.js';
 import {
   formatDuration,
   logStatusEntries,
@@ -370,6 +371,9 @@ export async function deploy(ctx: OpsContext, opts: DeployOptions): Promise<void
     warnAboutSsrSeo(ctx);
     await preflightWebFunction(ctx);
   }
+  // Converge the response headers before anything is uploaded or built, so a
+  // policy CloudFront rejects stops the deploy with nothing published.
+  await reconcileResponseHeadersOnDeploy(ctx);
 
   const files = await listRepoFiles(
     ctx.ports,
@@ -553,6 +557,11 @@ export async function rollback(
   ctx.logger.ok(`rolled back to ${hash} in ${formatDuration(Date.now() - startedAt)}`);
 }
 
+/** The build target one PR's preview publishes as: its pending-job and record name. */
+function previewTarget(id: string): string {
+  return `preview-${id}`;
+}
+
 function assertPreviewId(id: string): void {
   if (!/^[a-z0-9-]+$/.test(id)) {
     throw new Error(`preview id must be lowercase alphanumeric/dashes (e.g. pr-42), got "${id}"`);
@@ -601,7 +610,7 @@ export async function previewDeploy(
     hash,
     sourceKey,
     sitePrefix: `previews/${id}/site/`,
-    target: `preview-${id}`,
+    target: previewTarget(id),
     baseUrl: url,
     // Per-PR objects carry the PR id in the environment tag (preview-pr-42).
     objectTags: { ...ctx.tags, environment: `preview-${id}` },
@@ -615,6 +624,7 @@ export async function previewDeploy(
 export async function previewDestroy(ctx: OpsContext, id: string): Promise<void> {
   assertPreviewId(id);
   const count = await ctx.clients.s3.deletePrefix(ctx.names.bucket, `previews/${id}/`);
+  await ctx.clients.s3.deleteObject(ctx.names.bucket, cacheControlRecordKey(previewTarget(id)));
   ctx.logger.ok(`removed preview ${id} (${count} object(s))`);
 }
 
