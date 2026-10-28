@@ -151,17 +151,18 @@ export async function writeCacheControlRecord(
 }
 
 /**
- * Mark the target's record `unconfirmed` before a build that re-applies the
- * rules, so a build that stops partway is re-applied by the next one. Fatal:
- * nothing has been published yet, and building without the mark could leave
- * mixed headers that no later build notices.
+ * Mark the target's record `unconfirmed` before its files are rewritten with
+ * other rules - by a build that re-applies them, or a promotion copying a
+ * staged release's headers in - so one that stops partway is re-applied by the
+ * next build. Fatal: nothing has been published yet, and going on without the
+ * mark could leave mixed headers that no later build notices.
  */
 export async function markCacheControlUnconfirmed(ctx: OpsContext, target: string): Promise<void> {
   try {
     await writeCacheControlRecord(ctx, target, { status: 'unconfirmed' });
   } catch (err) {
     throw new Error(
-      `could not mark ${cacheControlRecordKey(target)} unconfirmed before the build ` +
+      `could not mark ${cacheControlRecordKey(target)} unconfirmed before rewriting its files ` +
         `(${errorMessage(err)}); nothing was published`,
       { cause: err },
     );

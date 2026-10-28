@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,8 +9,10 @@ import {
   buildArtifactManifest,
   describeFiles,
   readSiteVersion,
+  recordArtifactManifest,
   writeArtifactManifest,
 } from './artifact.js';
+import { publishBuild } from './build.js';
 
 let dir: string;
 
@@ -42,6 +44,46 @@ describe('describeFiles', () => {
       { path: 'posts/a/index.html', bytes: 4, sha256: sha256Hex('post') },
     ]);
   });
+
+  it('records a backslash in a name as /, exactly as the upload keys it', async () => {
+    const dist = join(dir, 'dist');
+    const files = await writeTree(dist, { 'a\\b.html': 'odd', 'index.html': 'home' });
+    const keys: string[] = [];
+    const s3 = {
+      listObjects: async () => [],
+      putObject: async (_bucket: string, key: string) => {
+        keys.push(key);
+        return undefined;
+      },
+      deleteObject: async () => undefined,
+    } as unknown as S3Client;
+    await publishBuild(
+      s3,
+      {
+        hash: 'h1',
+        sourceKey: 'build/h1.zip',
+        bucket: 'b',
+        region: 'us-east-1',
+        sitePrefix: 'site/',
+      },
+      dir,
+      dist,
+      () => undefined,
+    );
+
+    const paths = (await describeFiles(dist, files)).map((file) => file.path);
+    expect(paths).toContain('a/b.html');
+    expect(keys.map((key) => key.slice('site/'.length)).sort()).toEqual([...paths].sort());
+  });
+
+  it('records a symlinked file with the bytes of its target, as it is published', async () => {
+    const dist = join(dir, 'dist');
+    const [target] = await writeTree(dist, { 'real.html': 'real' });
+    await symlink(target!, join(dist, 'alias.html'));
+    expect(await describeFiles(dist, [join(dist, 'alias.html')])).toEqual([
+      { path: 'alias.html', bytes: 4, sha256: sha256Hex('real') },
+    ]);
+  });
 });
 
 describe('readSiteVersion', () => {
@@ -57,6 +99,21 @@ describe('readSiteVersion', () => {
 
   it('is undefined for a non-string version', async () => {
     await writeFile(join(dir, 'package.json'), JSON.stringify({ version: 3 }));
+    expect(await readSiteVersion(dir)).toBeUndefined();
+  });
+
+  it('ignores a leading byte-order mark, as npm and pnpm do', async () => {
+    await writeFile(join(dir, 'package.json'), `\uFEFF${JSON.stringify({ version: '1.0.0' })}`);
+    expect(await readSiteVersion(dir)).toBe('1.0.0');
+  });
+
+  it('is undefined, not an error, for an app whose pnpm manifest is package.yaml', async () => {
+    await writeFile(join(dir, 'package.yaml'), 'name: site\nversion: 1.0.0\n');
+    expect(await readSiteVersion(dir)).toBeUndefined();
+  });
+
+  it('is undefined, not an error, for a package.json that does not parse', async () => {
+    await writeFile(join(dir, 'package.json'), '{ "version": "1.0.0", }');
     expect(await readSiteVersion(dir)).toBeUndefined();
   });
 });
@@ -122,5 +179,56 @@ describe('writeArtifactManifest', () => {
     );
     expect(log).toHaveLength(1);
     expect(log[0]).toMatch(/^warning: could not write artifact manifest .*blogwright bootstrap/);
+  });
+});
+
+describe('recordArtifactManifest', () => {
+  it('logs a warning instead of failing when the manifest cannot be built', async () => {
+    // `a\b.html` and `a/b.html` publish to the same key, so no manifest can list both.
+    const dist = join(dir, 'dist');
+    const files = await writeTree(dist, { 'a\\b.html': 'one', 'a/b.html': 'two' });
+    const puts: string[] = [];
+    const s3 = {
+      putObject: async (_bucket: string, key: string) => {
+        puts.push(key);
+        return undefined;
+      },
+    } as unknown as S3Client;
+    const log: string[] = [];
+
+    await recordArtifactManifest(
+      s3,
+      (line) => log.push(line),
+      { bucket: 'b', key: 'build/artifacts/h1/b1.json' },
+      { hash: 'h1', appDir: dir, rootDir: dist, files },
+    );
+
+    expect(puts).toEqual([]);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatch(/^warning: could not build the artifact manifest .*listed twice/);
+  });
+
+  it('writes the manifest of an app with no package.json, without a version', async () => {
+    await writeFile(join(dir, 'package.yaml'), 'name: site\n');
+    const dist = join(dir, 'dist');
+    const files = await writeTree(dist, { 'index.html': 'home' });
+    const bodies: string[] = [];
+    const s3 = {
+      putObject: async (_bucket: string, _key: string, body: string) => {
+        bodies.push(body);
+        return undefined;
+      },
+    } as unknown as S3Client;
+
+    await recordArtifactManifest(
+      s3,
+      () => undefined,
+      { bucket: 'b', key: 'build/artifacts/h1/b1.json' },
+      { hash: 'h1', appDir: dir, rootDir: dist, files },
+    );
+
+    const manifest = parseArtifactManifest(bodies[0]!, 'put');
+    expect(manifest.siteVersion).toBeUndefined();
+    expect(manifest.release).toBe(`h1.${manifest.releaseHash.slice(0, 12)}`);
   });
 });

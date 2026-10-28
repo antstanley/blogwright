@@ -158,6 +158,22 @@ describe('mapConcurrently', () => {
     ).rejects.toThrow('boom 2');
   });
 
+  it('starts no call after the first rejection', async () => {
+    const started: number[] = [];
+    const items = Array.from({ length: 20 }, (_, i) => i);
+    await expect(
+      mapConcurrently(items, 4, async (n) => {
+        started.push(n);
+        if (n === 0) throw new Error('boom 0');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return n;
+      }),
+    ).rejects.toThrow('boom 0');
+    // Let the calls still in flight settle: none of them may take another item.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(started).toEqual([0, 1, 2, 3]);
+  });
+
   it('refuses a limit below one', async () => {
     await expect(mapConcurrently([1], 0, async (n) => n)).rejects.toThrow(/at least 1, got 0/);
   });

@@ -59,6 +59,14 @@ function encodeKey(key: string): string {
     .join('/');
 }
 
+/** What a {@link S3Client.getObject} reads: a byte range, and the version it must still be. */
+export interface ObjectReadOptions {
+  /** Inclusive byte offsets, sent as `Range: bytes=<start>-<end>`. */
+  range?: { start: number; end: number } | undefined;
+  /** The ETag, without quotes, the object must still have (`If-Match`). */
+  ifMatch?: string | undefined;
+}
+
 /** Object metadata written with a PUT; S3 records it only then, never for an unchanged object. */
 export interface ObjectMetadata {
   /** Object tags, sent as `x-amz-tagging` (the role also needs `s3:PutObjectTagging`). */
@@ -196,6 +204,38 @@ export class S3Client {
     }
   }
 
+  /**
+   * Create an object only if the key is free (S3's conditional write,
+   * `If-None-Match: *`): true when this call created it, false when an object
+   * already exists there - or another conditional write to the key is in
+   * flight - and was left untouched. For write-once records.
+   */
+  async putObjectIfAbsent(
+    bucket: string,
+    key: string,
+    body: string | Uint8Array,
+    contentType = 'application/octet-stream',
+  ): Promise<boolean> {
+    try {
+      await this.client.send({
+        service: 's3',
+        method: 'PUT',
+        path: this.objectPath(bucket, key),
+        headers: { 'content-type': contentType, 'if-none-match': '*' },
+        body,
+      });
+      return true;
+    } catch (err) {
+      if (
+        err instanceof AwsError &&
+        (err.statusCode === 412 || /PreconditionFailed|ConditionalRequestConflict/i.test(err.code))
+      ) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
   /** Enable or suspend bucket versioning. Never suspended once enabled (see the SSR contract). */
   async putBucketVersioning(bucket: string, status: 'Enabled' | 'Suspended'): Promise<void> {
     const body =
@@ -248,11 +288,22 @@ export class S3Client {
     });
   }
 
-  async getObject(bucket: string, key: string): Promise<Uint8Array> {
+  /**
+   * An object's bytes, or the part of them `opts.range` names. `opts.ifMatch`
+   * makes the read conditional on the object still having that ETag: S3
+   * answers 412 `PreconditionFailed` when it has changed, so the ranged reads
+   * of one object are all reads of the same bytes.
+   */
+  async getObject(bucket: string, key: string, opts: ObjectReadOptions = {}): Promise<Uint8Array> {
+    const { range, ifMatch } = opts;
     const res = await this.client.send({
       service: 's3',
       method: 'GET',
       path: this.objectPath(bucket, key),
+      headers: {
+        ...(range ? { range: `bytes=${range.start}-${range.end}` } : {}),
+        ...(ifMatch !== undefined ? { 'if-match': `"${ifMatch}"` } : {}),
+      },
     });
     return res.body;
   }

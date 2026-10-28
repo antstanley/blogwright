@@ -11,11 +11,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { OpsContext } from './context.js';
 import {
+  changedManifestKey,
+  jobOutcome,
   microvmLogGroup,
   pollBuild,
   runBuild,
   runMicrovmWithRetry,
   type AgentStatus,
+  type BuildJobRef,
 } from './deploy.js';
 import { createTestContext } from './test-support.js';
 
@@ -51,10 +54,66 @@ describe('microvmLogGroup', () => {
 const HASH = 'abc123';
 const ENDPOINT = 'vm.example.aws';
 const TOKEN = 'proxy-token';
+const JOB: BuildJobRef = {
+  hash: HASH,
+  jobId: 'job-1',
+  changedKey: changedManifestKey('site', HASH),
+};
 
 function doneEvent(): LogEvent {
-  return { eventId: 'e1', timestamp: 1, message: `##build:done:${HASH}` };
+  return { eventId: 'e1', timestamp: 1, message: `##build:done:${HASH}@job-1` };
 }
+
+describe('build completion is per job, not per hash', () => {
+  const STAGE: BuildJobRef = {
+    hash: HASH,
+    jobId: 'job-2',
+    changedKey: changedManifestKey(`release-${HASH}`, HASH),
+  };
+
+  it("ignores another job's markers for the same hash", () => {
+    expect(jobOutcome(`##build:done:${HASH}@job-2`, JOB)).toBeUndefined();
+    expect(jobOutcome(`##build:failed:${HASH}@job-2: boom`, JOB)).toBeUndefined();
+    expect(jobOutcome(`##build:done:${HASH}@job-2`, STAGE)).toEqual({ state: 'done' });
+    expect(jobOutcome(`##build:failed:${HASH}@job-1: boom`, JOB)).toEqual({
+      state: 'failed',
+      message: 'boom',
+    });
+  });
+
+  it('keys the changed-paths manifest by target as well as hash', () => {
+    expect(JOB.changedKey).toBe(`build/changed/site/${HASH}.json`);
+    expect(STAGE.changedKey).toBe(`build/changed/release-${HASH}/${HASH}.json`);
+  });
+
+  it('fails on a bare-hash marker from an agent older than job ids, rather than take it', () => {
+    const outcome = jobOutcome(`##build:done:${HASH}`, JOB);
+    expect(outcome?.state).toBe('failed');
+    expect(outcome?.message).toMatch(/predates per-job build markers/);
+    expect(jobOutcome(`##build:done:${HASH}0`, JOB)).toBeUndefined();
+  });
+
+  it("keeps polling past another target's completion of the same hash", async () => {
+    let cycles = 0;
+    const ctx = createTestContext({
+      clients: {
+        logs: {
+          filterEvents: async () =>
+            ++cycles < 2
+              ? [{ eventId: 'a', timestamp: 1, message: `##build:done:${HASH}@job-2` }]
+              : [doneEvent()],
+        },
+        // Only the stage's changed-paths manifest exists, never this job's.
+        s3: { objectExists: async (_b: string, key: string) => key === STAGE.changedKey },
+      },
+      ports: { ping: async () => undefined },
+    });
+    await expect(pollBuild(ctx, JOB, Date.now(), ENDPOINT, TOKEN)).resolves.toEqual({
+      state: 'done',
+    });
+    expect(cycles).toBe(2);
+  });
+});
 
 describe('pollBuild nudge', () => {
   it(
@@ -76,7 +135,7 @@ describe('pollBuild nudge', () => {
         },
       });
 
-      const result: AgentStatus = await pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN);
+      const result: AgentStatus = await pollBuild(ctx, JOB, Date.now(), ENDPOINT, TOKEN);
 
       expect(result).toEqual({ state: 'done' });
       expect(pings).toEqual([
@@ -95,7 +154,7 @@ describe('pollBuild nudge', () => {
         },
       },
     });
-    await expect(pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN)).resolves.toEqual({
+    await expect(pollBuild(ctx, JOB, Date.now(), ENDPOINT, TOKEN)).resolves.toEqual({
       state: 'done',
     });
   });
@@ -107,7 +166,7 @@ describe('pollBuild nudge', () => {
       ports: { terminal, ping: async () => undefined },
     });
 
-    await pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN);
+    await pollBuild(ctx, JOB, Date.now(), ENDPOINT, TOKEN);
 
     expect(terminal.statuses.at(-1)).toBe('');
     const shown = terminal.statuses.slice(0, -1);
@@ -120,14 +179,14 @@ describe('pollBuild nudge', () => {
     const failed: LogEvent = {
       eventId: 'e2',
       timestamp: 1,
-      message: `##build:failed:${HASH}: pnpm build exited 1`,
+      message: `##build:failed:${HASH}@job-1: pnpm build exited 1`,
     };
     const ctx = createTestContext({
       clients: { logs: { filterEvents: async () => [failed] } },
       ports: { terminal, ping: async () => undefined },
     });
 
-    const result = await pollBuild(ctx, HASH, Date.now(), ENDPOINT, TOKEN);
+    const result = await pollBuild(ctx, JOB, Date.now(), ENDPOINT, TOKEN);
 
     expect(result.state).toBe('failed');
     expect(terminal.statuses.at(-1)).toBe('');
@@ -143,8 +202,8 @@ describe('pollBuild nudge', () => {
         },
       },
     });
-    await pollBuild(ctx, HASH, Date.now(), '', TOKEN);
-    await pollBuild(ctx, HASH, Date.now(), ENDPOINT, '');
+    await pollBuild(ctx, JOB, Date.now(), '', TOKEN);
+    await pollBuild(ctx, JOB, Date.now(), ENDPOINT, '');
     expect(pinged).toBe(0);
   });
 });
@@ -235,7 +294,7 @@ describe('runMicrovmWithRetry', () => {
 
 describe('runBuild pending job', () => {
   const RECORD_KEY = 'build/cache-control/site.json';
-  const REPORT_KEY = 'build/changed/abc123.json';
+  const REPORT_KEY = 'build/changed/site/abc123.json';
   const NO_CACHE = [{ match: ['**'], value: 'no-cache' }];
 
   interface BuildRun {
@@ -274,7 +333,10 @@ describe('runBuild pending job', () => {
     const warns: string[] = [];
     let launches = 0;
     let jobBody: string | undefined;
-    const failed: LogEvent = { eventId: 'f', timestamp: 1, message: `##build:failed:abc123: x` };
+    const failed = (): LogEvent[] => {
+      const { jobId } = JSON.parse(jobBody ?? '{}') as { jobId?: string };
+      return [{ eventId: 'f', timestamp: 1, message: `##build:failed:abc123@${jobId}: x` }];
+    };
     const report = (): string | undefined => {
       if ('report' in setup) return setup.report;
       const received = (JSON.parse(jobBody ?? '{}') as { cacheControl?: unknown }).cacheControl;
@@ -319,7 +381,7 @@ describe('runBuild pending job', () => {
           createAuthToken: async () => 'tok',
           terminateMicrovm: async () => undefined,
         },
-        logs: { filterEvents: async () => (setup.buildFails ? [failed] : []) },
+        logs: { filterEvents: async () => (setup.buildFails ? failed() : []) },
       },
       logger: {
         step: (msg: string) => {

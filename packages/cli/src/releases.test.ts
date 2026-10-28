@@ -1,14 +1,26 @@
-import { AwsError, artifactManifestKey, sha256Hex, stripColors } from 'blogwright-core';
+import {
+  AwsError,
+  artifactManifestKey,
+  sha256Hex,
+  stagedReleaseManifestKey,
+  stripColors,
+} from 'blogwright-core';
 import { describe, expect, it } from 'vitest';
 
 import { readArtifactManifest } from './artifacts.js';
 import { cacheControlRecordKey } from './cache-control.js';
 import { deleteSite, deploy, history, rollback } from './commands.js';
-import { readManifest } from './deploy.js';
+import { readManifest, writeManifest } from './deploy.js';
 import { LIVE_RELEASE_KEY, readLiveRelease } from './live-release.js';
+import { historyTime, renderHistoryTable } from './render.js';
 import { RELEASE_STAGING_OUTPUT } from './nodes.js';
 import { promote, stage } from './releases.js';
-import { attachFakeBuilder, createBuildContext, createMemoryS3 } from './test-support.js';
+import {
+  attachFakeBuilder,
+  createBuildContext,
+  createMemoryS3,
+  type FakeBuildJob,
+} from './test-support.js';
 import { verify } from './verify.js';
 
 const HASH = 'abc123';
@@ -18,14 +30,17 @@ const NO_HOOKS = { afterDeploy: async () => undefined };
 async function setup(initial: Record<string, string>, hash = HASH) {
   const s3 = createMemoryS3();
   let files = initial;
-  attachFakeBuilder(s3, () => files);
+  const failedJobs: FakeBuildJob[] = [];
+  const builder: { fails?: boolean; failedJobs: FakeBuildJob[] } = { failedJobs };
+  attachFakeBuilder(s3, () => files, builder);
   const logged: string[] = [];
   const invalidations: string[][] = [];
-  const ctx = await createBuildContext({ s3, hash, logged, invalidations });
+  const ctx = await createBuildContext({ s3, hash, logged, invalidations, failedJobs });
   ctx.state.resources['iam-exec-role']![RELEASE_STAGING_OUTPUT] = true;
   return {
     s3,
     ctx,
+    builder,
     invalidations,
     lines: () => logged.map(stripColors),
     build(next: Record<string, string>, nextHash: string) {
@@ -59,15 +74,19 @@ describe('stage', () => {
 
     expect(pending).toHaveLength(1);
     expect(pending[0]!.key).toBe(`build/pending/release-${HASH}.json`);
-    expect(pending[0]!.job).toMatchObject({
-      sitePrefix: `releases/${HASH}/`,
-      artifactManifestKey: artifactManifestKey(HASH),
-    });
+    expect(pending[0]!.job).toMatchObject({ sitePrefix: `releases/${HASH}/` });
+    // The build records its own manifest; the builder may not write the original.
+    expect(String(pending[0]!.job.artifactManifestKey)).toMatch(
+      new RegExp(`^build/artifacts/${HASH}/\\d{8}T\\d{6}Z-[0-9a-f]{8}\\.json$`),
+    );
+    expect(s3.text(stagedReleaseManifestKey(HASH))).toBeDefined();
     expect(snapshot(s3, `releases/${HASH}/`)).toEqual({ 'index.html': sha256Hex('v1') });
     expect(s3.text('site/index.html')).toBe('live');
-    expect(s3.objects.has(`build/changed/${HASH}.json`)).toBe(false);
+    expect(s3.objects.has(`build/changed/release-${HASH}/${HASH}.json`)).toBe(false);
     expect(invalidations).toEqual([]);
-    expect((await readManifest(ctx, HASH))?.kind).toBe('staged');
+    expect((await readManifest(ctx, HASH, 'staged'))?.kind).toBe('staged');
+    // The hash's deployment manifest is a deploy's alone.
+    expect(await readManifest(ctx, HASH)).toBeUndefined();
     expect(lines().some((line) => line.includes(`releases/${HASH}/ matches release`))).toBe(true);
     expect(lines()).toContain(`  promote it with: blogwright promote ${HASH} production`);
   });
@@ -160,10 +179,48 @@ describe('promote', () => {
     });
   });
 
+  it('records the staged manifest as the original when the revision has none', async () => {
+    const { s3, ctx } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    expect(s3.text(artifactManifestKey(HASH))).toBe(s3.text(stagedReleaseManifestKey(HASH)));
+    await promote(ctx, HASH, NO_HOOKS);
+    await verify(ctx, HASH);
+  });
+
+  it('promotes a staged build whose bytes differ from the revision original, against its own manifest', async () => {
+    const { s3, ctx, lines, build } = await setup({ 'index.html': 'first build' });
+    await deploy(ctx, NO_HOOKS);
+    const original = s3.text(artifactManifestKey(HASH));
+    build({ 'index.html': 'second build' }, HASH);
+
+    await stage(ctx);
+    expect(s3.text(artifactManifestKey(HASH))).toBe(original);
+    expect(
+      lines().some((line) => line.startsWith('promote publishes and checks this staged release')),
+    ).toBe(true);
+
+    await promote(ctx, HASH, NO_HOOKS);
+    expect(s3.text('site/index.html')).toBe('second build');
+    await verify(ctx, HASH, 'staged');
+    await expect(verify(ctx, HASH)).rejects.toThrow(/does not match release/);
+  });
+
+  it('leaves nothing promotable when a re-stage stops partway', async () => {
+    const { s3, ctx } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    s3.onPut((key) => {
+      if (key.startsWith('build/pending/')) throw new Error('builder unavailable');
+    });
+    await expect(stage(ctx)).rejects.toThrow(/builder unavailable/);
+    await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(/is not staged/);
+  });
+
   it('refuses a hash that was never staged', async () => {
     const { ctx } = await setup({ 'index.html': 'v1' });
     await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(
-      new RegExp(`${HASH} is not staged: s3://.*/releases/${HASH}/ is empty`),
+      new RegExp(
+        `${HASH} is not staged: there is no staged release record at s3://.*/build/releases/${HASH}\\.json`,
+      ),
     );
   });
 
@@ -265,7 +322,7 @@ describe('history of staged releases', () => {
 
     expect((await plainRows())[0]).toMatch(/^abc123\s+staged\s/);
     await promote(ctx, HASH, NO_HOOKS);
-    const promotedAt = (await readManifest(ctx, HASH))?.promotedAt;
+    const promotedAt = (await readManifest(ctx, HASH, 'staged'))?.promotedAt;
     expect((await plainRows())[0]).toMatch(new RegExp(`^abc123\\s+promoted\\s+${promotedAt}`));
   });
 });
@@ -358,16 +415,16 @@ describe('rollback to a staged release', () => {
     );
   });
 
-  it('rebuilds, with a warning, when the staged release has an unreadable manifest', async () => {
+  it('rebuilds, with a warning, when the staged release has an unreadable record', async () => {
     const { s3, ctx, lines } = await setup({ 'index.html': 'v1' });
     await stage(ctx);
-    await s3.client.putObject('b', artifactManifestKey(HASH), 'not json');
+    await s3.client.putObject('b', stagedReleaseManifestKey(HASH), 'not json');
     const builds = launches(lines());
 
     await rollback(ctx, HASH);
 
     expect(launches(lines())).toBe(builds + 1);
-    expect(lines().some((line) => line.startsWith('ignoring the recorded artifact manifest'))).toBe(
+    expect(lines().some((line) => line.startsWith('ignoring the staged release record'))).toBe(
       true,
     );
   });
@@ -442,5 +499,226 @@ describe('promote keeps Cache-Control coherent', () => {
 
     await expect(promote(ctx, 'def456', NO_HOOKS)).rejects.toThrow(/boom/);
     expect(JSON.parse(s3.text(cacheControlRecordKey('site'))!)).toEqual({ status: 'unconfirmed' });
+  });
+});
+
+describe('history keeps deploys and staged builds apart', () => {
+  async function plain(ctx: Awaited<ReturnType<typeof setup>>['ctx'], lines: () => string[]) {
+    const start = lines().length;
+    await history(ctx);
+    return lines()
+      .slice(start)
+      .filter((line) => line.startsWith(HASH));
+  }
+
+  it('leaves a live deploy succeeded when a stage of the same hash fails', async () => {
+    const { ctx, builder, lines } = await setup({ 'index.html': 'v1' });
+    await deploy(ctx, NO_HOOKS);
+    builder.fails = true;
+
+    await expect(stage(ctx)).rejects.toThrow(/build failed/);
+
+    expect((await readManifest(ctx, HASH))?.status).toBe('succeeded');
+    expect((await readManifest(ctx, HASH, 'staged'))?.status).toBe('failed');
+    const rows = (await plain(ctx, lines)).map((row) => row.split(/\s+/)[1]).sort();
+    expect(rows).toEqual(['failed', 'succeeded']);
+  });
+
+  it('marks the deploy live until the stage of the same hash is promoted', async () => {
+    const { ctx } = await setup({ 'index.html': 'v1' });
+    await deploy(ctx, NO_HOOKS);
+    // Pin the deploy well before the stage, so the order does not hang on the clock.
+    const deployed = (await readManifest(ctx, HASH))!;
+    await writeManifest(ctx, { ...deployed, finishedAt: '2026-01-01T00:00:00.000Z' });
+    await stage(ctx);
+    const entries = async () =>
+      [(await readManifest(ctx, HASH, 'staged'))!, (await readManifest(ctx, HASH))!].sort((a, b) =>
+        historyTime(a) > historyTime(b) ? -1 : 1,
+      );
+    const liveRow = async () =>
+      renderHistoryTable(await entries(), Date.now())
+        .map(stripColors)
+        .findIndex((line) => line.includes('← live'));
+
+    // Newest first: the staged row, then the deploy - which is what is live.
+    expect(await liveRow()).toBe(2);
+    await promote(ctx, HASH, NO_HOOKS);
+    expect(await liveRow()).toBe(1);
+  });
+});
+
+describe('the live-release record while site/ changes', () => {
+  it('names neither release when a promotion stops partway, and the next one says so', async () => {
+    const { s3, ctx, lines, build } = await setup({ 'index.html': 'one' });
+    await deploy(ctx, NO_HOOKS);
+    const first = await readArtifactManifest(ctx, HASH);
+    build({ 'index.html': 'two' }, 'def456');
+    await stage(ctx);
+    const copyObject = ctx.clients.s3.copyObject.bind(ctx.clients.s3);
+    ctx.clients.s3.copyObject = async () => {
+      throw new AwsError({
+        service: 's3',
+        code: 'InternalError',
+        message: 'boom',
+        statusCode: 500,
+      });
+    };
+
+    await expect(promote(ctx, 'def456', NO_HOOKS)).rejects.toThrow(/boom/);
+    const record = await readLiveRelease(ctx);
+    expect(record).toMatchObject({
+      status: 'publishing',
+      hash: 'def456',
+      via: 'promote',
+      previous: { hash: HASH, releaseHash: first!.releaseHash },
+    });
+
+    ctx.clients.s3.copyObject = copyObject;
+    await promote(ctx, 'def456', NO_HOOKS);
+    expect(
+      lines().some(
+        (line) =>
+          line.startsWith('  previous: unknown (a promote of def456 started ') &&
+          line.endsWith(
+            `did not finish; the last completed release was ${first!.release} (sha256 ${first!.releaseHash}))`,
+          ),
+      ),
+    ).toBe(true);
+    expect(await readLiveRelease(ctx)).toMatchObject({ hash: 'def456', via: 'promote' });
+    expect(s3.text('site/index.html')).toBe('two');
+  });
+
+  it('is marked publishing before a deploy builds, and stays so when the build fails', async () => {
+    const { ctx, builder, build } = await setup({ 'index.html': 'one' });
+    await deploy(ctx, NO_HOOKS);
+    build({ 'index.html': 'two' }, 'def456');
+    builder.fails = true;
+
+    await expect(deploy(ctx, NO_HOOKS)).rejects.toThrow(/build failed/);
+
+    expect(await readLiveRelease(ctx)).toMatchObject({
+      status: 'publishing',
+      hash: 'def456',
+      via: 'deploy',
+      previous: { hash: HASH },
+    });
+  });
+});
+
+describe('promote and object tags', () => {
+  async function stagedTwoFiles() {
+    const env = await setup({ 'a.html': 'a', 'b.html': 'b' });
+    await stage(env.ctx);
+    return env;
+  }
+
+  it('says how to copy the tags afterwards when it promotes untagged', async () => {
+    const { ctx, lines } = await stagedTwoFiles();
+    const copyObject = ctx.clients.s3.copyObject.bind(ctx.clients.s3);
+    ctx.clients.s3.copyObject = async (bucket, source, destination, options = {}) => {
+      if ((options.tags ?? 'copy') === 'copy') {
+        throw new AwsError({ service: 's3', code: 'AccessDenied', message: 'no', statusCode: 403 });
+      }
+      return copyObject(bucket, source, destination, options);
+    };
+    await promote(ctx, HASH, NO_HOOKS);
+    expect(lines()).toContainEqual(
+      expect.stringContaining(`then \`blogwright promote ${HASH} production --refresh\``),
+    );
+  });
+
+  it('fails without blaming tags when the untagged copy is denied too', async () => {
+    const { s3, ctx, lines } = await stagedTwoFiles();
+    ctx.clients.s3.copyObject = async () => {
+      throw new AwsError({ service: 's3', code: 'AccessDenied', message: 'no', statusCode: 403 });
+    };
+    await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(/AccessDenied/);
+    expect(lines().some((line) => line.includes('cannot copy object tags'))).toBe(false);
+    expect(snapshot(s3, 'site/')).toEqual({});
+  });
+
+  it('does not retry a 403 that is not an access denial', async () => {
+    const { ctx } = await stagedTwoFiles();
+    let calls = 0;
+    ctx.clients.s3.copyObject = async () => {
+      calls += 1;
+      throw new AwsError({
+        service: 's3',
+        code: 'SignatureDoesNotMatch',
+        message: 'bad signature',
+        statusCode: 403,
+      });
+    };
+    await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(/SignatureDoesNotMatch/);
+    // The first failure stops further copies; none was retried without tags.
+    expect(calls).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('promote applies the response headers', () => {
+  it('converges the response headers policy before copying, and stops when CloudFront rejects it', async () => {
+    const { s3, ctx } = await setup({ 'index.html': 'v1' });
+    await stage(ctx);
+    ctx.config.headers = {
+      security: { contentTypeOptions: true, contentSecurityPolicy: "default-src 'self'" },
+      custom: [],
+    };
+    ctx.state.resources['response-headers-policy'] = { id: 'RHP-1', attachedTo: 'D1' };
+    let updates = 0;
+    Object.assign(ctx.clients.cloudfront, {
+      getResponseHeadersPolicy: async (id: string) => ({ id, config: '<x/>', etag: 'E1' }),
+      responseHeadersPolicyMatches: () => false,
+      updateResponseHeadersPolicy: async () => {
+        updates += 1;
+        throw new AwsError({
+          service: 'cloudfront',
+          code: 'TooLongCSPInResponseHeadersPolicy',
+          message: 'too long',
+          statusCode: 400,
+        });
+      },
+    });
+
+    await expect(promote(ctx, HASH, NO_HOOKS)).rejects.toThrow(/contentSecurityPolicy/);
+    expect(updates).toBe(1);
+    expect(snapshot(s3, 'site/')).toEqual({});
+    expect(await readLiveRelease(ctx)).toBeUndefined();
+  });
+});
+
+describe('stage --refresh', () => {
+  it('asks the builder to re-upload every file into the staged prefix', async () => {
+    const { s3, ctx } = await setup({ 'index.html': 'v1' });
+    const jobs: Record<string, unknown>[] = [];
+    s3.onPut((key, body) => {
+      if (key.startsWith('build/pending/')) jobs.push(JSON.parse(new TextDecoder().decode(body)));
+    });
+    await stage(ctx); // the first build to the target writes every file anyway
+    await stage(ctx);
+    await stage(ctx, { refresh: true });
+    expect(jobs.map((job) => job.refresh)).toEqual([true, undefined, true]);
+  });
+});
+
+describe('promote stops before copying when it cannot mark the Cache-Control record', () => {
+  it("names the record and says nothing was published, not 'the build'", async () => {
+    const { s3, ctx, build } = await setup({ 'index.html': 'home' });
+    await deploy(ctx, NO_HOOKS);
+    Object.assign(ctx.config, { cacheControl: [{ match: ['**'], value: 'no-store' }] });
+    build({ 'index.html': 'home, edited' }, 'def456');
+    await stage(ctx);
+    const putObject = ctx.clients.s3.putObject.bind(ctx.clients.s3);
+    ctx.clients.s3.putObject = async (bucket, key, ...rest) => {
+      if (key === cacheControlRecordKey('site')) throw new Error('AccessDenied');
+      return putObject(bucket, key, ...rest);
+    };
+
+    await expect(promote(ctx, 'def456', NO_HOOKS)).rejects.toThrow(
+      'could not mark build/cache-control/site.json unconfirmed before rewriting its files ' +
+        '(AccessDenied); nothing was published',
+    );
+    expect(s3.text('site/index.html')).toBe('home');
+    // Nothing changed, so the live release is still the deploy's.
+    expect(await readLiveRelease(ctx)).toMatchObject({ hash: HASH, via: 'deploy' });
   });
 });

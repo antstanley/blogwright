@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  artifactManifestKey,
   AwsError,
   createArtifactManifest,
   createCacheControlLookup,
@@ -36,15 +37,18 @@ import {
   type PluginContext,
   type CopyObjectOptions,
   type ObjectMetadata,
+  type ObjectReadOptions,
   type S3Client,
   type S3Object,
   type Terminal,
+  type RawResponse,
   type Transport,
 } from 'blogwright-core';
 
 import type { AwsHost, ResolvedAwsProfile } from './aws-session.js';
 import type { AwsAccessFactory } from './cli.js';
 import { cliPackageDir, type OpsContext } from './context.js';
+import { ENV_LOCK_KEY } from './lock.js';
 import type { Logger } from './logger.js';
 import type {
   AddPackageOptions,
@@ -83,7 +87,24 @@ export interface TestContextOverrides {
   save?: (() => Promise<void>) | undefined;
 }
 
+/**
+ * How an untouched test context answers the environment lock: free, so the
+ * commands that take it run as they did before it existed. A test about the
+ * lock overrides the S3 methods (or uses `createMemoryS3`).
+ */
+function freeEnvLock(method: string): RawResponse {
+  const reply = (statusCode: number, body: string): RawResponse => ({
+    statusCode,
+    headers: {},
+    body: new TextEncoder().encode(body),
+    text: () => body,
+  });
+  if (method === 'GET') return reply(404, '<Error><Code>NoSuchKey</Code></Error>');
+  return reply(method === 'DELETE' ? 204 : 200, '');
+}
+
 const rejectAllTransport: Transport = async (req) => {
+  if (new URL(req.url).pathname.endsWith(`/${ENV_LOCK_KEY}`)) return freeEnvLock(req.method);
   throw new Error(
     `unexpected AWS request in test: ${req.method} ${req.url} - override the client method on createTestContext`,
   );
@@ -651,6 +672,11 @@ export type PutListener = (key: string, body: Uint8Array) => void;
 
 const textEncoder = new TextEncoder();
 
+/** The ETag S3 reports for a single-part upload: the body's MD5, in hex. */
+function md5Hex(body: Uint8Array): string {
+  return createHash('md5').update(body).digest('hex');
+}
+
 function toBytes(body: string | Uint8Array): Uint8Array {
   return typeof body === 'string' ? textEncoder.encode(body) : body;
 }
@@ -686,10 +712,31 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
       for (const listener of listeners) listener(key, bytes);
       return undefined;
     },
-    getObject: async (_bucket: string, key: string) => {
+    putObjectIfAbsent: async (
+      _bucket: string,
+      key: string,
+      body: string | Uint8Array,
+      contentType = 'application/octet-stream',
+    ) => {
+      if (objects.has(key)) return false;
+      const bytes = toBytes(body);
+      objects.set(key, { body: bytes, contentType });
+      for (const listener of listeners) listener(key, bytes);
+      return true;
+    },
+    getObject: async (_bucket: string, key: string, opts: ObjectReadOptions = {}) => {
       const found = objects.get(key);
       if (!found) throw noSuchKey(key);
-      return found.body;
+      if (opts.ifMatch !== undefined && opts.ifMatch !== md5Hex(found.body)) {
+        throw new AwsError({
+          service: 's3',
+          code: 'PreconditionFailed',
+          message: key,
+          statusCode: 412,
+        });
+      }
+      const { range } = opts;
+      return range ? found.body.subarray(range.start, range.end + 1) : found.body;
     },
     getObjectText: async (_bucket: string, key: string) => {
       const found = objects.get(key);
@@ -727,7 +774,7 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
           key,
           size: object.body.byteLength,
           lastModified: undefined,
-          etag: createHash('md5').update(object.body).digest('hex'),
+          etag: md5Hex(object.body),
         })),
   } satisfies Partial<S3Client>;
   return {
@@ -744,8 +791,10 @@ export function createMemoryS3(seed: Record<string, string | Uint8Array> = {}) {
 }
 
 /** The pending-job fields the fake builder acts on. */
-interface FakeBuildJob {
+export interface FakeBuildJob {
   hash: string;
+  jobId?: string;
+  changedKey?: string;
   sitePrefix: string;
   objectTags?: Record<string, string>;
   cacheControl?: unknown;
@@ -755,18 +804,33 @@ interface FakeBuildJob {
 /**
  * Stand in for the builder MicroVM: when the CLI writes a static pending job,
  * publish `files` under its site prefix (replacing whatever was there), record
- * the artifact manifest when asked, and write the changed-paths manifest that
+ * the artifact manifest at the job's key when asked, and write the changed-paths manifest that
  * signals completion. `files` is read at each build, so a test can change the
  * site between builds.
  */
 export function attachFakeBuilder(
   s3: ReturnType<typeof createMemoryS3>,
   files: () => Record<string, string>,
-  opts: { siteVersion?: string; artifactWriteDenied?: boolean } = {},
+  opts: {
+    siteVersion?: string;
+    artifactWriteDenied?: boolean;
+    /** Act as an agent from before artifact manifests, which drops `artifactManifestKey`. */
+    ignoresArtifactManifestKey?: boolean;
+    /**
+     * Fail the build: publish nothing and write no changed-paths manifest; the
+     * job's id goes to `failedJobs` for a test's log fake to report.
+     */
+    fails?: boolean;
+    failedJobs?: FakeBuildJob[];
+  } = {},
 ): void {
   s3.onPut((key, body) => {
     if (!key.startsWith('build/pending/')) return;
     const job = JSON.parse(new TextDecoder().decode(body)) as FakeBuildJob;
+    if (opts.fails) {
+      opts.failedJobs?.push(job);
+      return;
+    }
     const built = files();
     const rules = parseCacheControlRules(job.cacheControl ?? []);
     const cacheControlFor = createCacheControlLookup(rules);
@@ -783,7 +847,15 @@ export function attachFakeBuilder(
           : {}),
       });
     }
-    if (job.artifactManifestKey && !opts.artifactWriteDenied) {
+    // The builder's grant stops at per-build keys: a revision's original
+    // record is out of its reach, as IAM keeps it in AWS.
+    const deniedOriginal = job.artifactManifestKey === artifactManifestKey(job.hash);
+    if (
+      job.artifactManifestKey &&
+      !deniedOriginal &&
+      !opts.artifactWriteDenied &&
+      !opts.ignoresArtifactManifestKey
+    ) {
       const manifest = createArtifactManifest({
         hash: job.hash,
         siteVersion: opts.siteVersion,
@@ -799,7 +871,7 @@ export function attachFakeBuilder(
       });
     }
     const paths = Object.keys(built).map((path) => `/${path}`);
-    s3.objects.set(`build/changed/${job.hash}.json`, {
+    s3.objects.set(job.changedKey ?? `build/changed/${job.hash}.json`, {
       // Reports the rules it applied, as the real agent does, so the CLI's
       // Cache-Control record is confirmed.
       body: textEncoder.encode(JSON.stringify({ paths, cacheControl: rules })),
@@ -823,6 +895,8 @@ export async function createBuildContext(opts: {
   logged: string[];
   invalidations?: string[][] | undefined;
   config?: ConfigInput | undefined;
+  /** Builds `attachFakeBuilder` failed; each is reported failed in the build log. */
+  failedJobs?: FakeBuildJob[] | undefined;
 }): Promise<OpsContext> {
   const repoRoot = await findRepoRoot(createNodeFileSystem());
   const fs = createMemoryFileSystem({
@@ -855,7 +929,14 @@ export async function createBuildContext(opts: {
         createAuthToken: async () => 'tok',
         terminateMicrovm: async () => undefined,
       },
-      logs: { filterEvents: async () => [] },
+      logs: {
+        filterEvents: async () =>
+          (opts.failedJobs ?? []).map((job, i) => ({
+            eventId: `failed-${i}`,
+            timestamp: i,
+            message: `##build:failed:${job.hash}@${job.jobId}: the fake build failed`,
+          })),
+      },
       cloudfront: {
         createInvalidation: async (_id: string, paths: string[]) => {
           opts.invalidations?.push(paths);

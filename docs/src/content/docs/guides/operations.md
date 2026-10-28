@@ -21,21 +21,21 @@ A `missing` resource means the account has drifted from the plan. `bootstrap` is
 
 ## Audit deployments: `history`
 
-Every build the builder MicroVM runs - deploy or rollback, success or failure - writes a manifest to `build/manifests/<hash>.json` recording the revision hash, source key, status, start and finish times, duration, and the MicroVM id. `blogwright history` lists them, newest first.
+Every build the builder MicroVM runs for `site/` - deploy or rollback, success or failure - writes a manifest to `build/manifests/<hash>.json` recording the revision hash, source key, status, start and finish times, duration, and the MicroVM id. A build made by [`stage`](/guides/deploying/#release-gating-stage-verify-promote) writes the same record to `build/staged/<hash>.json` instead, so staging a revision - even a stage that fails - never changes the record of the deploy that made it live. `blogwright history` lists both, newest first.
 
 ```sh
 bw history
 ```
 
-A build made by [`stage`](/guides/deploying/#release-gating-stage-verify-promote) is listed as `staged` (`◇` on a TTY) until it is promoted, then as `promoted`, at the time of its promotion. The manifest records the latest operation on a hash, so staging a hash that is already live shows it as `staged` until it is promoted again.
+A staged build is listed as `staged` (`◇` on a TTY) until it is promoted, then as `promoted`, at the time of its promotion; a stage whose build failed is listed as `failed`. A revision that was both deployed and staged has a row for each.
 
-On a TTY the table shows a status mark, a relative finish time (`3h ago`), the build duration, and a `← live` marker on the newest success. The plain form prints fixed columns - `hash status finished duration` - with ISO timestamps. In an [SSR environment](/guides/server-rendered-sites/) both forms add a `revision` column: the Web Function revision a hash was verified with, or `-` when it has none. Pick a hash with a revision to roll back without a rebuild.
+On a TTY the table shows a status mark, a relative time (`3h ago`), the build duration, and a `← live` marker on the newest build that reached `site/` - a successful deploy or rollback, or a promoted stage. The plain form prints fixed columns - `hash status time duration` - with ISO timestamps. The time is when the row last changed the site: a build's finish, or a promoted stage's promotion. In an [SSR environment](/guides/server-rendered-sites/) both forms add a `revision` column: the Web Function revision a hash was verified with, or `-` when it has none. Pick a hash with a revision to roll back without a rebuild.
 
 One corrupt manifest never takes down the whole listing: it's skipped with a `skipping unreadable manifest` warning and the rest still render. An environment with no builds yet prints `no deployments yet`.
 
 ## Read build logs: `logs <hash>`
 
-`blogwright logs <hash>` shows the CloudWatch logs for one build. It reads that build's manifest and filters the builder MicroVM log group to the build's time window - from a minute before it started to a minute after it finished - printing each event with an ISO timestamp. Get hashes from `history`.
+`blogwright logs <hash>` shows the CloudWatch logs for one build. It reads the hash's newest build record - its deployment manifest, or its staged build's record when that is newer - and filters the builder MicroVM log group to the build's time window - from a minute before it started to a minute after it finished - printing each event with an ISO timestamp. Get hashes from `history`.
 
 ```sh
 bw logs 4f3a2b1c9d0e
@@ -45,14 +45,28 @@ If the manifest for that hash is unreadable, the command warns and shows the unf
 
 ## Check what is live: `verify <hash>`
 
-`blogwright verify <hash>` compares the objects under `site/` with the [artifact manifest](/reference/artifact-manifest/) recorded for that hash - reading every object and comparing its SHA-256, and flagging any object the release does not contain. It answers "is what is live exactly what was built (and reviewed) for this hash?" after the fact, for instance from CI once a deploy finishes:
+`blogwright verify <hash>` compares the objects under `site/` with the original [artifact manifest](/reference/artifact-manifest/) recorded for that hash - reading and hashing every object the release lists with its recorded size, and flagging, without reading them, objects whose size differs and objects the release does not contain. It answers "is what is live exactly what was built (and reviewed) for this hash?" after the fact, for instance from CI once a deploy finishes:
 
 ```sh
 bw verify 4f3a2b1c9d0e
 # ✓ s3://production-example-123456789012/site/ matches release 1.4.0+4f3a2b1c9d0e.9f86d081884c: 212 files, sha256 9f86d081…
 ```
 
-A hand-edited object, a missing file or a stray extra file each print a line and fail the command with exit code 1. Edge caches are not part of the check: CloudFront may still serve a copy cached before the last invalidation completed.
+To check a [staged release](/guides/deploying/#release-gating-stage-verify-promote) before promoting it, add `--staged`: that compares `releases/<hash>/` with the staged release's own record. A hand-edited object, a missing file or a stray extra file each print a line and fail the command with exit code 1. Run it once nothing is deploying: an object replaced mid-run fails the command rather than being compared. Edge caches are not part of the check: CloudFront may still serve a copy cached before the last invalidation completed.
+
+## One command at a time: the environment lock
+
+`deploy`, `rollback`, `stage`, `promote` and `delete` each take the environment's lock, `build/lock.json` in its bucket, before they change anything, and release it when they finish - whether they succeed or fail. A second of these commands started meanwhile refuses straight away, changing nothing, and names the holder: the command, the hash, the AWS identity that ran it and when it started.
+
+```text
+Error: "production" is locked by deploy 4f3a2b1c9d0e by arn:aws:sts::123456789012:assumed-role/production-example-github/GitHubActions, started 2026-10-28T09:00:00.000Z (4 min ago) (s3://production-example-123456789012/build/lock.json), so promote would interleave its writes with that command - nothing was changed. Wait for it to finish; if it is no longer running (a cancelled job, a killed process), re-run with `--force-unlock` to replace the lock.
+```
+
+Without it, two deploys - or a deploy and a promotion - could interleave their uploads, copies and deletes in `site/` and leave a mix of both releases while each reported success. The lock closes that race, which earlier versions had between any two deploys.
+
+A command that dies without releasing the lock - a cancelled CI job, a killed terminal - leaves it behind, and nothing expires it on a timer, because a long build cannot be told apart from a dead one. Once you know its holder is no longer running, re-run your command with `--force-unlock`: it warns, naming the lock it replaces, and takes the lock itself. `destroy` refuses while the lock is held (or pass `--force-unlock`); `bootstrap`, `history`, `logs`, `status`, `verify` and PR previews do not take it.
+
+Both the CI deploy role and an operator's credentials can create and delete `build/lock.json` with the object access they already hold; the builder's roles cannot.
 
 ## Roll back: `rollback <hash>`
 
@@ -80,15 +94,15 @@ bw rollback 4f3a2b1c9d0e
 
 As with a deploy, only the CloudFront paths whose content actually changed are invalidated, and `--refresh` is accepted to force every file to re-upload.
 
-A rebuild is not guaranteed to reproduce the original bytes - the builder image, dependency resolution and toolchain may all have moved since. So the rollback reads the [artifact manifest](/reference/artifact-manifest/) recorded for the hash before the rebuild replaces it, and prints both release hashes:
+A rebuild is not guaranteed to reproduce the original bytes - the builder image, dependency resolution and toolchain may all have moved since. So the rollback checks the rebuild against the hash's original [artifact manifest](/reference/artifact-manifest/) - the one its first deploy recorded - and prints both release hashes:
 
 ```text
-  recorded release sha256 9f86d081884c7d65… (1.4.0+4f3a2b1c9d0e.9f86d081884c)
-  rebuilt  release sha256 9f86d081884c7d65… (1.4.0+4f3a2b1c9d0e.9f86d081884c)
+  recorded release sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 (1.4.0+4f3a2b1c9d0e.9f86d081884c)
+  rebuilt  release sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 (1.4.0+4f3a2b1c9d0e.9f86d081884c)
 ✓ the rebuild is byte-identical to the recorded artifact
 ```
 
-When they differ it warns instead: the site now serves rebuilt bytes that no review covered. A hash deployed before artifact manifests existed has nothing to compare against, and the rollback says so.
+When they differ it warns instead: the site now serves rebuilt bytes that no review covered. The rebuild's manifest is kept under its own key and never replaces the original, so the next rollback is still checked against the reviewed bytes. A rebuild that recorded no manifest of its own cannot be checked, and the rollback says so instead of reporting a match. A hash deployed before artifact manifests existed has nothing to compare against, and the rollback says so too.
 
 :::caution
 A production rollback does **not** sync the PDS. The [standard.site records](/plugins/standard-site/) mirror the current repo content, which a rollback does not restore - so the command only warns about the divergence. To realign the records, check out the rolled-back revision and run `blogwright pds sync`.
