@@ -86,6 +86,10 @@ Options:
   --force-unlock    Replace the environment lock a deploy, rollback, stage,
                     promote or delete left behind when it stopped; only once
                     that command is known to be no longer running
+  --prune-aliases   With bootstrap: detach attached CloudFront aliases that
+                    the config does not name. Without it they are reported
+                    and left attached, so a config edit never drops a
+                    live hostname.
   --switch-mode     Allow bootstrap to change a bootstrapped stack between
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy
@@ -421,6 +425,7 @@ export async function main(
       // form would reject the flag the usage text and docs advertise.
       'switch-mode': { type: 'boolean', default: false },
       'force-unlock': { type: 'boolean', default: false },
+      'prune-aliases': { type: 'boolean', default: false },
       staged: { type: 'boolean', default: false },
       rebuild: { type: 'boolean', default: false },
       yes: { type: 'boolean', default: false },
@@ -569,6 +574,7 @@ export async function main(
     domain: values.domain,
     endpointOverride: values.endpoint,
     profile: values.profile,
+    pruneAliases: command === 'bootstrap' && values['prune-aliases'],
     ports: { terminal },
   });
 

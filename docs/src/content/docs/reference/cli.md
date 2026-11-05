@@ -56,10 +56,12 @@ no first-run config questions.
 ### bootstrap
 
 ```sh
-blogwright bootstrap [env] [--switch-mode]
+blogwright bootstrap [env] [--switch-mode] [--prune-aliases]
 ```
 
 Creates or reconciles the full infrastructure graph for the environment - safe to re-run, including after a failure partway: state is persisted even when a step fails, and resources a crashed run created but never recorded (such as a CloudFront distribution hitting a duplicate-alias conflict) are adopted rather than duplicated.
+
+`--prune-aliases` detaches CloudFront aliases that are attached to the distribution but not named by `domain` and `aliases`, and requests a certificate for the narrower set. Without it they are reported and left attached; bootstrap never removes a live hostname as a side effect. See [multiple domains](/guides/custom-domains/#multiple-domains).
 
 `--switch-mode` allows a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses when the configured mode (presence of an `ssr` block) differs from the mode the live distribution was left in (a stack bootstrapped before SSR existed counts as static), because the distribution's default behavior moves before a deploy in the new mode exists: a static → SSR switch answers `503` from the placeholder until the first SSR deploy completes, and an SSR → static switch serves whatever `site/` holds until the next static deploy. The refusal names that window and applies nothing; with the flag the same window is repeated as a warning and the distribution converges in place. An environment with an `ssr` block also enables S3 versioning on its bucket here (and never suspends it again). When a domain is configured (via `--domain` or the config), bootstrap requests the ACM certificate and prints the DNS validation CNAMEs, and the distribution gets the domain as an alias. On completion it prints the CloudFront domain the site is served from. See [deploying](/guides/deploying/) and [custom domains](/guides/custom-domains/).
 
@@ -427,6 +429,7 @@ Reconciles the `site.standard.document` records on the PDS with the local conten
 | `--id <preview>` | `preview deploy`, `preview destroy` | The preview id (e.g. `pr-42`); wins over the positional. |
 | `--identifier <handle-or-did>` | `pds login` | The account to authorize as. Required. |
 | `--plain` | all | Minimal machine-friendly output - no color, no live status, no prompts. Also automatic when output is piped. |
+| `--prune-aliases` | `bootstrap` | Detach attached CloudFront aliases that `domain` and `aliases` do not name. Without it they are reported and left attached. |
 | `--switch-mode` | `bootstrap` | Allow a bootstrapped stack to move between static and SSR serving. Without it, `bootstrap` refuses a mode change. |
 | `--refresh` | `deploy`, `rollback`, `preview deploy`, `stage`, `promote` | Re-upload every file, even unchanged ones, so metadata fixes (content types, object tags) reach objects the ETag comparison would otherwise skip. For `promote`, and a `rollback` that republishes a staged release, copy every staged file rather than only the changed ones. |
 | `--force-unlock` | `deploy`, `rollback`, `stage`, `promote`, `delete`, `destroy` | Replace the [environment lock](/guides/operations/#one-command-at-a-time-the-environment-lock) a command left behind when it stopped. Use it only once that command is known to be no longer running. |

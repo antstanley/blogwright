@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   ALL_VIEWER_EXCEPT_HOST_HEADER,
   AwsError,
@@ -28,6 +30,21 @@ import {
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
+import {
+  certificateToken,
+  desiredHostnames,
+  findHostedZone,
+  recordedDomains,
+  routingGuidance,
+  sameSet,
+  siteHostnames,
+} from './domains.js';
+import {
+  type AliasRedirect,
+  routerCodeHash,
+  ssrRouterCode,
+  staticRouterCode,
+} from './router-function.js';
 
 type ResourceNode = CoreResourceNode<OpsContext>;
 
@@ -503,7 +520,16 @@ function microvmImageNode(): ResourceNode {
   };
 }
 
-/** ACM certificate (us-east-1) - only present when a custom domain is configured. */
+/**
+ * ACM certificate (us-east-1) - only present when a custom domain is configured.
+ *
+ * Production carries one certificate for every hostname the site serves (the
+ * primary as `DomainName`, the rest as subject alternative names), because a
+ * distribution takes a single viewer certificate. ACM cannot change the names
+ * on an issued certificate, so a changed name set requests a replacement; the
+ * old certificate stays attached and is retired by `retirePreviousCertificate`
+ * once the distribution carries the new one. Previews keep one wildcard name.
+ */
 function certificateNode(): ResourceNode {
   return {
     id: 'acm-certificate',
@@ -514,6 +540,10 @@ function certificateNode(): ResourceNode {
     async read(ctx) {
       const arn = output(ctx, 'acm-certificate').arn;
       if (typeof arn !== 'string') return false;
+      // A name set that no longer matches needs a replacement, which `create` does.
+      if (!ctx.preview && !sameSet(recordedDomains(ctx), await desiredHostnames(ctx))) {
+        return false;
+      }
       try {
         const status = await ctx.clients.acm.describeCertificate(arn);
         return status.status === 'ISSUED';
@@ -526,15 +556,14 @@ function certificateNode(): ResourceNode {
     async create(ctx) {
       const domain = ctx.domain;
       if (!domain) throw new Error('certificate node requires a domain');
+      const out = output(ctx, 'acm-certificate');
       // Previews are served at <pr-id>.<domain>, so the cert must be wildcard.
-      const certDomain = ctx.preview ? `*.${domain}` : domain;
-      let arn = output(ctx, 'acm-certificate').arn as string | undefined;
-      if (!arn) {
-        // ACM idempotency token must match \w+ (no dashes).
-        const token = `${ctx.config.siteName}${ctx.env}`.replace(/\W/g, '');
-        arn = await ctx.clients.acm.requestCertificate(certDomain, token, ctx.tags);
-        output(ctx, 'acm-certificate').arn = arn;
-        await ctx.save();
+      const names = ctx.preview ? [`*.${domain}`] : await desiredHostnames(ctx);
+      let arn = out.arn as string | undefined;
+      if (arn && !ctx.preview && !sameSet(recordedDomains(ctx), names)) {
+        arn = await replaceCertificate(ctx, arn, names);
+      } else if (!arn) {
+        arn = await requestCertificate(ctx, names);
       }
       let initial = await ctx.clients.acm.describeCertificate(arn);
       if (initial.status === 'PENDING_VALIDATION' && initial.validation.length === 0) {
@@ -567,11 +596,7 @@ function certificateNode(): ResourceNode {
           }
           ctx.logger.step('created ACM validation records in Route53; waiting for ISSUED…');
         } else {
-          ctx.logger.warn('Add these DNS records at your registrar to validate the certificate:');
-          for (const r of initial.validation) {
-            ctx.logger.info(`  ${r.type}  ${r.name}  ->  ${r.value}`);
-          }
-          ctx.logger.step('waiting for certificate to be ISSUED (Ctrl-C to background)…');
+          await validateProduction(ctx, initial.validation);
         }
       }
       const settled = await pollUntil(
@@ -586,10 +611,138 @@ function certificateNode(): ResourceNode {
       }
     },
     async delete(ctx) {
-      const arn = output(ctx, 'acm-certificate').arn;
-      if (typeof arn === 'string') await ctx.clients.acm.deleteCertificate(arn);
+      const out = output(ctx, 'acm-certificate');
+      for (const arn of [out.arn, out.previousArn]) {
+        if (typeof arn === 'string') await ctx.clients.acm.deleteCertificate(arn);
+      }
     },
   };
+}
+
+/**
+ * Request a certificate for `names` (the first is its subject) and record it.
+ * `previousArn`, when given, is recorded in the same save as the new ARN, so
+ * state never names a superseded certificate that a failed request left
+ * without a replacement.
+ */
+async function requestCertificate(
+  ctx: OpsContext,
+  names: string[],
+  previousArn?: string,
+): Promise<string> {
+  const [subject, ...alternatives] = names;
+  if (!subject) throw new Error('certificate node requires a domain');
+  const out = output(ctx, 'acm-certificate');
+  // ACM idempotency token must match \w+ (no dashes) and fit 32 characters.
+  const token = ctx.preview
+    ? `${ctx.config.siteName}${ctx.env}`.replace(/\W/g, '')
+    : certificateToken(ctx.config.siteName, ctx.env, names);
+  const arn = await ctx.clients.acm.requestCertificate(subject, token, ctx.tags, alternatives);
+  if (previousArn !== undefined) out.previousArn = previousArn;
+  out.arn = arn;
+  out.domains = ctx.preview ? names : [...names].sort();
+  await ctx.save();
+  return arn;
+}
+
+/**
+ * Swap the recorded certificate for one covering `names`. The certificate the
+ * distribution may still be serving is remembered as `previousArn`. When the
+ * recorded certificate is not the one attached, it never served and is
+ * dropped; when it is attached (an earlier swap finished but ACM refused to
+ * delete its predecessor), it becomes the one to retire and the older
+ * predecessor is deleted now, since nothing serves it.
+ */
+async function replaceCertificate(
+  ctx: OpsContext,
+  current: string,
+  names: string[],
+): Promise<string> {
+  const out = output(ctx, 'acm-certificate');
+  ctx.logger.info(`  certificate names changed; requesting a replacement for ${names.join(', ')}`);
+  const earlier = typeof out.previousArn === 'string' ? out.previousArn : undefined;
+  if (earlier === undefined) return requestCertificate(ctx, names, current);
+  const distributionId = output(ctx, 'cloudfront-distribution').id;
+  const live =
+    typeof distributionId === 'string'
+      ? await ctx.clients.cloudfront.getDistributionAliases(distributionId)
+      : undefined;
+  const stale = live?.certificateArn === current ? earlier : current;
+  try {
+    await ctx.clients.acm.deleteCertificate(stale);
+  } catch (err) {
+    ctx.logger.warn(`could not delete the superseded certificate ${stale}: ${String(err)}`);
+  }
+  return requestCertificate(ctx, names, stale === current ? earlier : current);
+}
+
+/**
+ * Production DNS validation. With `manageDns` the records whose zone is in the
+ * account's Route 53 are created; every other still-pending record is printed,
+ * grouped by hostname. A record ACM already marks validated is skipped (the
+ * validation CNAME is per hostname, so an apex validated by an earlier
+ * certificate needs nothing new).
+ */
+async function validateProduction(
+  ctx: OpsContext,
+  records: Awaited<ReturnType<OpsContext['clients']['acm']['describeCertificate']>>['validation'],
+): Promise<void> {
+  const pending = new Map<string, (typeof records)[number]>();
+  for (const r of records) {
+    if (r.status !== 'SUCCESS') pending.set(`${r.type} ${r.name}`, r);
+  }
+  const unmanaged: (typeof records)[number][] = [];
+  for (const r of pending.values()) {
+    const zone = ctx.config.manageDns
+      ? await findHostedZone(ctx.clients.route53, r.domain ?? r.name)
+      : undefined;
+    if (zone) {
+      await ctx.clients.route53.upsertRecord(zone.zoneId, {
+        name: r.name,
+        type: r.type,
+        value: r.value,
+      });
+      ctx.logger.info(`  ${r.domain ?? r.name}: validation record created in Route 53`);
+    } else {
+      unmanaged.push(r);
+    }
+  }
+  if (unmanaged.length > 0) {
+    ctx.logger.warn('Add these DNS records at your registrar to validate the certificate:');
+    for (const r of unmanaged) {
+      ctx.logger.info(`  ${r.domain ?? r.name}: ${r.type}  ${r.name}  ->  ${r.value}`);
+    }
+    ctx.logger.step('waiting for certificate to be ISSUED (Ctrl-C to background)…');
+  } else {
+    ctx.logger.step(
+      pending.size > 0
+        ? 'created ACM validation records in Route53; waiting for ISSUED…'
+        : 'no validation records pending; waiting for ISSUED…',
+    );
+  }
+}
+
+/**
+ * Delete the certificate a replacement superseded, once the distribution
+ * carries the current one. ACM refuses to delete a certificate CloudFront still
+ * references (its update is eventually consistent), so a refusal is kept in
+ * state and retried on the next run instead of failing the bootstrap.
+ */
+async function retirePreviousCertificate(ctx: OpsContext, distributionId: string): Promise<void> {
+  const out = output(ctx, 'acm-certificate');
+  const previous = out.previousArn;
+  if (typeof previous !== 'string' || previous === out.arn) return;
+  const live = await ctx.clients.cloudfront.getDistributionAliases(distributionId);
+  if (live?.certificateArn !== out.arn) return;
+  try {
+    await ctx.clients.acm.deleteCertificate(previous);
+    Reflect.deleteProperty(out, 'previousArn');
+    ctx.logger.ok('superseded certificate deleted');
+  } catch (err) {
+    ctx.logger.warn(
+      `superseded certificate not deleted yet (${String(err)}); it will be retried on the next bootstrap`,
+    );
+  }
 }
 
 /** CloudFront Origin Access Control granting the distribution private read on S3. */
@@ -1365,20 +1518,14 @@ const PREVIEW_FUNCTION_CODE = `function handler(event) {
 }`;
 
 /**
- * CloudFront Function (viewer-request) for staging/production: resolve a directory URL
- * to its index document (`/projects/` → `/projects/index.html`). Required because the S3
- * origin is the private REST endpoint (via OAC), which - unlike an S3 website endpoint -
- * does no index-document resolution, so `DefaultRootObject` only covers the apex. The
- * `/site` origin path is applied by the distribution, so this function must not add it.
+ * The alias redirect this environment runs, or undefined when none applies:
+ * `redirectToPrimary` needs a primary domain and at least one alias.
  */
-const STATIC_ROUTER_CODE = `function handler(event) {
-  var request = event.request;
-  var uri = request.uri;
-  if (uri.endsWith('/')) { uri += 'index.html'; }
-  else if (uri.lastIndexOf('.') < uri.lastIndexOf('/')) { uri += '/index.html'; }
-  request.uri = uri;
-  return request;
-}`;
+function aliasRedirect(ctx: OpsContext): AliasRedirect | undefined {
+  const { aliases, redirectToPrimary } = ctx.config;
+  if (!redirectToPrimary || !ctx.domain || aliases.length === 0) return undefined;
+  return { primary: ctx.domain, aliases };
+}
 
 /**
  * CloudFront viewer-request function. Preview stacks route a subdomain to its S3 prefix
@@ -1386,6 +1533,21 @@ const STATIC_ROUTER_CODE = `function handler(event) {
  * index document. Both are needed because the OAC/REST S3 origin does no index resolution.
  */
 function routerFunctionNode(preview: boolean): ResourceNode {
+  /**
+   * The source this environment should run. Staging/production resolve
+   * directory URLs and, with `redirectToPrimary`, also 301 alias hosts to the
+   * primary. SSR sites run the redirect alone, since the application owns its
+   * routing; without a redirect the SSR function is unattached.
+   */
+  function desiredCode(ctx: OpsContext): string {
+    if (preview) return PREVIEW_FUNCTION_CODE;
+    const redirect = aliasRedirect(ctx);
+    if (ctx.config.ssr && redirect) return ssrRouterCode(redirect);
+    return staticRouterCode(redirect);
+  }
+  function comment(ctx: OpsContext): string {
+    return `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`;
+  }
   return {
     id: 'cloudfront-function',
     dependsOn: [],
@@ -1394,17 +1556,29 @@ function routerFunctionNode(preview: boolean): ResourceNode {
       return typeof output(ctx, 'cloudfront-function').arn === 'string';
     },
     async create(ctx) {
-      const arn = await ctx.clients.cloudfront.ensureFunction(
+      const code = desiredCode(ctx);
+      const out = output(ctx, 'cloudfront-function');
+      out.arn = await ctx.clients.cloudfront.ensureFunction(
         `${ctx.names.prefix}-router`,
-        preview ? PREVIEW_FUNCTION_CODE : STATIC_ROUTER_CODE,
-        `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`,
+        code,
+        comment(ctx),
       );
-      output(ctx, 'cloudfront-function').arn = arn;
+      out.codeHash = routerCodeHash(code);
     },
-    async update() {
-      // The router code is static; leave the already-published function as-is (updating +
-      // re-publishing hits CloudFront's ETag/stage preconditions). To change the router,
-      // delete the function (teardown) and re-bootstrap.
+    async update(ctx) {
+      // Preview code is static. Production code varies with the alias redirect, so
+      // republish when the source differs from the one last published. A site
+      // bootstrapped before the hash was recorded, and still on the plain
+      // directory-index router, is left alone: republishing it would change nothing.
+      if (preview) return;
+      const code = desiredCode(ctx);
+      const hash = routerCodeHash(code);
+      const out = output(ctx, 'cloudfront-function');
+      if (out.codeHash === hash) return;
+      if (out.codeHash === undefined && code === staticRouterCode()) return;
+      await ctx.clients.cloudfront.ensureFunction(`${ctx.names.prefix}-router`, code, comment(ctx));
+      out.codeHash = hash;
+      ctx.logger.ok('CloudFront routing function republished');
     },
     async delete(ctx) {
       await ctx.clients.cloudfront.deleteFunction(`${ctx.names.prefix}-router`);
@@ -1463,13 +1637,17 @@ function distributionShape(
   const shared = {
     callerReference: `${ctx.names.prefix}-${ctx.accountId}`,
     comment: `${ctx.config.siteName} ${ctx.env}`,
-    aliases: ctx.domain ? [preview ? `*.${ctx.domain}` : ctx.domain] : [],
+    aliases: ctx.domain ? (preview ? [`*.${ctx.domain}`] : siteHostnames(ctx)) : [],
     acmCertificateArn: ctx.domain ? String(output(ctx, 'acm-certificate').arn) : undefined,
   };
   const responseHeadersPolicyId = desiredResponseHeadersPolicyId(ctx);
 
   if (mode === 'ssr') {
     const config = ssrConfig(ctx);
+    // Aliases must redirect on every path, static or dynamic, so the function
+    // is on each behavior; without a redirect nothing is attached.
+    const functionArn =
+      !preview && aliasRedirect(ctx) ? String(output(ctx, 'cloudfront-function').arn) : undefined;
     return {
       ...shared,
       // The app answers `/`; a root object would only intercept it.
@@ -1491,6 +1669,7 @@ function distributionShape(
         cachePolicyId: String(output(ctx, 'web-cache-policy').id),
         originRequestPolicyId: ALL_VIEWER_EXCEPT_HOST_HEADER,
         allowedMethods: ['GET', 'HEAD', 'OPTIONS', 'PUT', 'POST', 'PATCH', 'DELETE'],
+        ...(functionArn ? { functionArn } : {}),
         responseHeadersPolicyId,
       },
       // The static paths carry the headers too: they are the same site's responses.
@@ -1498,6 +1677,7 @@ function distributionShape(
         pathPattern,
         targetOriginId: 's3-site',
         cachePolicyId: CACHING_OPTIMIZED,
+        ...(functionArn ? { functionArn } : {}),
         responseHeadersPolicyId,
       })),
       // No custom error responses: the application owns 404s, and error
@@ -1579,22 +1759,17 @@ async function reconcileStaticAliases(
     ctx.logger.ok('no domain configured - existing aliases left as-is');
     return;
   }
-  const alias = preview ? `*.${ctx.domain}` : ctx.domain;
+  // Production: the configured names plus any attached alias config does not
+  // name (kept unless `--prune-aliases`); the certificate node computed the same
+  // set, so the certificate covers whatever is attached.
+  const aliases = preview ? [`*.${ctx.domain}`] : siteHostnames(ctx);
   const certArn = String(output(ctx, 'acm-certificate').arn);
   const changed = await ctx.clients.cloudfront.setDistributionAliases(
     distributionId,
-    [alias],
+    aliases,
     certArn,
   );
-  if (changed) {
-    ctx.logger.ok(`attached ${alias} to the distribution`);
-    const domainName = output(ctx, 'cloudfront-distribution').domainName;
-    if (typeof domainName === 'string') {
-      ctx.logger.info(`  point ${alias} (CNAME/ALIAS) at ${domainName}`);
-    }
-  } else {
-    ctx.logger.ok('aliases up to date');
-  }
+  ctx.logger.ok(changed ? `aliases set to ${aliases.join(', ')}` : 'aliases up to date');
 }
 
 /** The CloudFront distribution. Preview stacks use a host-routing function + no caching. */
@@ -1667,11 +1842,8 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
       out.mode = servingMode(ctx);
       await ctx.clients.cloudfront.tagResource(dist.arn, ctx.tags);
       ctx.logger.info(`  CloudFront domain: ${dist.domainName}`);
-      if (ctx.domain && !preview) {
-        // Preview stacks create the wildcard record themselves (preview-dns
-        // node, next in the graph); only the main site may be DNS'd elsewhere.
-        ctx.logger.info(`  point ${ctx.domain} (CNAME/ALIAS) at ${dist.domainName}`);
-      }
+      // Production routing records are the site-dns node's (next in the graph);
+      // preview stacks create their wildcard record in the preview-dns node.
     },
     async update(ctx) {
       const id = output(ctx, 'cloudfront-distribution').id;
@@ -1693,17 +1865,15 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
         recordResponseHeadersPolicyAttached(ctx, id);
         if (changed) {
           ctx.logger.ok(`reconciled the distribution for ${configured} serving`);
-          const domainName = out.domainName;
-          if (ctx.domain && !preview && typeof domainName === 'string') {
-            ctx.logger.info(`  point ${ctx.domain} (CNAME/ALIAS) at ${domainName}`);
-          }
         } else {
           ctx.logger.ok(`distribution already matches ${configured} serving`);
         }
+        if (!preview) await retirePreviousCertificate(ctx, id);
         return;
       }
       await reconcileStaticAliases(ctx, id, preview);
       await attachResponseHeadersPolicy(ctx, id);
+      if (!preview) await retirePreviousCertificate(ctx, id);
     },
     async delete(ctx) {
       const id = output(ctx, 'cloudfront-distribution').id;
@@ -2243,6 +2413,116 @@ function previewDnsNode(): ResourceNode {
   };
 }
 
+/**
+ * Routing for the production hostnames: the records that point each name at
+ * the distribution. With `manageDns`, hosts whose hosted zone is in the
+ * account's Route 53 get A and AAAA alias records (recorded in state so a
+ * teardown or a prune removes them); every other host is printed, as an
+ * apex or a sub-domain according to what DNS says its zone is. Guidance is
+ * printed when it changes, not on every run.
+ */
+function siteDnsNode(): ResourceNode {
+  const TYPES = ['A', 'AAAA'] as const;
+  async function reconcile(ctx: OpsContext): Promise<void> {
+    const target = output(ctx, 'cloudfront-distribution').domainName;
+    if (typeof target !== 'string') return;
+    const out = output(ctx, 'site-dns');
+    const hosts = siteHostnames(ctx);
+    const previousHosts = Array.isArray(out.hosts) ? out.hosts : [];
+    const previousZones = Array.isArray(out.zoneIds) ? out.zoneIds : [];
+    const managedHosts: string[] = [];
+    const managedZones: string[] = [];
+    const guidance: string[] = [];
+    for (const host of hosts) {
+      const zone = ctx.config.manageDns
+        ? await findHostedZone(ctx.clients.route53, host)
+        : undefined;
+      if (zone) {
+        try {
+          for (const type of TYPES) {
+            await ctx.clients.route53.upsertRecord(zone.zoneId, {
+              name: host,
+              type,
+              value: target,
+              aliasZoneId: CLOUDFRONT_ALIAS_ZONE_ID,
+            });
+          }
+          managedHosts.push(host);
+          managedZones.push(zone.zoneId);
+          ctx.logger.info(`  ${host} -> ${target} (Route 53 alias)`);
+          continue;
+        } catch (err) {
+          // A CNAME already at the name is the usual cause; fall back to guidance.
+          ctx.logger.warn(`could not write Route 53 records for ${host}: ${String(err)}`);
+        }
+      }
+      guidance.push(await routingGuidance(ctx.ports.dns, host, target));
+    }
+    // Records this node wrote for a host that is no longer served.
+    for (const [i, host] of previousHosts.entries()) {
+      const zoneId = previousZones[i];
+      if (hosts.includes(host) || zoneId === undefined) continue;
+      for (const type of TYPES) {
+        await ctx.clients.route53.deleteRecord(zoneId, {
+          name: host,
+          type,
+          value: target,
+          aliasZoneId: CLOUDFRONT_ALIAS_ZONE_ID,
+        });
+      }
+    }
+    // A host still served but not written this run (manageDns turned off, or a
+    // write that fell back to guidance) keeps its record of what was written,
+    // so a later prune or teardown still removes the records.
+    for (const [i, host] of previousHosts.entries()) {
+      const zoneId = previousZones[i];
+      if (zoneId === undefined || !hosts.includes(host) || managedHosts.includes(host)) continue;
+      managedHosts.push(host);
+      managedZones.push(zoneId);
+    }
+    out.hosts = managedHosts;
+    out.zoneIds = managedZones;
+    const signature = createHash('sha256')
+      .update([target, ...hosts, ...guidance].join('\n'))
+      .digest('hex');
+    if (guidance.length > 0 && out.signature !== signature) {
+      ctx.logger.warn(`Point these hostnames at ${target}:`);
+      for (const line of guidance) ctx.logger.info(`  ${line}`);
+    }
+    out.signature = signature;
+  }
+
+  return {
+    id: 'site-dns',
+    dependsOn: ['cloudfront-distribution'],
+    title: 'Site DNS routing',
+    async read(ctx) {
+      return typeof output(ctx, 'site-dns').signature === 'string';
+    },
+    create: reconcile,
+    update: reconcile,
+    async delete(ctx) {
+      const out = output(ctx, 'site-dns');
+      const target = output(ctx, 'cloudfront-distribution').domainName;
+      const hosts = Array.isArray(out.hosts) ? out.hosts : [];
+      const zones = Array.isArray(out.zoneIds) ? out.zoneIds : [];
+      if (typeof target !== 'string') return;
+      for (const [i, host] of hosts.entries()) {
+        const zoneId = zones[i];
+        if (zoneId === undefined) continue;
+        for (const type of TYPES) {
+          await ctx.clients.route53.deleteRecord(zoneId, {
+            name: host,
+            type,
+            value: target,
+            aliasZoneId: CLOUDFRONT_ALIAS_ZONE_ID,
+          });
+        }
+      }
+    },
+  };
+}
+
 /** Build the full node set for the current context (production or preview stack). */
 export function buildNodes(ctx: OpsContext): ResourceNode[] {
   const hasDomain = Boolean(ctx.domain);
@@ -2304,6 +2584,7 @@ export function buildNodes(ctx: OpsContext): ResourceNode[] {
   );
   if (ssr) nodes.push(webFunctionPolicyNode());
   if (hasDomain) nodes.push(certificateNode());
+  if (hasDomain && !ctx.preview) nodes.push(siteDnsNode());
   if (ctx.preview) {
     nodes.push(previewDnsNode(), githubOidcRoleNode(true, false));
   } else if (ctx.config.githubRepo) {

@@ -124,6 +124,21 @@ export interface AwsLogin {
 }
 
 /** The ports domain code reaches side effects through; adapters are wired in createContext. */
+/**
+ * DNS questions the multi-domain bootstrap asks. The real adapter queries the
+ * system resolver and falls back to public ones; it throws only when no
+ * resolver could answer at all.
+ */
+export interface DnsPort {
+  /**
+   * An opaque fingerprint of the SOA record `name` answers with, or
+   * `undefined` when it has none. A resolver follows a CNAME when asked for
+   * SOA, so `www` aliased to an apex answers with the apex's record; callers
+   * compare fingerprints rather than treating any answer as "this is a zone".
+   */
+  soa(name: string): Promise<string | undefined>;
+}
+
 export interface Ports {
   fs: FileSystem;
   vcs: Vcs;
@@ -131,4 +146,5 @@ export interface Ports {
   ping: PingBuilder;
   loader: ModuleLoader;
   awsLogin: AwsLogin;
+  dns: DnsPort;
 }

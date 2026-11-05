@@ -8,6 +8,10 @@ export interface DomainValidationRecord {
   name: string;
   type: string;
   value: string;
+  /** The hostname this record validates (`DomainValidationOptions[].DomainName`). */
+  domain?: string | undefined;
+  /** ACM's validation state for that hostname, e.g. `PENDING_VALIDATION` or `SUCCESS`. */
+  status?: string | undefined;
 }
 
 export interface CertificateStatus {
@@ -34,16 +38,22 @@ export class AcmClient {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
-  /** Request a DNS-validated certificate and return its ARN. */
+  /**
+   * Request a DNS-validated certificate and return its ARN. `alternativeNames`
+   * become subject alternative names: CloudFront takes one certificate per
+   * distribution, so every hostname the site serves goes on this one.
+   */
   async requestCertificate(
     domainName: string,
     idempotencyToken: string,
     tags?: ResourceTags,
+    alternativeNames: readonly string[] = [],
   ): Promise<string> {
     const out = await this.call<{ CertificateArn: string }>('RequestCertificate', {
       DomainName: domainName,
       ValidationMethod: 'DNS',
       IdempotencyToken: idempotencyToken,
+      ...(alternativeNames.length > 0 ? { SubjectAlternativeNames: [...alternativeNames] } : {}),
       ...(tags && Object.keys(tags).length > 0
         ? { Tags: Object.entries(tags).map(([Key, Value]) => ({ Key, Value })) }
         : {}),
@@ -56,6 +66,8 @@ export class AcmClient {
       Certificate?: {
         Status?: string;
         DomainValidationOptions?: Array<{
+          DomainName?: string;
+          ValidationStatus?: string;
           ResourceRecord?: { Name?: string; Type?: string; Value?: string };
         }>;
       };
@@ -66,7 +78,13 @@ export class AcmClient {
     for (const opt of cert.DomainValidationOptions ?? []) {
       const rr = opt.ResourceRecord;
       if (rr?.Name && rr.Type && rr.Value) {
-        validation.push({ name: rr.Name, type: rr.Type, value: rr.Value });
+        validation.push({
+          name: rr.Name,
+          type: rr.Type,
+          value: rr.Value,
+          domain: opt.DomainName,
+          status: opt.ValidationStatus,
+        });
       }
     }
     return { status: cert.Status ?? 'PENDING_VALIDATION', validation };

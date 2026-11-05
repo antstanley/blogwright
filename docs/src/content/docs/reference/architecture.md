@@ -49,9 +49,10 @@ The node set for a standard (non-preview) environment:
 | `web-function` | SSR only. The Lambda Web Function (`<env>-<siteName>-web`) with its placeholder revision, uploaded to `web/artifacts/placeholder.zip` first, and the `site` endpoint (`HomeRegion`, `IamAuth`, `autoDeploymentMode: LatestRevision`). Creation retries while IAM and the bucket policy propagate, records the function ARN immediately, and adopts a same-named function left by a crashed bootstrap. Bootstrap creates no real revision: the endpoint converges to whatever the first deploy publishes. |
 | `web-function-policy` | SSR only. The function's resource policy statement `AllowCloudFrontOACAccess`, replacing only that statement with the current distribution ARN - no wildcard principal is ever written. |
 
-Three nodes are conditional:
+Four nodes are conditional:
 
-- `acm-certificate` - only when a domain is configured. Requested in us-east-1 (CloudFront requires it), validated via DNS; the CLI prints the validation records and polls until `ISSUED`. Preview stacks request a wildcard cert and create the validation records in Route53 automatically.
+- `acm-certificate` - only when a domain is configured. Requested in us-east-1 (CloudFront requires it), validated via DNS; the CLI prints the validation records and polls until `ISSUED`. One certificate covers `domain` and every entry of `aliases` (the primary as subject, the rest as alternative names); a changed name set requests a replacement, which is deleted only after the distribution has switched to it. Preview stacks request a wildcard cert and create the validation records in Route53 automatically.
+- `site-dns` - production stacks with a domain. With `manageDns`, A/AAAA alias records in Route53 for each hostname whose hosted zone is in the account (recorded in state so `destroy` and `--prune-aliases` remove them); otherwise it prints the routing record each hostname needs.
 - `gh-oidc-role` - only when `githubRepo` is set (always present on preview stacks). Creates the account's GitHub OIDC provider if needed and a repo-scoped deploy role (`<env>-<siteName>-gh`). See [CI deploys](/guides/ci-github-oidc/).
 - `preview-dns` - preview stacks only: a Route53 wildcard `*.<domain>` A/AAAA alias record pointing at the distribution. See [PR previews](/guides/pr-previews/).
 

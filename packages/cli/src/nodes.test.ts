@@ -12,7 +12,7 @@ import {
   type ResponseHeadersPolicyConfigInput,
 } from 'blogwright-core';
 import { unzipSync } from 'fflate';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { applyGraph } from './graph.js';
 import type { OpsContext } from './context.js';
@@ -27,6 +27,7 @@ import {
   placeholderPackageZip,
   reconcileResponseHeadersOnDeploy,
 } from './nodes.js';
+import { routerCodeHash, ssrRouterCode, staticRouterCode } from './router-function.js';
 import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
 
 /** One response through the real transport seam, for the XML fixtures below. */
@@ -2153,5 +2154,181 @@ describe('response headers policy', () => {
         expect(actionsOf(oidcRolePolicyStatements(ops))).not.toContain(GRANT[1]);
       }
     });
+  });
+});
+
+describe('cloudfront-function (router) with alias redirect', () => {
+  function routerCtx(opts: {
+    config?: Record<string, unknown>;
+    state?: Record<string, Record<string, string>>;
+    preview?: boolean;
+  }) {
+    const published: string[] = [];
+    const ctx = createTestContext({
+      domain: 'example.com',
+      ...(opts.preview ? { preview: true } : {}),
+      config: { domain: 'example.com', ...opts.config },
+      state: { resources: opts.state ?? {} } as never,
+      clients: {
+        cloudfront: {
+          ensureFunction: async (_name: string, code: string) => {
+            published.push(code);
+            return 'arn:function:router';
+          },
+        } as never,
+      },
+    });
+    const node = buildNodes(ctx).find((n) => n.id === 'cloudfront-function');
+    if (!node?.update) throw new Error('router node not found');
+    return { ctx, node, published };
+  }
+
+  const REDIRECT = { aliases: ['www.example.com'], redirectToPrimary: true };
+
+  it('creates the plain router when no redirect is configured', async () => {
+    const { ctx, node, published } = routerCtx({});
+    await node.create(ctx);
+    expect(published).toEqual([staticRouterCode()]);
+    expect(ctx.state.resources['cloudfront-function']?.codeHash).toBe(
+      routerCodeHash(staticRouterCode()),
+    );
+  });
+
+  it('creates the router with the redirect folded in when configured', async () => {
+    const { ctx, node, published } = routerCtx({ config: REDIRECT });
+    await node.create(ctx);
+    expect(published).toEqual([
+      staticRouterCode({ primary: 'example.com', aliases: ['www.example.com'] }),
+    ]);
+  });
+
+  it('leaves a legacy router (no recorded hash) alone while no redirect is wanted', async () => {
+    const { ctx, node, published } = routerCtx({
+      state: { 'cloudfront-function': { arn: 'arn:function:router' } },
+    });
+    await node.update?.(ctx);
+    expect(published).toEqual([]);
+  });
+
+  it('republishes a legacy router once the redirect is turned on, then is idempotent', async () => {
+    const { ctx, node, published } = routerCtx({
+      config: REDIRECT,
+      state: { 'cloudfront-function': { arn: 'arn:function:router' } },
+    });
+    await node.update?.(ctx);
+    await node.update?.(ctx);
+    expect(published).toHaveLength(1);
+    expect(published[0]).toContain('statusCode: 301');
+  });
+
+  it('republishes when an alias is added and when the redirect is turned back off', async () => {
+    const first = routerCtx({ config: REDIRECT });
+    await first.node.create(first.ctx);
+    const added = routerCtx({
+      config: { ...REDIRECT, aliases: ['www.example.com', 'example.org'] },
+      state: first.ctx.state.resources as never,
+    });
+    await added.node.update?.(added.ctx);
+    expect(added.published).toHaveLength(1);
+    expect(added.published[0]).toContain('example.org');
+
+    const off = routerCtx({ state: added.ctx.state.resources as never });
+    await off.node.update?.(off.ctx);
+    expect(off.published).toEqual([staticRouterCode()]);
+  });
+
+  it('never republishes a preview router', async () => {
+    const { ctx, node, published } = routerCtx({
+      preview: true,
+      state: { 'cloudfront-function': { arn: 'arn:function:router' } },
+    });
+    await node.update?.(ctx);
+    expect(published).toEqual([]);
+  });
+});
+
+describe('alias redirect in ssr mode', () => {
+  function ssrCtx(config: Record<string, unknown>) {
+    const published: string[] = [];
+    const distributions: DistributionConfigInput[] = [];
+    const ssrOps = createTestContext({
+      domain: 'example.com',
+      config: {
+        domain: 'example.com',
+        githubRepo: 'antstanley/example',
+        ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] },
+        ...config,
+      },
+      state: {
+        resources: {
+          'cloudfront-distribution': { id: 'D1', arn: 'a', domainName: 'd', mode: 'ssr' },
+          oac: { id: 'OAC-S' },
+          'cloudfront-function': { arn: 'arn:function:router' },
+          'acm-certificate': { arn: 'arn:cert' },
+          'web-function': { endpointDomainName: 'abc.on.aws' },
+          'web-oac': { id: 'OAC-W' },
+          'web-cache-policy': { id: 'CP-SSR' },
+        },
+      } as never,
+      clients: {
+        cloudfront: {
+          ensureFunction: async (_name: string, code: string) => {
+            published.push(code);
+            return 'arn:function:router';
+          },
+          reconcileDistribution: async (_id: string, input: DistributionConfigInput) => {
+            distributions.push(input);
+            return false;
+          },
+          getDistributionAliases: async () => undefined,
+          tagResource: async () => undefined,
+        } as never,
+      },
+    });
+    return { ssrOps, published, distributions };
+  }
+
+  const REDIRECT = { aliases: ['www.example.com'], redirectToPrimary: true };
+
+  it('publishes a redirect-only function with no index rewrite', async () => {
+    const { ssrOps, published } = ssrCtx(REDIRECT);
+    const fn = buildNodes(ssrOps).find((n) => n.id === 'cloudfront-function');
+    await fn?.create(ssrOps);
+    expect(published).toEqual([
+      ssrRouterCode({ primary: 'example.com', aliases: ['www.example.com'] }),
+    ]);
+    expect(published[0]).toContain('statusCode: 301');
+    expect(published[0]).not.toContain('index.html');
+  });
+
+  it('attaches the function to the default and every static behavior', async () => {
+    const { ssrOps, distributions } = ssrCtx(REDIRECT);
+    await buildNodes(ssrOps)
+      .find((n) => n.id === 'cloudfront-distribution')
+      ?.update?.(ssrOps);
+    expect(distributions[0]?.defaultBehavior.functionArn).toBe('arn:function:router');
+    expect(distributions[0]?.orderedBehaviors?.map((b) => b.functionArn)).toEqual([
+      'arn:function:router',
+    ]);
+  });
+
+  it('attaches nothing without the redirect, or without aliases', async () => {
+    for (const config of [{ aliases: ['www.example.com'] }, { redirectToPrimary: true }]) {
+      const { ssrOps, distributions } = ssrCtx(config);
+      await buildNodes(ssrOps)
+        .find((n) => n.id === 'cloudfront-distribution')
+        ?.update?.(ssrOps);
+      expect(distributions[0]?.defaultBehavior.functionArn).toBeUndefined();
+      expect(distributions[0]?.orderedBehaviors?.[0]?.functionArn).toBeUndefined();
+    }
+  });
+
+  it('no longer warns that the redirect is ignored', async () => {
+    const { ssrOps } = ssrCtx(REDIRECT);
+    const warn = vi.spyOn(ssrOps.logger, 'warn');
+    await buildNodes(ssrOps)
+      .find((n) => n.id === 'cloudfront-function')
+      ?.create(ssrOps);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

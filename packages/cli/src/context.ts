@@ -19,6 +19,7 @@ import {
 } from 'blogwright-core';
 
 import { createFetchPing } from './adapters/fetch-ping.js';
+import { createNodeDns } from './adapters/node-dns.js';
 import { createNodeModuleLoader } from './adapters/node-module-loader.js';
 import { createProcessAwsLogin } from './adapters/process-aws-login.js';
 import { createProcessVcs } from './adapters/process-vcs.js';
@@ -37,6 +38,12 @@ export interface OpsContext {
   domain: string | undefined;
   /** True for the shared preview stack (host-routed, per-PR prefixes). */
   preview: boolean;
+  /**
+   * `bootstrap --prune-aliases`: detach attached aliases that config does not
+   * name. False for every other run, so a reconcile never drops a live
+   * hostname as a side effect.
+   */
+  pruneAliases: boolean;
   config: OpsConfig;
   /**
    * The environment's config file exactly as parsed, before `OpsConfig`'s
@@ -91,12 +98,39 @@ export function deriveAppTag(
   return config.app ?? domain ?? basename(repoRoot);
 }
 
+/**
+ * The multi-domain rules that depend on the effective domain (`--domain` can
+ * supply or override the config file's) or on the stack: aliases need a
+ * primary to be aliases of, must not repeat it, and a preview stack serves one
+ * wildcard host so it takes neither `aliases` nor `redirectToPrimary`.
+ */
+export function assertDomainSettings(
+  config: Pick<OpsConfig, 'aliases' | 'redirectToPrimary'> & Partial<Pick<OpsConfig, 'manageDns'>>,
+  domain: string | undefined,
+  preview: boolean,
+): void {
+  if (preview && (config.aliases.length > 0 || config.redirectToPrimary || config.manageDns)) {
+    throw new Error(
+      'config.aliases, config.redirectToPrimary and config.manageDns are not valid for a preview environment: ' +
+        'the preview stack serves one wildcard host',
+    );
+  }
+  if (config.aliases.length > 0 && !domain) {
+    throw new Error('config.aliases requires a primary domain (config.domain or --domain)');
+  }
+  if (domain && config.aliases.includes(domain)) {
+    throw new Error(`config.aliases must not repeat the primary domain ("${domain}")`);
+  }
+}
+
 export interface ContextOptions {
   env: string;
   configPath?: string | undefined;
   domain?: string | undefined;
   endpointOverride?: string | undefined;
   preview?: boolean | undefined;
+  /** `--prune-aliases`; see {@link OpsContext.pruneAliases}. */
+  pruneAliases?: boolean | undefined;
   /** `--profile`: the first row of AWS profile resolution. */
   profile?: string | undefined;
   /** The environment AWS resolution reads; defaults to `process.env`. */
@@ -122,6 +156,7 @@ function createPorts(overrides: Partial<Ports> = {}): Ports {
     ping: overrides.ping ?? createFetchPing(),
     loader: overrides.loader ?? createNodeModuleLoader(),
     awsLogin: overrides.awsLogin ?? createProcessAwsLogin(),
+    dns: overrides.dns ?? createNodeDns(),
   };
 }
 
@@ -281,6 +316,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     configPath: opts.configPath,
   });
   const domain = opts.domain ?? config.domain;
+  assertDomainSettings(config, domain, Boolean(opts.preview));
 
   const session = await resolveAwsSession({
     region: config.region,
@@ -305,6 +341,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     env: opts.env,
     domain,
     preview: opts.preview ?? false,
+    pruneAliases: opts.pruneAliases ?? false,
     config,
     configDocument,
     names,

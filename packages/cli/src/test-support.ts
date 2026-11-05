@@ -53,6 +53,7 @@ import type { Logger } from './logger.js';
 import type {
   AddPackageOptions,
   AwsLogin,
+  DnsPort,
   AwsLoginResult,
   ModuleLoader,
   ModuleResolution,
@@ -72,6 +73,7 @@ export interface TestContextOverrides {
   env?: string | undefined;
   domain?: string | undefined;
   preview?: boolean | undefined;
+  pruneAliases?: boolean | undefined;
   accountId?: string | undefined;
   identity?: Partial<CallerIdentity> | undefined;
   awsProfile?: ResolvedAwsProfile | undefined;
@@ -211,6 +213,9 @@ export function createRecordingPackageManager(
   };
 }
 
+/** With no override a test resolver finds no SOA anywhere: every host is of unknown zone shape. */
+const noSoaDns: DnsPort = { soa: async () => undefined };
+
 /** A sign-in in a test is a missing override: the default refuses. */
 const rejectAllAwsLogin: AwsLogin = {
   run: async (args) => {
@@ -343,6 +348,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     ping: overrides.ports?.ping ?? noopPing,
     loader: overrides.ports?.loader ?? rejectAllLoader,
     awsLogin: overrides.ports?.awsLogin ?? rejectAllAwsLogin,
+    dns: overrides.ports?.dns ?? noSoaDns,
   };
   const identity: CallerIdentity = {
     account: accountId,
@@ -358,6 +364,7 @@ export function createTestContext(overrides: TestContextOverrides = {}): OpsCont
     // graph shape (certificate node, aliases) the real run would.
     domain: overrides.domain ?? config.domain,
     preview: overrides.preview ?? false,
+    pruneAliases: overrides.pruneAliases ?? false,
     config,
     // The raw config document `createContext` keeps off `loadConfig`
     // (`context.ts`). Defaults to an EMPTY document rather than something

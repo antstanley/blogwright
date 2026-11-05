@@ -35,6 +35,39 @@ function configXml(aliases: string[], certArn?: string): string {
 
 const CERT = 'arn:aws:acm:us-east-1:1:certificate/abc';
 
+describe('CloudFrontClient.getDistributionAliases', () => {
+  it('reads every attached alias and the viewer certificate without writing', async () => {
+    const methods: string[] = [];
+    const client = cloudfrontWith(async (req) => {
+      methods.push(req.method);
+      return response(200, configXml(['example.com', 'www.example.com'], CERT), { etag: 'E1' });
+    });
+    expect(await client.getDistributionAliases('D1')).toEqual({
+      aliases: ['example.com', 'www.example.com'],
+      certificateArn: CERT,
+    });
+    expect(methods).toEqual(['GET']);
+  });
+
+  it('reports no aliases and no certificate for a bare distribution', async () => {
+    const client = cloudfrontWith(async () => response(200, configXml([]), { etag: 'E1' }));
+    expect(await client.getDistributionAliases('D1')).toEqual({
+      aliases: [],
+      certificateArn: undefined,
+    });
+  });
+
+  it('is undefined for a distribution that no longer exists', async () => {
+    const client = cloudfrontWith(async () =>
+      response(
+        404,
+        '<ErrorResponse><Error><Code>NoSuchDistribution</Code></Error></ErrorResponse>',
+      ),
+    );
+    expect(await client.getDistributionAliases('D1')).toBeUndefined();
+  });
+});
+
 describe('CloudFrontClient.setDistributionAliases', () => {
   it('attaches a new alias and certificate to an alias-less distribution', async () => {
     let putBody = '';
@@ -78,6 +111,25 @@ describe('CloudFrontClient.setDistributionAliases', () => {
 
     expect(changed).toBe(false);
     expect(puts).toBe(0);
+  });
+
+  it('attaches several aliases at once, in one request', async () => {
+    let putBody = '';
+    const client = cloudfrontWith(async (req) => {
+      if (req.method === 'GET')
+        return response(200, configXml(['example.com'], CERT), { etag: 'E1' });
+      putBody = String(req.body ?? '');
+      return response(200, '', {});
+    });
+    const changed = await client.setDistributionAliases(
+      'D1',
+      ['example.com', 'www.example.com', 'example.org'],
+      CERT,
+    );
+    expect(changed).toBe(true);
+    expect(putBody).toContain('<Quantity>3</Quantity>');
+    expect(putBody).toContain('<CNAME>www.example.com</CNAME>');
+    expect(putBody).toContain('<CNAME>example.org</CNAME>');
   });
 
   it('pushes a change when only the certificate differs', async () => {

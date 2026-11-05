@@ -50,6 +50,13 @@ Internal documentation does not offer a supported third-party plugin API.
 
 ## Change specs
 
+- [Multiple domains per site](changes/2026-11-05-multiple_domains_per_site.md)
+  — proposed (issue #57): `aliases` alongside the primary `domain`, one
+  multi-name ACM certificate, CloudFront aliases for every host, per-host DNS
+  guidance, drift warnings instead of silent alias removal, and an opt-in
+  `redirectToPrimary`. Preview stacks and production DNS management are
+  unchanged.
+
 - [Accessibility, visual tests, and docs-site updates](changes/2026-09-06-accessibility_visual_tests_and_docs.md)
   — accepted, implementation in progress: both web interfaces and browser gates; manual acceptance remains open.
 

@@ -257,6 +257,25 @@ export interface OpsConfig {
   app?: string | undefined;
   /** Custom domain; may also be supplied via --domain. */
   domain?: string | undefined;
+  /**
+   * Additional hostnames that serve the site alongside `domain`, the primary.
+   * Each is an independent fully-qualified hostname, not necessarily a
+   * sub-domain of the primary. Requires `domain`; not valid for a preview
+   * environment.
+   */
+  aliases: string[];
+  /**
+   * When true, a request for an alias host answers `301` to the same path and
+   * query on `domain`. Default false: every hostname serves the same content.
+   */
+  redirectToPrimary: boolean;
+  /**
+   * When true, the bootstrap creates routing and certificate-validation
+   * records itself for every hostname whose hosted zone is in the account's
+   * Route 53, and prints guidance for the rest. Default false: production DNS
+   * is the operator's. Not valid for a preview environment.
+   */
+  manageDns: boolean;
   /** MicroVM builder sizing / lifecycle. */
   microvm: {
     memory: number;
@@ -322,6 +341,9 @@ export interface OpsConfig {
 /** Every setting except the required `siteName`. */
 export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
   region: 'us-east-1',
+  aliases: [],
+  redirectToPrimary: false,
+  manageDns: false,
   microvm: {
     memory: 4,
     maxDurationSeconds: 1800,
@@ -505,6 +527,8 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
     ...DEFAULT_CONFIG,
     ...rest,
     siteName: raw.siteName,
+    // Copied so no config shares (or can mutate) the default's array.
+    aliases: Array.isArray(rest.aliases) ? [...rest.aliases] : (rest.aliases ?? []),
     microvm: {
       ...DEFAULT_CONFIG.microvm,
       ...raw.microvm,
@@ -816,6 +840,54 @@ function normalizeSsrConfig(raw: unknown, distDir: string): SsrConfig | undefine
   };
 }
 
+/** Most hostnames one certificate covers: the default ACM per-certificate name quota. */
+export const MAX_SITE_HOSTNAMES = 10;
+
+const HOSTNAME_PATTERN =
+  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** True for a lowercase ASCII fully-qualified hostname with at least two labels. */
+export function isValidHostname(name: string): boolean {
+  return HOSTNAME_PATTERN.test(name);
+}
+
+/**
+ * Shape rules for `aliases` / `redirectToPrimary` that need only the config
+ * file. The rules that depend on the effective domain (`--domain` can supply
+ * it) or on the stack being a preview run at context creation.
+ */
+function validateAliases(cfg: OpsConfig): void {
+  if (!Array.isArray(cfg.aliases) || cfg.aliases.some((a) => typeof a !== 'string')) {
+    throw new Error('config.aliases must be an array of hostnames');
+  }
+  if (typeof cfg.redirectToPrimary !== 'boolean') {
+    throw new Error('config.redirectToPrimary must be true or false');
+  }
+  if (typeof cfg.manageDns !== 'boolean') {
+    throw new Error('config.manageDns must be true or false');
+  }
+  for (const alias of cfg.aliases) {
+    if (!isValidHostname(alias)) {
+      throw new Error(
+        `config.aliases entry "${alias}" must be a lowercase hostname with at least two ` +
+          'labels, with no scheme, port, path or wildcard',
+      );
+    }
+  }
+  if (new Set(cfg.aliases).size !== cfg.aliases.length) {
+    throw new Error('config.aliases must not contain duplicates');
+  }
+  if (cfg.domain !== undefined && cfg.aliases.includes(cfg.domain)) {
+    throw new Error(`config.aliases must not repeat config.domain ("${cfg.domain}")`);
+  }
+  if (cfg.aliases.length + 1 > MAX_SITE_HOSTNAMES) {
+    throw new Error(
+      `config.domain plus config.aliases may name at most ${MAX_SITE_HOSTNAMES} hostnames ` +
+        '(the default ACM certificate name quota)',
+    );
+  }
+}
+
 function validateConfig(cfg: OpsConfig): void {
   if (!/^[a-z0-9-]+$/.test(cfg.siteName)) {
     throw new Error(`config.siteName must be lowercase alphanumeric/dashes, got "${cfg.siteName}"`);
@@ -849,6 +921,7 @@ function validateConfig(cfg: OpsConfig): void {
       );
     }
   }
+  validateAliases(cfg);
   const robotsModes: RobotsMode[] = ['auto', 'index', 'noindex', 'off'];
   if (!robotsModes.includes(cfg.seo.robots)) {
     throw new Error(`config.seo.robots must be one of ${robotsModes.join(', ')}`);
