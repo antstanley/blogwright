@@ -26,6 +26,8 @@ import {
   PLACEHOLDER_ARTIFACT_KEY,
   placeholderPackageZip,
   reconcileResponseHeadersOnDeploy,
+  reconcileRouterFunction,
+  ssrNeedsRouter,
 } from './nodes.js';
 import { routerCodeHash, ssrRouterCode, staticRouterCode } from './router-function.js';
 import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
@@ -765,6 +767,7 @@ describe('distributionNode adoption', () => {
       arn: 'arn:orphan',
       domainName: 'orphan.cloudfront.net',
       mode: 'static',
+      routerAttached: true,
     });
     expect(tagged).toEqual([{ arn: 'arn:orphan', tags: ctx.tags }]);
   });
@@ -2244,6 +2247,120 @@ describe('cloudfront-function (router) with alias redirect', () => {
     });
     await node.update?.(ctx);
     expect(published).toEqual([]);
+  });
+});
+
+describe('router function with path redirects', () => {
+  const PATHS = [{ from: '/about.php', to: '/about/' }];
+
+  function ctxWith(opts: {
+    config?: Record<string, unknown>;
+    state: Record<string, Record<string, unknown>>;
+    ensure?: (name: string, code: string) => Promise<string>;
+  }) {
+    const published: string[] = [];
+    const ctx = createTestContext({
+      domain: 'example.com',
+      config: { domain: 'example.com', redirects: PATHS, ...opts.config },
+      state: { resources: opts.state } as never,
+      clients: {
+        cloudfront: {
+          ensureFunction:
+            opts.ensure ??
+            (async (_n: string, code: string) => {
+              published.push(code);
+              return 'arn:function:router';
+            }),
+        } as never,
+      },
+    });
+    return { ctx, published };
+  }
+
+  it('republishes on a changed set, saves the codeHash, and is a no-op when unchanged', async () => {
+    const { ctx, published } = ctxWith({
+      state: {
+        'cloudfront-function': { arn: 'arn:f', codeHash: routerCodeHash(staticRouterCode()) },
+      },
+    });
+    const first = await reconcileRouterFunction(ctx);
+    expect(first).toEqual({ status: 'republished', redirects: 1 });
+    expect(published).toEqual([staticRouterCode(undefined, PATHS)]);
+    expect(ctx.state.resources['cloudfront-function']?.codeHash).toBe(
+      routerCodeHash(staticRouterCode(undefined, PATHS)),
+    );
+    const second = await reconcileRouterFunction(ctx);
+    expect(second.status).toBe('unchanged');
+    expect(published).toHaveLength(1);
+  });
+
+  it('republishes a router bootstrapped before the hash was recorded when redirects exist', async () => {
+    const { ctx, published } = ctxWith({ state: { 'cloudfront-function': { arn: 'arn:f' } } });
+    expect((await reconcileRouterFunction(ctx)).status).toBe('republished');
+    expect(published).toHaveLength(1);
+  });
+
+  it('skips a stack that was never bootstrapped without creating the function', async () => {
+    const { ctx, published } = ctxWith({ state: {} });
+    expect((await reconcileRouterFunction(ctx)).status).toBe('not-bootstrapped');
+    expect(published).toEqual([]);
+  });
+
+  it('names bootstrap when the publish fails after the content is live', async () => {
+    const { ctx } = ctxWith({
+      state: { 'cloudfront-function': { arn: 'arn:f', codeHash: 'old' } },
+      ensure: async () => {
+        throw new Error('boom');
+      },
+    });
+    await expect(reconcileRouterFunction(ctx)).rejects.toThrow('blogwright bootstrap');
+  });
+
+  it('warns when an SSR distribution needs the router but it is not attached', async () => {
+    const { ctx } = ctxWith({
+      config: { ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] } },
+      state: {
+        'cloudfront-function': { arn: 'arn:f', codeHash: 'old' },
+        'cloudfront-distribution': { id: 'D1', routerAttached: false },
+      },
+    });
+    const warn = vi.spyOn(ctx.logger, 'warn');
+    await reconcileRouterFunction(ctx);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('bootstrap'));
+  });
+
+  it('publishes the redirect-only SSR form and attaches it for redirects alone', async () => {
+    const { ctx, published } = ctxWith({
+      config: { ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] } },
+      state: { 'cloudfront-function': { arn: 'arn:f', codeHash: 'old' } },
+    });
+    await reconcileRouterFunction(ctx);
+    expect(published).toEqual([ssrRouterCode(undefined, PATHS)]);
+    expect(ssrNeedsRouter(ctx)).toBe(true);
+  });
+
+  it('does not publish the static rewrite to an SSR stack whose redirects were removed', async () => {
+    const { ctx, published } = ctxWith({
+      config: { redirects: [], ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] } },
+      state: {
+        'cloudfront-function': { arn: 'arn:f', codeHash: 'old' },
+        'cloudfront-distribution': { id: 'D1', routerAttached: true },
+      },
+    });
+    const warn = vi.spyOn(ctx.logger, 'warn');
+    expect((await reconcileRouterFunction(ctx)).status).toBe('unchanged');
+    expect(published).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('bootstrap'));
+  });
+
+  it('grants the CI deploy role the function actions on production', () => {
+    const { ctx } = ctxWith({ state: { 'cloudfront-distribution': { arn: 'arn:d' } } });
+    const actions = oidcRolePolicyStatements(ctx).flatMap(
+      (s) => (s as { Action?: string[] }).Action ?? [],
+    );
+    expect(actions).toEqual(
+      expect.arrayContaining(['cloudfront:UpdateFunction', 'cloudfront:PublishFunction']),
+    );
   });
 });
 

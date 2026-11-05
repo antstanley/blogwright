@@ -21,7 +21,10 @@ describe('stripJsonComments', () => {
       "url": "http://x/y", /* trailing */
       "note": "a // b /* c"
     }`;
-    const parsed = JSON.parse(stripJsonComments(src)) as { url: string; note: string };
+    const parsed = JSON.parse(stripJsonComments(src)) as {
+      url: string;
+      note: string;
+    };
     expect(parsed.url).toBe('http://x/y');
     expect(parsed.note).toBe('a // b /* c');
   });
@@ -30,12 +33,18 @@ describe('stripJsonComments', () => {
 describe('stripTrailingCommas', () => {
   it('drops commas before closing braces and brackets, across whitespace', () => {
     const src = '{ "a": [1, 2,], "b": { "c": 1, }, }';
-    expect(JSON.parse(stripTrailingCommas(src))).toEqual({ a: [1, 2], b: { c: 1 } });
+    expect(JSON.parse(stripTrailingCommas(src))).toEqual({
+      a: [1, 2],
+      b: { c: 1 },
+    });
   });
 
   it('leaves commas inside strings alone', () => {
     const src = '{ "note": "a, }", "list": [1,] }';
-    expect(JSON.parse(stripTrailingCommas(src))).toEqual({ note: 'a, }', list: [1] });
+    expect(JSON.parse(stripTrailingCommas(src))).toEqual({
+      note: 'a, }',
+      list: [1],
+    });
   });
 
   it('parseConfig accepts a config with comments and trailing commas together', () => {
@@ -293,8 +302,14 @@ describe('cacheControl config', () => {
       }`),
     );
     expect(cfg.cacheControl).toEqual([
-      { match: ['/_app/immutable/**', '/_astro/**'], value: 'public, max-age=31536000, immutable' },
-      { match: ['**'], value: 'public, max-age=0, s-maxage=31536000, must-revalidate' },
+      {
+        match: ['/_app/immutable/**', '/_astro/**'],
+        value: 'public, max-age=31536000, immutable',
+      },
+      {
+        match: ['**'],
+        value: 'public, max-age=0, s-maxage=31536000, must-revalidate',
+      },
     ]);
   });
 
@@ -602,5 +617,57 @@ describe('aws config', () => {
         'config.aws.accountId must be a string of exactly 12 digits',
       );
     }
+  });
+});
+
+describe('parseConfig redirects', () => {
+  const parse = (redirects: string): ReturnType<typeof parseConfig> =>
+    parseConfig(withSite(`{ "redirects": ${redirects} }`));
+
+  it('defaults to no redirects and copies entries', () => {
+    expect(parseConfig('{ "siteName": "x" }').redirects).toEqual([]);
+    expect(parse('[{ "from": "/a", "to": "/b" }]').redirects).toEqual([{ from: '/a', to: '/b' }]);
+  });
+
+  it.each([
+    ['[{ "from": "/about.php", "to": "/about/" }]'],
+    ['[{ "from": "/old/*", "to": "/news/:splat", "status": 308 }]'],
+    ['[{ "from": "/", "to": "https://example.org/x?y=1" }]'],
+    ['[{ "from": "/a/", "to": "/b" }, { "from": "/c", "to": "/a" }]'],
+  ])('accepts %s', (redirects) => {
+    expect(() => parse(redirects)).not.toThrow();
+  });
+
+  it.each([
+    ['{}', /array/],
+    ['[1]', /object/],
+    ['[{ "from": "a", "to": "/b" }]', /begin with/],
+    ['[{ "from": "/a b", "to": "/b" }]', /printable ASCII/],
+    ['[{ "from": "/é", "to": "/b" }]', /printable ASCII/],
+    ['[{ "from": "/a?x=1", "to": "/b" }]', /query or fragment/],
+    ['[{ "from": "/a#x", "to": "/b" }]', /query or fragment/],
+    ['[{ "from": "/*/a", "to": "/b" }]', /one "\*"/],
+    ['[{ "from": "/a/*/*", "to": "/b" }]', /one "\*"/],
+    ['[{ "from": "/a", "to": "//evil.com" }]', /single "\/"/],
+    ['[{ "from": "/a", "to": "http://x.com" }]', /https/],
+    ['[{ "from": "/a", "to": "/b#f" }]', /fragment/],
+    ['[{ "from": "/a", "to": "/b", "status": 200 }]', /status/],
+    ['[{ "from": "/a", "to": "/b", "x": 1 }]', /unknown key/],
+    ['[{ "from": "/a", "to": "/b/:splat" }]', /:splat/],
+    ['[{ "from": "/a/*", "to": "/:splat/:splat" }]', /at most once/],
+    ['[{ "from": "/a", "to": "/b" }, { "from": "/a/", "to": "/c" }]', /duplicates/],
+    ['[{ "from": "/a", "to": "/a/" }]', /itself/],
+    ['[{ "from": "/a", "to": "/b" }, { "from": "/b", "to": "/a" }]', /loop/],
+    ['[{ "from": "/docs/*", "to": "/docs/v2/:splat" }]', /beneath its own prefix/],
+  ])('rejects %s', (redirects, message) => {
+    expect(() => parse(redirects)).toThrow(message);
+  });
+
+  it('caps the list at 500 entries', () => {
+    const many = Array.from({ length: 501 }, (_, i) => ({
+      from: `/a${i}`,
+      to: '/b',
+    }));
+    expect(() => parse(JSON.stringify(many))).toThrow(/at most 500/);
   });
 });

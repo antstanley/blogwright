@@ -1,6 +1,6 @@
 # Change: Multiple domains per site
 
-**Status:** Proposed · **Date:** 2026-11-05 · **Owner:** Ant Stanley · **Target:** site config, ACM certificate node, CloudFront alias reconcile, bootstrap DNS guidance · **Issue:** [#57](https://github.com/antstanley/blogwright/issues/57)
+**Status:** Merged · **Merged:** 2026-11-05 · **Date:** 2026-11-05 · **Owner:** Ant Stanley · **Target:** site config, ACM certificate node, CloudFront alias reconcile, bootstrap DNS guidance · **Issue:** [#57](https://github.com/antstanley/blogwright/issues/57)
 
 Let one site environment answer on several hostnames that need not share a
 parent: an apex and its `www.` host, or unrelated domains. `domain` keeps its

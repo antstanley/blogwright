@@ -1,3 +1,9 @@
+import {
+  ROUTER_CODE_LIMIT,
+  routerCodeFits,
+  ssrRouterCode,
+  staticRouterCode,
+} from './router-function.js';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, relative, resolve } from 'node:path';
@@ -105,10 +111,16 @@ export function deriveAppTag(
  * wildcard host so it takes neither `aliases` nor `redirectToPrimary`.
  */
 export function assertDomainSettings(
-  config: Pick<OpsConfig, 'aliases' | 'redirectToPrimary'> & Partial<Pick<OpsConfig, 'manageDns'>>,
+  config: Pick<OpsConfig, 'aliases' | 'redirectToPrimary'> &
+    Partial<Pick<OpsConfig, 'manageDns' | 'redirects'>>,
   domain: string | undefined,
   preview: boolean,
 ): void {
+  if (preview && (config.redirects?.length ?? 0) > 0) {
+    throw new Error(
+      'config.redirects is not valid for a preview environment: the preview host router does not apply redirects',
+    );
+  }
   if (preview && (config.aliases.length > 0 || config.redirectToPrimary || config.manageDns)) {
     throw new Error(
       'config.aliases, config.redirectToPrimary and config.manageDns are not valid for a preview environment: ' +
@@ -120,6 +132,28 @@ export function assertDomainSettings(
   }
   if (domain && config.aliases.includes(domain)) {
     throw new Error(`config.aliases must not repeat the primary domain ("${domain}")`);
+  }
+}
+
+/**
+ * The compiled router source depends on the effective domain and on `ssr`, so
+ * its size is checked here, before any AWS call.
+ */
+export function assertRouterFits(config: OpsConfig, domain: string | undefined): void {
+  if (config.redirects.length === 0) return;
+  const alias =
+    config.redirectToPrimary && domain && config.aliases.length > 0
+      ? { primary: domain, aliases: config.aliases }
+      : undefined;
+  const code = config.ssr
+    ? ssrRouterCode(alias, config.redirects)
+    : staticRouterCode(alias, config.redirects);
+  if (!routerCodeFits(code)) {
+    throw new Error(
+      `config.redirects compiles to a ${Buffer.byteLength(code, 'utf8')}-byte router function, ` +
+        `over the CloudFront Function limit of ${ROUTER_CODE_LIMIT} bytes (${config.redirects.length} ` +
+        'entries); shorten the map or move redirects to the application',
+    );
   }
 }
 
@@ -289,7 +323,11 @@ export class ConfigNotFoundError extends Error {
 export async function loadConfig(
   fs: FileSystem,
   source: ConfigSource,
-): Promise<{ config: OpsConfig; raw: Readonly<Record<string, unknown>>; path: string }> {
+): Promise<{
+  config: OpsConfig;
+  raw: Readonly<Record<string, unknown>>;
+  path: string;
+}> {
   const path = await resolveConfigPath(fs, source);
   return { ...parseConfigDocument(await fs.readText(path)), path };
 }
@@ -317,6 +355,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
   });
   const domain = opts.domain ?? config.domain;
   assertDomainSettings(config, domain, Boolean(opts.preview));
+  if (!opts.preview) assertRouterFits(config, domain);
 
   const session = await resolveAwsSession({
     region: config.region,

@@ -270,6 +270,11 @@ export interface OpsConfig {
    */
   redirectToPrimary: boolean;
   /**
+   * Path redirects compiled into the router function. Each entry answers a
+   * real HTTP redirect from `from` to `to`; see {@link PathRedirect}.
+   */
+  redirects: PathRedirect[];
+  /**
    * When true, the bootstrap creates routing and certificate-validation
    * records itself for every hostname whose hosted zone is in the account's
    * Route 53, and prints guidance for the rest. Default false: production DNS
@@ -343,6 +348,7 @@ export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
   region: 'us-east-1',
   aliases: [],
   redirectToPrimary: false,
+  redirects: [],
   manageDns: false,
   microvm: {
     memory: 4,
@@ -529,6 +535,11 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
     siteName: raw.siteName,
     // Copied so no config shares (or can mutate) the default's array.
     aliases: Array.isArray(rest.aliases) ? [...rest.aliases] : (rest.aliases ?? []),
+    redirects: Array.isArray(rest.redirects)
+      ? rest.redirects.map((r) =>
+          r !== null && typeof r === 'object' ? ({ ...r } as PathRedirect) : r,
+        )
+      : (rest.redirects ?? []),
     microvm: {
       ...DEFAULT_CONFIG.microvm,
       ...raw.microvm,
@@ -888,6 +899,131 @@ function validateAliases(cfg: OpsConfig): void {
   }
 }
 
+/** One path redirect in `config.redirects`. */
+export interface PathRedirect {
+  from: string;
+  to: string;
+  /** Default 301. */
+  status?: 301 | 302 | 307 | 308;
+}
+
+export const REDIRECT_STATUSES: readonly number[] = [301, 302, 307, 308];
+export const MAX_REDIRECTS = 500;
+
+/** `from` without its trailing slash (the root `/` excepted). */
+export function normalizeRedirectFrom(from: string): string {
+  return from.length > 1 && from.endsWith('/') ? from.replace(/\/+$/, '') || '/' : from;
+}
+
+/** True when `from` ends in the `/*` prefix wildcard. */
+export function isPrefixRedirect(from: string): boolean {
+  return from.endsWith('/*');
+}
+
+const FROM_PATTERN = /^\/[\x21-\x22\x24-\x3e\x40-\x7e]*$/;
+const TO_PATH_PATTERN = /^\/(?!\/)[\x21-\x22\x24-\x7e]*$/;
+const TO_URL_PATTERN = /^https:\/\/[\x21-\x22\x24-\x2e\x30-\x3e\x40-\x7e]+[\x21-\x22\x24-\x7e]*$/;
+
+/** The `to` path with any query removed, for self-redirect and loop checks. */
+function toPathOnly(to: string): string {
+  const q = to.indexOf('?');
+  return normalizeRedirectFrom(q === -1 ? to : to.slice(0, q));
+}
+
+/**
+ * Shape rules for `redirects` that need only the config file. The rules that
+ * depend on the stack kind or the compiled size run at context creation.
+ */
+function validateRedirects(cfg: OpsConfig): void {
+  const list: unknown = cfg.redirects;
+  if (!Array.isArray(list)) throw new Error('config.redirects must be an array');
+  if (list.length > MAX_REDIRECTS) {
+    throw new Error(
+      `config.redirects may hold at most ${MAX_REDIRECTS} entries, got ${list.length}`,
+    );
+  }
+  const seen = new Map<string, PathRedirect>();
+  for (const [i, raw] of list.entries()) {
+    const label = `config.redirects[${i}]`;
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error(`${label} must be an object with "from" and "to"`);
+    }
+    const entry = raw as Record<string, unknown>;
+    for (const key of Object.keys(entry)) {
+      if (key !== 'from' && key !== 'to' && key !== 'status') {
+        throw new Error(`${label} has unknown key "${key}"`);
+      }
+    }
+    const { from, to, status } = entry;
+    if (typeof from !== 'string' || typeof to !== 'string') {
+      throw new Error(`${label} "from" and "to" must be strings`);
+    }
+    if (status !== undefined && !REDIRECT_STATUSES.includes(status as number)) {
+      throw new Error(`${label} status must be one of ${REDIRECT_STATUSES.join(', ')}`);
+    }
+    if (from.includes('?') || from.includes('#')) {
+      throw new Error(`${label} from "${from}" must not contain a query or fragment`);
+    }
+    if (!FROM_PATTERN.test(from)) {
+      throw new Error(
+        `${label} from "${from}" must begin with "/" and be printable ASCII with no whitespace ` +
+          '(write other characters percent-encoded)',
+      );
+    }
+    const stars = from.split('*').length - 1;
+    if (stars > 1 || (stars === 1 && !from.endsWith('/*'))) {
+      throw new Error(
+        `${label} from "${from}" may hold one "*", as the final segment ("/prefix/*")`,
+      );
+    }
+    if (to.includes('#')) throw new Error(`${label} to "${to}" must not contain a fragment`);
+    if (!TO_PATH_PATTERN.test(to) && !TO_URL_PATTERN.test(to)) {
+      throw new Error(
+        `${label} to "${to}" must be a path beginning with a single "/" or an absolute ` +
+          'https:// URL, in printable ASCII with no whitespace',
+      );
+    }
+    const splats = to.split(':splat').length - 1;
+    const prefix = isPrefixRedirect(from);
+    if (splats > 0 && !prefix) {
+      throw new Error(`${label} to "${to}" uses :splat but from "${from}" is not a prefix ("/*")`);
+    }
+    if (splats > 1) throw new Error(`${label} to "${to}" may use :splat at most once`);
+    const key = normalizeRedirectFrom(from);
+    if (seen.has(key)) throw new Error(`${label} from "${from}" duplicates an earlier entry`);
+    seen.set(key, entry as unknown as PathRedirect);
+  }
+  for (const [key, entry] of seen) {
+    const target = toPathOnly(entry.to);
+    const relative = entry.to.startsWith('/');
+    if (!relative) continue;
+    if (isPrefixRedirect(key)) {
+      const base = key.slice(0, -2);
+      if (target === base || target.startsWith(`${base}/`)) {
+        throw new Error(
+          `config.redirects from "${entry.from}" redirects to "${entry.to}", which falls ` +
+            'beneath its own prefix and would match again',
+        );
+      }
+      continue;
+    }
+    if (target === key) {
+      throw new Error(`config.redirects from "${entry.from}" redirects to itself`);
+    }
+    const other = seen.get(target);
+    if (
+      other &&
+      !isPrefixRedirect(target) &&
+      toPathOnly(other.to) === key &&
+      other.to.startsWith('/')
+    ) {
+      throw new Error(
+        `config.redirects "${entry.from}" and "${other.from}" redirect to each other (a loop)`,
+      );
+    }
+  }
+}
+
 function validateConfig(cfg: OpsConfig): void {
   if (!/^[a-z0-9-]+$/.test(cfg.siteName)) {
     throw new Error(`config.siteName must be lowercase alphanumeric/dashes, got "${cfg.siteName}"`);
@@ -922,6 +1058,7 @@ function validateConfig(cfg: OpsConfig): void {
     }
   }
   validateAliases(cfg);
+  validateRedirects(cfg);
   const robotsModes: RobotsMode[] = ['auto', 'index', 'noindex', 'off'];
   if (!robotsModes.includes(cfg.seo.robots)) {
     throw new Error(`config.seo.robots must be one of ${robotsModes.join(', ')}`);

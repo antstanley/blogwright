@@ -76,6 +76,29 @@ One ACM certificate covers every name, and the distribution lists each as an ali
 
 By default every hostname serves the same content and the site's canonical URLs identify the primary. When `true`, a request for an alias answers `301` with the same path and query on `https://<domain>`. The redirect runs in the CloudFront routing function, so it does not reach the origin. On a server-rendered site (`ssr`) the same redirect runs as a redirect-only function attached to every behavior; the application's own routing is untouched. Not valid for the preview environment.
 
+### `redirects`
+
+`object[]` · default `[]`
+
+Path redirects answered by the CloudFront routing function with a real HTTP redirect, ahead of the directory-index rewrite. Each entry has `from`, `to` and an optional `status` (`301` by default; `302`, `307` and `308` are also allowed).
+
+```jsonc
+{
+  "redirects": [
+    { "from": "/about.php", "to": "/about/" },
+    { "from": "/old-blog/*", "to": "/news/:splat", "status": 301 },
+  ],
+}
+```
+
+- `from` begins with `/`; a trailing slash is not significant, so `/a` matches requests for `/a` and `/a/`. Matching is case-sensitive, against the path as the viewer sent it (percent-encoded, not decoded). A `from` ending in `/*` is a prefix match: the rest of the path replaces `:splat` in `to` (valid once, only in a prefix redirect). An exact `from` beats a prefix, and the longest prefix wins.
+- `to` is a path on the same host (one leading `/`) or an absolute `https://` URL. `from` and `to` are printable ASCII with no whitespace: write anything else percent-encoded. Neither may hold a fragment.
+- The request's query string is carried over; if `to` has its own query, the request's is appended with `&`.
+- A relative `to` answers a relative `location` on the host that was requested. With [`redirectToPrimary`](#redirecttoprimary), an alias request whose path has a redirect reaches the final URL on the primary in one hop.
+- Rejected at config load or context creation, before any AWS call: bad shapes, duplicate `from`, a redirect to itself, a two-entry loop, a prefix redirect whose `to` falls under its own prefix, more than 500 entries, and a map whose compiled router function exceeds CloudFront's 10,240-byte limit. Longer cycles are not detected.
+
+`bootstrap` and `deploy` publish the function when the compiled source changes; an unchanged set changes nothing. `deploy` publishes after the new content is live. An SSR site gets the redirect-only function attached by `bootstrap`; `deploy` warns if that has not happened yet. `rollback` does not touch redirects, because they belong to the environment's config. The preview environment rejects `redirects`: the shared preview router does not apply them.
+
 ### `manageDns`
 
 `boolean` · default `false`

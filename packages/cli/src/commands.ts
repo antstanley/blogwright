@@ -40,7 +40,12 @@ import {
 } from './live-release.js';
 import { assertEnvUnlocked, withEnvLock, type LockOptions } from './lock.js';
 import { clearRunningMicrovms } from './microvms.js';
-import { buildNodes, reconcileBuilderImage, reconcileResponseHeadersOnDeploy } from './nodes.js';
+import {
+  buildNodes,
+  reconcileBuilderImage,
+  reconcileResponseHeadersOnDeploy,
+  reconcileRouterFunction,
+} from './nodes.js';
 import {
   describeInvalidation,
   formatDuration,
@@ -404,6 +409,8 @@ async function deployLocked(
     if (artifactKey) artifact = await recordDeployArtifact(ctx, hash, artifactKey);
     await noteLiveRelease(ctx, artifact, 'deploy');
   }
+  // The content is live, so a redirect to a new page never answers before the page exists.
+  const router = await reconcileRouterFunction(ctx);
   // The site is live - plugins' post-deploy steps (the pds sync, for one) run now.
   await opts.afterDeploy(ctx);
 
@@ -416,10 +423,22 @@ async function deployLocked(
         : hash,
     },
     { label: 'environment', value: ctx.env },
-    { label: 'source', value: `${fileCount} files, ${(zipBytes / 1024).toFixed(0)} KiB` },
+    {
+      label: 'source',
+      value: `${fileCount} files, ${(zipBytes / 1024).toFixed(0)} KiB`,
+    },
     { label: 'build', value: formatDuration(manifest.durationMs) },
     ...(artifact ? [{ label: 'release', value: describeRelease(artifact) }] : []),
     { label: 'invalidated', value: describeInvalidation(invalidation) },
+    ...(router.status === 'not-bootstrapped' ||
+    (router.redirects === 0 && router.status === 'unchanged')
+      ? []
+      : [
+          {
+            label: 'redirects',
+            value: `${router.redirects} (router function ${router.status})`,
+          },
+        ]),
     ...(url ? [{ label: 'site', value: colors.cyan(url) }] : []),
   ];
   for (const line of renderSummary('deploy summary', rows, ctx.ports.terminal.isInteractive)) {
@@ -621,7 +640,9 @@ export async function previewDeploy(
     ctx.config.sourceInclude,
   );
   ctx.logger.step(`zipping ${files.length} files`);
-  const zip = await buildRepoZip(ctx.ports.fs, cwd, files, { [COMMIT_FILE]: hash });
+  const zip = await buildRepoZip(ctx.ports.fs, cwd, files, {
+    [COMMIT_FILE]: hash,
+  });
   const sourceKey = `build/${hash}.zip`;
   await ctx.clients.s3.putObject(ctx.names.bucket, sourceKey, zip, 'application/zip');
 
@@ -804,12 +825,20 @@ export async function readNodeStatus<Ctx extends GraphContext>(
     try {
       exists = await node.read(ctx);
     } catch (err) {
-      entries.push({ title: node.title, state: 'error', detail: (err as Error).message });
+      entries.push({
+        title: node.title,
+        state: 'error',
+        detail: (err as Error).message,
+      });
       continue;
     }
     const outputs = ctx.state.resources[node.id];
     const detail = outputs ? JSON.stringify(outputs) : undefined;
-    entries.push({ title: node.title, state: exists ? 'present' : 'missing', detail });
+    entries.push({
+      title: node.title,
+      state: exists ? 'present' : 'missing',
+      detail,
+    });
   }
   return entries;
 }

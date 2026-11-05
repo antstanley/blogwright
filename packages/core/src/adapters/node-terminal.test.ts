@@ -9,8 +9,12 @@ function ttyStream(): PassThrough & { isTTY: boolean } {
 }
 
 function drain(stream: PassThrough): string {
-  const chunk: unknown = stream.read();
-  return chunk === null ? '' : String(chunk);
+  // One read() may return only the first buffered chunk, so collect them all.
+  let text = '';
+  for (let chunk: unknown = stream.read(); chunk !== null; chunk = stream.read()) {
+    text += String(chunk);
+  }
+  return text;
 }
 
 describe('createNodeTerminal', () => {

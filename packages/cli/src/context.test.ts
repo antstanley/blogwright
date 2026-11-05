@@ -15,6 +15,7 @@ import {
   type ResourceNode,
   type ResourceOutputs,
   type Transport,
+  DEFAULT_CONFIG,
 } from 'blogwright-core';
 import pdsPlugin, { type PdsContext } from 'blogwright-pds';
 import { describe, expect, it } from 'vitest';
@@ -27,6 +28,7 @@ import {
 } from './cli.js';
 import {
   assertDomainSettings,
+  assertRouterFits,
   cliPackageDir,
   createContext,
   deriveAppTag,
@@ -1232,5 +1234,32 @@ describe('assertDomainSettings', () => {
       ),
     ).toThrow('preview');
     expect(() => assertDomainSettings(plain, 'example.com', true)).not.toThrow();
+  });
+
+  it('rejects redirects for a preview environment', () => {
+    const redirects = [{ from: '/a', to: '/b' }];
+    expect(() => assertDomainSettings({ ...plain, redirects }, 'example.com', true)).toThrow(
+      'preview host router does not apply redirects',
+    );
+    expect(() => assertDomainSettings({ ...plain, redirects }, 'example.com', false)).not.toThrow();
+  });
+});
+
+describe('assertRouterFits', () => {
+  const base = { ...DEFAULT_CONFIG, siteName: 'x' };
+  it('passes a small map and an empty one', () => {
+    expect(() => assertRouterFits({ ...base, redirects: [] }, undefined)).not.toThrow();
+    expect(() =>
+      assertRouterFits({ ...base, redirects: [{ from: '/a', to: '/b' }] }, undefined),
+    ).not.toThrow();
+  });
+  it('names the compiled size, the limit and the entry count when oversize', () => {
+    const redirects = Array.from({ length: 500 }, (_, i) => ({
+      from: `/some/long/path/segment/number-${i}`,
+      to: `/another/long/path/segment/target-${i}`,
+    }));
+    expect(() => assertRouterFits({ ...base, redirects }, undefined)).toThrow(
+      /-byte router function, over the CloudFront Function limit of 10240 bytes \(500 entries\)/,
+    );
   });
 });
