@@ -304,6 +304,61 @@
         }
       },
       "description": "Persisted envelope; unknown envelope fields are preserved for compatibility. Runtime accepts string timestamps without format/version/env equality restrictions."
+    },
+    "PathRedirect": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^/[\\x21-\\x22\\x24-\\x3e\\x40-\\x7e]*$"
+        },
+        "to": {
+          "type": "string",
+          "pattern": "^(/(?!/)[\\x21-\\x22\\x24-\\x7e]*|https://[\\x21-\\x22\\x24-\\x2e\\x30-\\x3e\\x40-\\x7e]+[\\x21-\\x22\\x24-\\x7e]*)$"
+        },
+        "status": {
+          "enum": [
+            301,
+            302,
+            307,
+            308
+          ],
+          "default": 301
+        }
+      }
+    },
+    "PathRedirects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PathRedirect"
+      },
+      "maxItems": 500
+    },
+    "AcmCertificateOutput": {
+      "type": "object",
+      "required": [
+        "arn",
+        "domains"
+      ],
+      "properties": {
+        "arn": {
+          "type": "string"
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "maxItems": 10
+        }
+      }
     }
   }
 }

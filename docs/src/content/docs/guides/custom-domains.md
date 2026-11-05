@@ -84,7 +84,7 @@ Bootstrap then:
 - prints one validation CNAME per hostname that still needs one. A name ACM has already validated needs no new record;
 - attaches every hostname to the distribution, and prints the routing record each one needs.
 
-By default every hostname serves the same content. Set [`redirectToPrimary`](/reference/configuration/#redirecttoprimary) to make the aliases answer `301` to the primary instead.
+By default every hostname serves the same content. Set [`redirectToPrimary`](/reference/configuration/#redirecttoprimary) to make the aliases answer `301` to the primary instead. Combined with [`redirects`](/reference/configuration/#redirects), a path redirect is evaluated first, so an alias request for a redirected path goes to its final URL on the primary in a single hop.
 
 **Adding an alias** to a bootstrapped site requests a replacement certificate (ACM cannot add names to an issued one), prints the new validation CNAME, and attaches the new certificate and alias once it is issued. The old certificate keeps serving until then, and is deleted after the distribution has switched. If ACM refuses the delete because CloudFront has not finished updating, bootstrap keeps it and retries on the next run.
 

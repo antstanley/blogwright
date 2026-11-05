@@ -1,6 +1,6 @@
 # JSON entities, identities and state
 
-**Status:** Implemented · **Date:** 2026-10-16 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Implemented · **Date:** 2026-11-05 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [development guidelines](../../../DEVELOPMENT.md) and [spec index](../../README.md).
 
@@ -171,6 +171,231 @@ for a revision that is serving and verified, and an SSR manifest's `status`
 is the outcome of the whole deploy, not of the build alone. The Web Function
 placeholder revision created at bootstrap is registered in state like any
 other node output; no plugin state is involved.
+
+## Site domains
+
+An environment's hostnames are `domain` (the **primary**) plus the optional
+`aliases` list. `domain` may still be supplied with `--domain`; `aliases` is
+config-file only. Existing configs without `aliases` behave exactly as before.
+The primary is the canonical origin: the host used for `robots.txt` and
+`sitemap.xml` URLs, PDS records and OAuth client metadata, and the redirect
+target when `redirectToPrimary` is set.
+
+Each alias is an independent fully-qualified hostname. It need not be a
+sub-domain of the primary and may live in a different DNS zone or at a
+different registrar.
+
+`aliases` is validated at config load. Every entry is a lowercase ASCII
+hostname with at least two labels, with no scheme, port, path or wildcard.
+Entries are unique and none equals `domain`. The primary and aliases together
+number at most 10, the default ACM per-certificate name quota. `aliases`
+without `domain` is rejected.
+
+`redirectToPrimary` is a boolean, default `false`. When `false`, every
+hostname serves the same content and the site's own canonical URLs identify
+the primary. When `true`, a viewer-request CloudFront Function answers any
+request whose `Host` is an alias with a `301` to the same path and query on
+`https://<domain>`. The status is `301`.
+
+`manageDns` is a boolean, default `false`. When `true`, the bootstrap creates
+the validation and routing records itself for every hostname whose hosted
+zone is in the account's Route 53, and prints guidance for the rest (see DNS
+guidance).
+
+In a preview environment, `aliases`, `redirectToPrimary` and `manageDns` are
+rejected at config load with a message that the preview stack serves one
+wildcard host.
+
+## Certificate and validation
+
+The certificate is one DNS-validated ACM certificate. CloudFront accepts one
+certificate per distribution, so it covers every name: the primary is its
+`DomainName` and every other name is a subject alternative name. The
+**desired name set** is the primary, the configured aliases, and any
+attached alias that config does not name and the operator has not pruned.
+
+The `acm-certificate` output records `arn` and `domains`, the sorted desired
+name set the certificate was requested for. On every run the certificate node
+compares `domains` with the desired set. A mismatch requests a replacement
+certificate rather than editing the existing one, because ACM cannot change
+the names on an issued certificate. The idempotency token is derived from the
+site name, the environment and a short hash of the sorted name set, so a
+changed set requests a new certificate and an unchanged set reuses the
+existing one. The old certificate stays attached and serving until the
+replacement is `ISSUED` and the alias reconcile has attached it; only then
+is the old certificate deleted. A failed or interrupted replacement leaves
+the old certificate in place.
+
+ACM returns one validation record per name, and a record is per hostname,
+not per certificate. Records already satisfied for a name, such as an apex
+validated by an earlier certificate, are not reprinted. Production does not
+manage DNS: the bootstrap prints, grouped by hostname, each validation CNAME
+that is still missing and waits for `ISSUED`. Preview stacks keep creating
+their single validation record in Route 53.
+
+## CloudFront aliases
+
+The production distribution's alias list is `[domain, ...aliases]` plus any
+retained undeclared alias, and its viewer certificate is the multi-name
+certificate. The reconcile reads the live alias list and compares it with the
+desired set order-insensitively, so a run with no drift changes nothing and
+re-running `bootstrap` never drops an alias.
+
+Drift is detected in both directions. A configured name missing from the
+distribution is attached. An attached alias that config does not name is
+reported with a warning that names it and says how to prune it, and it stays
+attached, with the certificate still covering it. As today, an absent
+`domain` never removes aliases from a live distribution.
+
+Removing an alias is explicit and is never a side effect of editing config.
+`blogwright bootstrap --prune-aliases` detaches every attached alias that
+config does not name, requests a certificate for the narrower set, and
+deletes the old certificate once the replacement is attached.
+
+## DNS guidance
+
+After the alias reconcile, the bootstrap prints the final routing record for
+every hostname, pointing at the distribution's CloudFront domain. A zone
+apex needs an ALIAS or ANAME record, or A and AAAA records at a DNS host that
+cannot flatten a CNAME at the apex. Any other host, such as `www`, can be a
+plain CNAME.
+
+The bootstrap decides which case applies by asking DNS. For each hostname it
+queries the SOA record at the host and then at each parent in turn, dropping
+the leading label each time. The first name that answers with an SOA starts
+a run; the run continues up through parents that answer with an identical
+record and ends at the first that does not, and the highest name in the run
+is the zone apex. The run matters because a resolver follows a CNAME when
+asked for SOA, so a `www` that is a CNAME to the apex answers with the
+apex's record and must not be taken for an apex itself. A host equal to the
+apex is an apex. Using DNS rather than a
+suffix list means a host under a multi-label public suffix such as
+`example.co.uk` is classified correctly. If no name answers, as for a domain
+not yet delegated, the bootstrap prints both the apex and the sub-domain
+form for that host and says why.
+
+The queries go to the system resolver first. If the system resolver fails to
+answer (a timeout, `SERVFAIL`, `REFUSED` or a connection error), the same
+query is retried once against public resolvers (`1.1.1.1`, then `8.8.8.8`).
+A definite negative answer (`NXDOMAIN` or no SOA at that name) is not a
+failure and does not trigger the fallback; the walk simply moves to the
+parent.
+
+By default the bootstrap creates none of these records, because the zone is
+often at a registrar blogwright cannot reach. With `manageDns: true`, the
+bootstrap looks for a Route 53 hosted zone that contains each hostname,
+trying the host and then each parent. For a host with a zone it upserts the
+A and AAAA alias records and any ACM validation CNAME there, as the preview
+stack does. A host with no zone in the account is not an error: it falls
+back to the printed guidance, so one site can mix Route 53 and registrar
+hosted names.
+
+## Path redirects
+
+`redirects` is an optional list of path redirects in the environment's config
+file. Each entry has `from` and `to`, and an optional `status`:
+
+```jsonc
+"redirects": [
+  { "from": "/about.php", "to": "/about/" },
+  { "from": "/old-blog/*", "to": "/news/:splat", "status": 301 }
+]
+```
+
+`status` is `301` by default and may be `301`, `302`, `307` or `308`. `to` is
+either a path on the same host, beginning with a single `/`, or an absolute
+`https://` URL. Both `from` and `to` are printable ASCII with no whitespace;
+any other character is written percent-encoded. A site with no `redirects`, or an empty list, runs a router
+function byte-for-byte identical to one without the setting.
+
+**Matching.** A redirect matches against the URI the viewer requested, before
+the directory-index rewrite, case-sensitively and without decoding, so `from`
+is written as the viewer sends it. A trailing slash is not significant: `from`
+is stored without one (the root `/` excepted) and a request for `/a` or `/a/`
+matches `/a`. A `from` ending in `/*` is a prefix match. It matches the prefix
+with or without a trailing slash and any path beneath it, and the rest of the
+path (empty when none) replaces `:splat` in `to`. An exact `from` wins over a
+prefix `from`, and among prefixes the longest wins. `:splat` is valid only in
+the `to` of a prefix redirect, and at most once.
+
+**Query string.** The request's query string is carried over unchanged, using
+the same handling as the alias redirect. If `to` already contains a query, the
+request's query is appended to it with `&`. `to` and `from` may not contain a
+fragment, and `from` may not contain a query.
+
+**Validation.** `redirects` is validated before any AWS call: the shape rules
+at config load, and the rules that need the effective primary domain, the
+serving mode or the stack kind at context creation. `from` begins with `/` and has no scheme, host, query or fragment, and at most
+one `*`, which must be the final segment. After the trailing slash is
+removed, no two entries share a `from`. `to` is a path or an `https://` URL
+with a host. A redirect whose `to` is its own `from` is rejected, and so is a
+two-entry loop in which each entry's `to` is the other's `from`. A prefix
+redirect whose `to` falls beneath its own prefix (`/docs/*` to
+`/docs/v2/:splat`) is rejected too, since its own output matches it again.
+Longer cycles are not detected. `status` is one of the four allowed codes. The list holds at
+most 500 entries, and the compiled router function source must fit the
+CloudFront Function limit of 10,240 bytes; a map that does not fit fails with
+the compiled size, the limit and a count of entries, and says to shorten the
+map or move redirects to the application.
+
+**Hosts.** A path redirect applies to every hostname the environment serves.
+A relative `to` answers a relative `location` on the host that was requested.
+When `redirectToPrimary` is set and the request is for an alias host, the
+path redirect is evaluated first and answers a single redirect to the final
+URL on the primary host: `https://<domain><to>` for a relative `to`, or `to`
+itself when it is absolute. An alias request whose path has no redirect
+answers the alias host redirect as before.
+
+**Previews.** `redirects` is rejected at context creation in a preview
+environment, with a message that the preview host router does not apply
+redirects. A preview answers `403` for a path that production redirects.
+
+## Alias redirect
+
+When `redirectToPrimary` is `true`, the alias redirect composes with the
+existing router function. A distribution allows one function per event type,
+so the redirect is not a second function: the router function's source gains
+a host check ahead of its directory-index rewrite, and the combined function
+stays the single viewer-request association. When `redirectToPrimary` is
+`false` the router function's source is unchanged.
+
+The router function holds the path-redirect check, then the alias host check,
+then the directory-index rewrite, in that order. A distribution allows one
+function per event type, so these stay one function. When `redirects` is
+empty and `redirectToPrimary` is `false`, the source is the directory-index
+rewrite alone.
+
+## Router function publication
+
+The router function's source is generated from config: it varies with the
+alias redirect and the path redirects. The `cloudfront-function` output
+records `codeHash`, the SHA-256 of the source last published. A reconcile
+compares the hash of the source the config now produces with `codeHash` and
+republishes only on a difference, so a run with an unchanged config changes
+nothing.
+
+`bootstrap` reconciles the function as part of the resource graph. A
+`deploy`, static or SSR, reconciles it too, holding the environment lock and
+after the new site content is live, so a redirect to a new page never answers
+before the page exists; it records the new `codeHash` in state. The reconcile
+does not invalidate the cache: the function runs on the viewer request, ahead
+of the cache. A stack with no `cloudfront-function` output is not
+bootstrapped: `deploy` says so and does not create the function. If the
+publish fails, the deploy fails after the content is live, naming
+`blogwright bootstrap <env>` as the way to retry. `rollback`, `stage` and
+`promote` do not touch the function, because redirects belong to the
+environment's config and not to a release. The deploy summary reports whether
+the redirect function was republished or unchanged, and the count of
+redirects in it. `preview deploy` and the preview router are unchanged.
+
+A deploy publishes code only; it never edits the distribution. A static
+distribution always has the function associated, so a deploy is enough there.
+An SSR distribution associates it only when the config needs it, and that
+association is made by `bootstrap`. The distribution's recorded output notes
+whether the router is associated; when the config now needs it and the
+record says it is not, `deploy` warns that redirects are not live until
+`blogwright bootstrap <env>` runs, as it does for an unattached response
+headers policy.
 
 ## Assumptions and open questions
 

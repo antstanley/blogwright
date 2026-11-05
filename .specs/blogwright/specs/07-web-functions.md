@@ -1,6 +1,6 @@
 # Web Functions (SSR)
 
-**Status:** Proposed · **Date:** 2026-10-13 · **Owner:** Ant Stanley · **Scope:** blogwright product
+**Status:** Proposed · **Date:** 2026-11-05 · **Owner:** Ant Stanley · **Scope:** blogwright product
 
 Read first: [development guidelines](../../../DEVELOPMENT.md) and the [spec index](../README.md).
 
@@ -269,10 +269,17 @@ because the application owns 404s. Error responses are distribution-wide, so
 the `staticPaths` behaviors have none either: a path that matches a static
 pattern but has no object in `site/` returns S3's 403, not the application's
 404 page. The router function node is still reconciled - so teardown and
-static-mode switches stay complete - but it is not associated with any behavior
-in SSR mode; static mode keeps attaching it to the S3 behavior for
-directory-index resolution. Aliases and the ACM certificate behave exactly as
-they do today.
+static-mode switches stay complete. Static mode attaches it to the S3 behavior
+for directory-index resolution. The viewer-request router function is associated
+in SSR mode when either `redirectToPrimary` is set with at least one alias, or
+`redirects` is non-empty. It is the redirect-only form: path redirects first,
+then the alias host check, and no directory-index rewrite, since the application
+owns routing. It is associated with the default behavior and every static-path
+behavior, so redirects apply on all paths. With neither setting, SSR keeps its
+current shape with no viewer-request association. An SSR `deploy` republishes
+the function's code as a static one does, but attaching it to the behaviors is
+the `bootstrap` reconcile's work. Aliases and the ACM certificate follow the
+multi-domain contract in the [domain model](01-domain-model.md).
 
 The reconcile that produces this shape runs on every SSR bootstrap and on a
 mode switch, compares the desired shape semantically, PUTs only when something

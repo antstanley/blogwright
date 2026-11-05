@@ -1,6 +1,6 @@
 # Change: Path-based redirects
 
-**Status:** Proposed · **Date:** 2026-11-05 · **Owner:** Ant Stanley · **Target:** site config, CloudFront viewer-request router function, deploy · **Issue:** [#60](https://github.com/antstanley/blogwright/issues/60)
+**Status:** Merged · **Merged:** 2026-11-05 · **Date:** 2026-11-05 · **Owner:** Ant Stanley · **Target:** site config, CloudFront viewer-request router function, deploy · **Issue:** [#60](https://github.com/antstanley/blogwright/issues/60)
 
 Let a site redirect one path to another with a real HTTP redirect. A new
 `redirects` list in `config/<env>.jsonc` names each `from` path, its `to`

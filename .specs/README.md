@@ -50,19 +50,6 @@ Internal documentation does not offer a supported third-party plugin API.
 
 ## Change specs
 
-- [Path-based redirects](changes/2026-11-05-path_based_redirects.md)
-  — proposed (issue #60): a `redirects` list compiled into the viewer-request
-  router function, exact and trailing-wildcard matches with `:splat`, 10 KB size
-  validation at config load, one-hop composition with `redirectToPrimary`, and
-  republish on `deploy` as well as `bootstrap`. Previews reject the setting.
-
-- [Multiple domains per site](changes/2026-11-05-multiple_domains_per_site.md)
-  — proposed (issue #57): `aliases` alongside the primary `domain`, one
-  multi-name ACM certificate, CloudFront aliases for every host, per-host DNS
-  guidance, drift warnings instead of silent alias removal, and an opt-in
-  `redirectToPrimary`. Preview stacks and production DNS management are
-  unchanged.
-
 - [Accessibility, visual tests, and docs-site updates](changes/2026-09-06-accessibility_visual_tests_and_docs.md)
   — accepted, implementation in progress: both web interfaces and browser gates; manual acceptance remains open.
 
@@ -75,6 +62,22 @@ Internal documentation does not offer a supported third-party plugin API.
   [Web Functions page](blogwright/specs/07-web-functions.md) records the shipped
   contract; spec review and merge remain open. No canonical JSON Schema type
   changed - `ssr` is site-owned config of the same kind as `microvm` and `paths`.
+
+- [Multiple domains per site](changes/merged/2026-11-05-multiple_domains_per_site.md)
+  — merged 2026-11-05: `aliases` alongside the primary `domain`, one multi-name
+  ACM certificate, CloudFront aliases for every host, per-host DNS guidance,
+  drift warnings instead of silent alias removal, and an opt-in
+  `redirectToPrimary`. Folded into [domain model](blogwright/specs/01-domain-model.md);
+  `AcmCertificateOutput` added to the canonical JSON Schema.
+
+- [Path-based redirects](changes/merged/2026-11-05-path_based_redirects.md)
+  — merged 2026-11-05: a `redirects` list compiled into the viewer-request router
+  function, exact and trailing-wildcard matches with `:splat`, 10 KB size
+  validation before any AWS call, one-hop composition with `redirectToPrimary`,
+  and republish on `deploy` as well as `bootstrap`. Previews reject the setting.
+  Folded into [domain model](blogwright/specs/01-domain-model.md) and
+  [Web Functions](blogwright/specs/07-web-functions.md); `PathRedirect` added to
+  the canonical JSON Schema.
 
 - [AWS profiles, account detection and account pinning](changes/merged/2026-10-16-aws_profiles_and_account_pinning.md)
   — merged 2026-10-16: `--profile`/`AWS_PROFILE`/exported-credentials/`aws.profile`

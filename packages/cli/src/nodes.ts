@@ -227,8 +227,16 @@ async function applyBuildRolePolicy(ctx: OpsContext): Promise<void> {
   await ctx.clients.iam.putRolePolicy(ctx.names.buildRole, 'build', {
     Version: '2012-10-17',
     Statement: [
-      { Effect: 'Allow', Action: ['s3:GetObject'], Resource: `arn:aws:s3:::${ctx.names.bucket}/*` },
-      { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
+      {
+        Effect: 'Allow',
+        Action: ['s3:GetObject'],
+        Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
+      },
+      {
+        Effect: 'Allow',
+        Action: ['s3:ListBucket'],
+        Resource: `arn:aws:s3:::${ctx.names.bucket}`,
+      },
       {
         // s3:PutObjectTagging is required even though the tags ride on the PUT
         // itself (x-amz-tagging header) - AWS checks it as a distinct action, and
@@ -381,7 +389,10 @@ async function imageInput(ctx: OpsContext): Promise<{ input: CreateImageInput; h
       // Bucket + region for the agent, which polls s3://<bucket>/build/pending.json and
       // resolves credentials from IMDS (→ the build role identity). Hookless: hooks are
       // delivered over TLS which the agent can't satisfy, and are unnecessary here.
-      environmentVariables: { BUILD_BUCKET: ctx.names.bucket, BUILD_REGION: ctx.config.region },
+      environmentVariables: {
+        BUILD_BUCKET: ctx.names.bucket,
+        BUILD_REGION: ctx.config.region,
+      },
       // Arm64 in every environment, so what the build compiles or installs matches
       // the Web Function runtime (and `ARM_64` is the API's only value). Sent on
       // create AND update, because `imageBody` emits it either way.
@@ -949,7 +960,10 @@ function desiredResponseHeadersPolicyId(ctx: OpsContext): string | undefined {
 function recordResponseHeadersPolicyAttached(ctx: OpsContext, distributionId: string): void {
   const policyId = desiredResponseHeadersPolicyId(ctx);
   if (policyId !== undefined) {
-    recordResponseHeadersPolicy(ctx, { id: policyId, attachedTo: distributionId });
+    recordResponseHeadersPolicy(ctx, {
+      id: policyId,
+      attachedTo: distributionId,
+    });
   }
 }
 
@@ -1392,7 +1406,9 @@ function webFunctionNode(): ResourceNode {
                 timeoutSeconds: config.timeoutSeconds,
                 maxConcurrencyPerEnvironment: config.maxConcurrencyPerEnvironment,
                 environmentVariables: { NODE_ENV: 'production', ...config.env },
-                telemetryConfig: { loggingConfig: { logGroup: ctx.names.webLogGroup } },
+                telemetryConfig: {
+                  loggingConfig: { logGroup: ctx.names.webLogGroup },
+                },
               },
             },
             endpointConfig: {
@@ -1446,7 +1462,11 @@ function webFunctionPolicyStatement(ctx: OpsContext): object {
     Principal: { Service: 'cloudfront.amazonaws.com' },
     Action: 'lambda:InvokeWebFunctionEndpoint',
     Resource: String(output(ctx, 'web-function').endpointArn),
-    Condition: { ArnLike: { 'AWS:SourceArn': String(output(ctx, 'cloudfront-distribution').arn) } },
+    Condition: {
+      ArnLike: {
+        'AWS:SourceArn': String(output(ctx, 'cloudfront-distribution').arn),
+      },
+    },
   };
 }
 
@@ -1528,6 +1548,90 @@ function aliasRedirect(ctx: OpsContext): AliasRedirect | undefined {
 }
 
 /**
+ * The source of the production/staging router function this environment
+ * should run: path redirects, then the alias host check, then (static only)
+ * the directory-index rewrite.
+ */
+function productionRouterCode(ctx: OpsContext): string {
+  const redirect = aliasRedirect(ctx);
+  const paths = ctx.config.redirects;
+  if (ctx.config.ssr && ssrNeedsRouter(ctx)) return ssrRouterCode(redirect, paths);
+  return staticRouterCode(redirect, paths);
+}
+
+/** True when an SSR distribution needs the viewer-request router attached. */
+export function ssrNeedsRouter(ctx: OpsContext): boolean {
+  return Boolean(aliasRedirect(ctx)) || ctx.config.redirects.length > 0;
+}
+
+/** Whether the viewer-request router is associated for this mode. */
+function routerAttached(ctx: OpsContext, mode: 'ssr' | 'static', preview: boolean): boolean {
+  return preview || mode === 'static' || ssrNeedsRouter(ctx);
+}
+
+const ROUTER_COMMENT = (ctx: OpsContext): string =>
+  `${ctx.config.siteName} ${ctx.env} directory-index router`;
+
+/**
+ * Deploy-time half of the router function: republish the source when the
+ * config now produces different code than the recorded `codeHash`, never
+ * touching the distribution. Returns what happened, for the deploy summary.
+ */
+export async function reconcileRouterFunction(ctx: OpsContext): Promise<{
+  status: 'republished' | 'unchanged' | 'not-bootstrapped';
+  redirects: number;
+}> {
+  const redirects = ctx.config.redirects.length;
+  const out = output(ctx, 'cloudfront-function');
+  const bootstrap = `blogwright bootstrap ${ctx.env}`;
+  if (typeof out.arn !== 'string') {
+    ctx.logger.warn(
+      `no router function exists yet, so redirects are not live; run \`${bootstrap}\` to create it`,
+    );
+    return { status: 'not-bootstrapped', redirects };
+  }
+  const code = productionRouterCode(ctx);
+  const hash = routerCodeHash(code);
+  if (ctx.config.ssr) {
+    const attached = output(ctx, 'cloudfront-distribution').routerAttached === true;
+    if (ssrNeedsRouter(ctx) && !attached) {
+      ctx.logger.warn(
+        `the router function is not associated with the distribution, so redirects are not live; ` +
+          `run \`${bootstrap}\` to attach it`,
+      );
+    }
+  }
+  if (out.codeHash === hash) return { status: 'unchanged', redirects };
+  if (out.codeHash === undefined && code === staticRouterCode()) {
+    return { status: 'unchanged', redirects };
+  }
+  try {
+    await ctx.clients.cloudfront.ensureFunction(
+      `${ctx.names.prefix}-router`,
+      code,
+      ROUTER_COMMENT(ctx),
+    );
+  } catch (err) {
+    if (err instanceof AwsError && /AccessDenied|not authorized/i.test(err.message)) {
+      throw new Error(
+        `the deploy role may not publish the router function; run \`${bootstrap}\` to update it: ${err.message}`,
+        { cause: err },
+      );
+    }
+    throw new Error(
+      `the site is live but the router function failed to publish; run \`${bootstrap}\` to retry: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      { cause: err },
+    );
+  }
+  out.codeHash = hash;
+  await ctx.save();
+  ctx.logger.ok('CloudFront routing function republished');
+  return { status: 'republished', redirects };
+}
+
+/**
  * CloudFront viewer-request function. Preview stacks route a subdomain to its S3 prefix
  * (and resolve index documents); staging/production just resolve directory URLs to their
  * index document. Both are needed because the OAC/REST S3 origin does no index resolution.
@@ -1541,9 +1645,7 @@ function routerFunctionNode(preview: boolean): ResourceNode {
    */
   function desiredCode(ctx: OpsContext): string {
     if (preview) return PREVIEW_FUNCTION_CODE;
-    const redirect = aliasRedirect(ctx);
-    if (ctx.config.ssr && redirect) return ssrRouterCode(redirect);
-    return staticRouterCode(redirect);
+    return productionRouterCode(ctx);
   }
   function comment(ctx: OpsContext): string {
     return `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`;
@@ -1647,7 +1749,7 @@ function distributionShape(
     // Aliases must redirect on every path, static or dynamic, so the function
     // is on each behavior; without a redirect nothing is attached.
     const functionArn =
-      !preview && aliasRedirect(ctx) ? String(output(ctx, 'cloudfront-function').arn) : undefined;
+      !preview && ssrNeedsRouter(ctx) ? String(output(ctx, 'cloudfront-function').arn) : undefined;
     return {
       ...shared,
       // The app answers `/`; a root object would only intercept it.
@@ -1840,6 +1942,7 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
       // The mode the live distribution was left serving, so a later bootstrap can
       // tell a routine re-run from a serving cutover.
       out.mode = servingMode(ctx);
+      out.routerAttached = routerAttached(ctx, servingMode(ctx), preview);
       await ctx.clients.cloudfront.tagResource(dist.arn, ctx.tags);
       ctx.logger.info(`  CloudFront domain: ${dist.domainName}`);
       // Production routing records are the site-dns node's (next in the graph);
@@ -1862,6 +1965,7 @@ function distributionNode(options: DistributionNodeOptions): ResourceNode {
           distributionShape(ctx, configured, preview),
         );
         out.mode = configured;
+        out.routerAttached = routerAttached(ctx, configured, preview);
         recordResponseHeadersPolicyAttached(ctx, id);
         if (changed) {
           ctx.logger.ok(`reconciled the distribution for ${configured} serving`);
@@ -2236,7 +2340,11 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       Resource: `arn:aws:s3:::${ctx.names.bucket}/*`,
     },
     ...promoteTaggingStatements(ctx),
-    { Effect: 'Allow', Action: ['s3:ListBucket'], Resource: `arn:aws:s3:::${ctx.names.bucket}` },
+    {
+      Effect: 'Allow',
+      Action: ['s3:ListBucket'],
+      Resource: `arn:aws:s3:::${ctx.names.bucket}`,
+    },
     {
       Effect: 'Allow',
       Action: [
@@ -2279,6 +2387,16 @@ export function oidcRolePolicyStatements(ctx: OpsContext): object[] {
       Action: ['cloudfront:CreateInvalidation'],
       Resource: String(output(ctx, 'cloudfront-distribution').arn),
     });
+    // Deploys republish the router function's code (`reconcileRouterFunction`).
+    statements.push({
+      Effect: 'Allow',
+      Action: [
+        'cloudfront:DescribeFunction',
+        'cloudfront:UpdateFunction',
+        'cloudfront:PublishFunction',
+      ],
+      Resource: `arn:aws:cloudfront::${ctx.accountId}:function/${ctx.names.prefix}-router`,
+    });
     // Deploys converge the response headers in place - this one policy only,
     // never the distribution (`reconcileResponseHeadersOnDeploy`).
     const policyId = recordedResponseHeadersPolicyId(ctx);
@@ -2315,7 +2433,9 @@ async function applyOidcRole(ctx: OpsContext, roleName: string): Promise<void> {
           Action: 'sts:AssumeRoleWithWebIdentity',
           Condition: {
             StringEquals: { [`${GITHUB_OIDC_URL}:aud`]: 'sts.amazonaws.com' },
-            StringLike: { [`${GITHUB_OIDC_URL}:sub`]: oidcSubClaim(repo, ctx.env, ctx.preview) },
+            StringLike: {
+              [`${GITHUB_OIDC_URL}:sub`]: oidcSubClaim(repo, ctx.env, ctx.preview),
+            },
           },
         },
       ],
