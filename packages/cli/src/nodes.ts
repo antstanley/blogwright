@@ -28,6 +28,7 @@ import {
 
 import { packageAndUploadAgent } from './agent-package.js';
 import type { OpsContext } from './context.js';
+import { routerCodeHash, staticRouterCode } from './router-function.js';
 
 type ResourceNode = CoreResourceNode<OpsContext>;
 
@@ -1365,27 +1366,34 @@ const PREVIEW_FUNCTION_CODE = `function handler(event) {
 }`;
 
 /**
- * CloudFront Function (viewer-request) for staging/production: resolve a directory URL
- * to its index document (`/projects/` → `/projects/index.html`). Required because the S3
- * origin is the private REST endpoint (via OAC), which - unlike an S3 website endpoint -
- * does no index-document resolution, so `DefaultRootObject` only covers the apex. The
- * `/site` origin path is applied by the distribution, so this function must not add it.
- */
-const STATIC_ROUTER_CODE = `function handler(event) {
-  var request = event.request;
-  var uri = request.uri;
-  if (uri.endsWith('/')) { uri += 'index.html'; }
-  else if (uri.lastIndexOf('.') < uri.lastIndexOf('/')) { uri += '/index.html'; }
-  request.uri = uri;
-  return request;
-}`;
-
-/**
  * CloudFront viewer-request function. Preview stacks route a subdomain to its S3 prefix
  * (and resolve index documents); staging/production just resolve directory URLs to their
  * index document. Both are needed because the OAC/REST S3 origin does no index resolution.
  */
 function routerFunctionNode(preview: boolean): ResourceNode {
+  /**
+   * The source this environment should run. Staging/production resolve
+   * directory URLs and, with `redirectToPrimary`, also 301 alias hosts to the
+   * primary; the redirect needs a primary and at least one alias.
+   */
+  function desiredCode(ctx: OpsContext): string {
+    if (preview) return PREVIEW_FUNCTION_CODE;
+    const { aliases, redirectToPrimary } = ctx.config;
+    return staticRouterCode(
+      redirectToPrimary && ctx.domain ? { primary: ctx.domain, aliases } : undefined,
+    );
+  }
+  function warnIfUnattached(ctx: OpsContext): void {
+    if (ctx.config.redirectToPrimary && ctx.config.ssr && !preview) {
+      ctx.logger.warn(
+        'redirectToPrimary is not applied in ssr mode: the router function is not associated ' +
+          'with any behavior there',
+      );
+    }
+  }
+  function comment(ctx: OpsContext): string {
+    return `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`;
+  }
   return {
     id: 'cloudfront-function',
     dependsOn: [],
@@ -1394,17 +1402,31 @@ function routerFunctionNode(preview: boolean): ResourceNode {
       return typeof output(ctx, 'cloudfront-function').arn === 'string';
     },
     async create(ctx) {
-      const arn = await ctx.clients.cloudfront.ensureFunction(
+      const code = desiredCode(ctx);
+      const out = output(ctx, 'cloudfront-function');
+      out.arn = await ctx.clients.cloudfront.ensureFunction(
         `${ctx.names.prefix}-router`,
-        preview ? PREVIEW_FUNCTION_CODE : STATIC_ROUTER_CODE,
-        `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`,
+        code,
+        comment(ctx),
       );
-      output(ctx, 'cloudfront-function').arn = arn;
+      out.codeHash = routerCodeHash(code);
+      warnIfUnattached(ctx);
     },
-    async update() {
-      // The router code is static; leave the already-published function as-is (updating +
-      // re-publishing hits CloudFront's ETag/stage preconditions). To change the router,
-      // delete the function (teardown) and re-bootstrap.
+    async update(ctx) {
+      // Preview code is static. Production code varies with the alias redirect, so
+      // republish when the source differs from the one last published. A site
+      // bootstrapped before the hash was recorded, and still on the plain
+      // directory-index router, is left alone: republishing it would change nothing.
+      warnIfUnattached(ctx);
+      if (preview) return;
+      const code = desiredCode(ctx);
+      const hash = routerCodeHash(code);
+      const out = output(ctx, 'cloudfront-function');
+      if (out.codeHash === hash) return;
+      if (out.codeHash === undefined && code === staticRouterCode()) return;
+      await ctx.clients.cloudfront.ensureFunction(`${ctx.names.prefix}-router`, code, comment(ctx));
+      out.codeHash = hash;
+      ctx.logger.ok('CloudFront routing function republished');
     },
     async delete(ctx) {
       await ctx.clients.cloudfront.deleteFunction(`${ctx.names.prefix}-router`);

@@ -26,6 +26,7 @@ import {
   type PackageManagerFactory,
 } from './cli.js';
 import {
+  assertDomainSettings,
   cliPackageDir,
   createContext,
   deriveAppTag,
@@ -1198,5 +1199,31 @@ describe('createContext - AWS session', () => {
       `aws  ${PINNED} · AdminRole · profile mysite-prod (--profile) · pinned`,
     ]);
     expect(run.terminal.errors).toEqual([]);
+  });
+});
+
+describe('assertDomainSettings', () => {
+  const plain = { aliases: [], redirectToPrimary: false };
+  const multi = { aliases: ['www.example.com'], redirectToPrimary: false };
+
+  it('accepts a primary with aliases, and no aliases with no domain', () => {
+    expect(() => assertDomainSettings(multi, 'example.com', false)).not.toThrow();
+    expect(() => assertDomainSettings(plain, undefined, false)).not.toThrow();
+  });
+
+  it('requires a primary for aliases', () => {
+    expect(() => assertDomainSettings(multi, undefined, false)).toThrow('requires a primary');
+  });
+
+  it('rejects a --domain that is also an alias', () => {
+    expect(() => assertDomainSettings(multi, 'www.example.com', false)).toThrow('must not repeat');
+  });
+
+  it('rejects aliases and the redirect for a preview environment', () => {
+    expect(() => assertDomainSettings(multi, 'example.com', true)).toThrow('preview');
+    expect(() =>
+      assertDomainSettings({ aliases: [], redirectToPrimary: true }, 'example.com', true),
+    ).toThrow('preview');
+    expect(() => assertDomainSettings(plain, 'example.com', true)).not.toThrow();
   });
 });

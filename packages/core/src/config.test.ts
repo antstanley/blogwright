@@ -49,6 +49,58 @@ describe('stripTrailingCommas', () => {
   });
 });
 
+describe('parseConfig aliases', () => {
+  it('defaults to no aliases and no redirect', () => {
+    const cfg = parseConfig(withSite('{ "domain": "example.com" }'));
+    expect(cfg.aliases).toEqual([]);
+    expect(cfg.redirectToPrimary).toBe(false);
+  });
+
+  it('accepts aliases on any zone, plus the redirect flag', () => {
+    const cfg = parseConfig(
+      withSite(
+        '{ "domain": "example.com", "aliases": ["www.example.com", "example.org"], "redirectToPrimary": true }',
+      ),
+    );
+    expect(cfg.aliases).toEqual(['www.example.com', 'example.org']);
+    expect(cfg.redirectToPrimary).toBe(true);
+  });
+
+  it.each([
+    ['https://www.example.com', 'lowercase hostname'],
+    ['*.example.com', 'lowercase hostname'],
+    ['WWW.example.com', 'lowercase hostname'],
+    ['localhost', 'lowercase hostname'],
+    ['www.example.com:8080', 'lowercase hostname'],
+  ])('rejects the malformed alias %s', (alias, message) => {
+    expect(() =>
+      parseConfig(withSite(`{ "domain": "example.com", "aliases": ["${alias}"] }`)),
+    ).toThrow(message);
+  });
+
+  it('rejects duplicates, the primary, and more than ten names in all', () => {
+    expect(() =>
+      parseConfig(withSite('{ "aliases": ["a.example.com", "a.example.com"] }')),
+    ).toThrow('duplicates');
+    expect(() =>
+      parseConfig(withSite('{ "domain": "example.com", "aliases": ["example.com"] }')),
+    ).toThrow('repeat config.domain');
+    const nine = Array.from({ length: 9 }, (_, i) => `"h${i}.example.com"`).join(',');
+    expect(() =>
+      parseConfig(withSite(`{ "domain": "example.com", "aliases": [${nine}] }`)),
+    ).not.toThrow();
+    const ten = `${nine},"h9.example.com"`;
+    expect(() => parseConfig(withSite(`{ "domain": "example.com", "aliases": [${ten}] }`))).toThrow(
+      'at most 10',
+    );
+  });
+
+  it('rejects non-array aliases and a non-boolean redirect', () => {
+    expect(() => parseConfig(withSite('{ "aliases": "www.example.com" }'))).toThrow('array');
+    expect(() => parseConfig(withSite('{ "redirectToPrimary": "yes" }'))).toThrow('true or false');
+  });
+});
+
 describe('parseConfig', () => {
   it('applies defaults and merges nested objects', () => {
     const cfg = parseConfig(withSite('{ "domain": "example.com", "microvm": { "memory": 8 } }'));

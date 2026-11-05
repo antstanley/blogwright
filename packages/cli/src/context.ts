@@ -91,6 +91,31 @@ export function deriveAppTag(
   return config.app ?? domain ?? basename(repoRoot);
 }
 
+/**
+ * The multi-domain rules that depend on the effective domain (`--domain` can
+ * supply or override the config file's) or on the stack: aliases need a
+ * primary to be aliases of, must not repeat it, and a preview stack serves one
+ * wildcard host so it takes neither `aliases` nor `redirectToPrimary`.
+ */
+export function assertDomainSettings(
+  config: Pick<OpsConfig, 'aliases' | 'redirectToPrimary'>,
+  domain: string | undefined,
+  preview: boolean,
+): void {
+  if (preview && (config.aliases.length > 0 || config.redirectToPrimary)) {
+    throw new Error(
+      'config.aliases and config.redirectToPrimary are not valid for a preview environment: ' +
+        'the preview stack serves one wildcard host',
+    );
+  }
+  if (config.aliases.length > 0 && !domain) {
+    throw new Error('config.aliases requires a primary domain (config.domain or --domain)');
+  }
+  if (domain && config.aliases.includes(domain)) {
+    throw new Error(`config.aliases must not repeat the primary domain ("${domain}")`);
+  }
+}
+
 export interface ContextOptions {
   env: string;
   configPath?: string | undefined;
@@ -281,6 +306,7 @@ export async function createContext(opts: ContextOptions): Promise<OpsContext> {
     configPath: opts.configPath,
   });
   const domain = opts.domain ?? config.domain;
+  assertDomainSettings(config, domain, Boolean(opts.preview));
 
   const session = await resolveAwsSession({
     region: config.region,
