@@ -4,7 +4,9 @@ import { createNodeDns, type SoaResolver } from './node-dns.js';
 
 const SOA = { nsname: 'ns1.example.com', hostmaster: 'admin.example.com', serial: 42 };
 
-function resolver(answer: (name: string) => Promise<typeof SOA>): SoaResolver & { asked: string[] } {
+function resolver(
+  answer: (name: string) => Promise<typeof SOA>,
+): SoaResolver & { asked: string[] } {
   const asked: string[] = [];
   return {
     asked,

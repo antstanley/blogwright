@@ -2303,7 +2303,9 @@ describe('alias redirect in ssr mode', () => {
 
   it('attaches the function to the default and every static behavior', async () => {
     const { ssrOps, distributions } = ssrCtx(REDIRECT);
-    await buildNodes(ssrOps).find((n) => n.id === 'cloudfront-distribution')?.update?.(ssrOps);
+    await buildNodes(ssrOps)
+      .find((n) => n.id === 'cloudfront-distribution')
+      ?.update?.(ssrOps);
     expect(distributions[0]?.defaultBehavior.functionArn).toBe('arn:function:router');
     expect(distributions[0]?.orderedBehaviors?.map((b) => b.functionArn)).toEqual([
       'arn:function:router',
@@ -2313,7 +2315,9 @@ describe('alias redirect in ssr mode', () => {
   it('attaches nothing without the redirect, or without aliases', async () => {
     for (const config of [{ aliases: ['www.example.com'] }, { redirectToPrimary: true }]) {
       const { ssrOps, distributions } = ssrCtx(config);
-      await buildNodes(ssrOps).find((n) => n.id === 'cloudfront-distribution')?.update?.(ssrOps);
+      await buildNodes(ssrOps)
+        .find((n) => n.id === 'cloudfront-distribution')
+        ?.update?.(ssrOps);
       expect(distributions[0]?.defaultBehavior.functionArn).toBeUndefined();
       expect(distributions[0]?.orderedBehaviors?.[0]?.functionArn).toBeUndefined();
     }
@@ -2322,7 +2326,9 @@ describe('alias redirect in ssr mode', () => {
   it('no longer warns that the redirect is ignored', async () => {
     const { ssrOps } = ssrCtx(REDIRECT);
     const warn = vi.spyOn(ssrOps.logger, 'warn');
-    await buildNodes(ssrOps).find((n) => n.id === 'cloudfront-function')?.create(ssrOps);
+    await buildNodes(ssrOps)
+      .find((n) => n.id === 'cloudfront-function')
+      ?.create(ssrOps);
     expect(warn).not.toHaveBeenCalled();
   });
 });

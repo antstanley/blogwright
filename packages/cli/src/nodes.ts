@@ -39,7 +39,12 @@ import {
   sameSet,
   siteHostnames,
 } from './domains.js';
-import { type AliasRedirect, routerCodeHash, ssrRouterCode, staticRouterCode } from './router-function.js';
+import {
+  type AliasRedirect,
+  routerCodeHash,
+  ssrRouterCode,
+  staticRouterCode,
+} from './router-function.js';
 
 type ResourceNode = CoreResourceNode<OpsContext>;
 

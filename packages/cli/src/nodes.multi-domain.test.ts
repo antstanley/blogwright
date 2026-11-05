@@ -26,7 +26,13 @@ interface Options {
   /** What describeCertificate answers, one entry per call (the last repeats). */
   describes?: Array<{
     status: string;
-    validation: Array<{ name: string; type: string; value: string; domain?: string; status?: string }>;
+    validation: Array<{
+      name: string;
+      type: string;
+      value: string;
+      domain?: string;
+      status?: string;
+    }>;
   }>;
   deleteFails?: boolean;
   dns?: Record<string, string>;
@@ -67,11 +73,11 @@ function harness(opts: Options = {}): Harness {
         deleteCertificate: async (arn: string) => {
           if (opts.deleteFails) {
             throw new AwsError({
-            service: 'acm',
-            code: 'ResourceInUseException',
-            message: 'in use',
-            statusCode: 400,
-          });
+              service: 'acm',
+              code: 'ResourceInUseException',
+              message: 'in use',
+              statusCode: 400,
+            });
           }
           deleted.push(arn);
         },
@@ -169,7 +175,11 @@ describe('certificate node with several hostnames', () => {
     const h = harness({
       config: { aliases: ['www.example.com', 'example.org'] },
       state: {
-        'acm-certificate': { arn: PENDING, previousArn: OLD, domains: ['example.com', 'www.example.com'] },
+        'acm-certificate': {
+          arn: PENDING,
+          previousArn: OLD,
+          domains: ['example.com', 'www.example.com'],
+        },
       },
     });
     await node(h, 'acm-certificate').create(h.ctx);
@@ -182,10 +192,11 @@ describe('certificate node with several hostnames', () => {
       config: { aliases: ['www.example.com'] },
       state: { 'acm-certificate': { arn: OLD, domains: ['example.com'] } },
     });
-    (h.ctx.clients.acm as unknown as { requestCertificate: () => Promise<string> }).requestCertificate =
-      async () => {
-        throw new Error('quota');
-      };
+    (
+      h.ctx.clients.acm as unknown as { requestCertificate: () => Promise<string> }
+    ).requestCertificate = async () => {
+      throw new Error('quota');
+    };
     await expect(node(h, 'acm-certificate').create(h.ctx)).rejects.toThrow('quota');
     expect(h.ctx.state.resources['acm-certificate']?.previousArn).toBeUndefined();
     expect(h.deleted).toEqual([]);
@@ -197,19 +208,29 @@ describe('certificate node with several hostnames', () => {
       config: { aliases: ['www.example.com', 'example.org'] },
       state: {
         ...DIST,
-        'acm-certificate': { arn: ATTACHED, previousArn: OLD, domains: ['example.com', 'www.example.com'] },
+        'acm-certificate': {
+          arn: ATTACHED,
+          previousArn: OLD,
+          domains: ['example.com', 'www.example.com'],
+        },
       },
       live: live(['example.com', 'www.example.com'], ATTACHED),
     });
     await node(h, 'acm-certificate').create(h.ctx);
     expect(h.deleted).toEqual([OLD]);
-    expect(h.ctx.state.resources['acm-certificate']).toMatchObject({ arn: NEW, previousArn: ATTACHED });
+    expect(h.ctx.state.resources['acm-certificate']).toMatchObject({
+      arn: NEW,
+      previousArn: ATTACHED,
+    });
   });
 
   it('keeps and covers an attached alias that config does not name', async () => {
     const h = harness({
       config: { aliases: ['www.example.com'] },
-      state: { ...DIST, 'acm-certificate': { arn: OLD, domains: ['example.com', 'www.example.com'] } },
+      state: {
+        ...DIST,
+        'acm-certificate': { arn: OLD, domains: ['example.com', 'www.example.com'] },
+      },
       live: live(['example.com', 'www.example.com', 'legacy.example.com'], OLD),
     });
     expect(await node(h, 'acm-certificate').read(h.ctx)).toBe(false);
@@ -222,7 +243,13 @@ describe('certificate node with several hostnames', () => {
     const h = harness({
       prune: true,
       config: { aliases: ['www.example.com'] },
-      state: { ...DIST, 'acm-certificate': { arn: OLD, domains: ['example.com', 'www.example.com', 'legacy.example.com'] } },
+      state: {
+        ...DIST,
+        'acm-certificate': {
+          arn: OLD,
+          domains: ['example.com', 'www.example.com', 'legacy.example.com'],
+        },
+      },
       live: live(['example.com', 'www.example.com', 'legacy.example.com'], OLD),
     });
     await node(h, 'acm-certificate').create(h.ctx);
@@ -236,8 +263,20 @@ describe('certificate node with several hostnames', () => {
         {
           status: 'PENDING_VALIDATION',
           validation: [
-            { name: '_a.example.com.', type: 'CNAME', value: '_a.acm.', domain: 'example.com', status: 'SUCCESS' },
-            { name: '_b.www.example.com.', type: 'CNAME', value: '_b.acm.', domain: 'www.example.com', status: 'PENDING_VALIDATION' },
+            {
+              name: '_a.example.com.',
+              type: 'CNAME',
+              value: '_a.acm.',
+              domain: 'example.com',
+              status: 'SUCCESS',
+            },
+            {
+              name: '_b.www.example.com.',
+              type: 'CNAME',
+              value: '_b.acm.',
+              domain: 'www.example.com',
+              status: 'PENDING_VALIDATION',
+            },
           ],
         },
         { status: 'ISSUED', validation: [] },
@@ -258,9 +297,27 @@ describe('certificate node with several hostnames', () => {
         {
           status: 'PENDING_VALIDATION',
           validation: [
-            { name: '_a.example.com.', type: 'CNAME', value: '_a.acm.', domain: 'example.com', status: 'PENDING_VALIDATION' },
-            { name: '_b.www.example.com.', type: 'CNAME', value: '_b.acm.', domain: 'www.example.com', status: 'PENDING_VALIDATION' },
-            { name: '_c.example.org.', type: 'CNAME', value: '_c.acm.', domain: 'example.org', status: 'PENDING_VALIDATION' },
+            {
+              name: '_a.example.com.',
+              type: 'CNAME',
+              value: '_a.acm.',
+              domain: 'example.com',
+              status: 'PENDING_VALIDATION',
+            },
+            {
+              name: '_b.www.example.com.',
+              type: 'CNAME',
+              value: '_b.acm.',
+              domain: 'www.example.com',
+              status: 'PENDING_VALIDATION',
+            },
+            {
+              name: '_c.example.org.',
+              type: 'CNAME',
+              value: '_c.acm.',
+              domain: 'example.org',
+              status: 'PENDING_VALIDATION',
+            },
           ],
         },
         { status: 'ISSUED', validation: [] },
@@ -419,11 +476,17 @@ describe('site-dns node', () => {
   it('keeps track of records it wrote for a host that is still served but no longer managed', async () => {
     const h = harness({
       config: { manageDns: false },
-      state: { ...state, 'site-dns': { signature: 'x', hosts: ['example.com'], zoneIds: ['ZCOM'] } },
+      state: {
+        ...state,
+        'site-dns': { signature: 'x', hosts: ['example.com'], zoneIds: ['ZCOM'] },
+      },
     });
     await node(h, 'site-dns').update?.(h.ctx);
     expect(h.calls).toEqual([]);
-    expect(h.ctx.state.resources['site-dns']).toMatchObject({ hosts: ['example.com'], zoneIds: ['ZCOM'] });
+    expect(h.ctx.state.resources['site-dns']).toMatchObject({
+      hosts: ['example.com'],
+      zoneIds: ['ZCOM'],
+    });
   });
 
   it('removes the records it wrote for a host that is no longer served, and on teardown', async () => {
@@ -431,14 +494,24 @@ describe('site-dns node', () => {
       config: { manageDns: true },
       state: {
         ...state,
-        'site-dns': { signature: 'x', hosts: ['example.com', 'gone.example.com'], zoneIds: ['ZCOM', 'ZCOM'] },
+        'site-dns': {
+          signature: 'x',
+          hosts: ['example.com', 'gone.example.com'],
+          zoneIds: ['ZCOM', 'ZCOM'],
+        },
       },
       zones: { 'example.com': 'ZCOM' },
     });
     await node(h, 'site-dns').update?.(h.ctx);
-    expect(h.calls).toEqual(['deleteRecord ZCOM gone.example.com A', 'deleteRecord ZCOM gone.example.com AAAA']);
+    expect(h.calls).toEqual([
+      'deleteRecord ZCOM gone.example.com A',
+      'deleteRecord ZCOM gone.example.com AAAA',
+    ]);
     h.calls.length = 0;
     await node(h, 'site-dns').delete(h.ctx);
-    expect(h.calls).toEqual(['deleteRecord ZCOM example.com A', 'deleteRecord ZCOM example.com AAAA']);
+    expect(h.calls).toEqual([
+      'deleteRecord ZCOM example.com A',
+      'deleteRecord ZCOM example.com AAAA',
+    ]);
   });
 });

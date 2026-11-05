@@ -843,7 +843,8 @@ function normalizeSsrConfig(raw: unknown, distDir: string): SsrConfig | undefine
 /** Most hostnames one certificate covers: the default ACM per-certificate name quota. */
 export const MAX_SITE_HOSTNAMES = 10;
 
-const HOSTNAME_PATTERN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const HOSTNAME_PATTERN =
+  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
 /** True for a lowercase ASCII fully-qualified hostname with at least two labels. */
 export function isValidHostname(name: string): boolean {

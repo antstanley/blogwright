@@ -163,7 +163,11 @@ describe('desiredHostnames', () => {
 
   it('keeps an attached alias config does not name, and says so once', async () => {
     const { ctx, warnings } = ctxWith({ live: ['example.com', 'old.example.com'] });
-    expect(await desiredHostnames(ctx)).toEqual(['example.com', 'www.example.com', 'old.example.com']);
+    expect(await desiredHostnames(ctx)).toEqual([
+      'example.com',
+      'www.example.com',
+      'old.example.com',
+    ]);
     await desiredHostnames(ctx);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('old.example.com');

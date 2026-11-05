@@ -59,7 +59,10 @@ describe('CloudFrontClient.getDistributionAliases', () => {
 
   it('is undefined for a distribution that no longer exists', async () => {
     const client = cloudfrontWith(async () =>
-      response(404, '<ErrorResponse><Error><Code>NoSuchDistribution</Code></Error></ErrorResponse>'),
+      response(
+        404,
+        '<ErrorResponse><Error><Code>NoSuchDistribution</Code></Error></ErrorResponse>',
+      ),
     );
     expect(await client.getDistributionAliases('D1')).toBeUndefined();
   });
@@ -113,7 +116,8 @@ describe('CloudFrontClient.setDistributionAliases', () => {
   it('attaches several aliases at once, in one request', async () => {
     let putBody = '';
     const client = cloudfrontWith(async (req) => {
-      if (req.method === 'GET') return response(200, configXml(['example.com'], CERT), { etag: 'E1' });
+      if (req.method === 'GET')
+        return response(200, configXml(['example.com'], CERT), { etag: 'E1' });
       putBody = String(req.body ?? '');
       return response(200, '', {});
     });

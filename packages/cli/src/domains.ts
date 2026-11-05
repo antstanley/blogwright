@@ -124,11 +124,7 @@ export async function findHostedZone(
 }
 
 /** One printed routing instruction for a host that blogwright does not manage DNS for. */
-export async function routingGuidance(
-  dns: DnsPort,
-  host: string,
-  target: string,
-): Promise<string> {
+export async function routingGuidance(dns: DnsPort, host: string, target: string): Promise<string> {
   const apex = await findZoneApex(dns, host);
   if (apex === undefined) {
     return (
