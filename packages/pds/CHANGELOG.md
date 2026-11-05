@@ -1,5 +1,12 @@
 # blogwright-pds
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [[`bfdc666`](https://github.com/antstanley/blogwright/commit/bfdc66612c5a0f11ede7455df9339adedf7b066f)]:
+  - blogwright-core@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
