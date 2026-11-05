@@ -50,6 +50,12 @@ Internal documentation does not offer a supported third-party plugin API.
 
 ## Change specs
 
+- [Path-based redirects](changes/2026-11-05-path_based_redirects.md)
+  — proposed (issue #60): a `redirects` list compiled into the viewer-request
+  router function, exact and trailing-wildcard matches with `:splat`, 10 KB size
+  validation at config load, one-hop composition with `redirectToPrimary`, and
+  republish on `deploy` as well as `bootstrap`. Previews reject the setting.
+
 - [Multiple domains per site](changes/2026-11-05-multiple_domains_per_site.md)
   — proposed (issue #57): `aliases` alongside the primary `domain`, one
   multi-name ACM certificate, CloudFront aliases for every host, per-host DNS
