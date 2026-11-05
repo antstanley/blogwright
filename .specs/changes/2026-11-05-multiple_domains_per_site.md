@@ -144,8 +144,13 @@ No new canonical page is added.
 >
 > The bootstrap decides which case applies by asking DNS. For each hostname it
 > queries the SOA record at the host and then at each parent in turn, dropping
-> the leading label each time; the first name that answers with an SOA is the
-> zone apex. A host equal to that name is an apex. Using DNS rather than a
+> the leading label each time. The first name that answers with an SOA starts
+> a run; the run continues up through parents that answer with an identical
+> record and ends at the first that does not, and the highest name in the run
+> is the zone apex. The run matters because a resolver follows a CNAME when
+> asked for SOA, so a `www` that is a CNAME to the apex answers with the
+> apex's record and must not be taken for an apex itself. A host equal to the
+> apex is an apex. Using DNS rather than a
 > suffix list means a host under a multi-label public suffix such as
 > `example.co.uk` is classified correctly. If no name answers, as for a domain
 > not yet delegated, the bootstrap prints both the apex and the sub-domain
@@ -180,10 +185,9 @@ No new canonical page is added.
 
 > Aliases and the ACM certificate follow the multi-domain contract in the
 > domain model. In SSR mode the router function is not associated with any
-> behavior; with `redirectToPrimary` set, the function carrying only the host
-> redirect is associated as the viewer-request function on the default and
-> every ordered behavior, and without it SSR keeps its current shape with no
-> viewer-request association.
+> behavior, so `redirectToPrimary` has no effect there: bootstrap warns that it
+> is not applied and SSR keeps its current shape with no viewer-request
+> association. The application redirects aliases itself.
 
 ---
 
@@ -248,7 +252,9 @@ manageDns: boolean;           // default false
    the flag in cli.ts near :73 and thread it through the context.
 6. nodes.ts:1670-1698: replace the single "point <domain> at" line with the
    per-host DNS guidance block. Add a DNS port to Ports (ports.ts) with
-   resolveSoa(name), backed by node:dns in the composition root (system
+   soa(name) returning a fingerprint of the SOA answered (not a boolean: a
+   resolver follows a CNAME, so www answers with the apex's record), backed by
+   node:dns in the composition root (system
    resolver, then a dns.Resolver with setServers(['1.1.1.1', '8.8.8.8']) on a
    transport failure) and faked in tests, and a zone-apex helper that walks parents until an SOA answers.
    With manageDns, extend route53.hostedZoneId (route53.ts:25, currently an
@@ -356,6 +362,9 @@ preview DNS node (`previewDnsNode`, `nodes.ts:2168`).
 **Open questions**
 
 - In SSR mode the router function is deliberately not associated with any
-  behavior. Is attaching a redirect-only viewer-request function acceptable, or
-  should SSR sites redirect in the application? Left as proposed; revisit if
+  behavior, so `redirectToPrimary` is not applied there and bootstrap warns.
+  Is attaching a redirect-only viewer-request function to every behavior
+  acceptable, or should SSR sites redirect in the application? Left open until
   SSR redirects are wanted.
+- Should the `init` wizard ask for aliases? The config keys are documented but
+  the wizard does not prompt for them.

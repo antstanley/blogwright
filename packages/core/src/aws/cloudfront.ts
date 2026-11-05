@@ -502,6 +502,22 @@ export class CloudFrontClient {
   }
 
   /**
+   * The aliases (CNAMEs) and viewer certificate a distribution carries right
+   * now, or `undefined` when it no longer exists. Read-only: the drift check
+   * behind the alias reconcile.
+   */
+  async getDistributionAliases(
+    id: string,
+  ): Promise<{ aliases: string[]; certificateArn: string | undefined } | undefined> {
+    const current = await this.getDistributionConfig(id);
+    if (!current) return undefined;
+    return {
+      aliases: Array.from(current.config.matchAll(/<CNAME>(.*?)<\/CNAME>/g), (m) => m[1] ?? ''),
+      certificateArn: textTag(current.config, 'ACMCertificateArn'),
+    };
+  }
+
+  /**
    * Reconcile the distribution's aliases and viewer certificate in place - the
    * path taken when a domain is added (or changed) after the distribution was
    * first created. Compares semantically (CNAME set + certificate ARN), since

@@ -1224,6 +1224,9 @@ describe('assertDomainSettings', () => {
     expect(() =>
       assertDomainSettings({ aliases: [], redirectToPrimary: true }, 'example.com', true),
     ).toThrow('preview');
+    expect(() =>
+      assertDomainSettings({ aliases: [], redirectToPrimary: false, manageDns: true }, 'example.com', true),
+    ).toThrow('preview');
     expect(() => assertDomainSettings(plain, 'example.com', true)).not.toThrow();
   });
 });

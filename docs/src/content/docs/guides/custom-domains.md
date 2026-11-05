@@ -56,14 +56,45 @@ Bootstrap is a reconcile, and re-running it is always safe. The certificate's AR
 
 ### Point your domain at the distribution
 
-When the distribution is created, bootstrap prints its hostname and what to do with it:
+Once the distribution carries the alias, bootstrap prints what each hostname should point at:
 
 ```sh
 CloudFront domain: dxxxxxxxxxxxxx.cloudfront.net
-point example.com (CNAME/ALIAS) at dxxxxxxxxxxxxx.cloudfront.net
+Point these hostnames at dxxxxxxxxxxxxx.cloudfront.net:
+  example.com  ALIAS/ANAME -> dxxxxxxxxxxxxx.cloudfront.net  (or A and AAAA alias records where the DNS host cannot flatten a CNAME at the apex)
+  www.example.com  CNAME -> dxxxxxxxxxxxxx.cloudfront.net
 ```
 
-Create that record at your DNS host: a CNAME for a subdomain, or an ALIAS/ANAME-style record if the domain is a zone apex and your provider supports one. This is the only DNS record the site needs beyond the certificate validation records.
+Create those records at your DNS host. Whether a name is a zone apex is worked out by asking DNS - blogwright looks for the SOA record at the name and then at each parent, through your system resolver and falling back to public resolvers (`1.1.1.1`, then `8.8.8.8`) only if it cannot answer - so `example.co.uk` is treated as an apex without a built-in suffix list. If a name's zone cannot be looked up (a domain not yet delegated, say), both forms are printed. The list is printed when it changes, not on every run. This is the only DNS record each site hostname needs beyond the certificate validation records.
+
+### Multiple domains
+
+To serve more than one hostname - an apex and its `www.`, or unrelated domains - keep `domain` as the primary and list the rest as `aliases`:
+
+```jsonc
+{
+  "domain": "example.com",
+  "aliases": ["www.example.com"],
+}
+```
+
+Bootstrap then:
+
+- requests **one** ACM certificate with `domain` as the subject and the aliases as subject alternative names, because CloudFront takes a single certificate per distribution;
+- prints one validation CNAME per hostname that still needs one. A name ACM has already validated needs no new record;
+- attaches every hostname to the distribution, and prints the routing record each one needs.
+
+By default every hostname serves the same content. Set [`redirectToPrimary`](/reference/configuration/#redirecttoprimary) to make the aliases answer `301` to the primary instead.
+
+**Adding an alias** to a bootstrapped site requests a replacement certificate (ACM cannot add names to an issued one), prints the new validation CNAME, and attaches the new certificate and alias once it is issued. The old certificate keeps serving until then, and is deleted after the distribution has switched. If ACM refuses the delete because CloudFront has not finished updating, bootstrap keeps it and retries on the next run.
+
+**Removing an alias is always explicit.** Deleting an entry from `aliases` does not detach it: a hostname that is attached to the distribution but not named in config is reported and left attached, with the certificate still covering it, so a config edit never takes down a live site. Re-running `bootstrap` also never drops an alias you added by hand in the console. To detach the unlisted ones, run:
+
+```sh
+blogwright bootstrap --prune-aliases
+```
+
+**Managing DNS with Route 53.** If some or all of your zones are in the account's Route 53, set [`manageDns`](/reference/configuration/#managedns) and bootstrap writes the validation and alias records for those hostnames itself, printing guidance only for the rest.
 
 :::note
 Route53 is **not** required for the main site's domain - you create the validation and alias records yourself, wherever your DNS lives. PR previews are the opposite: the preview domain **must** be a Route53 hosted zone, so blogwright can create the wildcard certificate's validation records and the wildcard alias automatically. See [PR previews](/guides/pr-previews/).

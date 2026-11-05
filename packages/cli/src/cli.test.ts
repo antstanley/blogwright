@@ -125,6 +125,10 @@ Options:
   --force-unlock    Replace the environment lock a deploy, rollback, stage,
                     promote or delete left behind when it stopped; only once
                     that command is known to be no longer running
+  --prune-aliases   With bootstrap: detach attached CloudFront aliases that
+                    the config does not name. Without it they are reported
+                    and left attached, so a config edit never drops a
+                    live hostname.
   --switch-mode     Allow bootstrap to change a bootstrapped stack between
                     static and SSR serving. Without it that cutover is
                     refused, because the distribution moves before a deploy

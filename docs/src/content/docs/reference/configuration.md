@@ -55,6 +55,33 @@ Primary AWS region for S3, the builder MicroVM, and CloudWatch logs. ACM certifi
 
 Custom domain for the site. May also be supplied per-invocation with `--domain`, which takes precedence over the config value. When set, bootstrap requests an ACM certificate and prints the validation CNAMEs - see [Custom domains](/guides/custom-domains/). When unset, the site is served from its CloudFront domain.
 
+### `aliases`
+
+`string[]` · default `[]`
+
+Additional hostnames that serve the site alongside `domain`, which stays the primary (canonical) name: an apex plus its `www.`, or unrelated domains such as `example.org`. An alias need not be a subdomain of the primary and may live in a different DNS zone or at a different registrar. Requires `domain` (from the config or `--domain`); not valid for the preview environment. Each entry is a lowercase hostname with at least two labels - no scheme, port, path or wildcard - and none repeats `domain` or another alias. At most 10 hostnames in all (`domain` plus `aliases`), the default ACM per-certificate name limit.
+
+```jsonc
+{
+  "domain": "example.com",
+  "aliases": ["www.example.com", "example.org"],
+}
+```
+
+One ACM certificate covers every name, and the distribution lists each as an alias. Removing an entry never detaches it on its own: see [Multiple domains](/guides/custom-domains/#multiple-domains).
+
+### `redirectToPrimary`
+
+`boolean` · default `false`
+
+By default every hostname serves the same content and the site's canonical URLs identify the primary. When `true`, a request for an alias answers `301` with the same path and query on `https://<domain>`. The redirect runs in the CloudFront routing function, so it does not reach the origin. Not applied to a server-rendered site (`ssr`), whose router function is not attached to any behavior; bootstrap warns when the two are combined. Not valid for the preview environment.
+
+### `manageDns`
+
+`boolean` · default `false`
+
+When `true`, bootstrap creates the ACM validation records and the A/AAAA alias records that point each hostname at the distribution, for every hostname whose hosted zone is in the account's Route 53. Hostnames with no zone in the account are printed as guidance instead, so one site can mix Route 53 and registrar-hosted names. Not valid for the preview environment, which always uses Route 53.
+
 ### `app`
 
 `string` · optional · no default

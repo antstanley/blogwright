@@ -269,6 +269,13 @@ export interface OpsConfig {
    * query on `domain`. Default false: every hostname serves the same content.
    */
   redirectToPrimary: boolean;
+  /**
+   * When true, the bootstrap creates routing and certificate-validation
+   * records itself for every hostname whose hosted zone is in the account's
+   * Route 53, and prints guidance for the rest. Default false: production DNS
+   * is the operator's. Not valid for a preview environment.
+   */
+  manageDns: boolean;
   /** MicroVM builder sizing / lifecycle. */
   microvm: {
     memory: number;
@@ -336,6 +343,7 @@ export const DEFAULT_CONFIG: Omit<OpsConfig, 'siteName'> = {
   region: 'us-east-1',
   aliases: [],
   redirectToPrimary: false,
+  manageDns: false,
   microvm: {
     memory: 4,
     maxDurationSeconds: 1800,
@@ -851,6 +859,9 @@ function validateAliases(cfg: OpsConfig): void {
   }
   if (typeof cfg.redirectToPrimary !== 'boolean') {
     throw new Error('config.redirectToPrimary must be true or false');
+  }
+  if (typeof cfg.manageDns !== 'boolean') {
+    throw new Error('config.manageDns must be true or false');
   }
   for (const alias of cfg.aliases) {
     if (!isValidHostname(alias)) {

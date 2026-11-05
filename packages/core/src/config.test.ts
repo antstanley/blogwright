@@ -54,6 +54,14 @@ describe('parseConfig aliases', () => {
     const cfg = parseConfig(withSite('{ "domain": "example.com" }'));
     expect(cfg.aliases).toEqual([]);
     expect(cfg.redirectToPrimary).toBe(false);
+    expect(cfg.manageDns).toBe(false);
+  });
+
+  it('accepts manageDns and rejects a non-boolean', () => {
+    expect(parseConfig(withSite('{ "domain": "example.com", "manageDns": true }')).manageDns).toBe(
+      true,
+    );
+    expect(() => parseConfig(withSite('{ "manageDns": "yes" }'))).toThrow('manageDns');
   });
 
   it('accepts aliases on any zone, plus the redirect flag', () => {
