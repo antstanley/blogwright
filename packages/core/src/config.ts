@@ -527,6 +527,8 @@ export function mergeConfig(raw: ConfigInput): OpsConfig {
     ...DEFAULT_CONFIG,
     ...rest,
     siteName: raw.siteName,
+    // Copied so no config shares (or can mutate) the default's array.
+    aliases: Array.isArray(rest.aliases) ? [...rest.aliases] : (rest.aliases ?? []),
     microvm: {
       ...DEFAULT_CONFIG.microvm,
       ...raw.microvm,

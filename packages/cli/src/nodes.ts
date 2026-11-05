@@ -614,8 +614,17 @@ function certificateNode(): ResourceNode {
   };
 }
 
-/** Request a certificate for `names` (the first is its subject) and record it. */
-async function requestCertificate(ctx: OpsContext, names: string[]): Promise<string> {
+/**
+ * Request a certificate for `names` (the first is its subject) and record it.
+ * `previousArn`, when given, is recorded in the same save as the new ARN, so
+ * state never names a superseded certificate that a failed request left
+ * without a replacement.
+ */
+async function requestCertificate(
+  ctx: OpsContext,
+  names: string[],
+  previousArn?: string,
+): Promise<string> {
   const [subject, ...alternatives] = names;
   if (!subject) throw new Error('certificate node requires a domain');
   const out = output(ctx, 'acm-certificate');
@@ -624,6 +633,7 @@ async function requestCertificate(ctx: OpsContext, names: string[]): Promise<str
     ? `${ctx.config.siteName}${ctx.env}`.replace(/\W/g, '')
     : certificateToken(ctx.config.siteName, ctx.env, names);
   const arn = await ctx.clients.acm.requestCertificate(subject, token, ctx.tags, alternatives);
+  if (previousArn !== undefined) out.previousArn = previousArn;
   out.arn = arn;
   out.domains = ctx.preview ? names : [...names].sort();
   await ctx.save();
@@ -631,10 +641,12 @@ async function requestCertificate(ctx: OpsContext, names: string[]): Promise<str
 }
 
 /**
- * Swap the recorded certificate for one covering `names`. The certificate it
- * replaces is remembered as `previousArn` - it is what the distribution may
- * still be serving - unless an earlier interrupted swap already remembered one,
- * in which case the recorded certificate was never attached and is dropped.
+ * Swap the recorded certificate for one covering `names`. The certificate the
+ * distribution may still be serving is remembered as `previousArn`. When the
+ * recorded certificate is not the one attached, it never served and is
+ * dropped; when it is attached (an earlier swap finished but ACM refused to
+ * delete its predecessor), it becomes the one to retire and the older
+ * predecessor is deleted now, since nothing serves it.
  */
 async function replaceCertificate(
   ctx: OpsContext,
@@ -643,16 +655,20 @@ async function replaceCertificate(
 ): Promise<string> {
   const out = output(ctx, 'acm-certificate');
   ctx.logger.info(`  certificate names changed; requesting a replacement for ${names.join(', ')}`);
-  if (typeof out.previousArn === 'string') {
-    try {
-      await ctx.clients.acm.deleteCertificate(current);
-    } catch (err) {
-      ctx.logger.warn(`could not delete the superseded pending certificate: ${String(err)}`);
-    }
-  } else {
-    out.previousArn = current;
+  const earlier = typeof out.previousArn === 'string' ? out.previousArn : undefined;
+  if (earlier === undefined) return requestCertificate(ctx, names, current);
+  const distributionId = output(ctx, 'cloudfront-distribution').id;
+  const live =
+    typeof distributionId === 'string'
+      ? await ctx.clients.cloudfront.getDistributionAliases(distributionId)
+      : undefined;
+  const stale = live?.certificateArn === current ? earlier : current;
+  try {
+    await ctx.clients.acm.deleteCertificate(stale);
+  } catch (err) {
+    ctx.logger.warn(`could not delete the superseded certificate ${stale}: ${String(err)}`);
   }
-  return requestCertificate(ctx, names);
+  return requestCertificate(ctx, names, stale === current ? earlier : current);
 }
 
 /**
@@ -693,7 +709,11 @@ async function validateProduction(
     }
     ctx.logger.step('waiting for certificate to be ISSUED (Ctrl-C to background)…');
   } else {
-    ctx.logger.step('created ACM validation records in Route53; waiting for ISSUED…');
+    ctx.logger.step(
+      pending.size > 0
+        ? 'created ACM validation records in Route53; waiting for ISSUED…'
+        : 'no validation records pending; waiting for ISSUED…',
+    );
   }
 }
 
@@ -711,7 +731,7 @@ async function retirePreviousCertificate(ctx: OpsContext, distributionId: string
   if (live?.certificateArn !== out.arn) return;
   try {
     await ctx.clients.acm.deleteCertificate(previous);
-    delete out.previousArn;
+    Reflect.deleteProperty(out, 'previousArn');
     ctx.logger.ok('superseded certificate deleted');
   } catch (err) {
     ctx.logger.warn(
@@ -2439,6 +2459,15 @@ function siteDnsNode(): ResourceNode {
           aliasZoneId: CLOUDFRONT_ALIAS_ZONE_ID,
         });
       }
+    }
+    // A host still served but not written this run (manageDns turned off, or a
+    // write that fell back to guidance) keeps its record of what was written,
+    // so a later prune or teardown still removes the records.
+    for (const [i, host] of previousHosts.entries()) {
+      const zoneId = previousZones[i];
+      if (zoneId === undefined || !hosts.includes(host) || managedHosts.includes(host)) continue;
+      managedHosts.push(host);
+      managedZones.push(zoneId);
     }
     out.hosts = managedHosts;
     out.zoneIds = managedZones;

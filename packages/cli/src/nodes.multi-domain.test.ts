@@ -177,6 +177,35 @@ describe('certificate node with several hostnames', () => {
     expect(h.ctx.state.resources['acm-certificate']).toMatchObject({ arn: NEW, previousArn: OLD });
   });
 
+  it('records nothing about the old certificate when the replacement request fails', async () => {
+    const h = harness({
+      config: { aliases: ['www.example.com'] },
+      state: { 'acm-certificate': { arn: OLD, domains: ['example.com'] } },
+    });
+    (h.ctx.clients.acm as unknown as { requestCertificate: () => Promise<string> }).requestCertificate =
+      async () => {
+        throw new Error('quota');
+      };
+    await expect(node(h, 'acm-certificate').create(h.ctx)).rejects.toThrow('quota');
+    expect(h.ctx.state.resources['acm-certificate']?.previousArn).toBeUndefined();
+    expect(h.deleted).toEqual([]);
+  });
+
+  it('retires the attached certificate, not the older one, when the set changes after a swap whose cleanup was refused', async () => {
+    const ATTACHED = 'arn:aws:acm:us-east-1:1:certificate/attached';
+    const h = harness({
+      config: { aliases: ['www.example.com', 'example.org'] },
+      state: {
+        ...DIST,
+        'acm-certificate': { arn: ATTACHED, previousArn: OLD, domains: ['example.com', 'www.example.com'] },
+      },
+      live: live(['example.com', 'www.example.com'], ATTACHED),
+    });
+    await node(h, 'acm-certificate').create(h.ctx);
+    expect(h.deleted).toEqual([OLD]);
+    expect(h.ctx.state.resources['acm-certificate']).toMatchObject({ arn: NEW, previousArn: ATTACHED });
+  });
+
   it('keeps and covers an attached alias that config does not name', async () => {
     const h = harness({
       config: { aliases: ['www.example.com'] },
@@ -385,6 +414,16 @@ describe('site-dns node', () => {
       hosts: ['example.com', 'www.example.com'],
       zoneIds: ['ZCOM', 'ZCOM'],
     });
+  });
+
+  it('keeps track of records it wrote for a host that is still served but no longer managed', async () => {
+    const h = harness({
+      config: { manageDns: false },
+      state: { ...state, 'site-dns': { signature: 'x', hosts: ['example.com'], zoneIds: ['ZCOM'] } },
+    });
+    await node(h, 'site-dns').update?.(h.ctx);
+    expect(h.calls).toEqual([]);
+    expect(h.ctx.state.resources['site-dns']).toMatchObject({ hosts: ['example.com'], zoneIds: ['ZCOM'] });
   });
 
   it('removes the records it wrote for a host that is no longer served, and on teardown', async () => {

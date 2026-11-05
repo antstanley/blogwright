@@ -64,6 +64,12 @@ describe('parseConfig aliases', () => {
     expect(() => parseConfig(withSite('{ "manageDns": "yes" }'))).toThrow('manageDns');
   });
 
+  it('does not share the default alias list between configs', () => {
+    const a = parseConfig('{ "siteName": "x" }');
+    a.aliases.push('mutated.example.com');
+    expect(parseConfig('{ "siteName": "x" }').aliases).toEqual([]);
+  });
+
   it('accepts aliases on any zone, plus the redirect flag', () => {
     const cfg = parseConfig(
       withSite(
