@@ -104,6 +104,9 @@ function pathRedirectsBlock(paths: readonly PathRedirect[], alias?: AliasRedirec
       if (key === base || key.indexOf(base + '/') === 0) {
         to = prefixes[p][1].split(':splat').join(uri.length > base.length ? uri.slice(base.length + 1) : '');
         status = prefixes[p][2];
+        // A splat that begins with slashes (\`/old//evil.com\`) must not turn a
+        // relative target into a protocol-relative one (\`//evil.com\`).
+        if (to.charAt(0) === '/') { to = '/' + to.replace(/^[\\/\\\\]+/, ''); }
         break;
       }
     }

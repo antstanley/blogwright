@@ -1590,6 +1590,17 @@ export async function reconcileRouterFunction(ctx: OpsContext): Promise<{
     );
     return { status: 'not-bootstrapped', redirects };
   }
+  if (ctx.config.ssr && !ssrNeedsRouter(ctx)) {
+    // The config no longer needs the router, but the distribution may still run
+    // it; publishing the static rewrite there would break the application's
+    // routes. Leave the code to the bootstrap, which detaches it first.
+    if (output(ctx, 'cloudfront-distribution').routerAttached === true) {
+      ctx.logger.warn(
+        `the router function is still associated with the distribution; run \`${bootstrap}\` to detach it`,
+      );
+    }
+    return { status: 'unchanged', redirects };
+  }
   const code = productionRouterCode(ctx);
   const hash = routerCodeHash(code);
   if (ctx.config.ssr) {

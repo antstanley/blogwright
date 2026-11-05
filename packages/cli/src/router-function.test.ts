@@ -176,6 +176,22 @@ describe('path redirects', () => {
     );
   });
 
+  it('never turns a splat starting with slashes into a protocol-relative location', () => {
+    const code = staticRouterCode(undefined, [{ from: '/old/*', to: '/:splat' }]);
+    expect(run(code, 'h', '/old//evil.com').headers?.location.value).toBe('/evil.com');
+    expect(run(code, 'h', '/old/\\evil.com').headers?.location.value).toBe('/evil.com');
+    expect(run(code, 'h', '/old/a/b').headers?.location.value).toBe('/a/b');
+    const aliased = staticRouterCode(REDIRECT, [{ from: '/old/*', to: '/:splat' }]);
+    expect(run(aliased, 'www.example.com', '/old//evil.com').headers?.location.value).toBe(
+      'https://example.com/evil.com',
+    );
+  });
+
+  it('keeps $ sequences in a splat literal', () => {
+    const code = staticRouterCode(undefined, [{ from: '/o/*', to: '/n/:splat' }]);
+    expect(run(code, 'h', '/o/$&$1').headers?.location.value).toBe('/n/$&$1');
+  });
+
   it('SSR form redirects and otherwise passes through without a rewrite', () => {
     const code = ssrRouterCode(undefined, PATHS);
     expect(run(code, 'h', '/about.php').statusCode).toBe(301);

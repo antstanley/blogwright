@@ -2339,6 +2339,20 @@ describe('router function with path redirects', () => {
     expect(ssrNeedsRouter(ctx)).toBe(true);
   });
 
+  it('does not publish the static rewrite to an SSR stack whose redirects were removed', async () => {
+    const { ctx, published } = ctxWith({
+      config: { redirects: [], ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] } },
+      state: {
+        'cloudfront-function': { arn: 'arn:f', codeHash: 'old' },
+        'cloudfront-distribution': { id: 'D1', routerAttached: true },
+      },
+    });
+    const warn = vi.spyOn(ctx.logger, 'warn');
+    expect((await reconcileRouterFunction(ctx)).status).toBe('unchanged');
+    expect(published).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('bootstrap'));
+  });
+
   it('grants the CI deploy role the function actions on production', () => {
     const { ctx } = ctxWith({ state: { 'cloudfront-distribution': { arn: 'arn:d' } } });
     const actions = oidcRolePolicyStatements(ctx).flatMap(
