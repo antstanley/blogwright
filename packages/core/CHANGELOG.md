@@ -1,5 +1,11 @@
 # blogwright-core
 
+## 0.7.0
+
+### Minor Changes
+
+- [#61](https://github.com/antstanley/blogwright/pull/61) [`4dfafb2`](https://github.com/antstanley/blogwright/commit/4dfafb2a2897f2e988c8dba75cf7f92c0415683f) Thanks [@antstanley](https://github.com/antstanley)! - feat: path-based redirects. A new `redirects` list in the environment config compiles into the CloudFront router function, answering real HTTP redirects (exact paths and trailing-wildcard prefixes with `:splat`). `bootstrap` and `deploy` republish the function when the set changes.
+
 ## 0.6.0
 
 ### Minor Changes
