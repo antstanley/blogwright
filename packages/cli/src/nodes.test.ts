@@ -12,7 +12,7 @@ import {
   type ResponseHeadersPolicyConfigInput,
 } from 'blogwright-core';
 import { unzipSync } from 'fflate';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { applyGraph } from './graph.js';
 import type { OpsContext } from './context.js';
@@ -27,7 +27,7 @@ import {
   placeholderPackageZip,
   reconcileResponseHeadersOnDeploy,
 } from './nodes.js';
-import { routerCodeHash, staticRouterCode } from './router-function.js';
+import { routerCodeHash, ssrRouterCode, staticRouterCode } from './router-function.js';
 import { createTestContext, TEST_AGENT_DIR } from './test-support.js';
 
 /** One response through the real transport seam, for the XML fixtures below. */
@@ -2244,5 +2244,85 @@ describe('cloudfront-function (router) with alias redirect', () => {
     });
     await node.update?.(ctx);
     expect(published).toEqual([]);
+  });
+});
+
+describe('alias redirect in ssr mode', () => {
+  function ssrCtx(config: Record<string, unknown>) {
+    const published: string[] = [];
+    const distributions: DistributionConfigInput[] = [];
+    const ssrOps = createTestContext({
+      domain: 'example.com',
+      config: {
+        domain: 'example.com',
+        githubRepo: 'antstanley/example',
+        ssr: { staticDir: 'dist/client', staticPaths: ['/_app/*'] },
+        ...config,
+      },
+      state: {
+        resources: {
+          'cloudfront-distribution': { id: 'D1', arn: 'a', domainName: 'd', mode: 'ssr' },
+          oac: { id: 'OAC-S' },
+          'cloudfront-function': { arn: 'arn:function:router' },
+          'acm-certificate': { arn: 'arn:cert' },
+          'web-function': { endpointDomainName: 'abc.on.aws' },
+          'web-oac': { id: 'OAC-W' },
+          'web-cache-policy': { id: 'CP-SSR' },
+        },
+      } as never,
+      clients: {
+        cloudfront: {
+          ensureFunction: async (_name: string, code: string) => {
+            published.push(code);
+            return 'arn:function:router';
+          },
+          reconcileDistribution: async (_id: string, input: DistributionConfigInput) => {
+            distributions.push(input);
+            return false;
+          },
+          getDistributionAliases: async () => undefined,
+          tagResource: async () => undefined,
+        } as never,
+      },
+    });
+    return { ssrOps, published, distributions };
+  }
+
+  const REDIRECT = { aliases: ['www.example.com'], redirectToPrimary: true };
+
+  it('publishes a redirect-only function with no index rewrite', async () => {
+    const { ssrOps, published } = ssrCtx(REDIRECT);
+    const fn = buildNodes(ssrOps).find((n) => n.id === 'cloudfront-function');
+    await fn?.create(ssrOps);
+    expect(published).toEqual([
+      ssrRouterCode({ primary: 'example.com', aliases: ['www.example.com'] }),
+    ]);
+    expect(published[0]).toContain('statusCode: 301');
+    expect(published[0]).not.toContain('index.html');
+  });
+
+  it('attaches the function to the default and every static behavior', async () => {
+    const { ssrOps, distributions } = ssrCtx(REDIRECT);
+    await buildNodes(ssrOps).find((n) => n.id === 'cloudfront-distribution')?.update?.(ssrOps);
+    expect(distributions[0]?.defaultBehavior.functionArn).toBe('arn:function:router');
+    expect(distributions[0]?.orderedBehaviors?.map((b) => b.functionArn)).toEqual([
+      'arn:function:router',
+    ]);
+  });
+
+  it('attaches nothing without the redirect, or without aliases', async () => {
+    for (const config of [{ aliases: ['www.example.com'] }, { redirectToPrimary: true }]) {
+      const { ssrOps, distributions } = ssrCtx(config);
+      await buildNodes(ssrOps).find((n) => n.id === 'cloudfront-distribution')?.update?.(ssrOps);
+      expect(distributions[0]?.defaultBehavior.functionArn).toBeUndefined();
+      expect(distributions[0]?.orderedBehaviors?.[0]?.functionArn).toBeUndefined();
+    }
+  });
+
+  it('no longer warns that the redirect is ignored', async () => {
+    const { ssrOps } = ssrCtx(REDIRECT);
+    const warn = vi.spyOn(ssrOps.logger, 'warn');
+    await buildNodes(ssrOps).find((n) => n.id === 'cloudfront-function')?.create(ssrOps);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

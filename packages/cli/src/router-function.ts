@@ -64,6 +64,20 @@ ${block}${INDEX_REWRITE}
 }`;
 }
 
+/**
+ * Source of the viewer-request function an SSR distribution runs when
+ * `redirectToPrimary` is set. The application owns its own routing, so unlike
+ * the static router there is no directory-index rewrite: alias hosts get the
+ * `301` and every other request passes through untouched.
+ */
+export function ssrRouterCode(redirect: AliasRedirect): string {
+  const block = redirect.aliases.length > 0 ? redirectBlock(redirect) : '';
+  return `function handler(event) {
+  var request = event.request;
+${block}  return request;
+}`;
+}
+
 /** Stable fingerprint of a function's source, recorded in state to detect a change. */
 export function routerCodeHash(code: string): string {
   return createHash('sha256').update(code).digest('hex');

@@ -74,7 +74,7 @@ One ACM certificate covers every name, and the distribution lists each as an ali
 
 `boolean` · default `false`
 
-By default every hostname serves the same content and the site's canonical URLs identify the primary. When `true`, a request for an alias answers `301` with the same path and query on `https://<domain>`. The redirect runs in the CloudFront routing function, so it does not reach the origin. Not applied to a server-rendered site (`ssr`), whose router function is not attached to any behavior; bootstrap warns when the two are combined. Not valid for the preview environment.
+By default every hostname serves the same content and the site's canonical URLs identify the primary. When `true`, a request for an alias answers `301` with the same path and query on `https://<domain>`. The redirect runs in the CloudFront routing function, so it does not reach the origin. On a server-rendered site (`ssr`) the same redirect runs as a redirect-only function attached to every behavior; the application's own routing is untouched. Not valid for the preview environment.
 
 ### `manageDns`
 

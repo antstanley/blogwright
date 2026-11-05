@@ -39,7 +39,7 @@ import {
   sameSet,
   siteHostnames,
 } from './domains.js';
-import { routerCodeHash, staticRouterCode } from './router-function.js';
+import { type AliasRedirect, routerCodeHash, ssrRouterCode, staticRouterCode } from './router-function.js';
 
 type ResourceNode = CoreResourceNode<OpsContext>;
 
@@ -1513,6 +1513,16 @@ const PREVIEW_FUNCTION_CODE = `function handler(event) {
 }`;
 
 /**
+ * The alias redirect this environment runs, or undefined when none applies:
+ * `redirectToPrimary` needs a primary domain and at least one alias.
+ */
+function aliasRedirect(ctx: OpsContext): AliasRedirect | undefined {
+  const { aliases, redirectToPrimary } = ctx.config;
+  if (!redirectToPrimary || !ctx.domain || aliases.length === 0) return undefined;
+  return { primary: ctx.domain, aliases };
+}
+
+/**
  * CloudFront viewer-request function. Preview stacks route a subdomain to its S3 prefix
  * (and resolve index documents); staging/production just resolve directory URLs to their
  * index document. Both are needed because the OAC/REST S3 origin does no index resolution.
@@ -1521,22 +1531,14 @@ function routerFunctionNode(preview: boolean): ResourceNode {
   /**
    * The source this environment should run. Staging/production resolve
    * directory URLs and, with `redirectToPrimary`, also 301 alias hosts to the
-   * primary; the redirect needs a primary and at least one alias.
+   * primary. SSR sites run the redirect alone, since the application owns its
+   * routing; without a redirect the SSR function is unattached.
    */
   function desiredCode(ctx: OpsContext): string {
     if (preview) return PREVIEW_FUNCTION_CODE;
-    const { aliases, redirectToPrimary } = ctx.config;
-    return staticRouterCode(
-      redirectToPrimary && ctx.domain ? { primary: ctx.domain, aliases } : undefined,
-    );
-  }
-  function warnIfUnattached(ctx: OpsContext): void {
-    if (ctx.config.redirectToPrimary && ctx.config.ssr && !preview) {
-      ctx.logger.warn(
-        'redirectToPrimary is not applied in ssr mode: the router function is not associated ' +
-          'with any behavior there',
-      );
-    }
+    const redirect = aliasRedirect(ctx);
+    if (ctx.config.ssr && redirect) return ssrRouterCode(redirect);
+    return staticRouterCode(redirect);
   }
   function comment(ctx: OpsContext): string {
     return `${ctx.config.siteName} ${ctx.env} ${preview ? 'preview host router' : 'directory-index router'}`;
@@ -1557,14 +1559,12 @@ function routerFunctionNode(preview: boolean): ResourceNode {
         comment(ctx),
       );
       out.codeHash = routerCodeHash(code);
-      warnIfUnattached(ctx);
     },
     async update(ctx) {
       // Preview code is static. Production code varies with the alias redirect, so
       // republish when the source differs from the one last published. A site
       // bootstrapped before the hash was recorded, and still on the plain
       // directory-index router, is left alone: republishing it would change nothing.
-      warnIfUnattached(ctx);
       if (preview) return;
       const code = desiredCode(ctx);
       const hash = routerCodeHash(code);
@@ -1639,6 +1639,10 @@ function distributionShape(
 
   if (mode === 'ssr') {
     const config = ssrConfig(ctx);
+    // Aliases must redirect on every path, static or dynamic, so the function
+    // is on each behavior; without a redirect nothing is attached.
+    const functionArn =
+      !preview && aliasRedirect(ctx) ? String(output(ctx, 'cloudfront-function').arn) : undefined;
     return {
       ...shared,
       // The app answers `/`; a root object would only intercept it.
@@ -1660,6 +1664,7 @@ function distributionShape(
         cachePolicyId: String(output(ctx, 'web-cache-policy').id),
         originRequestPolicyId: ALL_VIEWER_EXCEPT_HOST_HEADER,
         allowedMethods: ['GET', 'HEAD', 'OPTIONS', 'PUT', 'POST', 'PATCH', 'DELETE'],
+        ...(functionArn ? { functionArn } : {}),
         responseHeadersPolicyId,
       },
       // The static paths carry the headers too: they are the same site's responses.
@@ -1667,6 +1672,7 @@ function distributionShape(
         pathPattern,
         targetOriginId: 's3-site',
         cachePolicyId: CACHING_OPTIMIZED,
+        ...(functionArn ? { functionArn } : {}),
         responseHeadersPolicyId,
       })),
       // No custom error responses: the application owns 404s, and error

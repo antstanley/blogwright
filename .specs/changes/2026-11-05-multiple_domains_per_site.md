@@ -184,10 +184,12 @@ No new canonical page is added.
 ### `.specs/blogwright/specs/07-web-functions.md` → Distribution reconcile (Modify)
 
 > Aliases and the ACM certificate follow the multi-domain contract in the
-> domain model. In SSR mode the router function is not associated with any
-> behavior, so `redirectToPrimary` has no effect there: bootstrap warns that it
-> is not applied and SSR keeps its current shape with no viewer-request
-> association. The application redirects aliases itself.
+> domain model. When `redirectToPrimary` is `true` and `aliases` is non-empty,
+> the router function is a redirect-only viewer-request function (no
+> directory-index rewrite, since the application owns routing) associated with
+> the default behavior and every static-path behavior, so aliases redirect on
+> all paths. Otherwise SSR keeps its current shape with no viewer-request
+> association.
 
 ---
 
@@ -358,13 +360,12 @@ preview DNS node (`previewDnsNode`, `nodes.ts:2168`).
 - *Previews reject the new settings.* **`aliases`, `redirectToPrimary` and
   `manageDns` fail config load in a preview environment.** A clear error beats
   silently ignoring a setting the operator expects to take effect.
+- *SSR redirects at the edge too.* **`redirectToPrimary` attaches a
+  redirect-only viewer-request function to every SSR behavior.** The same
+  setting behaves the same in both modes, and the application needs no host
+  logic of its own.
 
 **Open questions**
 
-- In SSR mode the router function is deliberately not associated with any
-  behavior, so `redirectToPrimary` is not applied there and bootstrap warns.
-  Is attaching a redirect-only viewer-request function to every behavior
-  acceptable, or should SSR sites redirect in the application? Left open until
-  SSR redirects are wanted.
 - Should the `init` wizard ask for aliases? The config keys are documented but
   the wizard does not prompt for them.
